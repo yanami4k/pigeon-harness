@@ -20,6 +20,16 @@ export const STATE_DIR = "state";
 export const SETTINGS_FILE = "settings.json";
 export const LOCAL_SETTINGS_FILE = "settings.local.json";
 
+// 决策 444、445：写进使用者全局 git 排除文件的规则，与各自探测是否已被忽略的路径（相对治理根，正斜杠）
+export const GLOBAL_IGNORE_ENTRIES: readonly { rule: string; probe: string }[] = [
+  { rule: `**/${PIGEON_DIR}/${STATE_DIR}/`, probe: `${PIGEON_DIR}/${STATE_DIR}/probe` },
+  {
+    rule: `**/${PIGEON_DIR}/${LOCAL_SETTINGS_FILE}`,
+    probe: `${PIGEON_DIR}/${LOCAL_SETTINGS_FILE}`,
+  },
+  { rule: `**/${PIGEON_DIR}/worktrees/`, probe: `${PIGEON_DIR}/worktrees/probe` },
+];
+
 // 展示用的相对写法（报错、提示与系统提示里的路径说法；一律正斜杠）
 export function pigeonRel(...segments: string[]): string {
   return [PIGEON_DIR, ...segments].join("/");

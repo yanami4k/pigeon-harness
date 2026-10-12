@@ -306,7 +306,8 @@ function gitRepo(prefix: string): string {
 }
 
 function globalIgnore(): { file: string; text: string } {
-  const file = globalExcludesFile(tmpdir());
+  const file = globalExcludesFile(tmpdir()) ?? "";
+  assert.notEqual(file, "", "全局排除文件的位置应明确（测试总装没设 core.excludesFile）");
   assert.ok(
     realpathSync.native(dirname(dirname(file))).startsWith(realpathSync.native(tmpdir())),
     file

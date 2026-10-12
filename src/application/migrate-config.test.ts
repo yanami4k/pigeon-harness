@@ -43,7 +43,8 @@ function git(cwd: string, ...args: string[]): string {
 
 // 决策 444：全局排除文件的内容（测试总装把全局配置与 XDG 目录指到临时位置；这里再核一遍确实不是真实用户目录）
 function globalIgnoreText(): string {
-  const file = globalExcludesFile(tmpdir());
+  const file = globalExcludesFile(tmpdir()) ?? "";
+  assert.notEqual(file, "", "全局排除文件的位置应明确（测试总装没设 core.excludesFile）");
   assert.ok(realpathSync.native(file).startsWith(realpathSync.native(tmpdir())), file);
   return existsSync(file) ? readFileSync(file, "utf8") : "";
 }

@@ -1,11 +1,13 @@
 // 固化 grant 配置文件读写测试（M4 S6 D6 + 收口决策 ②）：缺失 = 无规则、合法载入、畸形
 // fail-closed、升格追加、同 grantId 去重拒绝。
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
 import { newGrantId, newSessionId } from "../state/ids.ts";
+import { globalExcludesFile } from "./global-ignore.ts";
 import {
   appendGrantConfigRule,
   findPromotedRuleIndex,
@@ -203,6 +205,33 @@ test("升格去重（note-6 / 决策 ②）：同一 grantId 二次升格响亮�
     );
     assert.equal(readFileSync(grantsConfigPath(root), "utf8"), bytesBefore, "拒绝时文件不得改写");
     assert.equal(findPromotedRuleIndex(loadGrantConfig(root), newGrantId()), -1);
+  } finally {
+    cleanup();
+  }
+});
+
+// 决策 444：git 仓库里第一次写个人设置（/grants save）时，个人设置与程序状态的忽略规则写进全局排除文件（测试总装指到临时位置）
+test("决策 444：git 仓库里第一次写个人设置，忽略规则进全局排除文件、个人设置不出现在 git status 里", () => {
+  const { root, cleanup } = makeWorkspace();
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+    const file = globalExcludesFile(root) ?? "";
+    assert.ok(file.includes("pigeon-test-gitenv-"), file);
+    appendGrantConfigRule(root, {
+      tool: "read_file",
+      promotedFrom: {
+        grantId: newGrantId(),
+        sessionId: newSessionId(),
+        firstCall: { toolCallId: "toolu_01XYZ", args: { path: "a.ts" } },
+        promotedAt: 1_757_000_000_000,
+      },
+    });
+    assert.ok(readFileSync(file, "utf8").split("\n").includes("**/.pigeon/settings.local.json"));
+    const status = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    assert.ok(!status.includes("settings.local.json"), status);
   } finally {
     cleanup();
   }

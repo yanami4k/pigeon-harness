@@ -32,6 +32,7 @@ import {
   migrateMemoryFileLocked,
   readMemoryLayer,
 } from "../memory/memory-migration.ts";
+import { ensureStateDirOf } from "../persistence/settings.ts";
 import type { MemoryLimits } from "../state/memory-config.ts";
 
 export const MEMORY_COMMAND_USAGE =
@@ -154,6 +155,8 @@ export async function editMemoryLayer(
   const notes: string[] = [];
   const original = readMemoryLayer(location, (line) => notes.push(line));
   const draft = memoryDraftPathOf(location.file);
+  // 决策 444：项目级草稿在程序状态目录里——第一次写时确保全局忽略规则（用户级不动）
+  ensureStateDirOf(draft);
   mkdirSync(path.dirname(draft), { recursive: true });
   writeFileSync(draft, original.exists ? original.text : MEMORY_FILE_HEADERS[layer]);
   const ran = (options.run ?? spawnEditor)(editor, draft);

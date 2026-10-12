@@ -10,12 +10,14 @@ import type { DotMcpJson } from "../state/mcp-config.ts";
 import {
   dotMcpJsonPathOf,
   LOCAL_SETTINGS_FILE,
+  PIGEON_DIR,
   pigeonRel,
   projectLocalSettingsPath,
   projectPigeonDir,
   projectSettingsPath,
   projectStateDir,
   SETTINGS_FILE,
+  STATE_DIR,
   userPigeonRel,
   userSettingsPath,
 } from "../state/paths.ts";
@@ -153,7 +155,7 @@ export function ensureStateDirOf(
   for (;;) {
     const parent = path.dirname(current);
     if (parent === current) return;
-    if (path.basename(current) === "state" && path.basename(parent) === ".pigeon") {
+    if (path.basename(current) === STATE_DIR && path.basename(parent) === PIGEON_DIR) {
       const root = path.dirname(parent);
       if (path.resolve(root) !== path.resolve(homeDir)) ensureProjectStateDir(root, notice);
       return;

@@ -80,6 +80,7 @@ import {
 import { sessionsDirOf } from "../application/workspace.ts";
 import type { TuiWorktreesFace } from "../application/worktree-cleanup.ts";
 import type { ApprovalRequest } from "../approvals/handler.ts";
+import { ensureStateDirOf } from "../persistence/settings.ts";
 import type {
   CompactionNotice,
   ManualCompactionOutcome,
@@ -350,6 +351,10 @@ export class PigeonTuiShell
     if (options.workers !== undefined) this.current.workers = options.workers;
     if (options.hooks !== undefined) this.current.hooks = options.hooks;
     if (options.tasks !== undefined) this.tasks = options.tasks;
+    // 决策 444：PI_DEBUG_REDRAW=1 时 pi-tui 第一帧就写调试日志进程序状态目录——先确保目录与全局忽略规则
+    if (options.logDir !== undefined && process.env.PI_DEBUG_REDRAW === "1") {
+      ensureStateDirOf(options.logDir);
+    }
     this.tui = new TuiMainScreen(options.terminal, false, options.logDir);
     this.input = createPromptEditor(this.tui, options.promptHistory?.load() ?? []);
     this.statusBar = new StatusBar({
