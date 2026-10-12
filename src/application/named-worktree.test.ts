@@ -234,9 +234,12 @@ test("/worktrees 列出独立工作树、标明独立工作树；clean 缺省与
   const repo = plainRepo();
   const wt = openNamedWorktree({ cwd: repo, name: "solo" });
   writeFileSync(join(wt.path, "w.txt"), "w\n");
+  // 没有改动的独立工作树：缺省清理同样不挑（它有自己的退出清理）
+  openNamedWorktree({ cwd: repo, name: "idle" });
   const scope = { workspaceRoot: repo, now: () => Date.now() + 3_600_000 };
   const items = listLeftoverWorktrees(scope);
-  const named = items.find((item) => item.kind === "named");
+  assert.equal(items.find((item) => item.name === "idle")?.untaken, 0);
+  const named = items.find((item) => item.name === "solo");
   assert.ok(named !== undefined, JSON.stringify(items));
   assert.equal(named.name, "solo");
   assert.equal(named.untaken, 1);
