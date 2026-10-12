@@ -18,6 +18,7 @@
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -30,6 +31,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { writeFileAtomic } from "../persistence/atomic-write.ts";
 import { lockHeldByLiveProcess } from "../persistence/exclusive-lock.ts";
+import { legacyWorkerWorktreeEntries } from "../persistence/legacy-layout.ts";
 import {
   migrationBackupConflict,
   migrationBackupLocation,
@@ -470,12 +472,15 @@ function realOrSelf(target: string): string {
   }
 }
 
+// 决策 445：.pigeon/worktrees/ 下的独立工作树不是旧布局，不挪
 function legacyWorktreeDirs(root: string): string[] {
-  const dir = legacyStatePath(root, "worktrees");
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => path.join(dir, entry.name));
+  return legacyWorkerWorktreeEntries(root).filter((entry) => {
+    try {
+      return lstatSync(entry).isDirectory();
+    } catch {
+      return false;
+    }
+  });
 }
 
 export const legacyWorktreesStep: MigrationStep = {
@@ -483,7 +488,9 @@ export const legacyWorktreesStep: MigrationStep = {
   title: `worker 工作树移入 ${pigeonRel(STATE_DIR, "worktrees")}`,
   plan(ctx) {
     const legacyDir = legacyStatePath(ctx.root, "worktrees");
-    if (!existsSync(legacyDir)) return { todo: [], blockers: [] };
+    if (!existsSync(legacyDir) || legacyWorkerWorktreeEntries(ctx.root).length === 0) {
+      return { todo: [], blockers: [] };
+    }
     const todo: string[] = [];
     const blockers: string[] = [];
     const known = new Map(gitWorktrees(ctx.root).map((tree) => [realOrSelf(tree.path), tree]));

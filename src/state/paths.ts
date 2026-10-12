@@ -115,6 +115,11 @@ export function worktreesDirOf(root: string): string {
   return path.join(projectStateDir(root), "worktrees");
 }
 
+// 决策 445：独立工作树（pigeon --worktree、enter_worktree）放在项目的 .pigeon/worktrees/ 下，与 worker 的分开
+export function namedWorktreesDirOf(root: string): string {
+  return path.join(root, PIGEON_DIR, "worktrees");
+}
+
 // 旧的补做复盘记录（决策 331 删除补做；迁移命令挪出仓库进用户级备份）
 export function reviewBackfillDirOf(root: string): string {
   return path.join(projectStateDir(root), "review-backfill");

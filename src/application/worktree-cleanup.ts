@@ -23,8 +23,12 @@ import {
 } from "../orchestration/worktree.ts";
 import { loadSessionView } from "../persistence/session-catalog.ts";
 import { sessionFileHolder } from "../persistence/session-lock.ts";
-import { locateSessionFile, readSessionHeader } from "../persistence/session-reader.ts";
-import { sessionsDirOf, worktreesDirOf } from "../state/paths.ts";
+import {
+  locateSessionFile,
+  readSessionHeader,
+  sessionDirectoryName,
+} from "../persistence/session-reader.ts";
+import { namedWorktreesDirOf, sessionsDirOf, worktreesDirOf } from "../state/paths.ts";
 
 // 工作目录在 git 仓库里（/worktrees 只在这时提供）
 export function isGitWorkspace(workspaceRoot: string): boolean {
@@ -36,7 +40,8 @@ export function isGitWorkspace(workspaceRoot: string): boolean {
   }
 }
 
-export type LeftoverKind = "worktree" | "missing-dir" | "branch-only" | "orphan-dir";
+// named：pigeon --worktree 与 enter_worktree 建的独立工作树（决策 445、446），有自己的退出清理；列出但 clean 缺省与 --all 都不挑
+export type LeftoverKind = "worktree" | "missing-dir" | "branch-only" | "orphan-dir" | "named";
 
 export interface LeftoverWorktree {
   kind: LeftoverKind;
@@ -223,6 +228,20 @@ function workerFacts(
   return facts;
 }
 
+// 有会话开在这个独立工作树里（会话按工作目录分子目录存放；锁被仍在的进程持有，含本进程）
+function namedSessionHolder(governanceRoot: string, path: string): boolean {
+  const dir = join(sessionsDirOf(governanceRoot), sessionDirectoryName(path));
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return false;
+  }
+  return names
+    .filter((name) => name.endsWith(".jsonl"))
+    .some((name) => sessionFileHolder(join(dir, name)) !== undefined);
+}
+
 // 当前目录在 worker 工作树里（.pigeon/state/worktrees 之下）时拒绝：比较与删除都要从主检出做
 function assertNotInWorkerWorktree(scope: WorktreeScope, governanceRoot: string): void {
   const here = realOrResolved(scope.workspaceRoot);
@@ -272,6 +291,26 @@ export function listLeftoverWorktrees(scope: WorktreeScope): LeftoverWorktree[] 
           ? branchUntaken(repoRoot, entry.branch, base)
           : "unknown",
       bytes: present ? directoryBytes(path) : 0,
+    });
+  }
+  // 决策 445、446：独立工作树（.pigeon/worktrees/<名字>）
+  const namedDir = realOrResolved(namedWorktreesDirOf(repoRoot));
+  for (const entry of listWorktrees(repoRoot)) {
+    const path = resolve(entry.path);
+    if (!isInside(namedDir, path) || !existsSync(path)) continue;
+    const base =
+      entry.branch !== undefined ? branchCreationCommit(repoRoot, entry.branch) : undefined;
+    const holder = namedSessionHolder(governanceRoot, path);
+    items.push({
+      kind: "named",
+      name: basename(path),
+      path,
+      ...(entry.branch !== undefined ? { branch: entry.branch } : {}),
+      legacy: false,
+      inUse: holder,
+      ...(holder ? { inUseReason: "有会话开在这个工作树里" } : {}),
+      untaken: untakenFiles(path, base, mainRoot),
+      bytes: directoryBytes(path),
     });
   }
   // 没有工作树的 pigeon/ 分支
@@ -365,9 +404,11 @@ function itemLine(item: LeftoverWorktree, index: number): string {
       ? `分支 ${item.branch ?? "?"}（工作树已不在）`
       : item.kind === "missing-dir"
         ? `分支 ${item.branch ?? "（分离头指针）"}（工作树目录已不在，git 仍登记）`
-        : item.kind === "orphan-dir"
-          ? "目录（git 已不认）"
-          : `分支 ${item.branch ?? "（分离头指针）"}`,
+        : item.kind === "named"
+          ? `独立工作树，分支 ${item.branch ?? "（分离头指针）"}`
+          : item.kind === "orphan-dir"
+            ? "目录（git 已不认）"
+            : `分支 ${item.branch ?? "（分离头指针）"}`,
     `所属会话 ${item.ownerSessionId ?? "不明"}`,
     untakenText(item),
     ...(item.kind === "branch-only" || item.kind === "missing-dir"
@@ -398,9 +439,11 @@ export function planClean(items: readonly LeftoverWorktree[], args: readonly str
   const picked = new Set<LeftoverWorktree>();
   const named = args.filter((arg) => arg !== "--all");
   if (args.includes("--all")) {
-    for (const item of items) if (!item.inUse) picked.add(item);
+    for (const item of items) if (!item.inUse && item.kind !== "named") picked.add(item);
   } else if (named.length === 0) {
-    for (const item of items) if (!item.inUse && !hasUntaken(item)) picked.add(item);
+    for (const item of items) {
+      if (!item.inUse && !hasUntaken(item) && item.kind !== "named") picked.add(item);
+    }
   }
   for (const arg of named) {
     let item: LeftoverWorktree | undefined;

@@ -87,8 +87,8 @@ export function workerStartRefFor(tail: string): string {
   return `${WORKER_START_REF_PREFIX}${tail}`;
 }
 
-// 显式给出的分支名（/fork、独立工作树）：小写字母数字开头，小写字母数字、连字符与斜杠，不含空段、不以斜杠结尾
-const EXPLICIT_BRANCH = /^[a-z0-9][a-z0-9/-]{0,99}$/;
+// 显式给出的分支名（/fork、独立工作树）：小写字母数字开头，小写字母数字、下划线、连字符与斜杠，不含空段、不以斜杠结尾
+const EXPLICIT_BRANCH = /^[a-z0-9][a-z0-9/_-]{0,99}$/;
 
 function assertExplicitBranch(branch: string): void {
   if (!EXPLICIT_BRANCH.test(branch) || branch.includes("//") || branch.endsWith("/")) {
@@ -126,17 +126,47 @@ export function addWorktree(input: AddWorktreeInput): WorktreeHandle {
   } else {
     branch = worktreeBranchFor(input.sessionId, input.name);
   }
-  // 决策 449：先算要复制的清单（列不出即不建，不留半成品），建好工作树之后再复制；复制出错即删掉刚建的工作树与分支
-  const includes = listWorktreeIncludes(input.includeSource ?? input.repoRoot);
+  createWorktreeAt({
+    repoRoot: input.repoRoot,
+    path,
+    branch,
+    baseRef,
+    includeSource: input.includeSource ?? input.repoRoot,
+  });
+  return { name: input.name, sessionId: input.sessionId, path, branch };
+}
+
+// 在给定位置建工作树与新分支（worker 与独立工作树共用）。决策 449：先算 .worktreeinclude 要复制的清单（列不出即不建，
+// 不留半成品），建好工作树之后再复制；复制出错即删掉刚建的工作树与分支
+export function createWorktreeAt(input: {
+  repoRoot: string;
+  path: string;
+  branch: string;
+  baseRef: string;
+  includeSource: string;
+}): void {
+  assertExplicitBranch(input.branch);
+  if (input.baseRef.startsWith("-")) {
+    throw new WorktreeError(`起点提交不合法：${input.baseRef}`);
+  }
+  const includes = listWorktreeIncludes(input.includeSource);
   // 建工作树要检出文件：只关钩子（post-checkout 等）与 fsmonitor，不加 --attr-source——检出照常按 .gitattributes
   // 做行尾转换与过滤，工作树里的文件与正常检出一致
-  runGit(input.repoRoot, ["worktree", "add", "-b", branch, path, baseRef], GIT_HARDENING_CONFIG);
+  runGit(
+    input.repoRoot,
+    ["worktree", "add", "-b", input.branch, input.path, input.baseRef],
+    GIT_HARDENING_CONFIG
+  );
   if (includes !== undefined) {
     try {
-      copyListedIncludes(includes, path);
+      copyListedIncludes(includes, input.path);
     } catch (error) {
       try {
-        removeWorktreeAndBranch({ repoRoot: input.repoRoot, path, branch });
+        removeWorktreeAndBranch({
+          repoRoot: input.repoRoot,
+          path: input.path,
+          branch: input.branch,
+        });
       } catch {
         // 回滚失败：工作树留着，由 /worktrees 列出
       }
@@ -145,7 +175,6 @@ export function addWorktree(input: AddWorktreeInput): WorktreeHandle {
       );
     }
   }
-  return { name: input.name, sessionId: input.sessionId, path, branch };
 }
 
 export const WORKTREE_INCLUDE_FILE = ".worktreeinclude";

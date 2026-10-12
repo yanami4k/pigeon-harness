@@ -82,6 +82,8 @@ export interface OpenSessionRuntimeRequest {
   resume?: boolean;
   // 决策 432：新开的会话等第一次真要落盘时才建会话文件（终端界面与命令行对话新开会话时给）
   deferSessionFile?: boolean;
+  // 决策 445、446：主会话的工作区根（独立工作树）；缺省按会话推导（新会话即治理根）。worker 会话不受它影响
+  workspaceRoot?: string;
   // MCP 启动提示（启动问题与注解配置冲突）：cli 打 stdout、tui 打 stderr，由调用方决定
   onMcpNote?: (note: string) => void;
   // 缺省按治理根与作用域工作区根启动真实 MCP 会话；测试注入替身。reuse 为 /reload 时的旧 MCP 会话（沿用未变的连接）
@@ -162,8 +164,13 @@ export async function openSessionRuntime(
   request: OpenSessionRuntimeRequest
 ): Promise<OpenedSessionRuntime> {
   const settings = request.settings ?? emptySettingsSnapshot(request.governanceRoot);
-  // M5.5 S4（决策 040）：worker 会话回到它自己的工作树与委派策略；新建会话与主会话即治理根
-  const scope = sessionRuntimeScope(request.governanceRoot, request.sessionId);
+  // M5.5 S4（决策 040）：worker 会话回到它自己的工作树与委派策略；新建会话与主会话即治理根。
+  // 决策 445、446：主会话另给了工作区根（独立工作树）时用它；治理根照旧是主仓库
+  const derived = sessionRuntimeScope(request.governanceRoot, request.sessionId);
+  const scope =
+    request.workspaceRoot !== undefined && derived.worker === undefined
+      ? { ...derived, workspaceRoot: request.workspaceRoot }
+      : derived;
   const restoredGrants =
     request.resume === true
       ? restoreGrantSeed(request.governanceRoot, request.sessionId)

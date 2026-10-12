@@ -85,6 +85,7 @@ import {
   ToolsSectionSchema,
 } from "./tools-config.ts";
 import { WEB_KEY_FIELDS, type WebSection, WebSectionSchema } from "./web-config.ts";
+import { type WorktreeSection, WorktreeSectionSchema } from "./worktree-config.ts";
 
 // 三层，按优先级从低到高
 export const SETTINGS_LAYERS = ["user", "project", "local"] as const;
@@ -115,6 +116,7 @@ export const SETTINGS_SECTIONS = {
   snapshot: SnapshotSectionSchema,
   sessionSearch: SessionSearchSectionSchema,
   thinking: ThinkingSectionSchema,
+  worktree: WorktreeSectionSchema,
   modelRequest: ModelRequestSectionSchema,
 } as const satisfies Record<string, TSchema>;
 export type SettingsSectionName = keyof typeof SETTINGS_SECTIONS;
@@ -145,6 +147,7 @@ export const SettingsFileSchema = Type.Object(
     snapshot: Type.Optional(SnapshotSectionSchema),
     sessionSearch: Type.Optional(SessionSearchSectionSchema),
     thinking: Type.Optional(ThinkingSectionSchema),
+    worktree: Type.Optional(WorktreeSectionSchema),
     modelRequest: Type.Optional(ModelRequestSectionSchema),
     [DISABLE_ALL_HOOKS_KEY]: Type.Optional(Type.Boolean()),
     [STOP_HOOK_BLOCK_CAP_KEY]: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -305,6 +308,7 @@ export interface MergedSettings {
   snapshot?: SnapshotSection;
   sessionSearch?: Static<typeof SessionSearchSectionSchema>;
   thinking?: ThinkingSection;
+  worktree?: WorktreeSection;
   modelRequest?: ModelRequestSection;
   trustedDirectories: string[];
   // 停用全部钩子（324）：三层按标量覆盖（高优先层说了算），缺省 false
@@ -510,6 +514,11 @@ export function sessionSearchEnabledOf(snapshot: SettingsSnapshot): boolean {
 // 推理档位（决策 390）：合并后的 thinking 一节（没写为 undefined，按模型信息定缺省档位）
 export function thinkingSectionOf(snapshot: SettingsSnapshot): ThinkingSection | undefined {
   return snapshot.merged.thinking;
+}
+
+// 决策 445：独立工作树的起点档位（合并后的 worktree 一节；没写为 fresh）
+export function worktreeSectionOf(snapshot: SettingsSnapshot): WorktreeSection | undefined {
+  return snapshot.merged.worktree;
 }
 
 // 决策 420：模型请求的失败重试次数（modelRequest 一节，缺省 4）

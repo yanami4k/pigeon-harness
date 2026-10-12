@@ -5,9 +5,10 @@
 // 从会话存储读（决策 177 / 180）：worker 与分支会话的来历在会话文件头（metadata），委派策略在父会话的
 // worker 派出条目里；会话存储里没有这个会话的文件即按主会话处理（新会话尚未写出文件）。
 import { existsSync } from "node:fs";
+import { isAbsolute, relative } from "node:path";
 import { loadStoreSession } from "../persistence/session-view.ts";
 import type { SessionId } from "../state/ids.ts";
-import { mapLegacyWorktreePath } from "../state/paths.ts";
+import { mapLegacyWorktreePath, namedWorktreesDirOf } from "../state/paths.ts";
 import { storeWorkerSpawned } from "../state/session-judge.ts";
 import type { DelegatedPolicy, WorkerRole, WorkerWorkspace } from "../state/session-payloads.ts";
 import { sessionsDirOf } from "./workspace.ts";
@@ -37,7 +38,7 @@ export function sessionRuntimeScope(
   const worker = view.metadata?.worker;
   const parentSessionId = view.parentSessionId;
   if (worker === undefined || parentSessionId === undefined) {
-    return { workspaceRoot: governanceRoot };
+    return { workspaceRoot: mainSessionWorkspace(governanceRoot, loaded.file.header.cwd) };
   }
   const parent = loadStoreSession(dir, parentSessionId);
   if (parent === undefined) {
@@ -56,6 +57,15 @@ export function sessionRuntimeScope(
     parentSessionId,
     worker: { name: worker.name, role: worker.role },
   });
+}
+
+// 决策 445：主会话开在独立工作树（.pigeon/worktrees/<名字>）里时，续接回到那里（会话文件头记着工作目录）；
+// 工作树已不在即回到治理根（主检出），不报错
+function mainSessionWorkspace(governanceRoot: string, cwd: string): string {
+  const dir = namedWorktreesDirOf(governanceRoot);
+  const rel = relative(dir, cwd);
+  const inside = rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  return inside && existsSync(cwd) ? cwd : governanceRoot;
 }
 
 // 决策 325：工作树移入 .pigeon/state/worktrees 之前的会话记着旧位置的绝对路径，按旧前缀到新前缀映射后再找

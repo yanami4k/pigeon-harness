@@ -39,6 +39,8 @@ export function spawnWorkerOption(
 // 重建所需的、跨快照不变的部分（入口在开局时备好）
 export interface MainReloadContext {
   governanceRoot: string;
+  // 决策 445、446：主会话的工作区根（独立工作树）；缺省按会话推导
+  workspaceRoot?: string;
   streamFn: StreamFn;
   flags: LaunchFlags;
   workspaceHost?: WorkspaceHost;
@@ -77,6 +79,7 @@ export async function reopenMainSessionForReload(
   await current.bundle.sessionStore.flush();
   const opened = await openSessionRuntime({
     governanceRoot: context.governanceRoot,
+    ...(context.workspaceRoot !== undefined ? { workspaceRoot: context.workspaceRoot } : {}),
     settings: snapshot,
     sessionId: current.sessionId,
     streamFn: context.streamFn,
