@@ -53,8 +53,9 @@ function runCli(args: string[], input = "") {
 // 两个派出串行执行时 A 等不到 B，超时后在摘要里记"串行"
 function writeStreamFnModule(dir: string): string {
   const file = join(dir, "fake-stream-fn.mjs");
+  // 决策 447：分支名带 worker 会话号后 8 位，合并时从工作树里取实际分支名
   const merge =
-    "cd .pigeon/state/worktrees/*-fix-a && git add -A && git commit -qm fix-a && cd ../../.. && git merge -q --no-edit pigeon/fix-a";
+    "cd .pigeon/state/worktrees/*-fix-a && git add -A && git commit -qm fix-a && git -C ../../.. merge -q --no-edit $(git branch --show-current)";
   writeFileSync(
     file,
     `import { createFakeStreamFn } from ${JSON.stringify(FIXTURES)};
@@ -146,7 +147,10 @@ test.skipIf(process.platform === "win32" ? "合并命令用 sh 的通配与串�
         .map((block) => block.text ?? "")
         .join("");
     assert.deepEqual(
-      calls.filter((call) => call.toolName === "spawn_worker").map((call) => textOf(call)),
+      calls
+        .filter((call) => call.toolName === "spawn_worker")
+        // 决策 447：分支名里随会话变的 8 位不比（格式另在 worktree.test 核对）
+        .map((call) => textOf(call).replace(/pigeon\/[0-9a-z]{8}-/g, "pigeon/")),
       ["fix-a", "fix-b"].map((name) =>
         SPAWN_WORKER_TEXTS.spawned({ name, role: "implementer", branch: `pigeon/${name}` })
       )

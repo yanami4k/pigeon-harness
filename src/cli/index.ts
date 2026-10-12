@@ -15,7 +15,6 @@ import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { handbackJobsNotice } from "../application/background-jobs.ts";
 import { runForkCommand } from "../application/fork-command.ts";
-import { runWorktreesCommand } from "../application/worktree-cleanup.ts";
 import { failureBadge } from "../application/format.ts";
 import type { GrantsCommandContext } from "../application/grants.ts";
 import { currentHarnessRef, describeHarness } from "../application/harness-ref.ts";
@@ -58,6 +57,7 @@ import {
   trustPromptText,
 } from "../application/session-settings.ts";
 import { prepareWorkspace } from "../application/workspace.ts";
+import { runWorktreesCommand } from "../application/worktree-cleanup.ts";
 import { memoryWriteNoticeLine } from "../memory/update-memory-tool.ts";
 import { probeUpstreamVersions } from "../pi-runtime/upstream-version.ts";
 import type { TrustEntry } from "../state/config-trust.ts";

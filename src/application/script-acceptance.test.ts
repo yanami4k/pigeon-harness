@@ -83,7 +83,7 @@ test("额度用完不自动收回：汇总列出已做完的 worker 与分支，
   const text = await notice;
   assert.match(
     text,
-    /Already done: s9-1 \(branch pigeon\/s9-1\), s9-2 \(branch pigeon\/s9-2\)\. They can be taken one by one with \/take, or raise the budget and resume; finished work will be reused\./
+    /Already done: s9-1 \(branch pigeon\/[0-9a-z]{8}-s9-1\), s9-2 \(branch pigeon\/[0-9a-z]{8}-s9-2\)\. They can be taken one by one with \/take, or raise the budget and resume; finished work will be reused\./
   );
   assert.match(text, /Not collected: the script did not finish normally\./);
 });
@@ -104,7 +104,7 @@ test("脚本卡住监控：没有 worker 在跑或排队、脚本又没结束（
     text,
     /stalled: no worker was running or queued for 1 minute and the script had not finished, so it was stopped/
   );
-  assert.match(text, /Already done: s7-1 \(branch pigeon\/s7-1\)/);
+  assert.match(text, /Already done: s7-1 \(branch pigeon\/[0-9a-z]{8}-s7-1\)/);
   await harness.runs.settled("s7");
   const [node] = harness.runs.nodes();
   assert.equal(node?.state, "stalled");
