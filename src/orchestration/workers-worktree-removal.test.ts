@@ -288,11 +288,12 @@ test("discardWorkspace：在跑的不删", async () => {
   await orchestrator.awaitResult(id);
 });
 
-// 审查补修（复现场景）：.gitignore 有 node_modules/，worker 在工作树里建指向外部目录的联接、别的不改——判为无改动、
+// 审查补修（复现场景）：.gitignore 忽略 node_modules，worker 在工作树里建指向外部目录的联接、别的不改——判为无改动、
 // 收尾自动删除时只删链接本身，外部目录里的文件完好
 test("决策 448：收尾自动删除不顺着 worker 建的目录联接删到工作树外", async () => {
   const repo = makeRepo();
-  writeFileSync(join(repo, ".gitignore"), "node_modules/\n");
+  // 不带斜杠：Linux 上 worker 建的是目录符号链接，git 当文件看，带斜杠（只匹配目录）的规则不忽略它
+  writeFileSync(join(repo, ".gitignore"), "node_modules\n");
   git(repo, ["add", ".gitignore"]);
   git(repo, ["commit", "-q", "-m", "ignore"]);
   const external = realpathSync.native(mkdtempSync(join(tmpdir(), "pigeon-wt-external-")));
