@@ -58,3 +58,22 @@
 
 - 终端界面里第一次写程序状态时那一行提示的显示效果（未在真实终端界面里看）。
 - 服务器全量验证：第二次 TB 比较跑完之后补做。
+
+## 六、审查补修（基于 d159caa 的验证与审查）
+
+提交：bb78259（代码与测试）、文档提交、本节。
+
+- 路径字面量：规则与探测路径改为 `src/state/paths.ts` 的 `GLOBAL_IGNORE_ENTRIES`（由 `PIGEON_DIR`、`STATE_DIR`、`LOCAL_SETTINGS_FILE` 拼出），提示文字里不再写目录名字面量，`settings.ts` 的 `ensureStateDirOf` 用常量比较。`src/pigeon-paths-boundary.test.ts` 通过。以后回归一并跑 `src/*.test.ts` 根目录的边界规则测试。
+- 终端界面里的提示：同一目录第一次调用若没带提示口（输入历史先于会话文件写），产生的提示留着，交给之后第一个带提示口的调用补发（会话文件新建前的 beforeCreate 带存储告警口，终端界面落消息区）；写不进时"可自行加入"的说明同样补发。用例：`global-ignore.test.ts`"第一次没带提示口时，提示补发"；新文件 `src/tui/global-ignore-shell.test.ts`（真实运行面、推迟建会话文件、真实输入历史，经壳提交第一条消息，告警口收到"已在 git 全局排除文件"那一行）。
+- 全局排除文件的取法：改为 `git config --global --includes --type=path --get core.excludesFile`（跟 include，`~` 由 git 按 HOME 展开）；没设时 `$XDG_CONFIG_HOME/git/ignore`，再退 `$HOME/.config/git/ignore`（HOME 优先，与 checkpoint.ts 一致）；写完用 check-ignore 复核，没生效即如实提示（不算写成）。用例：include 配置一条、`~` 按 HOME 展开、仓库里有取反规则时提示"git 仍没有忽略"且不重复写。
+- 相对路径的 `core.excludesFile`：不写，只提示位置不明、请自行加入三行。用例一条。
+- 测试总装：只写 user.name、user.email 的最小全局配置（不再照抄真实配置），每个测试文件跑完删掉临时目录；此前留在本机 %TEMP% 的 285 个 `pigeon-test-gitenv-*` 目录（都是本总装今天建的，其中 1 个是中途被终止的那次只有 gitconfig）已删掉。
+- 建议项已改：只敲斜杠命令时程序状态目录还没有就不写跨启动的输入历史（不为它建目录；本次启动内仍可翻到），用例：壳里只输入 `/sessions` 就退出，不留 `.pigeon`、全局文件不变；`/memory edit` 的项目级草稿与 `PI_DEBUG_REDRAW=1` 时的调试日志目录写之前经 `ensureStateDirOf`；写之前再读一次全局文件（与同时首写的别的进程撞上时少写重复行）；补了 CRLF 已有文件、include 配置、壳提交路径、`/grants save` 首写后规则确实写进全局文件的用例。
+- 建议项未改，记在这里：并发首写没有加锁，只是写前再读一次，几个进程恰好同时首写仍可能写出重复行（不影响忽略效果）。
+- 变异核对（均已恢复）：无提示口时不留提示、相对路径照样写、不复核是否生效、不跟 include、斜杠命令也建目录，共 5 处，全部变红。
+- 回归：src 根目录的 3 个边界规则测试、src/persistence、state、memory、tui 全部与 prompt-history、memory-command、migrate-config、session-settings、session-store（共 82 个文件）通过；整仓 biome、tsc、依赖检查通过。
+
+### 自定的细节（补）
+
+- `core.excludesFile` 设成相对路径时不写、只提示：决策 444 原文是"否则用 $XDG_CONFIG_HOME/git/ignore"，但 git 在设了 excludesFile 时不读 XDG 文件，写进去无效；按边缘情况的实现取舍处理，请明天确认。
+- 斜杠命令不触发建程序状态目录：只在目录已存在时照常记进跨启动的输入历史。
