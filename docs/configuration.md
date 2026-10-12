@@ -409,9 +409,30 @@ Pigeon 第一次在项目里建 `.pigeon/state/` 或 `settings.local.json` 时�
 
 explorer 不拍快照、不建工作树（决策 377）：工具全在 explorer 预设之内（读文件、搜索、检索历史会话、联网的两件，层数放开时另加派出与等待等编排工具）时，它直接只读派出方的工作区——主 agent 派的读主工作目录，worker 派的读该 worker 的工作树。读到的是正在变的内容，可能读到正在修改的文件；它不交分支、只交摘要，`take_worker` 与 `/take` 对它给出说明。作用范围与工作区外读取的审批照常生效，范围路径相对派出方的工作区。另给了写、跑命令或 MCP 工具的 explorer，以及编排脚本派出的 explorer，照旧从快照建工作树。沙箱会话不派 worker。
 
-worker 的派出与收尾成对记在派出它的会话里（缺收尾即进程中途退出）；工作树在 `.pigeon/state/worktrees/` 下，不自动清理。终端界面续接主会话（`pigeon --continue`、`pigeon --resume <id>`、`/resume`，以及 `/reload` 在同一会话上重建运行面）时，从会话记录找回之前运行的 worker：
+worker 的派出与收尾成对记在派出它的会话里（缺收尾即进程中途退出）。
 
-- 之前的运行中已收尾的：`worker_status`、`/workers` 照常列出，标明"来自之前的运行"；`take_worker` 与 `/take` 照常取用（工作树已清理时如实说明）；`wait_workers` 立即交回其结果。
+worker 的工作树在 `.pigeon/state/worktrees/<worker 会话号>-<名字>`，分支为 `pigeon/<worker 会话号后 8 位，小写>-<名字>`（带会话号，不同会话派出的同名 worker 不会撞分支；以前留下的 `pigeon/<名字>` 分支不动）。`/fork` 的分支照旧为 `pigeon/fork-<会话号后 8 位>`。
+
+工作树的清理：
+
+- 自动删除工作树与分支只在两种情况：worker 收尾时没有改动任何文件（没有未提交的改动、没有新的提交）；它的改动经 `take_worker` 或 `/take` 完整取回（没有冲突、没有因过大留下的文件）之后。没有改动而删掉的，补批续做时按原起点重建同一工作树；完整取回而删掉的不能再续做，要接着做请另派一个 worker。
+- 其余一律保留：没有取回的、取回有冲突的、中途失败或中断的、等审批停下的（可补批续做）、`/fork` 的分支工作树。不按天数自动删除。
+- 脚本编排派出的 worker 收尾时不删（接力与收回要用它的工作树）；整次运行正常结束并收回之后，完整收回的与没有改动的删掉，其余保留。
+- 删除失败（例如 Windows 上文件被占用）不影响收尾与取回的结果，工作树留着。
+- 留下的用 `/worktrees`（终端界面）或 `pigeon worktrees list` 列出：`.pigeon/state/worktrees/` 下的工作树、没有工作树的 `pigeon/` 分支（含以前旧命名留下的）、git 已不认的残留目录。每项给出所属会话（派出它的会话）、有无未取走的改动（worker 相对起点改过、内容又与主工作目录不同的文件数；只剩分支的看分支上有无新提交）与占用大小，旧命名的标出。
+- 删除：`/worktrees clean` 或 `pigeon worktrees clean` 不带编号只删没有未取走改动的；带编号或名字删点名的；`--all` 连有改动的一起删。删除前先列出将删的各项，有未取走改动的写明"删除后丢失"：终端界面里输入 `/worktrees confirm` 才删（期间输入别的 `/worktrees` 命令即作罢）；命令行在终端里问一次 `[y/N]`，没有终端时须加 `--yes`。worker 正在跑（它的会话被一个仍在的进程打开）的一律不删。
+
+被 git 忽略的本地文件（`.env` 之类）不在检出里。在项目根放一个 `.worktreeinclude`，按 `.gitignore` 的写法列出要带进工作树的文件，建工作树时（worker、脚本编排）把主工作目录里既匹配其中规则、又被 git 忽略的文件复制进去；已跟踪的文件本就在检出里，不重复复制，未被忽略的文件不复制，`.pigeon` 下的一律不复制。只复制普通文件（符号链接跳过），工作树里已有的不覆盖。依赖目录不做链接，照旧由 worker 按需安装；列进 `.worktreeinclude` 的目录会整个复制。没有 `.worktreeinclude` 即不复制。例：
+
+```gitignore
+.env
+.env.local
+config/secrets.json
+```
+
+终端界面续接主会话（`pigeon --continue`、`pigeon --resume <id>`、`/resume`，以及 `/reload` 在同一会话上重建运行面）时，从会话记录找回之前运行的 worker：
+
+- 之前的运行中已收尾的：`worker_status`、`/workers` 照常列出，标明"来自之前的运行"；`take_worker` 与 `/take` 照常取用（工作树已删时如实说明：本进程删的写明原因，之前的运行里删的或人手删的列出可能的原因）；`wait_workers` 立即交回其结果。
 - 只有派出、没有收尾的：标为随进程退出而中断，不可取用；它的分支与工作树留在原处。
 - "之前的运行"不分进程：`/reload` 重建运行面后，本进程此前派出、已收尾的 worker 同样这样标注（`/reload` 在有 worker 在跑时拒绝，不会有中断的）。
 - 对之前运行的 worker 发取消（`stop_worker`、`/cancel`、`/stop`）、发消息（`message_worker`、在 worker 会话里输入）、补批续做（`/approve`）：给出明确说明，不报"找不到"；要接着做请另派一个 worker。
