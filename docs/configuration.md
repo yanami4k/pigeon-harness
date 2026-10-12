@@ -397,7 +397,7 @@ Pigeon 拍的工作目录快照——worker 与沙箱的起点、检查点与退
 
 人写的内容：`.pigeon/skills`、`~/.pigeon/skills` 留在原处；人写的说明改读 AGENTS.md（见下文"记忆与人写的说明"），旧的 `.pigeon/memory/` 与 `~/.pigeon/preferences.md` 不再读取，由迁移命令处理。
 
-启动时不建 `.pigeon/state/`：打开终端界面或命令行对话、不发消息就退出，项目里不留 `.pigeon`。`.pigeon/state/` 在第一次真要写程序状态时才建——第一条消息建会话文件、`pigeon run` 开跑、写输入历史、检索缓存或项目级记忆等。
+启动时不建 `.pigeon/state/`：打开终端界面或命令行对话、不发消息就退出（只敲了斜杠命令也一样），项目里不留 `.pigeon`。`.pigeon/state/` 在第一次真要写程序状态时才建——第一条消息建会话文件、`pigeon run` 开跑、`/search` 写检索缓存、项目级记忆的写入与编辑、`/grants save` 写个人设置等。斜杠命令在程序状态目录还没有时不记进跨启动的输入历史（本次启动内仍可用 ↑ 翻到）。
 
 忽略规则写在使用者的全局 git 排除文件里，不再写 `.pigeon/.gitignore`（以前写下的不动，快照与沙箱交回照旧认得它）。在 git 仓库里第一次建程序状态或写 `settings.local.json` 时，若 `.pigeon/state/`、`.pigeon/settings.local.json`、`.pigeon/worktrees/` 尚未被忽略，把下面缺的行追加进全局排除文件，已有的行不重复，并在终端提示一行写进了哪个文件：
 
@@ -407,7 +407,7 @@ Pigeon 拍的工作目录快照——worker 与沙箱的起点、检查点与退
 **/.pigeon/worktrees/
 ```
 
-全局排除文件的位置：`core.excludesFile` 设为绝对路径或以 `~` 开头时用它；否则用 `$XDG_CONFIG_HOME/git/ignore`；没设 `XDG_CONFIG_HOME` 时用 `~/.config/git/ignore`（Windows 上 `~` 即用户目录）。写一次即覆盖本机所有仓库、工作树与新克隆。非 git 目录不写任何忽略规则。写不进时只提示一行，不影响运行。不想让 Pigeon 改全局排除文件的，事先自己在项目的 `.gitignore` 或全局排除文件里忽略这三处即可（已被忽略就不会再写）。
+全局排除文件的位置与 git 实际读的一致：用户级 git 配置（连同其中 include 进来的配置）设了 `core.excludesFile` 时用它（`~` 按 `HOME` 展开）；没设时用 `$XDG_CONFIG_HOME/git/ignore`，没设 `XDG_CONFIG_HOME` 时用 `$HOME/.config/git/ignore`。`core.excludesFile` 设成相对路径时位置不明，Pigeon 不写，只提示一行请你自行加入。写一次即覆盖本机所有仓库、工作树与新克隆；写完会再核一遍 git 是否确实忽略了，没生效同样提示。非 git 目录不写任何忽略规则。写不进时只提示一行（附上要加的三行），不影响运行。终端界面里这一行提示显示在消息区。不想让 Pigeon 改全局排除文件的，事先自己在项目的 `.gitignore` 或全局排除文件里忽略这三处即可（已被忽略就不会再写）。
 
 `pigeon run --governance-root <目录>` 把治理根与工作区根分开：设置三层、项目 `.mcp.json` 与程序状态（`.pigeon/state/` 全部内容，含会话与检索缓存）锚到治理根，工作区只是 agent 干活的代码——工作区自带的 `.pigeon/` 设置与 `.mcp.json` 不生效，程序状态也不落进工作区。缺省与 `--root` 相同（行为不变）；不与 `--sandbox` 同用。
 
