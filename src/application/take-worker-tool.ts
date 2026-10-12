@@ -34,7 +34,7 @@ export const TAKE_WORKER_DESCRIPTION = [
   "Only files the worker changed are written; files it did not touch are left alone. Nothing in your working directory is deleted or reverted. Files the worker deleted are not deleted automatically; they are only listed in the result, and you decide whether to delete them.",
   "Files that cannot be merged (you also changed the same spot) are not written and are listed as conflicts; the worker's branch and worktree are kept as they are, and you can see its changes to those files with: git -C <worktree path> diff <snapshot> -- <file>. Applying cannot be undone: review the returned summary and changed files before applying.",
   "Take the changes of several workers one at a time as needed, finishing one before taking the next; if a later one changed the same spot as an earlier one, it is listed as a conflict.",
-  "Returns three lists: files applied, files with conflicts that were not written, and files the worker deleted. When everything is applied (no conflicts and no files left behind), the worker's worktree and branch are removed.",
+  "Returns three lists: files applied, files with conflicts that were not written, and files the worker deleted. When everything is applied (no conflicts, no files left behind, and the worker deleted no files), the worker's worktree and branch are removed.",
 ].join("\n");
 
 // 参数（说明为定稿原文）
@@ -229,8 +229,12 @@ export function takeWorkerChanges(
     result.unchanged.length === 0 &&
     result.conflicts.length === 0 &&
     result.deletedByWorker.length === 0;
-  // 决策 448：完整取回（没有冲突、没有因过大留下的文件）即删工作树与分支；删不成照常留着，不改变取回结果
-  const complete = result.conflicts.length === 0 && (result.skipped?.length ?? 0) === 0;
+  // 决策 448：完整取回（没有冲突、没有因过大留下的文件、worker 没有删除文件——删除不叠回，留给人定）即删工作树与分支；
+  // 删不成照常留着，不改变取回结果
+  const complete =
+    result.conflicts.length === 0 &&
+    (result.skipped?.length ?? 0) === 0 &&
+    result.deletedByWorker.length === 0;
   const removed =
     complete && host.orchestrator.discardWorkspace?.(status.sessionId, "taken") === true;
   return {

@@ -2,7 +2,15 @@
 // 续做时按起点重建因无改动删掉的工作树。真实 git 仓库 + 真实工作树提供者，运行面用替身。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "vitest";
@@ -278,4 +286,40 @@ test("discardWorkspace：在跑的不删", async () => {
   assert.equal(orchestrator.discardWorkspace(id, "taken"), false);
   await orchestrator.cancel(id);
   await orchestrator.awaitResult(id);
+});
+
+// 审查补修（复现场景）：.gitignore 有 node_modules/，worker 在工作树里建指向外部目录的联接、别的不改——判为无改动、
+// 收尾自动删除时只删链接本身，外部目录里的文件完好
+test("决策 448：收尾自动删除不顺着 worker 建的目录联接删到工作树外", async () => {
+  const repo = makeRepo();
+  writeFileSync(join(repo, ".gitignore"), "node_modules/\n");
+  git(repo, ["add", ".gitignore"]);
+  git(repo, ["commit", "-q", "-m", "ignore"]);
+  const external = realpathSync.native(mkdtempSync(join(tmpdir(), "pigeon-wt-external-")));
+  repos.push(external);
+  writeFileSync(join(external, "dep.js"), "module.exports = 1;\n");
+  const { orchestrator } = setup(repo, () => "idle", {
+    createRuntime: (request) => ({
+      run: async () => {
+        if (request.workspace.kind === "git-worktree") {
+          symlinkSync(
+            external,
+            join(request.workspace.path, "node_modules"),
+            process.platform === "win32" ? "junction" : "dir"
+          );
+        }
+        return { status: "completed" as const, runId: newRunId() };
+      },
+      interrupt: async () => {},
+      subscribe: () => () => {},
+      summary: () => "linked",
+      dispose: async () => {},
+    }),
+  });
+  const outcome = await orchestrator.awaitResult(
+    orchestrator.spawn({ role: "implementer", task: "装依赖", name: "linker" })
+  );
+  assert.equal(outcome.worktreeRemoved, "unchanged");
+  assert.equal(existsSync(workspaceOf(outcome).path), false);
+  assert.equal(readFileSync(join(external, "dep.js"), "utf8"), "module.exports = 1;\n");
 });

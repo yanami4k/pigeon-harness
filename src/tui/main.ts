@@ -515,7 +515,24 @@ export async function main(argv: string[]): Promise<void> {
     },
     // 决策 448：/worktrees 列出与删除留下的 worker 工作树（git 仓库、不在沙箱里才有）
     ...(sandbox === undefined && isGitWorkspace(workspaceRoot)
-      ? { worktrees: createTuiWorktreesFace({ workspaceRoot }) }
+      ? {
+          worktrees: createTuiWorktreesFace({
+            workspaceRoot,
+            // 本进程里仍可能用到工作树的 worker：在跑、排队、等补批续做、脚本派出的（整次收回之前）
+            liveWorkers: () =>
+              new Set(
+                (slot.workers?.status() ?? [])
+                  .filter(
+                    (status) =>
+                      status.state === "running" ||
+                      status.state === "queued" ||
+                      status.outcome?.recoverable === true ||
+                      (status.script !== undefined && status.worktreeRemoved === undefined)
+                  )
+                  .map((status) => status.sessionId)
+              ),
+          }),
+        }
       : {}),
     // S5+（裁决 033）：双击 Ctrl+C / /quit 的真实退出路径——壳内已先 stop()
     //（dispose 对称、挂起审批 fail-closed），此处只释放当前运行面并退进程

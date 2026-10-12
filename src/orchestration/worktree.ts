@@ -4,8 +4,20 @@
 // 名字先按白名单校验再进参数，杜绝被当成选项或路径穿越。合并由人用 git 完成，本模块不合并。
 // 决策 449：建好后把项目根 .worktreeinclude 列出、又被 git 忽略的文件从来源工作目录复制进去。
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, lstatSync, mkdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import {
+  constants,
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmdirSync,
+  rmSync,
+  unlinkSync,
+} from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { SessionId } from "../state/ids.ts";
 import { isUnderPigeonDir, worktreesDirOf } from "../state/paths.ts";
 import { GIT_HARDENING_CONFIG, hardenedGitArgs } from "../tools/git-hardening.ts";
@@ -114,46 +126,120 @@ export function addWorktree(input: AddWorktreeInput): WorktreeHandle {
   } else {
     branch = worktreeBranchFor(input.sessionId, input.name);
   }
+  // 决策 449：先算要复制的清单（列不出即不建，不留半成品），建好工作树之后再复制；复制出错即删掉刚建的工作树与分支
+  const includes = listWorktreeIncludes(input.includeSource ?? input.repoRoot);
   // 建工作树要检出文件：只关钩子（post-checkout 等）与 fsmonitor，不加 --attr-source——检出照常按 .gitattributes
   // 做行尾转换与过滤，工作树里的文件与正常检出一致
   runGit(input.repoRoot, ["worktree", "add", "-b", branch, path, baseRef], GIT_HARDENING_CONFIG);
-  copyWorktreeIncludes(input.includeSource ?? input.repoRoot, path);
+  if (includes !== undefined) {
+    try {
+      copyListedIncludes(includes, path);
+    } catch (error) {
+      try {
+        removeWorktreeAndBranch({ repoRoot: input.repoRoot, path, branch });
+      } catch {
+        // 回滚失败：工作树留着，由 /worktrees 列出
+      }
+      throw new WorktreeError(
+        `按 .worktreeinclude 复制文件失败：${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
   return { name: input.name, sessionId: input.sessionId, path, branch };
 }
 
 export const WORKTREE_INCLUDE_FILE = ".worktreeinclude";
 
-// 决策 449：来源工作目录里既匹配 .worktreeinclude 规则（gitignore 语法）、又被 git 忽略的文件，复制进新工作树的同一位置。
+// ls-files 列出的文件可能很多（.worktreeinclude 列了整个目录）：输出上限放宽到 256 MiB
+const LIST_MAX_BUFFER = 256 * 1024 * 1024;
+
+export interface WorktreeIncludes {
+  // 来源所在仓库的顶层（清单里的路径都相对它；工作树的根与它对应）
+  top: string;
+  files: string[];
+}
+
+// 决策 449：来源工作目录所在仓库里，既匹配仓库顶层 .worktreeinclude 规则（gitignore 语法）、又被 git 忽略的文件（相对顶层）。
 // 匹配借 git 自己：ls-files --others --ignored --exclude-from 只按 .worktreeinclude 的规则列出未跟踪的文件，
-// 再经 check-ignore 留下真被忽略的（已跟踪的本就在检出里，不在 --others 之列）。.pigeon 下的文件不复制；
-// 只复制普通文件（符号链接与特殊文件跳过），目标已存在的不覆盖。没有 .worktreeinclude 即什么都不做。返回复制了的相对路径
-export function copyWorktreeIncludes(sourceRoot: string, worktreePath: string): string[] {
-  const includeFile = join(sourceRoot, WORKTREE_INCLUDE_FILE);
+// 再经 check-ignore 留下真被忽略的（已跟踪的本就在检出里，不在 --others 之列）。.pigeon 下的不要。
+// 没有 .worktreeinclude 即 undefined
+export function listWorktreeIncludes(sourceRoot: string): WorktreeIncludes | undefined {
+  const top = resolve(runGit(sourceRoot, ["rev-parse", "--show-toplevel"]).trim());
+  const includeFile = join(top, WORKTREE_INCLUDE_FILE);
   if (!existsSync(includeFile)) {
-    return [];
+    return undefined;
   }
   const matched = splitNul(
-    runGit(sourceRoot, ["ls-files", "-z", "--others", "--ignored", `--exclude-from=${includeFile}`])
+    runGit(
+      top,
+      ["ls-files", "-z", "--others", "--ignored", `--exclude-from=${includeFile}`],
+      undefined,
+      LIST_MAX_BUFFER
+    )
   ).filter((path) => !isUnderPigeonDir(path));
   if (matched.length === 0) {
-    return [];
+    return { top, files: [] };
   }
-  const ignored = new Set(checkIgnored(sourceRoot, matched));
-  const copied: string[] = [];
-  for (const relative of matched) {
-    if (!ignored.has(relative)) continue;
-    const from = join(sourceRoot, relative);
-    const to = join(worktreePath, relative);
+  const ignored = new Set(checkIgnored(top, matched));
+  return { top, files: matched.filter((path) => ignored.has(path)) };
+}
+
+// 一路上没有符号链接或目录联接（逐段 lstat，不跟随）；某段还不存在即到此为止、算没有
+function noLinkAlong(root: string, relative: string): boolean {
+  let current = root;
+  for (const segment of relative.split("/")) {
+    current = join(current, segment);
+    let stat: ReturnType<typeof lstatSync>;
     try {
-      if (!lstatSync(from).isFile() || existsSync(to)) continue;
-      mkdirSync(dirname(to), { recursive: true });
-      copyFileSync(from, to);
-      copied.push(relative);
+      stat = lstatSync(current);
     } catch {
-      // 来源在列出之后消失、或无权读取：跳过这一个，不挡建工作树
+      return true;
+    }
+    if (stat.isSymbolicLink()) return false;
+  }
+  return true;
+}
+
+function inside(root: string, path: string): boolean {
+  const rel = relative(root, path);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+// 按清单复制进工作树的同一位置。来源一路上不能有链接、真实路径须在来源仓库顶层之内、本身是普通文件；目标一路上不能有链接，
+// 已存在的不覆盖（COPYFILE_EXCL）。单个文件读不了或已不在即跳过；其余错误上抛（由建工作树的一方回滚）。返回复制了的相对路径
+function copyListedIncludes(includes: WorktreeIncludes, worktreePath: string): string[] {
+  const realTop = realpathSync.native(includes.top);
+  const copied: string[] = [];
+  for (const file of includes.files) {
+    const from = join(includes.top, file);
+    const to = join(worktreePath, file);
+    let stat: ReturnType<typeof lstatSync>;
+    try {
+      if (!noLinkAlong(includes.top, file)) continue;
+      stat = lstatSync(from);
+      if (!stat.isFile()) continue;
+      if (!inside(realTop, realpathSync.native(from))) continue;
+    } catch {
+      continue;
+    }
+    if (!noLinkAlong(worktreePath, file)) continue;
+    mkdirSync(dirname(to), { recursive: true });
+    try {
+      copyFileSync(from, to, constants.COPYFILE_EXCL);
+      copied.push(file);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EEXIST" || code === "ENOENT" || code === "EACCES" || code === "EPERM") continue;
+      throw error;
     }
   }
   return copied;
+}
+
+// 决策 449：把来源仓库里 .worktreeinclude 列出、又被忽略的文件复制进已建好的工作树（清单见 listWorktreeIncludes）
+export function copyWorktreeIncludes(sourceRoot: string, worktreePath: string): string[] {
+  const includes = listWorktreeIncludes(sourceRoot);
+  return includes === undefined ? [] : copyListedIncludes(includes, worktreePath);
 }
 
 // git check-ignore：给出的路径里被忽略的（全不被忽略时 git 以 1 退出，按空清单处理）
@@ -165,7 +251,7 @@ function checkIgnored(cwd: string, paths: readonly string[]): string[] {
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
-      maxBuffer: 64 * 1024 * 1024,
+      maxBuffer: LIST_MAX_BUFFER,
     });
     return splitNul(output);
   } catch (error) {
@@ -182,13 +268,100 @@ function splitNul(output: string): string[] {
   return output.split("\0").filter((part) => part.length > 0);
 }
 
+function samePath(a: string, b: string): boolean {
+  const left = resolve(a);
+  const right = resolve(b);
+  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
+// 工作树在 git 里的登记目录（<共同目录>/worktrees/<名>）：按各登记的 gitdir 文件找指向 <path>/.git 的那一个
+function worktreeAdminDir(repoRoot: string, path: string): string | undefined {
+  const common = resolve(
+    runGit(repoRoot, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).trim()
+  );
+  const dir = join(common, "worktrees");
+  if (!existsSync(dir)) return undefined;
+  const target = join(resolve(path), ".git");
+  for (const name of readdirSync(dir)) {
+    let recorded: string;
+    try {
+      recorded = readFileSync(join(dir, name, "gitdir"), "utf8").trim();
+    } catch {
+      continue;
+    }
+    if (samePath(recorded, target)) return join(dir, name);
+  }
+  return undefined;
+}
+
+// 删一个目录树，不跟随符号链接与目录联接：先逐层把链接本身断开（只删链接），再删目录。
+// 链接指向的目录（可能在工作树之外）一个文件都不碰
+export function removeTreeNoFollow(root: string): void {
+  let rootStat: ReturnType<typeof lstatSync>;
+  try {
+    rootStat = lstatSync(root);
+  } catch {
+    return;
+  }
+  if (rootStat.isSymbolicLink()) {
+    unlinkLink(root);
+    return;
+  }
+  const stack = [root];
+  while (stack.length > 0) {
+    const current = stack.pop() as string;
+    let entries: string[];
+    try {
+      entries = readdirSync(current);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      const entry = join(current, name);
+      let stat: ReturnType<typeof lstatSync>;
+      try {
+        stat = lstatSync(entry);
+      } catch {
+        continue;
+      }
+      if (stat.isSymbolicLink()) {
+        unlinkLink(entry);
+      } else if (stat.isDirectory()) {
+        stack.push(entry);
+      }
+    }
+  }
+  rmSync(root, { recursive: true, force: true, maxRetries: 3 });
+}
+
+// 删链接本身：文件符号链接用 unlink；目录符号链接与 Windows 目录联接 unlink 不成时用 rmdir（只删链接，不进目标）
+function unlinkLink(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch {
+    rmdirSync(path);
+  }
+}
+
+// 删一个工作树：先断开里面的链接再删目录（不跟随，决策 448 的删除都经这里），再删 git 的登记目录（只删这一个工作树的，
+// 不整库 prune）。被 git worktree lock 锁定的不删；目录里 .git 是目录（主检出或独立仓库，不是工作树）的拒删
 export function removeWorktree(input: { repoRoot: string; path: string; force?: boolean }): void {
-  runGit(input.repoRoot, [
-    "worktree",
-    "remove",
-    ...(input.force === true ? ["--force"] : []),
-    resolve(input.path),
-  ]);
+  const path = resolve(input.path);
+  const admin = worktreeAdminDir(input.repoRoot, path);
+  if (admin !== undefined && existsSync(join(admin, "locked"))) {
+    throw new WorktreeError(`工作树已被锁定（git worktree lock），不删：${path}`);
+  }
+  try {
+    if (lstatSync(join(path, ".git")).isDirectory()) {
+      throw new WorktreeError(`${path} 不是 git 工作树（.git 是目录），不删`);
+    }
+  } catch (error) {
+    if (error instanceof WorktreeError) throw error;
+  }
+  removeTreeNoFollow(path);
+  if (admin !== undefined) {
+    rmSync(admin, { recursive: true, force: true, maxRetries: 3 });
+  }
 }
 
 // 删除 worker 分支（M6.5 S2：Eval 每次运行收尾清理工作树与分支）；只接受 pigeon/<会话号后 8 位>-<名字> 与旧的 pigeon/<名字>。
@@ -202,19 +375,15 @@ export function deleteBranch(input: { repoRoot: string; branch: string }): void 
   runGit(input.repoRoot, ["update-ref", "-d", workerStartRefFor(tail)]);
 }
 
-// 决策 448：删一个工作树连同它的分支。目录还在即 git worktree remove --force；目录已不在即 prune 掉 git 的登记。
-// 分支已不在不算失败；pigeon/ 下的分支连起点引用一并删（deleteBranch），其余（独立工作树的等）只删分支
+// 决策 448：删一个工作树连同它的分支。目录在不在都按登记删（目录已被手删的只删登记），不跟随链接；分支已不在不算失败；
+// pigeon/ 下的分支连起点引用一并删（deleteBranch），其余（独立工作树的等）只删分支
 export function removeWorktreeAndBranch(input: {
   repoRoot: string;
   path?: string;
   branch?: string;
 }): void {
   if (input.path !== undefined) {
-    if (existsSync(input.path)) {
-      removeWorktree({ repoRoot: input.repoRoot, path: input.path, force: true });
-    } else {
-      pruneWorktrees(input.repoRoot);
-    }
+    removeWorktree({ repoRoot: input.repoRoot, path: input.path });
   }
   const branch = input.branch;
   if (branch === undefined || branch.startsWith("-")) return;
@@ -347,11 +516,27 @@ export function branchMovedSince(repoRoot: string, branch: string, base: string)
   return resolveCommit(repoRoot, `refs/heads/${branch}`) !== base;
 }
 
-// 决策 448：工作树与起点一致——目录在、没有未提交改动（含未跟踪文件）、HEAD 仍是起点提交（没有新提交）
-export function worktreePristine(worktreePath: string, baseCommit: string): boolean {
+// 决策 448：工作树与起点一致——目录在、没有未提交改动（含未跟踪文件与子模块里的改动）、HEAD 仍是起点提交，
+// 给了分支时分支也仍指向起点（提交之后把 HEAD 分离回起点的，分支上的提交仍算改动）
+export function worktreePristine(
+  worktreePath: string,
+  baseCommit: string,
+  branch?: string
+): boolean {
   if (!existsSync(worktreePath)) return false;
+  const status = runGit(worktreePath, [
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--untracked-files=all",
+    "--ignore-submodules=none",
+  ]);
+  if (status !== "") return false;
+  if (resolveCommit(worktreePath, "HEAD") !== baseCommit) return false;
   return (
-    changedFiles(worktreePath).length === 0 && resolveCommit(worktreePath, "HEAD") === baseCommit
+    branch === undefined ||
+    branch.startsWith("-") ||
+    resolveCommit(worktreePath, `refs/heads/${branch}`) === baseCommit
   );
 }
 
@@ -359,7 +544,8 @@ export function worktreePristine(worktreePath: string, baseCommit: string): bool
 function runGit(
   cwd: string,
   args: string[],
-  hardening: readonly string[] = hardenedGitArgs(cwd)
+  hardening: readonly string[] = hardenedGitArgs(cwd),
+  maxBuffer?: number
 ): string {
   try {
     return execFileSync("git", [...hardening, ...args], {
@@ -367,6 +553,7 @@ function runGit(
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
+      ...(maxBuffer !== undefined ? { maxBuffer } : {}),
     });
   } catch (error) {
     const stderr = (error as { stderr?: unknown }).stderr;

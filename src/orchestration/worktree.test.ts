@@ -8,7 +8,9 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -269,6 +271,175 @@ test(".worktreeinclude：没有该文件时什么都不复制；includeSource �
       includeSource: plain.path,
     });
     assert.equal(readFileSync(join(nested.path, ".env"), "utf8"), "FROM=plain\n");
+  } finally {
+    cleanup();
+  }
+});
+
+// 审查补修：删除不跟随链接、按登记删、锁定与非工作树拒删；.worktreeinclude 不跟随链接、按仓库顶层、大清单、复制失败回滚
+const LINK_TYPE = process.platform === "win32" ? "junction" : "dir";
+
+function outside(): { dir: string; cleanup: () => void } {
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "pigeon-wt-outside-")));
+  writeFileSync(join(dir, "keep.txt"), "outside\n");
+  mkdirSync(join(dir, "deep"));
+  writeFileSync(join(dir, "deep", "keep2.txt"), "outside 2\n");
+  return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+test("删除工作树不顺着目录联接或符号链接删到工作树外：链接本身删掉，链接指向的目录与文件完好", () => {
+  const { repo, cleanup } = makeRepo();
+  const ext = outside();
+  try {
+    const w = addWorktree({ repoRoot: repo, sessionId: newSessionId(), name: "linked" });
+    symlinkSync(ext.dir, join(w.path, "node_modules"), LINK_TYPE);
+    mkdirSync(join(w.path, "nested"));
+    symlinkSync(ext.dir, join(w.path, "nested", "again"), LINK_TYPE);
+    removeWorktreeAndBranch({ repoRoot: repo, path: w.path, branch: w.branch });
+    assert.equal(existsSync(w.path), false);
+    assert.equal(readFileSync(join(ext.dir, "keep.txt"), "utf8"), "outside\n");
+    assert.equal(readFileSync(join(ext.dir, "deep", "keep2.txt"), "utf8"), "outside 2\n");
+    assert.equal(git(repo, ["branch", "--list", w.branch]).trim(), "");
+    assert.equal(listWorktrees(repo).length, 1, "登记已删");
+  } finally {
+    ext.cleanup();
+    cleanup();
+  }
+});
+
+test("删除：目录已被手删而 git 仍登记的，只删这一个登记与分支，不碰别的工作树的登记；被锁定的不删；主检出拒删", () => {
+  const { repo, cleanup } = makeRepo();
+  try {
+    const gone = addWorktree({ repoRoot: repo, sessionId: newSessionId(), name: "gone" });
+    const other = addWorktree({ repoRoot: repo, sessionId: newSessionId(), name: "other" });
+    rmSync(gone.path, { recursive: true, force: true });
+    // 另一个工作树的目录暂时挪开（例如所在的盘暂时不可达）：整库 prune 会顺带清掉它的登记，这里不应清掉
+    const parked = `${other.path}-parked`;
+    renameSync(other.path, parked);
+    removeWorktreeAndBranch({ repoRoot: repo, path: gone.path, branch: gone.branch });
+    assert.equal(git(repo, ["branch", "--list", gone.branch]).trim(), "");
+    renameSync(parked, other.path);
+    const listed = listWorktrees(repo).map((entry) => resolve(entry.path));
+    assert.ok(listed.includes(other.path), "别的工作树的登记还在");
+    assert.ok(!listed.includes(gone.path));
+
+    git(repo, ["worktree", "lock", other.path]);
+    assert.throws(
+      () => removeWorktreeAndBranch({ repoRoot: repo, path: other.path, branch: other.branch }),
+      /锁定/
+    );
+    assert.ok(existsSync(other.path));
+    assert.throws(() => removeWorktree({ repoRoot: repo, path: repo }), /不是 git 工作树/);
+    assert.ok(existsSync(join(repo, "a.txt")));
+  } finally {
+    cleanup();
+  }
+});
+
+test(".worktreeinclude 不顺着目录联接或符号链接复制工作区外的文件", () => {
+  const { repo, cleanup } = makeRepo();
+  const ext = outside();
+  try {
+    writeFileSync(join(ext.dir, "id_rsa"), "PRIVATE\n");
+    writeFileSync(join(repo, ".gitignore"), "vendor/\n.env\n");
+    writeFileSync(join(repo, ".worktreeinclude"), "vendor/\n.env\n");
+    git(repo, ["add", ".gitignore", ".worktreeinclude"]);
+    git(repo, ["commit", "-q", "-m", "ignore"]);
+    symlinkSync(ext.dir, join(repo, "vendor"), LINK_TYPE);
+    writeFileSync(join(repo, ".env"), "OK=1\n");
+    const w = addWorktree({ repoRoot: repo, sessionId: newSessionId(), name: "inc-link" });
+    assert.equal(readFileSync(join(w.path, ".env"), "utf8"), "OK=1\n");
+    assert.equal(existsSync(join(w.path, "vendor", "id_rsa")), false);
+    assert.equal(existsSync(join(w.path, "vendor")), false);
+  } finally {
+    ext.cleanup();
+    cleanup();
+  }
+});
+
+test(".worktreeinclude 按仓库顶层：会话在子目录时，规则读顶层的文件，pkg/.env 复制到工作树的 pkg/.env", () => {
+  const { repo, cleanup } = makeRepo();
+  try {
+    mkdirSync(join(repo, "pkg"));
+    writeFileSync(join(repo, ".gitignore"), ".env\n");
+    writeFileSync(join(repo, ".worktreeinclude"), "pkg/.env\n");
+    git(repo, ["add", ".gitignore", ".worktreeinclude"]);
+    git(repo, ["commit", "-q", "-m", "ignore"]);
+    writeFileSync(join(repo, "pkg", ".env"), "PKG=1\n");
+    const w = addWorktree({
+      repoRoot: join(repo, "pkg"),
+      governanceRoot: repo,
+      sessionId: newSessionId(),
+      name: "sub",
+    });
+    assert.equal(readFileSync(join(w.path, "pkg", ".env"), "utf8"), "PKG=1\n");
+    assert.equal(existsSync(join(w.path, ".env")), false);
+  } finally {
+    cleanup();
+  }
+});
+
+test(".worktreeinclude 列出的文件很多（清单超过 1 MiB）也能建出并复制", () => {
+  const { repo, cleanup } = makeRepo();
+  try {
+    writeFileSync(join(repo, ".gitignore"), "cache/\n");
+    writeFileSync(join(repo, ".worktreeinclude"), "cache/\n");
+    git(repo, ["add", ".gitignore", ".worktreeinclude"]);
+    git(repo, ["commit", "-q", "-m", "ignore"]);
+    const deep = join(repo, "cache", "x".repeat(60), "y".repeat(60));
+    mkdirSync(deep, { recursive: true });
+    const count = 6000;
+    for (let index = 0; index < count; index += 1) {
+      writeFileSync(join(deep, `${"z".repeat(50)}-${index}.txt`), "");
+    }
+    const w = addWorktree({ repoRoot: repo, sessionId: newSessionId(), name: "big" });
+    const copied = join(w.path, "cache", "x".repeat(60), "y".repeat(60));
+    assert.ok(existsSync(join(copied, `${"z".repeat(50)}-${count - 1}.txt`)));
+  } finally {
+    cleanup();
+  }
+});
+
+test(".worktreeinclude 复制出错（目标位置在检出里是个文件）：派出失败，刚建的工作树与分支删掉", () => {
+  const { repo, cleanup } = makeRepo();
+  try {
+    writeFileSync(join(repo, ".gitignore"), "cfg/\n");
+    writeFileSync(join(repo, ".worktreeinclude"), "cfg/\n");
+    writeFileSync(join(repo, "cfg"), "a file in the old commit\n");
+    git(repo, ["add", "-f", ".gitignore", ".worktreeinclude", "cfg"]);
+    git(repo, ["commit", "-q", "-m", "cfg as file"]);
+    const old = git(repo, ["rev-parse", "HEAD"]).trim();
+    git(repo, ["rm", "-q", "--cached", "cfg"]);
+    git(repo, ["commit", "-q", "-m", "drop cfg"]);
+    rmSync(join(repo, "cfg"));
+    mkdirSync(join(repo, "cfg"));
+    writeFileSync(join(repo, "cfg", "secret"), "s\n");
+    const sessionId = newSessionId();
+    assert.throws(
+      () => addWorktree({ repoRoot: repo, sessionId, name: "rollback", baseRef: old }),
+      /\.worktreeinclude/
+    );
+    assert.equal(existsSync(worktreePathFor(repo, sessionId, "rollback")), false);
+    assert.equal(
+      git(repo, ["branch", "--list", worktreeBranchFor(sessionId, "rollback")]).trim(),
+      ""
+    );
+    assert.equal(listWorktrees(repo).length, 1);
+  } finally {
+    cleanup();
+  }
+});
+
+test("worktreePristine 给了分支时：提交之后把 HEAD 分离回起点，分支上的提交仍算改动", () => {
+  const { repo, cleanup } = makeRepo();
+  try {
+    const head = git(repo, ["rev-parse", "HEAD"]).trim();
+    const w = addWorktree({ repoRoot: repo, sessionId: newSessionId(), name: "detach" });
+    writeFileSync(join(w.path, "a.txt"), "edited\n");
+    git(w.path, ["commit", "-q", "-am", "worker"]);
+    git(w.path, ["checkout", "-q", "--detach", head]);
+    assert.equal(worktreePristine(w.path, head), true, "只看 HEAD 会误判");
+    assert.equal(worktreePristine(w.path, head, w.branch), false);
   } finally {
     cleanup();
   }

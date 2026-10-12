@@ -28,13 +28,13 @@ export function sessionFileLockPath(filePath: string): string {
 }
 
 // 决策 448：会话文件此刻是否被一个仍在的进程打开着（列出留下的工作树时判断"在用"）；返回持有进程号，没有即 undefined。
-// 本进程持有的也算（本进程在跑的 worker）
+// 本进程持有的也算（本进程在跑的 worker）。锁文件读不了（权限等）按在用算，返回 -1
 export function sessionFileHolder(filePath: string): number | undefined {
   let holder: LockHolder | "missing" | "malformed";
   try {
     holder = readHolder(sessionFileLockPath(filePath));
   } catch {
-    return undefined;
+    return -1;
   }
   if (holder === "missing" || holder === "malformed") return undefined;
   return holder.pid === process.pid || isProcessAlive(holder.pid) ? holder.pid : undefined;

@@ -198,7 +198,7 @@ test("工具形态：名字、定稿说明、参数说明、写档注册；未�
       "Only files the worker changed are written; files it did not touch are left alone. Nothing in your working directory is deleted or reverted. Files the worker deleted are not deleted automatically; they are only listed in the result, and you decide whether to delete them.",
       "Files that cannot be merged (you also changed the same spot) are not written and are listed as conflicts; the worker's branch and worktree are kept as they are, and you can see its changes to those files with: git -C <worktree path> diff <snapshot> -- <file>. Applying cannot be undone: review the returned summary and changed files before applying.",
       "Take the changes of several workers one at a time as needed, finishing one before taking the next; if a later one changed the same spot as an earlier one, it is listed as a conflict.",
-      "Returns three lists: files applied, files with conflicts that were not written, and files the worker deleted. When everything is applied (no conflicts and no files left behind), the worker's worktree and branch are removed.",
+      "Returns three lists: files applied, files with conflicts that were not written, and files the worker deleted. When everything is applied (no conflicts, no files left behind, and the worker deleted no files), the worker's worktree and branch are removed.",
     ].join("\n")
   );
   const registration = takeWorkerRegistration();
@@ -567,5 +567,31 @@ test("决策 448：真实编排器上 take_worker 完整取回后工作树与分
     );
   } finally {
     rmSync(main, { recursive: true, force: true });
+  }
+});
+
+test("决策 448：worker 删了文件（删除不叠回、留给人定）不算完整取回，不删工作树", () => {
+  const f = fixture();
+  try {
+    const calls: string[] = [];
+    const status = f.status("completed");
+    const host = {
+      orchestrator: {
+        status: () => [status],
+        discardWorkspace: (_id: string, reason: string) => {
+          calls.push(reason);
+          return true;
+        },
+      },
+      workspaceRoot: f.main,
+    };
+    writeFileSync(join(f.worktree, "b.txt"), "b1\nb2 worker\nb3\n");
+    rmSync(join(f.worktree, "d.txt"));
+    const taken = takeWorkerChanges(host, "fix-a");
+    assert.deepEqual(taken.details.result?.deletedByWorker, ["d.txt"]);
+    assert.deepEqual(calls, []);
+    assert.equal(taken.details.worktreeRemoved, undefined);
+  } finally {
+    f.cleanup();
   }
 });

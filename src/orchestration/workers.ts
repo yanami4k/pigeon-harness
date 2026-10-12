@@ -266,7 +266,7 @@ export function gitWorktreeWorkspaces(roots: {
     pristine: (workspace) =>
       workspace.kind === "git-worktree" &&
       workspace.baseCommit !== undefined &&
-      worktreePristine(workspace.path, workspace.baseCommit),
+      worktreePristine(workspace.path, workspace.baseCommit, workspace.branch),
     remove: (workspace) => {
       if (workspace.kind !== "git-worktree") return;
       removeWorktreeAndBranch({

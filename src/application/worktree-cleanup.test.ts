@@ -2,7 +2,15 @@
 //（缺省只挑没有可丢东西的、--all、点名、在用不挑）；终端界面的二次确认；命令行没有终端时须 --yes。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "vitest";
@@ -11,6 +19,7 @@ import { sessionFileLockPath } from "../persistence/session-lock.ts";
 import { sessionDirectoryName, sessionFileName } from "../persistence/session-reader.ts";
 import { newSessionId, type SessionId } from "../state/ids.ts";
 import { sessionsDirOf } from "../state/paths.ts";
+import { childFamilySink, openSessionStore } from "./session-store.ts";
 import {
   createTuiWorktreesFace,
   formatLeftoverList,
@@ -19,6 +28,7 @@ import {
   listLeftoverWorktrees,
   planClean,
   runWorktreesCommand,
+  WorktreeCleanupError,
 } from "./worktree-cleanup.ts";
 
 function git(cwd: string, args: string[]): string {
@@ -100,8 +110,11 @@ function fixture() {
   // 6. git 不认的残留目录
   mkdirSync(join(repo, ".pigeon", "state", "worktrees", "junk"), { recursive: true });
   writeFileSync(join(repo, ".pigeon", "state", "worktrees", "junk", "x"), "12345");
-  return { repo, parent, dirty, taken, busy, legacyPath };
+  return { repo, parent, dirty, dirtyId, taken, busy, legacyPath };
 }
+
+// 夹具里的工作树都是刚建的：按"刚建、还没有 worker 会话记录"会算在用；用晚一小时的时钟看它们
+const later = () => Date.now() + 3_600_000;
 
 function byName(items: readonly LeftoverWorktree[], name: string): LeftoverWorktree {
   const item = items.find((entry) => entry.name === name);
@@ -111,7 +124,7 @@ function byName(items: readonly LeftoverWorktree[], name: string): LeftoverWorkt
 
 test("列出：三类条目、所属会话、在用、未取走的改动、旧命名与占用", () => {
   const f = fixture();
-  const items = listLeftoverWorktrees({ workspaceRoot: f.repo });
+  const items = listLeftoverWorktrees({ workspaceRoot: f.repo, now: later });
   assert.deepEqual(items.map((item) => item.name).sort(), [
     "ahead",
     "busy",
@@ -147,7 +160,7 @@ test("列出：三类条目、所属会话、在用、未取走的改动、旧�
 
 test("挑选：缺省只挑没有可丢东西且不在用的；--all 挑全部不在用的；点名照挑；在用的、不认得的列为不删", () => {
   const f = fixture();
-  const items = listLeftoverWorktrees({ workspaceRoot: f.repo });
+  const items = listLeftoverWorktrees({ workspaceRoot: f.repo, now: later });
   const names = (plan: { remove: LeftoverWorktree[] }) =>
     plan.remove.map((item) => item.name).sort();
   assert.deepEqual(names(planClean(items, [])), ["old", "stale", "taken"]);
@@ -167,7 +180,7 @@ test("挑选：缺省只挑没有可丢东西且不在用的；--all 挑全部�
 
 test("终端界面 /worktrees：clean 先给清单并写明会丢的改动，confirm 才删；中间打别的 /worktrees 即作罢", () => {
   const f = fixture();
-  const face = createTuiWorktreesFace({ workspaceRoot: f.repo });
+  const face = createTuiWorktreesFace({ workspaceRoot: f.repo, now: later });
   assert.match(face.run([]), /删除：\/worktrees clean/);
   const plan = face.run(["clean", "dirty"]);
   assert.match(plan, /dirty（pigeon\/[0-9a-z]{8}-dirty）——未取走的改动 1 个文件，删除后丢失/);
@@ -193,7 +206,7 @@ test("终端界面 /worktrees：clean 先给清单并写明会丢的改动，con
 
 test("命令行 pigeon worktrees：list 列出；clean 没有终端时不删、提示加 --yes；--yes 直接删；确认被拒即不删", async () => {
   const f = fixture();
-  const scope = { workspaceRoot: f.repo };
+  const scope = { workspaceRoot: f.repo, now: later };
   assert.match(await runWorktreesCommand(["list"], scope), /pigeon worktrees clean/);
   assert.match(await runWorktreesCommand(["clean", "--all"], scope), /加 --yes/);
   assert.ok(existsSync(f.dirty.path));
@@ -222,4 +235,134 @@ test("没有留下的：列出一句；不是 git 仓库时 /worktrees 不提供
   dirs.push(plain);
   assert.equal(isGitWorkspace(repo), true);
   assert.equal(isGitWorkspace(plain), false);
+});
+
+// 审查补修：比较基准与执行位置、起点不明、派出记录的起点、同名点名、确认后复核、在用的几种情形
+test("在 worker 工作树里执行：拒绝列出与删除（比较基准与删除都要从主检出做）", async () => {
+  const f = fixture();
+  const inside = { workspaceRoot: f.dirty.path, now: later };
+  assert.throws(() => listLeftoverWorktrees(inside), WorktreeCleanupError);
+  await assert.rejects(runWorktreesCommand(["clean", "--yes"], inside), /在主检出里执行/);
+  assert.match(createTuiWorktreesFace(inside).run(["clean"]), /在主检出里执行/);
+  assert.ok(existsSync(f.dirty.path));
+});
+
+test("起点取不到（没有引用日志、也没有派出记录）：未取走的改动记为不明，按有改动对待，缺省清理不删", () => {
+  const repo = makeRepo();
+  git(repo, ["config", "core.logAllRefUpdates", "false"]);
+  const w = addWorktree({ repoRoot: repo, sessionId: newSessionId(), name: "nolog" });
+  writeFileSync(join(w.path, "a.txt"), "worker\n");
+  git(w.path, ["commit", "-q", "-am", "worker"]);
+  const items = listLeftoverWorktrees({ workspaceRoot: repo, now: later });
+  const item = byName(items, "nolog");
+  assert.equal(item.untaken, "unknown");
+  assert.deepEqual(planClean(items, []).remove, []);
+  assert.match(formatLeftoverList(items), /有无未取走的改动不明（按有改动对待）/);
+});
+
+test("起点优先取派出记录：没有引用日志时按派出记录里的起点比，算得出未取走的改动", async () => {
+  const repo = makeRepo();
+  git(repo, ["config", "core.logAllRefUpdates", "false"]);
+  const base = git(repo, ["rev-parse", "HEAD"]);
+  const owner = newSessionId();
+  const workerId = newSessionId();
+  const w = addWorktree({ repoRoot: repo, sessionId: workerId, name: "recorded" });
+  writeFileSync(join(w.path, "a.txt"), "worker\n");
+  git(w.path, ["commit", "-q", "-am", "worker"]);
+  writeWorkerSession(repo, workerId, owner);
+  const store = openSessionStore({
+    sessionsDir: sessionsDirOf(repo),
+    sessionId: owner,
+    cwd: repo,
+    onFault: (fault) => {
+      throw fault;
+    },
+  });
+  childFamilySink(store).appendChildSpawned({
+    childSessionId: workerId,
+    name: "recorded",
+    role: "implementer",
+    task: "改",
+    policy: { allow: ["read_file"], deny: [], approvalMode: "prompt" },
+    limits: { maxTurns: 1, wallClockMs: 1000 },
+    workspace: { kind: "git-worktree", path: w.path, branch: w.branch, baseCommit: base },
+    spawnedAt: Date.now(),
+  });
+  await store.close();
+  const item = byName(listLeftoverWorktrees({ workspaceRoot: repo, now: later }), "recorded");
+  assert.equal(item.ownerSessionId, owner);
+  assert.equal(item.untaken, 1);
+});
+
+test("按名字点名：同名多项时不删，要求给编号或完整分支名；完整分支名可用", () => {
+  const repo = makeRepo();
+  const a = addWorktree({ repoRoot: repo, sessionId: newSessionId(), name: "fix" });
+  const b = addWorktree({ repoRoot: repo, sessionId: newSessionId(), name: "fix" });
+  writeFileSync(join(b.path, "new.txt"), "b\n");
+  const items = listLeftoverWorktrees({ workspaceRoot: repo, now: later });
+  const plan = planClean(items, ["fix"]);
+  assert.deepEqual(plan.remove, []);
+  assert.deepEqual(plan.refused, ["fix：对应 2 项，请改用编号或完整分支名"]);
+  const byBranch = planClean(items, [a.branch]);
+  assert.deepEqual(
+    byBranch.remove.map((item) => item.branch),
+    [a.branch]
+  );
+});
+
+test("确认之后、删之前重新核一遍：期间又改了文件的、变成在用的都剔除并说明", async () => {
+  const f = fixture();
+  const scope = { workspaceRoot: f.repo, now: later };
+  const face = createTuiWorktreesFace(scope);
+  // 选中没有改动的 taken 与旧命名的 old；确认之前 taken 又写了文件（worker 补批续做之后）
+  assert.match(face.run(["clean"]), /\/worktrees confirm/);
+  writeFileSync(join(f.taken.path, "late.txt"), "late\n");
+  const done = face.run(["confirm"]);
+  assert.match(done, /taken：确认期间改动有变化/);
+  assert.ok(existsSync(f.taken.path), "又有改动的没删");
+  assert.match(done, /已删除 \d+ 项/);
+  // 命令行：确认期间 dirty 的 worker 开跑了（会话被锁）
+  const answered = await runWorktreesCommand(["clean", "dirty"], scope, async () => {
+    const dir = join(sessionsDirOf(f.repo), sessionDirectoryName(f.repo));
+    const file = readdirSync(dir).find((name) => name.endsWith(`${f.dirtyId}.jsonl`));
+    assert.ok(file !== undefined);
+    writeFileSync(
+      sessionFileLockPath(join(dir, file)),
+      `${JSON.stringify({ pid: process.pid, acquiredAt: 0 })}\n`
+    );
+    return true;
+  });
+  assert.match(answered, /dirty：确认期间变成在用（worker 在跑），不删/);
+  assert.ok(existsSync(f.dirty.path));
+});
+
+test("在用的另几种：所属会话被另一个仍在的进程打开、刚建还没有 worker 会话记录、终端界面给的本进程里还在用的", () => {
+  const repo = makeRepo();
+  const owner = newSessionId();
+  const workerId = newSessionId();
+  const w = addWorktree({ repoRoot: repo, sessionId: workerId, name: "owned" });
+  writeWorkerSession(repo, workerId, owner);
+  // 所属会话的锁被另一个仍在的进程持有（用父进程号代替）
+  const dir = join(sessionsDirOf(repo), sessionDirectoryName(repo));
+  const ownerFile = join(dir, sessionFileName(Date.now(), owner));
+  writeFileSync(
+    ownerFile,
+    `${JSON.stringify({ kind: "header", version: 4, id: owner, createdAt: Date.now(), cwd: repo })}\n`
+  );
+  writeFileSync(
+    sessionFileLockPath(ownerFile),
+    `${JSON.stringify({ pid: process.ppid, acquiredAt: 0 })}\n`
+  );
+  const fresh = addWorktree({ repoRoot: repo, sessionId: newSessionId(), name: "fresh" });
+  const items = listLeftoverWorktrees({ workspaceRoot: repo });
+  assert.equal(byName(items, "owned").inUseReason, "所属会话正开着");
+  assert.equal(byName(items, "fresh").inUseReason, "刚建，还没有 worker 会话记录");
+  assert.deepEqual(planClean(items, ["--all"]).remove, []);
+  const live = listLeftoverWorktrees({
+    workspaceRoot: repo,
+    now: later,
+    liveWorkers: () => new Set([fresh.sessionId]),
+  });
+  assert.match(byName(live, "fresh").inUseReason ?? "", /本会话里还在用/);
+  void w;
 });
