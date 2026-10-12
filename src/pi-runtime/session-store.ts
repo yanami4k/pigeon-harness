@@ -9,6 +9,8 @@
 // - 撞上限续跑（367）：被截断的回复移出主分支——用 pi 的 moveLane 把主分支的叶子退回它之前，消息留在文件里成为一条
 //   废弃的分支；之后的写入接在它之前，按主分支还原的上下文（续跑、压缩、分叉）都不再含它。同样排进队列。
 // - 同进程对同一会话只有一个 pi 会话实例：再开写者时共用，最后一个关闭才释放锁（同一文件两个实例会各自持有 seq，交错写坏文件）。
+// - 推迟建文件（432）：新建时可推迟到第一条真要落盘的写入才建文件、取锁；在此之前只有钩子运行记录时先留在内存里，
+//   建文件时按原顺序补写，到最后一个写者关闭都没建就丢弃、不留文件。再开的写者共用同一核心，随它的状态。
 // 读非本进程所写的会话一律用 persistence/session-reader.ts 的只读读取器，不用这里。
 import path from "node:path";
 import {
@@ -27,6 +29,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
   HEADER_METADATA_KEY,
   type SessionEntrySink,
+  SessionEntryType,
   type SessionHeaderMetadata,
 } from "../state/session-entries.ts";
 import {
@@ -95,6 +98,8 @@ export interface SessionStoreWriterOptions {
   onFault?: (fault: SessionStoreFault) => void;
   // 思考是否持久化（045，缺省 true）：false 时助手消息的思考块在写入前剥去，只留略去标记（state/thinking-omission.ts）
   persistThinking?: boolean;
+  // 推迟建文件（432）：没有 existingPath 时等第一条真要落盘的写入才建文件、取锁；钩子运行记录不算，先留在内存里
+  deferCreate?: boolean;
 }
 
 // 运行面写消息与自定义条目的写入面（Adapter 经它写，结构类型便于测试注入）。
@@ -116,10 +121,19 @@ export interface SessionStoreWriter extends SessionStoreSink {
   appendCompaction(result: CompactResult): Promise<Entry[] | undefined>;
   // 等此前排队的写入全部落盘（写失败已交给 onFault，这里不拒绝）
   flush(): Promise<void>;
-  // 会话文件路径；打开或新建失败时为 undefined
+  // 会话文件路径；打开或新建失败、或推迟建文件还没建时为 undefined
   filePath(): Promise<string | undefined>;
+  // 推迟建文件（432）且还没建：会话里还没有要落盘的内容
+  fileDeferred?(): boolean;
   // flush 后关闭；同进程最后一个写者关闭时释放锁
   close(): Promise<void>;
+}
+
+// 排进队列的一次写入：失败交给发起它的写者的告警口
+interface QueuedWrite {
+  action: string;
+  write: (session: Session) => Promise<unknown>;
+  onFault: SessionStoreWriterOptions["onFault"];
 }
 
 interface WriterCore {
@@ -129,6 +143,8 @@ interface WriterCore {
   session: Session | undefined;
   path: string | undefined;
   release: (() => void) | undefined;
+  // 推迟建文件（432）且还没建时在场：建之前留在内存里的钩子运行记录（按写入顺序），及建文件所用的选项
+  deferred: { held: QueuedWrite[]; options: SessionStoreWriterOptions } | undefined;
 }
 
 const openCores = new Map<string, WriterCore>();
@@ -141,6 +157,75 @@ function report(onFault: SessionStoreWriterOptions["onFault"], action: string, e
   }
 }
 
+// 打开已有文件或新建文件并取锁；失败交给告警口，核心从注册表摘除
+async function openOrCreate(core: WriterCore, options: SessionStoreWriterOptions): Promise<void> {
+  const repo = createSessionRepo(options.sessionsRoot);
+  try {
+    if (options.existingPath !== undefined) {
+      core.release = options.lock?.(options.existingPath);
+      core.session = await repo.open({
+        id: options.sessionId,
+        path: options.existingPath,
+      } as JsonlSessionMetadata);
+      core.path = options.existingPath;
+    } else {
+      const session = await repo.create({
+        id: options.sessionId,
+        cwd: options.cwd,
+        ...(options.parentSessionId !== undefined
+          ? { parentSessionId: options.parentSessionId }
+          : {}),
+        ...(options.metadata !== undefined
+          ? { metadata: { [HEADER_METADATA_KEY]: stripUndefined(options.metadata) } as never }
+          : {}),
+      });
+      const filePath = (await session.getMetadata()).path;
+      core.release = options.lock?.(filePath);
+      core.session = session;
+      core.path = filePath;
+    }
+  } catch (error) {
+    core.release?.();
+    core.release = undefined;
+    core.session = undefined;
+    // 打开失败即从注册表摘除：此后同一会话的打开总是重新尝试，不共用这个失效的核心
+    if (openCores.get(core.key) === core) {
+      openCores.delete(core.key);
+    }
+    report(options.onFault, "打开", error);
+  }
+}
+
+// 在队列尾接一次写入：会话没打开（打开失败）时跳过
+function chainWrite(core: WriterCore, queued: QueuedWrite): void {
+  core.tail = core.tail.then(async () => {
+    const session = core.session;
+    if (session === undefined) {
+      return;
+    }
+    try {
+      await queued.write(session);
+    } catch (error) {
+      report(queued.onFault, queued.action, error);
+    }
+  });
+}
+
+// 推迟建文件（432）：第一条真要落盘的写入到来——排进队列建文件、取锁，再按原顺序补写留在内存里的记录。
+// 建文件失败报给发起这次写入的写者（它没有告警口时报给建核心的写者）
+function materialize(core: WriterCore, onFault: SessionStoreWriterOptions["onFault"]): void {
+  const deferred = core.deferred;
+  if (deferred === undefined) {
+    return;
+  }
+  core.deferred = undefined;
+  const options = { ...deferred.options, ...(onFault !== undefined ? { onFault } : {}) };
+  core.tail = core.tail.then(() => openOrCreate(core, options));
+  for (const queued of deferred.held) {
+    chainWrite(core, queued);
+  }
+}
+
 function startCore(key: string, options: SessionStoreWriterOptions): WriterCore {
   const core: WriterCore = {
     key,
@@ -149,46 +234,15 @@ function startCore(key: string, options: SessionStoreWriterOptions): WriterCore 
     session: undefined,
     path: undefined,
     release: undefined,
+    deferred: undefined,
   };
   // 先登记再开始打开：打开失败（含同步抛出的加锁失败）时的摘除总在登记之后
   openCores.set(key, core);
-  core.tail = (async () => {
-    const repo = createSessionRepo(options.sessionsRoot);
-    try {
-      if (options.existingPath !== undefined) {
-        core.release = options.lock?.(options.existingPath);
-        core.session = await repo.open({
-          id: options.sessionId,
-          path: options.existingPath,
-        } as JsonlSessionMetadata);
-        core.path = options.existingPath;
-      } else {
-        const session = await repo.create({
-          id: options.sessionId,
-          cwd: options.cwd,
-          ...(options.parentSessionId !== undefined
-            ? { parentSessionId: options.parentSessionId }
-            : {}),
-          ...(options.metadata !== undefined
-            ? { metadata: { [HEADER_METADATA_KEY]: stripUndefined(options.metadata) } as never }
-            : {}),
-        });
-        const filePath = (await session.getMetadata()).path;
-        core.release = options.lock?.(filePath);
-        core.session = session;
-        core.path = filePath;
-      }
-    } catch (error) {
-      core.release?.();
-      core.release = undefined;
-      core.session = undefined;
-      // 打开失败即从注册表摘除：此后同一会话的打开总是重新尝试，不共用这个失效的核心
-      if (openCores.get(key) === core) {
-        openCores.delete(key);
-      }
-      report(options.onFault, "打开", error);
-    }
-  })();
+  if (options.deferCreate === true && options.existingPath === undefined) {
+    core.deferred = { held: [], options };
+    return core;
+  }
+  core.tail = openOrCreate(core, options);
   return core;
 }
 
@@ -203,22 +257,23 @@ export function openSessionStoreWriter(options: SessionStoreWriterOptions): Sess
   }
   const shared = core;
   let closed = false;
-  const enqueue = (action: string, write: (session: Session) => Promise<unknown>): void => {
+  // held：推迟建文件还没建时可先留在内存里（钩子运行记录）；其余写入先建文件
+  const enqueue = (
+    action: string,
+    write: (session: Session) => Promise<unknown>,
+    held = false
+  ): void => {
     if (closed) {
       report(options.onFault, action, new Error("写者已关闭"));
       return;
     }
-    shared.tail = shared.tail.then(async () => {
-      const session = shared.session;
-      if (session === undefined) {
-        return;
-      }
-      try {
-        await write(session);
-      } catch (error) {
-        report(options.onFault, action, error);
-      }
-    });
+    const queued: QueuedWrite = { action, write, onFault: options.onFault };
+    if (shared.deferred !== undefined && held) {
+      shared.deferred.held.push(queued);
+      return;
+    }
+    materialize(shared, options.onFault);
+    chainWrite(shared, queued);
   };
   // 排进队列并取回结果：会话没打开、写者已关闭或失败时为 undefined（失败交给 onFault）
   const request = <T>(action: string, work: (session: Session) => Promise<T>) => {
@@ -228,6 +283,7 @@ export function openSessionStoreWriter(options: SessionStoreWriterOptions): Sess
       resolve(undefined);
       return promise;
     }
+    materialize(shared, options.onFault);
     shared.tail = shared.tail.then(async () => {
       const session = shared.session;
       if (session === undefined) {
@@ -265,9 +321,17 @@ export function openSessionStoreWriter(options: SessionStoreWriterOptions): Sess
         report(options.onFault, action, error);
         return;
       }
-      enqueue(action, (session) => session.appendCustomEntry(entry.customType, data));
+      enqueue(
+        action,
+        (session) => session.appendCustomEntry(entry.customType, data),
+        entry.customType === SessionEntryType.Hook
+      );
     },
-    branch: () => request("读主分支", readBranch),
+    // 推迟建文件还没建：主分支上还没有条目（留在内存里的钩子运行记录不算），不为读而建文件
+    branch: () =>
+      shared.deferred !== undefined && !closed
+        ? Promise.resolve([])
+        : request("读主分支", readBranch),
     dropTruncatedReply: () => {
       enqueue("移出截断的回复", (session) => dropTruncatedReply(session));
     },
@@ -299,6 +363,7 @@ export function openSessionStoreWriter(options: SessionStoreWriterOptions): Sess
       await shared.tail;
       return shared.session !== undefined ? shared.path : undefined;
     },
+    fileDeferred: () => shared.deferred !== undefined,
     close: async () => {
       if (closed) {
         return;
@@ -308,6 +373,8 @@ export function openSessionStoreWriter(options: SessionStoreWriterOptions): Sess
       await shared.tail;
       if (shared.refs === 0 && openCores.get(shared.key) === shared) {
         openCores.delete(shared.key);
+        // 推迟建文件到最后都没建：留在内存里的记录丢弃，不留文件
+        shared.deferred = undefined;
         try {
           shared.release?.();
         } catch (error) {

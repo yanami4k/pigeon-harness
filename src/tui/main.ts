@@ -369,8 +369,9 @@ export async function main(argv: string[]): Promise<void> {
     warn,
     memoryWrite,
     createApprovalHandler: createHandler,
-    // 决策 183、286：--continue / --resume <id> 直接续接——还原对话上下文
-    ...(resumed ? { resume: true } : {}),
+    // 决策 183、286：--continue / --resume <id> 直接续接——还原对话上下文；
+    // 决策 432：新开的会话等第一次真要落盘时才建会话文件
+    ...(resumed ? { resume: true } : { deferSessionFile: true }),
     // 决策 324：钩子拦下或出错的一行提示落消息区（壳尚未接管终端时落壳持有格，接管后进消息区）
     hooksNotice: (line) => shellHolder.current?.addSystem(line),
     onMcpNote: (note) => {

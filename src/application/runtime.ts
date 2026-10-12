@@ -329,6 +329,8 @@ export interface RuntimeDeps {
   initialMessages?: AgentMessage[];
   // 决策 177：worker 与分支会话的来历，新建会话文件时写进文件头
   storeLineage?: StoreLineage;
+  // 决策 432：新会话等第一次真要落盘时才建会话文件（交互入口新开的会话给）
+  deferSessionFile?: boolean;
   // 会话存储故障告警的出口（缺省标准错误输出；测试注入）
   storeWarn?: WarnSink;
   // 决策 324：钩子拦下或出错时的一行提示（终端界面落消息区；缺省静默）
@@ -634,6 +636,7 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     sessionId: deps.sessionId,
     cwd: deps.workspaceRoot,
     ...(deps.storeLineage !== undefined ? { lineage: deps.storeLineage } : {}),
+    ...(deps.deferSessionFile === true ? { deferCreate: true } : {}),
     onFault: storeFaultWarner(deps.storeWarn),
     persistThinking: deps.persistThinking ?? true,
   });

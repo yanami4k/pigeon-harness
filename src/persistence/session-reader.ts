@@ -9,6 +9,7 @@
 // 不逐个读文件首行；会话根下遗留的旧格式平铺文件（sess_*.jsonl 等）不在任何子目录里，不会被列举。
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync } from "node:fs";
 import { join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { SessionEntryType } from "../state/session-entries.ts";
 
 // pi v4 的七种条目类型与九种 record 类型（上游读盘白名单，pi-agent-core 0.84.4 jsonl/codec.js）
@@ -189,6 +190,56 @@ export function readSessionHeader(path: string): SessionHeaderView | undefined {
     return undefined;
   } catch {
     return undefined;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+// 钩子运行记录这一行（决策 432：不算会话内容）
+function isHookRecordLine(line: string): boolean {
+  try {
+    const value: unknown = JSON.parse(line);
+    return (
+      isObject(value) &&
+      value.kind === "entry" &&
+      value.type === "custom" &&
+      value.customType === SessionEntryType.Hook
+    );
+  } catch {
+    return false;
+  }
+}
+
+// 决策 432：文件头之后除钩子运行记录外还有没有条目——没有即从没开始过对话的会话（启动即建会话文件时留下的空会话）。
+// 逐块读到第一条这样的条目为止；读不出的行与写了一半的末行按有内容算（宁可多列）。打不开为 false。从不写文件
+export function sessionHasContent(path: string): boolean {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "r");
+    const chunk = Buffer.alloc(64 * 1024);
+    // 多字节字符可能跨块：按块解码，残字留到下一块
+    const decoder = new StringDecoder("utf8");
+    let position = 0;
+    let pending = "";
+    let headerSeen = false;
+    const contentLine = (line: string) => line.trim() !== "" && !isHookRecordLine(line);
+    for (;;) {
+      const read = readSync(fd, chunk, 0, chunk.length, position);
+      if (read === 0) break;
+      position += read;
+      const lines = (pending + decoder.write(chunk.subarray(0, read))).split("\n");
+      pending = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!headerSeen) {
+          headerSeen = true;
+          continue;
+        }
+        if (contentLine(line)) return true;
+      }
+    }
+    return headerSeen && contentLine(pending + decoder.end());
+  } catch {
+    return false;
   } finally {
     if (fd !== undefined) closeSync(fd);
   }

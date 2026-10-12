@@ -24,15 +24,32 @@ import { SESSION_SEARCH_SENTENCE } from "./system-prompt.ts";
 // 系统提示的工具用法一节里那一条（决策 429：每条一行、以"- "开头）
 const SEARCH_LINE = `\n- ${SESSION_SEARCH_SENTENCE}`;
 
+// 之前的一个会话：文件头加一条用户消息（决策 432：只有文件头的会话不算历史）
+function writeEarlierSession(root: string): void {
+  const earlier = { kind: "header", version: 4, id: newSessionId(), createdAt: 1, cwd: root };
+  const said = {
+    kind: "entry",
+    lane: "main",
+    type: "message",
+    id: "m1",
+    parentId: null,
+    seq: 1,
+    timestamp: 2,
+    message: { role: "user", content: [{ type: "text", text: "以前" }], timestamp: 1 },
+  };
+  mkdirSync(join(sessionsDirOf(root), "earlier"), { recursive: true });
+  writeFileSync(
+    join(sessionsDirOf(root), "earlier", sessionFileName(1, earlier.id)),
+    `${JSON.stringify(earlier)}\n${JSON.stringify(said)}\n`
+  );
+}
+
 async function assembled(sessionSearch: boolean | undefined) {
   const root = mkdtempSync(join(tmpdir(), "pigeon-search-switch-"));
   const home = mkdtempSync(join(tmpdir(), "pigeon-search-switch-home-"));
   try {
     // 决策 359：本项目有历史会话才注册会话检索三件——先放一个之前的会话
-    const earlier = { kind: "header", version: 4, id: newSessionId(), createdAt: 1, cwd: root };
-    mkdirSync(join(sessionsDirOf(root), "earlier"), { recursive: true });
-    const file = join(sessionsDirOf(root), "earlier", sessionFileName(1, earlier.id));
-    writeFileSync(file, `${JSON.stringify(earlier)}\n`);
+    writeEarlierSession(root);
     const streamFn = createFakeStreamFn({ replies: [{ text: "好" }] });
     const result = await runHeadless({
       task: "你好",
@@ -84,12 +101,7 @@ test("决策 382：使用者开关关掉即不注册检索三件、开局记录�
     const root = mkdtempSync(join(tmpdir(), "pigeon-search-user-switch-"));
     try {
       // 有历史会话（排除"没有历史会话"那条 skip，只留开关的原因）
-      const earlier = { kind: "header", version: 4, id: newSessionId(), createdAt: 1, cwd: root };
-      mkdirSync(join(sessionsDirOf(root), "earlier"), { recursive: true });
-      writeFileSync(
-        join(sessionsDirOf(root), "earlier", sessionFileName(1, earlier.id)),
-        `${JSON.stringify(earlier)}\n`
-      );
+      writeEarlierSession(root);
       const settings = emptySettingsSnapshot(root);
       if (input.settingsEnabled !== undefined) {
         settings.merged.sessionSearch = { enabled: input.settingsEnabled };

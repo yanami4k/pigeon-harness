@@ -14,6 +14,7 @@ import {
   readSessionFile,
   sessionDirectoryName,
   sessionFileName,
+  sessionHasContent,
 } from "./session-reader.ts";
 
 const HEADER = {
@@ -173,6 +174,46 @@ test("读取器：空文件与文件头不完整的文件不是会话（返回 u
     assert.equal(view.lanes.get("main"), null);
     assert.deepEqual(view.warnings, []);
   });
+});
+
+function hookEntry(seq: number, id: string, parentId: string | null, output = "") {
+  return {
+    kind: "entry",
+    lane: "main",
+    type: "custom",
+    customType: "pigeon.hook",
+    id,
+    parentId,
+    seq,
+    timestamp: 1_700_000_000_000 + seq,
+    data: { version: 1, event: "SessionStart", command: "echo", exitCode: 0, output },
+  };
+}
+
+test("有无会话内容（决策 432）：文件头之外只有钩子运行记录或什么都没有即没有内容；有别的条目、写了一半的末行即有", () => {
+  withFile(line(HEADER), (path) => assert.equal(sessionHasContent(path), false));
+  withFile(JSON.stringify(HEADER), (path) => assert.equal(sessionHasContent(path), false));
+  withFile("", (path) => assert.equal(sessionHasContent(path), false));
+  withFile(line(HEADER) + line(hookEntry(1, "h1", null)) + line(hookEntry(2, "h2", "h1")), (path) =>
+    assert.equal(sessionHasContent(path), false)
+  );
+  withFile(
+    line(HEADER) + line(hookEntry(1, "h1", null)) + line(message(2, "m1", "h1", "hi")),
+    (path) => assert.equal(sessionHasContent(path), true)
+  );
+  withFile(line(HEADER) + line(message(1, "m1", null, "hi")), (path) =>
+    assert.equal(sessionHasContent(path), true)
+  );
+  withFile(`${line(HEADER)}{"kind":"entry","type":"mess`, (path) =>
+    assert.equal(sessionHasContent(path), true)
+  );
+  // 钩子输出里的中文跨读块边界：逐块解码不出乱码，仍认得出是钩子运行记录
+  const long = "钩".repeat(40_000);
+  withFile(
+    line(HEADER) + line(hookEntry(1, "h1", null, long)) + line(hookEntry(2, "h2", "h1", long)),
+    (path) => assert.equal(sessionHasContent(path), false)
+  );
+  assert.equal(sessionHasContent(join(tmpdir(), "pigeon-missing-session.jsonl")), false);
 });
 
 test("读取器：会话名与条目标签按最新值还原", () => {

@@ -26,11 +26,12 @@ const SPAWN =
   "spawn_worker wait_workers worker_status message_worker stop_worker take_worker".split(" ");
 const SESSIONS = ["search_sessions", "read_session_entry", "list_sessions"];
 const TOOLS = [...SPAWN, "orchestrate", "web_search", "web_fetch", ...SESSIONS];
-// history：other 为会话树外有会话，family 为只有本会话派出的子会话，empty 为只有空的会话文件
+// history：other 为会话树外有会话，family 为只有本会话派出的子会话，empty 为只有空的会话文件，
+// headerOnly 为会话树外只有从没开始过对话（只有文件头）的会话（决策 432）
 const ALL = {
   git: true,
   docker: true,
-  history: "other" as "other" | "family" | "empty",
+  history: "other" as "other" | "family" | "empty" | "headerOnly",
   key: true,
 };
 const DOCKER = process.platform === "win32" ? "docker.exe" : "docker";
@@ -48,10 +49,24 @@ async function assemble(env: typeof ALL, frozenPrompt?: FrozenSessionPrompt) {
     const earlier = newSessionId();
     const parent = env.history === "family" ? { parentSessionId: sessionId } : {};
     const header = { kind: "header", version: 4, id: earlier, createdAt: 1, cwd: root, ...parent };
+    const said = {
+      kind: "entry",
+      lane: "main",
+      type: "message",
+      id: "m1",
+      parentId: null,
+      seq: 1,
+      timestamp: 2,
+      message: { role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 },
+    };
     mkdirSync(join(sessionsDirOf(root), "earlier"), { recursive: true });
     writeFileSync(
       join(sessionsDirOf(root), "earlier", sessionFileName(1, earlier)),
-      env.history === "empty" ? "" : `${JSON.stringify(header)}\n`
+      env.history === "empty"
+        ? ""
+        : env.history === "headerOnly"
+          ? `${JSON.stringify(header)}\n`
+          : `${JSON.stringify(header)}\n${JSON.stringify(said)}\n`
     );
     const streamFn = createFakeStreamFn({ replies: [{ text: "好" }] });
     const bundle = buildRuntime({
@@ -104,6 +119,7 @@ const CASES: Array<[string, Partial<typeof ALL>, string[]]> = [
   ],
   ["只有本会话派出的子会话：不注册会话检索三件", { history: "family" }, SESSIONS],
   ["只有空的会话文件：不注册会话检索三件", { history: "empty" }, SESSIONS],
+  ["只有从没开始过对话的会话：不注册会话检索三件", { history: "headerOnly" }, SESSIONS],
 ];
 
 for (const [label, lacking, missing] of CASES) {

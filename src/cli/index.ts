@@ -704,6 +704,8 @@ async function lineMain(argv: string[]): Promise<void> {
       sessionId,
       streamFn,
       flags,
+      // 决策 432：等第一次真要落盘时才建会话文件
+      deferSessionFile: true,
       ...(sandbox !== undefined
         ? { workspaceHost: sandbox.host, statusFacts: sandboxStatusFacts(sandbox) }
         : {}),

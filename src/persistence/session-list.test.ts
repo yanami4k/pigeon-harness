@@ -13,6 +13,7 @@ import {
   tearTail,
 } from "../application/session-store-fixtures.ts";
 import { asSessionId, newSessionId, type SessionId } from "../state/ids.ts";
+import { type SessionCustomEntry, SessionEntryType } from "../state/session-entries.ts";
 import { sessionCreatedAt } from "../state/session-summary.ts";
 import { listSessionSummaries } from "./session-list.ts";
 
@@ -309,6 +310,25 @@ test("只读：正被写入（末行撕裂）的会话照常列出、文件不�
       [[sessionId, 1]]
     );
     assert.deepEqual(readFileSync(path), before);
+  } finally {
+    cleanup();
+  }
+});
+
+test("从没开始过对话的会话不列（决策 432）：只有文件头、或文件头之外只有钩子运行记录的会话跳过，有消息的照列", async () => {
+  const { dir, cleanup } = makeDir();
+  try {
+    const headerOnly = await seed(dir, () => {});
+    const hookOnly = await seed(dir, (s) =>
+      s.writer.append({
+        customType: SessionEntryType.Hook,
+        data: { version: 1, event: "SessionStart", command: "echo", exitCode: 0 },
+      } as unknown as SessionCustomEntry)
+    );
+    const talked = await seed(dir, (s) => s.user("你好"));
+    const ids = listSessionSummaries(dir).map((summary) => summary.sessionId);
+    assert.deepEqual(ids, [talked]);
+    assert.ok(!ids.includes(headerOnly) && !ids.includes(hookOnly));
   } finally {
     cleanup();
   }

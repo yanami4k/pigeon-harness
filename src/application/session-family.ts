@@ -154,6 +154,16 @@ export function loadSessionFamily(
     const info = infos.get(id);
     const kids = (children.get(id) ?? []).filter((child) => !path.has(child));
     const next = new Set(path).add(id);
+    // 决策 432：本会话还没有对话、会话文件推迟建还没建——按没有 Run 的主会话列出，不算读不到
+    if (info === undefined && id === currentSessionId) {
+      return {
+        sessionId: id,
+        kind: "main",
+        turns: 0,
+        cost: emptyCostTally(),
+        children: kids.map((child) => build(child, undefined, next)),
+      };
+    }
     if (info === undefined || info.header === undefined) {
       const node: FamilyNode = {
         sessionId: id,

@@ -6,7 +6,11 @@ import { accessSync, constants } from "node:fs";
 import path from "node:path";
 import { sessionFamily } from "../memory/session-search.ts";
 import { isGitWorkspace } from "../orchestration/checkpoint.ts";
-import { listSessionFiles, readSessionHeader } from "../persistence/session-reader.ts";
+import {
+  listSessionFiles,
+  readSessionHeader,
+  sessionHasContent,
+} from "../persistence/session-reader.ts";
 
 // 各项检查的结果；只查用得上的，没查的缺省
 export interface ToolEnvironment {
@@ -42,22 +46,24 @@ export function executableOnPath(
   });
 }
 
-// 会话检索能不能搜到东西：与检索同一口径，排除本会话所在的整棵会话树（决策 339）；只读文件头，没有合法文件头的（空文件、
-// 写了一半）不算
+// 会话检索能不能搜到东西：与检索同一口径，排除本会话所在的整棵会话树（决策 339）；读文件头拼家谱，没有合法文件头的（空文件、
+// 写了一半）不算；决策 432：除文件头与钩子运行记录外没有条目的（从没开始过对话）也不算，只对家谱外的逐个看到第一个有内容的为止
 export function hasSessionHistory(
   sessionsDir: string,
   current: { sessionId: string; parentSessionId?: string }
 ): boolean {
   const parentOf = new Map<string, string | undefined>();
+  const pathOf = new Map<string, string>();
   for (const file of listSessionFiles(sessionsDir)) {
     const header = file.sessionId === current.sessionId ? undefined : readSessionHeader(file.path);
     if (header !== undefined) {
       parentOf.set(file.sessionId, header.parentSessionId);
+      pathOf.set(file.sessionId, file.path);
     }
   }
   parentOf.set(current.sessionId, current.parentSessionId);
   const family = sessionFamily(current.sessionId, parentOf);
-  return [...parentOf.keys()].some((id) => !family.has(id));
+  return [...pathOf].some(([id, file]) => !family.has(id) && sessionHasContent(file));
 }
 
 // 按需检查：已有结果的（/reload 沿用开局的）不重查

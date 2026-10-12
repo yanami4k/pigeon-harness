@@ -59,6 +59,8 @@ function taskSeqOf(session: StoreSessionView, runId: RunId): number {
   return index >= 0 ? index + 1 : 1;
 }
 
+const NO_RUN_TO_FORK = "本会话还没有任何 Run，没有可分叉的位置";
+
 // 分叉点定位：Run 顺序取会话里 Run 开始条目的先后
 export function resolveForkPoint(session: StoreSessionView, at: ForkAt): ForkPoint {
   const runs: RunId[] = session.runs.map((run) => run.runId);
@@ -78,7 +80,7 @@ export function resolveForkPoint(session: StoreSessionView, at: ForkAt): ForkPoi
     runId = runs.at(-1);
   }
   if (runId === undefined) {
-    throw new ForkCommandError("本会话还没有任何 Run，没有可分叉的位置");
+    throw new ForkCommandError(NO_RUN_TO_FORK);
   }
   const runSeq = at.runSeq ?? taskSeqOf(session, runId);
   if (storeMessageAt(session, { runId, runSeq }) === undefined) {
@@ -97,6 +99,10 @@ export async function runForkCommand(input: {
   const sessionId = input.opened.bundle.adapter.sessionId;
   if (input.opened.bundle.adapter.isRunning()) {
     throw new ForkCommandError("当前 Run 还在进行中，收尾后再分叉");
+  }
+  // 决策 432：会话文件推迟建、还没建——本会话还没有对话
+  if (input.opened.bundle.sessionStore.fileDeferred?.() === true) {
+    throw new ForkCommandError(NO_RUN_TO_FORK);
   }
   // 本会话的写者先落盘，再从会话存储读
   await input.opened.bundle.sessionStore.flush();

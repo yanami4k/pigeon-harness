@@ -105,6 +105,8 @@ export function openSessionStore(input: {
   onFault: StoreFaultHandler;
   // 思考是否持久化（045）：透传给写者
   persistThinking?: boolean;
+  // 决策 432：没有会话文件时推迟到第一次真要落盘才建（透传给写者）
+  deferCreate?: boolean;
 }): SessionStoreWriter {
   let existingPath: string | undefined;
   try {
@@ -121,6 +123,7 @@ export function openSessionStore(input: {
     lock: acquireSessionFileLock,
     onFault: input.onFault,
     ...(input.persistThinking !== undefined ? { persistThinking: input.persistThinking } : {}),
+    ...(input.deferCreate === true ? { deferCreate: true } : {}),
   });
 }
 

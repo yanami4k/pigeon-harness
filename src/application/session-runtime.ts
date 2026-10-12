@@ -80,6 +80,8 @@ export interface OpenSessionRuntimeRequest {
   createApprovalHandler?: RuntimeDeps["createApprovalHandler"];
   // 续跑既有会话：以会话里的生效 grant 为种子（决策 3b，静默继续有效），并还原对话上下文（决策 183）
   resume?: boolean;
+  // 决策 432：新开的会话等第一次真要落盘时才建会话文件（终端界面与命令行对话新开会话时给）
+  deferSessionFile?: boolean;
   // MCP 启动提示（启动问题与注解配置冲突）：cli 打 stdout、tui 打 stderr，由调用方决定
   onMcpNote?: (note: string) => void;
   // 缺省按治理根与作用域工作区根启动真实 MCP 会话；测试注入替身。reuse 为 /reload 时的旧 MCP 会话（沿用未变的连接）
@@ -131,11 +133,15 @@ export interface OpenedSessionRuntime {
 }
 
 // 续跑：等写者打开会话文件，读主分支还原上下文；悬空调用补的工具结果先写进会话，再连同还原的消息交给 Agent。
-// 会话文件打不开（会话存储故障）时报错：没有上下文的续跑不是续跑
+// 会话文件打不开（会话存储故障）时报错：没有上下文的续跑不是续跑。
+// 决策 432：会话文件推迟建、还没建（新会话还没对话时 /reload）——没有可还原的
 async function restoreContext(bundle: RuntimeBundle): Promise<{
   messages: number;
   interrupted: number;
 }> {
+  if (bundle.sessionStore.fileDeferred?.() === true) {
+    return { messages: 0, interrupted: 0 };
+  }
   const path = await bundle.sessionStore.filePath();
   const loaded = path !== undefined ? loadStoreSessionFile(path) : undefined;
   if (loaded === undefined) {
@@ -225,6 +231,7 @@ export async function openSessionRuntime(
       settings,
       ...(scope.toolPolicy !== undefined ? { toolPolicy: scope.toolPolicy } : {}),
       sessionId: request.sessionId,
+      ...(request.deferSessionFile === true ? { deferSessionFile: true } : {}),
       yolo: request.flags.yolo,
       provider: request.flags.provider,
       modelId: request.flags.modelId,

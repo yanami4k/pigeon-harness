@@ -487,3 +487,30 @@ test("会话树：父会话没有文件时根写一行读不到，不中断，�
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("会话树：当前会话还没有对话、会话文件推迟建还没建（决策 432）时按没有 Run 的主会话列出，不写读不到", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pigeon-session-tree-deferred-"));
+  const current = newSessionId();
+  const loaded = loadSessionFamily(sessionsDirOf(root), current);
+  assert.deepEqual(
+    [loaded.root.sessionId, loaded.root.kind, loaded.root.turns, loaded.root.unreadable],
+    [current, "main", 0, undefined]
+  );
+  const { term, shell, harness } = shellOn({ root }, current);
+  try {
+    shell.start();
+    await settle();
+    await press(term, CTRL_X);
+    await press(term, TAB);
+    const lines = term.screen.contentLines();
+    assert.ok(
+      lines.some((line) => line.includes(current) && line.includes("(current)")),
+      lines.join("\n")
+    );
+    assert.ok(!lines.some((line) => line.includes("读不到")), lines.join("\n"));
+  } finally {
+    shell.stop();
+    await harness.stopAll();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
