@@ -204,6 +204,48 @@ test("接力与收回：接力起点看得到上游的改动；按清单三方�
   );
   // 收回之后快照引用删掉
   assert.equal(git(harness.repo, "for-each-ref", "refs/pigeon/scripts/"), "");
+  // 决策 448：完整收回的三个删掉工作树与分支，有冲突的（改 a 二）留着
+  const left = harness.orchestrator
+    .status()
+    .filter((status) => status.workspace.kind === "git-worktree")
+    .map((status) => {
+      const workspace = status.workspace as { path: string; branch: string };
+      return {
+        removed: status.worktreeRemoved,
+        exists: existsSync(workspace.path),
+        branch: git(harness.repo, "branch", "--list", workspace.branch) !== "",
+      };
+    });
+  assert.equal(left.length, 4);
+  assert.equal(
+    left.filter((entry) => entry.removed === "taken" && !entry.exists && !entry.branch).length,
+    3
+  );
+  assert.equal(
+    left.filter((entry) => entry.removed === undefined && entry.exists && entry.branch).length,
+    1
+  );
+});
+
+test("决策 448：整次收回之后没列进收回清单、也没有改动的 worker 工作树一并删掉；有改动没收回的留着", async () => {
+  const harness = scriptHarness({
+    planner: (input) =>
+      input.task === "看看" ? { reply: "看完了" } : { files: { "k.txt": `${input.task}\n` } },
+  });
+  await runToEnd(
+    harness,
+    [
+      'await agent("看看");',
+      'await agent("改了不收");',
+      'const take = await agent("改了要收");',
+      "return { collect: [take] };",
+    ].join("\n")
+  );
+  const removed = harness.orchestrator
+    .status()
+    .map((status) => status.worktreeRemoved ?? "kept")
+    .sort();
+  assert.deepEqual(removed, ["kept", "taken", "unchanged"]);
 });
 
 test("收回：人没批准即不写主目录；脚本没有给 collect 即不请示", async () => {

@@ -53,8 +53,10 @@ import {
   addWorktree,
   assertWorkerName,
   changedFiles,
+  removeWorktreeAndBranch,
   worktreeBranchFor,
   worktreePathFor,
+  worktreePristine,
 } from "./worktree.ts";
 
 export const DEFAULT_WORKER_LIMITS: WorkerLimits = { maxTurns: 40, wallClockMs: 30 * 60_000 };
@@ -219,7 +221,14 @@ export interface WorkspaceProvider {
   changedFiles(workspace: WorkerWorkspace): string[];
   // 决策 381：worker 新建却因过大不会写进交回的树的未跟踪文件；不给即不列
   skippedFiles?(workspace: WorkerWorkspace): SkippedFile[];
+  // 决策 448：工作区与起点一致（没有未提交改动、没有新提交）；不给即一律当作有改动、不自动删
+  pristine?(workspace: WorkerWorkspace): boolean;
+  // 决策 448：删掉工作区（工作树连同分支）；不给即不删
+  remove?(workspace: WorkerWorkspace): void;
 }
+
+// 决策 448：自动删掉工作树的原因——收尾时没有改动、改动已完整取回
+export type WorktreeRemovedReason = "unchanged" | "taken";
 
 // 仓库根与治理根分开传（M6.5 S2）：工作树与分支建在仓库根上，目录放在治理根的 .pigeon/state/worktrees 下。
 // 主会话派 worker 时两者同为主仓库根（pigeon run --governance-root 时分开）；Eval 的治理根是输出目录
@@ -234,7 +243,7 @@ export function gitWorktreeWorkspaces(roots: {
     plan: ({ sessionId, name }) => ({
       kind: "git-worktree",
       path: worktreePathFor(roots.governanceRoot, sessionId, name),
-      branch: worktreeBranchFor(name),
+      branch: worktreeBranchFor(sessionId, name),
     }),
     create: (_workspace, { sessionId, name, baseRef }) => {
       addWorktree({
@@ -254,6 +263,18 @@ export function gitWorktreeWorkspaces(roots: {
             drop: isProgramOwnedPath,
           })
         : [],
+    pristine: (workspace) =>
+      workspace.kind === "git-worktree" &&
+      workspace.baseCommit !== undefined &&
+      worktreePristine(workspace.path, workspace.baseCommit),
+    remove: (workspace) => {
+      if (workspace.kind !== "git-worktree") return;
+      removeWorktreeAndBranch({
+        repoRoot: roots.repoRoot,
+        path: workspace.path,
+        branch: workspace.branch,
+      });
+    },
   };
 }
 
@@ -403,6 +424,8 @@ export interface WorkerStatus {
   script?: ScriptSpawnTag;
   // 已收尾的在场：结构化结果
   outcome?: WorkerOutcome;
+  // 决策 448：工作树已被自动删掉（收尾时没有改动、或改动已完整取回）
+  worktreeRemoved?: WorktreeRemovedReason;
   // 续接时从会话记录重建的、之前的运行派出的 worker（权威链审计 ②）：settled 为之前的运行中已收尾，
   // interrupted 为只有派出、没有收尾（随上次进程退出而中断）。只供查询与取用，不在本进程运行、不占并发额度
   previousRun?: "settled" | "interrupted";
@@ -460,6 +483,8 @@ export interface WorkerOutcome {
   // 收尾钩子的输出（SubagentStop 的拦截理由与补充上下文，逐轮累计；322：多份尝试交回各份的钩子输出）
   hookOutputs?: string[];
   durationMs?: number;
+  // 决策 448：收尾时没有改动，工作树与分支已删
+  worktreeRemoved?: "unchanged";
 }
 
 // 决策 294 ③：等待的结果——已收尾的结构化结果与仍在跑的状态
@@ -502,6 +527,7 @@ interface WorkerEntry {
   tokens: number;
   outcome?: WorkerOutcome;
   done: Promise<WorkerOutcome>;
+  worktreeRemoved?: WorktreeRemovedReason;
 }
 
 function refOf(entry: WorkerEntry): WorkerRef {
@@ -1005,6 +1031,7 @@ export class WorkerOrchestrator {
         `Worker ${entry.name} has not finished yet, so there is nothing to continue`
       );
     }
+    this.#restoreWorkspace(entry);
     const approve = options.approve === true && entry.blocked !== undefined;
     const blocked = entry.blocked;
     const text =
@@ -1223,6 +1250,7 @@ export class WorkerOrchestrator {
       parentSessionId: entry.parentSessionId,
       ...(entry.script !== undefined ? { script: entry.script } : {}),
       ...(entry.outcome !== undefined ? { outcome: entry.outcome } : {}),
+      ...(entry.worktreeRemoved !== undefined ? { worktreeRemoved: entry.worktreeRemoved } : {}),
     };
   }
 
@@ -1492,6 +1520,15 @@ export class WorkerOrchestrator {
     } catch (caught) {
       this.#errors.push(caught);
     }
+    // 决策 448：收尾时没有改动即删工作树与分支。等审批搁下的（可补批续做）、脚本编排派出的（接力与收回要用它的工作树，
+    // 由脚本在整次收尾时清理）不在这里删
+    const removed =
+      entry.blocked === undefined &&
+      entry.script === undefined &&
+      result !== undefined &&
+      (result.changedFiles?.length ?? 0) === 0 &&
+      (result.skippedFiles?.length ?? 0) === 0 &&
+      this.#removeIfPristine(entry);
     entry.state = status;
     const outcome: WorkerOutcome = {
       sessionId: entry.sessionId,
@@ -1512,6 +1549,7 @@ export class WorkerOrchestrator {
       ...(hookOutputs !== undefined && hookOutputs.length > 0 ? { hookOutputs } : {}),
       ...(transcript !== undefined ? { transcript } : {}),
       durationMs: skipRun ? 0 : this.#now() - runStartedAt,
+      ...(removed ? { worktreeRemoved: "unchanged" as const } : {}),
     };
     entry.outcome = outcome;
     this.#appendSettled(entry.parentLog, {
@@ -1535,6 +1573,79 @@ export class WorkerOrchestrator {
     });
     this.#emit({ kind: "worker.settled", worker: refOf(entry), outcome, at: this.#now() });
     return outcome;
+  }
+
+  // 决策 448：改动经取用完整叠回之后（taken）、或核对确实没有改动时（unchanged，脚本编排整次收尾用）删掉它的工作树与分支
+  //（之前的运行派出的同样删）。没有工作树、还没收尾、提供者不支持删除时不动；删除失败进内部故障清单，返回 false
+  discardWorkspace(sessionId: SessionId, reason: WorktreeRemovedReason): boolean {
+    const entry = this.#workers.get(sessionId);
+    const previous = entry === undefined ? this.#previous.get(sessionId) : undefined;
+    const target = entry ?? previous;
+    if (target === undefined || target.workspace.kind !== "git-worktree") return false;
+    if (entry !== undefined && entry.outcome === undefined) return false;
+    if (this.#workspaces.remove === undefined) return false;
+    try {
+      // 以"没有改动"为由删时先核对工作树确与起点一致
+      if (reason === "unchanged" && this.#workspaces.pristine?.(target.workspace) !== true) {
+        return false;
+      }
+      this.#workspaces.remove(target.workspace);
+    } catch (error) {
+      this.#errors.push(error);
+      return false;
+    }
+    if (entry !== undefined) {
+      entry.worktreeRemoved = reason;
+    } else if (previous !== undefined) {
+      this.#previous.set(sessionId, { ...previous, worktreeRemoved: reason });
+    }
+    return true;
+  }
+
+  #removeIfPristine(entry: WorkerEntry): boolean {
+    const workspaces = this.#workspaces;
+    if (
+      entry.workspace.kind !== "git-worktree" ||
+      workspaces.pristine === undefined ||
+      workspaces.remove === undefined
+    ) {
+      return false;
+    }
+    try {
+      if (!workspaces.pristine(entry.workspace)) return false;
+      workspaces.remove(entry.workspace);
+    } catch (error) {
+      this.#errors.push(error);
+      return false;
+    }
+    entry.worktreeRemoved = "unchanged";
+    return true;
+  }
+
+  // 续做前：收尾时因没有改动删掉的工作树按起点重建（同一路径与分支）；改动已取回而删掉的不能续做
+  #restoreWorkspace(entry: WorkerEntry): void {
+    if (entry.worktreeRemoved === undefined) return;
+    if (entry.worktreeRemoved === "taken") {
+      throw new WorkerSpawnError(
+        `Worker ${entry.name}'s changes were already taken in full and its worktree was removed, so it cannot continue; spawn another worker to carry on.`
+      );
+    }
+    const base = entry.workspace.kind === "git-worktree" ? entry.workspace.baseCommit : undefined;
+    try {
+      this.#workspaces.create(entry.workspace, {
+        sessionId: entry.sessionId,
+        name: entry.name,
+        role: entry.role,
+        ...(base !== undefined ? { baseRef: base } : {}),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new WorkerSpawnError(
+        `Worker ${entry.name}'s worktree was removed because it changed no files, and recreating it failed: ${message}`,
+        { cause: error }
+      );
+    }
+    delete entry.worktreeRemoved;
   }
 
   // 删起点引用失败不改变派出结果：进内部故障清单

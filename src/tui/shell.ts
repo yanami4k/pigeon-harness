@@ -78,6 +78,7 @@ import {
   type WorkerStatus,
 } from "../application/workers-commands.ts";
 import { sessionsDirOf } from "../application/workspace.ts";
+import type { TuiWorktreesFace } from "../application/worktree-cleanup.ts";
 import type { ApprovalRequest } from "../approvals/handler.ts";
 import type {
   CompactionNotice,
@@ -240,6 +241,8 @@ export interface TuiShellOptions {
   stopHookCap?: () => number;
   // 决策 331：/memory 的命令面（记忆按项目与用户分层，不跟会话走）；缺省 = 命令不可用
   memory?: TuiMemoryFace;
+  // 决策 448：/worktrees 的命令面（留下的 worker 工作树与分支）；缺省 = 命令不可用
+  worktrees?: TuiWorktreesFace;
 }
 
 // 决策 301：界面所处的视图——主会话、整屏的树形视图、进入的 worker 会话
@@ -694,6 +697,11 @@ export class PigeonTuiShell
   // 决策 331：/memory 的命令面（CommandsHost）
   memory(): TuiMemoryFace | undefined {
     return this.options.memory;
+  }
+
+  // 决策 448：/worktrees 的命令面（CommandsHost）
+  worktrees(): TuiWorktreesFace | undefined {
+    return this.options.worktrees;
   }
 
   // 接管 Esc（CommandsHost）：/memory edit 排队保存期间按 Esc 取消；后接管的优先，交还时只撤自己那一份

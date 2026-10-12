@@ -162,6 +162,8 @@ export async function prepareFork(request: ForkRequest): Promise<PreparedFork> {
       governanceRoot,
       sessionId: branchSessionId,
       name,
+      // 名字已带会话号后 8 位，分支照旧 pigeon/fork-<会话号后 8 位>（决策 447 只改 worker 的）
+      branch: `pigeon/${name}`,
       baseRef: checkpoint.commit,
     });
     const workspace: GitWorktreeWorkspace = {

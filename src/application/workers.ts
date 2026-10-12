@@ -25,7 +25,7 @@ import type {
   WorkerStartPointProvider,
 } from "../orchestration/workers.ts";
 import { WorkerOrchestrator } from "../orchestration/workers.ts";
-import { workerStartRefFor } from "../orchestration/worktree.ts";
+import { branchTailFor, workerStartRefFor } from "../orchestration/worktree.ts";
 import { loadStoreSession } from "../persistence/session-view.ts";
 import type { BeforeCompaction, CompactionConfigInput } from "../pi-runtime/compaction.ts";
 import { type PruneSeed, pruneSeedFromEntries } from "../pi-runtime/context-prune.ts";
@@ -210,8 +210,9 @@ export function workerStartPoint(
   workspaceRoot: string,
   limits?: UntrackedLimits
 ): WorkerStartPointProvider {
-  return ({ name, from }) => {
-    const ref = workerStartRefFor(name);
+  return ({ sessionId, name, from }) => {
+    // 决策 447：引用与分支同名（带会话号后 8 位），并行的同名 worker 不撞
+    const ref = workerStartRefFor(branchTailFor(sessionId, name));
     // 决策 299：派出方是 worker 时拍它的工作树（与主仓库同一个对象库，引用共用）
     const snap = snapshotWorkdir({
       repoRoot: from ?? workspaceRoot,

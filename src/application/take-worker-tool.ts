@@ -3,8 +3,8 @@
 // - 叠加本身在执行层 worker-overlay.ts：只写 worker 改过的文件，不删除不回退，冲突不写入、worker 分支与工作树原样保留，
 //   不设撤销。
 // - 续接后从会话记录找回的之前运行的 worker（previous-workers.ts）：已收尾的照常可取，只有派出没有收尾的不可取用。
-// - 取用依赖 worker 的工作树还在（日常使用里工作树不自动清理，由人用 git worktree remove 处理；跑批器每次运行收尾自行清理）；
-//   工作树已清理即返回明确的一句。
+// - 取用依赖 worker 的工作树还在。决策 448：收尾时没有改动的、完整取回（没有冲突、没有因过大留下的文件）之后的，工作树与分支
+//   自动删掉；其余留着，由 /worktrees 或 pigeon worktrees 列出删除（跑批器每次运行收尾自行清理）。工作树已删即返回明确的一句。
 // - 写工作目录，归写档、按写操作审批；与 spawn_worker 共用同一个工具槽（编排器与工作区根），注册范围相同（265–267：只给终端
 //   界面与 pigeon run 的主会话；命令行对话、worker 自己、沙箱会话与跑批器各条件都不注册）。
 // - 工具说明、参数说明与各情形的返回文字为定稿原文。
@@ -16,7 +16,7 @@ import {
   overlayWorkerChanges,
   workerOverlayPaths,
 } from "../execution/worker-overlay.ts";
-import type { WorkerOrchestrator } from "../orchestration/workers.ts";
+import type { WorkerOrchestrator, WorktreeRemovedReason } from "../orchestration/workers.ts";
 import { isUnderPigeonDir } from "../state/paths.ts";
 import type { ToolRegistration } from "../tools/registry.ts";
 import type { PigeonAgentTool, PigeonToolResult } from "../tools/wrap.ts";
@@ -34,14 +34,14 @@ export const TAKE_WORKER_DESCRIPTION = [
   "Only files the worker changed are written; files it did not touch are left alone. Nothing in your working directory is deleted or reverted. Files the worker deleted are not deleted automatically; they are only listed in the result, and you decide whether to delete them.",
   "Files that cannot be merged (you also changed the same spot) are not written and are listed as conflicts; the worker's branch and worktree are kept as they are, and you can see its changes to those files with: git -C <worktree path> diff <snapshot> -- <file>. Applying cannot be undone: review the returned summary and changed files before applying.",
   "Take the changes of several workers one at a time as needed, finishing one before taking the next; if a later one changed the same spot as an earlier one, it is listed as a conflict.",
-  "Returns three lists: files applied, files with conflicts that were not written, and files the worker deleted.",
+  "Returns three lists: files applied, files with conflicts that were not written, and files the worker deleted. When everything is applied (no conflicts and no files left behind), the worker's worktree and branch are removed.",
 ].join("\n");
 
 // 参数（说明为定稿原文）
 export const TakeWorkerParamsSchema = Type.Object({
   worker: Type.String({
     description:
-      "The worker's name, as given in the result returned by spawn_worker (branch pigeon/<name>)",
+      "The worker's name, as given in the result returned by spawn_worker (its branch is pigeon/<session suffix>-<name>)",
   }),
 });
 export type TakeWorkerParams = Static<typeof TakeWorkerParamsSchema>;
@@ -66,8 +66,16 @@ export const TAKE_WORKER_TEXTS = {
     `Worker ${name} has not finished yet; take its changes after it returns.`,
   unknown: (name: string) =>
     `There is no worker named ${name}; use the name given in the result returned by spawn_worker.`,
-  worktreeGone: (name: string) =>
-    `The worktree of worker ${name} has been cleaned up, so its changes cannot be taken.`,
+  // 决策 448：知道原因（本进程自动删的）时照实说；不知道（之前的运行里删的、人手删的）时列出可能
+  worktreeGone: (name: string, reason?: WorktreeRemovedReason) =>
+    reason === "unchanged"
+      ? `Worker ${name} changed no files, so its worktree and branch were removed; there is nothing to take.`
+      : reason === "taken"
+        ? `The changes of worker ${name} were already taken in full, so its worktree and branch were removed; there is nothing more to take.`
+        : `The worktree of worker ${name} has been removed (it changed no files, its changes were already taken in full, or it was deleted by hand), so its changes cannot be taken.`,
+  // 决策 448：完整取回（没有冲突、没有因过大留下的文件）之后删掉工作树与分支，附在取回结果之后
+  removedAfterTake: (name: string) =>
+    ` Everything was taken, so the worktree and branch of worker ${name} were removed.`,
   noStart: (name: string) =>
     `Worker ${name} has no recorded start snapshot, so its changes cannot be taken.`,
   // 续接后从会话记录找回的、只有派出没有收尾的（权威链审计 ②）
@@ -90,6 +98,8 @@ export function overlaySkippedLine(result: OverlayResult): string {
 export interface TakeWorkerDetails {
   worker: string;
   result?: OverlayResult;
+  // 决策 448：取回之后工作树与分支已删
+  worktreeRemoved?: boolean;
   rejected?:
     | "unknown"
     | "running"
@@ -143,7 +153,7 @@ export function takeWorkerChanges(
   host: {
     // 决策 381：编排器在场时按它的未跟踪文件上限写 worker 的树（替身可以不给，取产品缺省）
     orchestrator: Pick<WorkerOrchestrator, "status"> &
-      Partial<Pick<WorkerOrchestrator, "untrackedLimits">>;
+      Partial<Pick<WorkerOrchestrator, "untrackedLimits" | "discardWorkspace">>;
     workspaceRoot: string;
   },
   worker: string
@@ -189,7 +199,7 @@ export function takeWorkerChanges(
   }
   if (!existsSync(status.workspace.path)) {
     return {
-      text: TAKE_WORKER_TEXTS.worktreeGone(name),
+      text: TAKE_WORKER_TEXTS.worktreeGone(name, status.worktreeRemoved),
       details: { worker: name, rejected: "worktree-gone" },
     };
   }
@@ -219,13 +229,18 @@ export function takeWorkerChanges(
     result.unchanged.length === 0 &&
     result.conflicts.length === 0 &&
     result.deletedByWorker.length === 0;
+  // 决策 448：完整取回（没有冲突、没有因过大留下的文件）即删工作树与分支；删不成照常留着，不改变取回结果
+  const complete = result.conflicts.length === 0 && (result.skipped?.length ?? 0) === 0;
+  const removed =
+    complete && host.orchestrator.discardWorkspace?.(status.sessionId, "taken") === true;
   return {
     text:
       (empty
         ? TAKE_WORKER_TEXTS.noChanges(name)
         : TAKE_WORKER_TEXTS.taken(name, result, { worktree: status.workspace.path, base })) +
-      overlaySkippedLine(result),
-    details: { worker: name, result },
+      overlaySkippedLine(result) +
+      (removed ? TAKE_WORKER_TEXTS.removedAfterTake(name) : ""),
+    details: { worker: name, result, ...(removed ? { worktreeRemoved: true } : {}) },
   };
 }
 

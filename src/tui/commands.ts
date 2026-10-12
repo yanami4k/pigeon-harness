@@ -15,6 +15,7 @@ import { SCRIPT_COMMAND_TEXTS, type ScriptCommands } from "../application/script
 import { commandInputText } from "../application/script-texts.ts";
 import { runSearchCommand } from "../application/search.ts";
 import { runSessionListCommand } from "../application/session-list.ts";
+import type { TuiWorktreesFace } from "../application/worktree-cleanup.ts";
 import type { SessionGrantStore } from "../approvals/grant-store.ts";
 import type { ConfigGrantRule } from "../state/grants.ts";
 import type { SessionId } from "../state/ids.ts";
@@ -86,6 +87,8 @@ export interface CommandsHost {
   memory?(): TuiMemoryFace | undefined;
   // 接管 Esc（审批挂起时除外），直到返回的函数被调用；缺省 = 不能接管
   captureEscape?(onEscape: () => void): () => void;
+  // 决策 448：/worktrees 的命令面（缺省 = /worktrees 不可用）
+  worktrees?(): TuiWorktreesFace | undefined;
 }
 
 // 命令表判断可用性用的只读面
@@ -101,6 +104,7 @@ export function commandAvailability(host: CommandsHost): CommandAvailability {
     hooks: () => host.hooksView?.() !== undefined,
     scripts: () => host.scriptCommands?.() !== undefined,
     memory: () => host.memory?.() !== undefined,
+    worktrees: () => host.worktrees?.() !== undefined,
     workers: () => {
       const workers = host.workers();
       return workers === undefined
@@ -300,6 +304,12 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
         return;
       }
       host.addSystem(MEMORY_COMMAND_USAGE);
+      return;
+    }
+    // 决策 448：/worktrees 列出、删除留下的 worker 工作树与分支（删除要再确认一次）
+    const worktrees = host.worktrees?.();
+    if (tokens[0] === "worktrees" && worktrees !== undefined) {
+      host.addSystem(worktrees.run(tokens.slice(1)));
       return;
     }
     // 决策 189：/compact [重点] 手动压缩（重点作为摘要的附加说明）

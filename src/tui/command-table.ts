@@ -24,6 +24,8 @@ export interface CommandAvailability {
   reload?(): boolean;
   // 决策 323、324：/hooks 看本会话生效的钩子（缺省即不在场）
   hooks?(): boolean;
+  // 决策 448：/worktrees 列出与删除留下的工作树（缺省即不在场）
+  worktrees?(): boolean;
 }
 
 export interface SlashCommandSpec {
@@ -185,6 +187,13 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     usage: "/reload [confirm|skip]",
     whileRunning: { allow: false, reason: `${MAIN_STATE}（重读设置并重建运行面）` },
     available: (host) => host.reload?.() === true,
+  },
+  // 决策 448：列出只读；删除只动留下的工作树（在跑 worker 的不删），不碰主会话与主工作目录，运行中可用
+  {
+    name: "worktrees",
+    usage: "/worktrees [clean [编号…] [--all] | confirm]",
+    whileRunning: { allow: true },
+    available: (host) => host.worktrees?.() === true && !host.inSandbox(),
   },
   {
     name: "export",

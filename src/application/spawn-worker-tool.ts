@@ -27,7 +27,6 @@ import type {
   WorkerOutcome,
   WorkerStartPoint,
 } from "../orchestration/workers.ts";
-import { worktreeBranchFor } from "../orchestration/worktree.ts";
 import type { SessionId } from "../state/ids.ts";
 import {
   DEFAULT_ORCHESTRATION_SETTINGS,
@@ -272,8 +271,11 @@ export const SPAWN_WORKER_TEXTS = {
     ` (summary truncated; the full text is in worker session ${sessionId})`,
   limitHit: (w: WorkerFacts, limit: WorkerLimit) =>
     `Worker ${w.name} (${w.role}) hit the ${limit} limit and did not finish. Branch: ${w.branch}. Files changed so far (${w.files.length}): ${fileList(w.files)}. Summary: ${w.summary}`,
-  failed: (w: Pick<WorkerFacts, "name" | "role" | "branch">, reason: string) =>
-    `Worker ${w.name} (${w.role}) failed: ${reason}. The branch ${w.branch} may have partial changes.`,
+  // 派出本身失败时还没有分支，不给 branch
+  failed: (w: Pick<WorkerFacts, "name" | "role"> & { branch?: string }, reason: string) =>
+    `Worker ${w.name} (${w.role}) failed: ${reason}.${
+      w.branch !== undefined ? ` The branch ${w.branch} may have partial changes.` : ""
+    }`,
   cancelled: (w: Pick<WorkerFacts, "name" | "role" | "branch">) =>
     `Worker ${w.name} (${w.role}) was cancelled. The branch ${w.branch} may have partial changes.`,
   // 决策 298：卡住
@@ -300,6 +302,9 @@ export const SPAWN_WORKER_TEXTS = {
   unknownRole: (role: string) =>
     `There is no role ${role}; choose from: ${WORKER_ROLES.join(", ")}.`,
   emptyTask: "task cannot be empty: state the goal, the relevant files, and the criteria for done.",
+  // 决策 448：收尾时没有改动，工作树与分支已自动删掉（代替起点那一行）
+  removedUnchanged:
+    "It changed no files, so its worktree and branch were removed; there is nothing to take.",
   // 决策 279（271 修订）：另起一行写明起点快照与只取其自身改动的取用方式（人看的 /workers 用 workers-commands.ts 的中文一行）
   start: (start: WorkerStartPoint, name: string) => {
     const commit = start.commit.slice(0, 12);
@@ -543,10 +548,13 @@ function workerOutcomeTextBase(
     outcome.result?.summaryTruncated === true
       ? SPAWN_WORKER_TEXTS.truncated(outcome.sessionId)
       : "";
+  // 决策 448：收尾时没有改动、工作树已删的，不再提示取用
   const start =
-    (outcome.start !== undefined && outcome.workspace.kind === "git-worktree"
-      ? `\n${SPAWN_WORKER_TEXTS.start(outcome.start, outcome.name)}`
-      : "") + skippedFilesLine(outcome.result?.skippedFiles);
+    (outcome.worktreeRemoved === "unchanged"
+      ? `\n${SPAWN_WORKER_TEXTS.removedUnchanged}`
+      : outcome.start !== undefined && outcome.workspace.kind === "git-worktree"
+        ? `\n${SPAWN_WORKER_TEXTS.start(outcome.start, outcome.name)}`
+        : "") + skippedFilesLine(outcome.result?.skippedFiles);
   if (outcome.blocked !== undefined) {
     return (
       SPAWN_WORKER_TEXTS.awaitingApproval(
@@ -740,11 +748,7 @@ export function createSpawnWorkerTool(
       if (host === undefined) {
         return reply(
           SPAWN_WORKER_TEXTS.failed(
-            {
-              name: params.name ?? params.role,
-              role: params.role,
-              branch: worktreeBranchFor(params.name ?? params.role),
-            },
+            { name: params.name ?? params.role, role: params.role },
             "this session has no worker orchestrator set up"
           ),
           { sessionIds: [], rejected: "unbound" }
@@ -778,7 +782,7 @@ export function createSpawnWorkerTool(
         const name = params.name ?? params.role;
         return reply(
           SPAWN_WORKER_TEXTS.failed(
-            { name, role: params.role, branch: worktreeBranchFor(name) },
+            { name, role: params.role },
             error instanceof Error ? error.message : String(error)
           ),
           { sessionIds: [] }
@@ -793,7 +797,7 @@ export function createSpawnWorkerTool(
           ? SPAWN_WORKER_TEXTS.readOnly.spawned(who)
           : SPAWN_WORKER_TEXTS.spawned({
               ...who,
-              branch: status?.branch ?? worktreeBranchFor(name),
+              branch: status?.branch ?? "",
             }),
         { sessionIds: [id] }
       );
@@ -830,7 +834,7 @@ async function spawnAttempts(
       }
       return reply(
         SPAWN_WORKER_TEXTS.failed(
-          { name: params.role, role: params.role, branch: worktreeBranchFor(params.role) },
+          { name: params.role, role: params.role },
           error instanceof Error ? error.message : String(error)
         ),
         { sessionIds: [] }

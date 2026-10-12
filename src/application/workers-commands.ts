@@ -132,12 +132,15 @@ export function renderWorkerOutcome(outcome: WorkerOutcome): string {
     }
   }
   lines.push(
-    outcome.workspace.kind === "git-worktree"
-      ? `  工作树 ${outcome.workspace.path}：改动未提交，审阅与合并由人用 git 完成（trace ${outcome.sessionId} 查看证据链）`
-      : outcome.workspace.kind === "shared"
-        ? // 决策 377：只读的 explorer 不建工作树
-          `  不建工作树：只读了 ${outcome.workspace.path}，不产生文件改动（trace ${outcome.sessionId} 查看证据链）`
-        : `  无工作区：只读审阅不产生文件改动（trace ${outcome.sessionId} 查看证据链）`
+    outcome.worktreeRemoved === "unchanged"
+      ? // 决策 448：收尾时没有改动，工作树与分支已自动删掉
+        `  没有改动，工作树与分支已删（trace ${outcome.sessionId} 查看证据链）`
+      : outcome.workspace.kind === "git-worktree"
+        ? `  工作树 ${outcome.workspace.path}：改动未提交，审阅与合并由人用 git 完成（trace ${outcome.sessionId} 查看证据链）`
+        : outcome.workspace.kind === "shared"
+          ? // 决策 377：只读的 explorer 不建工作树
+            `  不建工作树：只读了 ${outcome.workspace.path}，不产生文件改动（trace ${outcome.sessionId} 查看证据链）`
+          : `  无工作区：只读审阅不产生文件改动（trace ${outcome.sessionId} 查看证据链）`
   );
   // 决策 381：worker 新建却因过大不会进交回的树的文件
   if (result?.skippedFiles !== undefined && result.skippedFiles.length > 0) {
@@ -146,7 +149,11 @@ export function renderWorkerOutcome(outcome: WorkerOutcome): string {
     );
   }
   // 决策 279：起点快照与只取其自身改动的取用方式（与 spawn_worker 返回的那一行同一口径，取用入口为 /take）
-  if (outcome.start !== undefined && outcome.workspace.kind === "git-worktree") {
+  if (
+    outcome.start !== undefined &&
+    outcome.workspace.kind === "git-worktree" &&
+    outcome.worktreeRemoved === undefined
+  ) {
     lines.push(`  ${workerStartLine(outcome.start, `用 /take ${outcome.name}`)}`);
   }
   return lines.join("\n");

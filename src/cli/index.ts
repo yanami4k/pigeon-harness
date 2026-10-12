@@ -15,6 +15,7 @@ import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { handbackJobsNotice } from "../application/background-jobs.ts";
 import { runForkCommand } from "../application/fork-command.ts";
+import { runWorktreesCommand } from "../application/worktree-cleanup.ts";
 import { failureBadge } from "../application/format.ts";
 import type { GrantsCommandContext } from "../application/grants.ts";
 import { currentHarnessRef, describeHarness } from "../application/harness-ref.ts";
@@ -564,6 +565,11 @@ export async function main(argv: string[]): Promise<void> {
     writeOut(await runSandboxCommand(argv.slice(1)));
     return;
   }
+  // 决策 448：pigeon worktrees list | clean：留下的 worker 工作树与分支
+  if (argv[0] === "worktrees") {
+    writeOut(await worktreesMain(argv.slice(1)));
+    return;
+  }
   if (argv[0] === "migrate-config") {
     migrateConfigMain(argv.slice(1));
     return;
@@ -579,8 +585,27 @@ const SUBCOMMANDS = new Set([
   "session",
   "resume",
   "sandbox",
+  "worktrees",
   "migrate-config",
 ]);
+
+// 决策 448：在当前目录所在的仓库上列出或删除留下的工作树；终端里删除前问一次，没有终端须带 --yes
+async function worktreesMain(argv: string[]): Promise<string> {
+  const scope = { workspaceRoot: realpathSync(process.cwd()) };
+  const confirm =
+    process.stdin.isTTY === true
+      ? async (question: string): Promise<boolean> => {
+          const { createInterface } = await import("node:readline/promises");
+          const rl = createInterface({ input: process.stdin, output: process.stdout });
+          try {
+            return /^y(es)?$/i.test((await rl.question(question)).trim());
+          } finally {
+            rl.close();
+          }
+        }
+      : undefined;
+  return runWorktreesCommand(argv, scope, confirm);
+}
 
 // pigeon migrate-config [--root <dir>]（决策 325）：旧配置并入三层设置、旧位置的程序状态移入 .pigeon/state/；可重复执行
 function migrateConfigMain(argv: string[]): void {
@@ -777,6 +802,7 @@ export const TOP_LEVEL_HELP = [
   "  pigeon replay <runId>         回放一次运行",
   "  pigeon session list           列出本项目的会话",
   "  pigeon sandbox list|clean     查看或清理残留的沙箱容器",
+  "  pigeon worktrees list|clean   查看或删除留下的 worker 工作树与分支（clean 缺省只删没有未取走改动的，--all 全删，--yes 不再确认）",
   `  pigeon migrate-config         把旧配置并入三层 settings.json、旧位置的程序状态移入 ${pigeonRel("state")}/`,
   "  pigeon sandbox cache|clear-cache  查看或清空沙箱共用的下载缓存（npm、pnpm、yarn、pip、uv、cargo、go）",
 ].join("\n");

@@ -24,6 +24,7 @@ import {
   createWorkerStatusTool,
   MESSAGE_WORKER_DESCRIPTION,
   STOP_WORKER_DESCRIPTION,
+  structuredOutcomeText,
   WORKER_STATUS_DESCRIPTION,
   waitWorkersDescription,
   waitWorkersParamsSchema,
@@ -41,6 +42,7 @@ import {
   spawnWorkerParamsSchema,
   workerNoticeMarker,
   workerNoticeText,
+  workerOutcomeText,
 } from "./spawn-worker-tool.ts";
 import { type NoticeTarget, WORKER_NOTICE_PREFIX, WorkerNotices } from "./worker-notices.ts";
 
@@ -909,4 +911,41 @@ test("message_worker 未送达：worker 在下一轮之前结束（最后一轮�
   );
   assert.equal(result.details.delivered, false);
   assert.deepEqual(h.runtimes.get("closing")?.withdrawn, ["note-1"]);
+});
+
+// 决策 448：收尾时没有改动、工作树已删的：完成通知与 wait_workers 的结果末行写明已删，不再给起点与取用方式
+test("决策 448：工作树因无改动已删的 worker，完成通知与结构化结果末行说明已删、不提示取用", () => {
+  const outcome: WorkerOutcome = {
+    sessionId: newSessionId(),
+    name: "w",
+    role: "tester",
+    status: "completed",
+    turns: 1,
+    workspace: {
+      kind: "git-worktree",
+      path: "/virtual/w",
+      branch: "pigeon/abcd1234-w",
+      baseCommit: "c".repeat(40),
+    },
+    start: { commit: "c".repeat(40), snapshot: false, files: [] },
+    result: {
+      branch: "pigeon/abcd1234-w",
+      changedFiles: [],
+      summary: "看过了",
+      summaryTruncated: false,
+    },
+    worktreeRemoved: "unchanged",
+  };
+  const notice = workerOutcomeText(outcome);
+  assert.equal(notice.split("\n").at(-1), SPAWN_WORKER_TEXTS.removedUnchanged);
+  assert.ok(!notice.includes("take_worker"), notice);
+  const structured = structuredOutcomeText(outcome);
+  assert.equal(structured.split("\n").at(-1), SPAWN_WORKER_TEXTS.removedUnchanged);
+  assert.equal(
+    SPAWN_WORKER_TEXTS.removedUnchanged,
+    "It changed no files, so its worktree and branch were removed; there is nothing to take."
+  );
+  // 没删的照旧给起点与取用方式
+  const { worktreeRemoved: _removed, ...kept } = outcome;
+  assert.match(workerOutcomeText(kept).split("\n").at(-1) ?? "", /call take_worker \(worker=w\)/);
 });

@@ -77,6 +77,7 @@ import { closeTuiSession } from "../application/tui-exit.ts";
 import type { WorkerNotices } from "../application/worker-notices.ts";
 import { createSessionWorkers } from "../application/workers.ts";
 import { prepareWorkspace } from "../application/workspace.ts";
+import { createTuiWorktreesFace, isGitWorkspace } from "../application/worktree-cleanup.ts";
 import type { SessionGrantStore } from "../approvals/grant-store.ts";
 import { createApprovalQueue } from "../approvals/queue.ts";
 import { memoryWriteNoticeLine } from "../memory/update-memory-tool.ts";
@@ -512,6 +513,10 @@ export async function main(argv: string[]): Promise<void> {
             spawnEditor(editor, file),
         }),
     },
+    // 决策 448：/worktrees 列出与删除留下的 worker 工作树（git 仓库、不在沙箱里才有）
+    ...(sandbox === undefined && isGitWorkspace(workspaceRoot)
+      ? { worktrees: createTuiWorktreesFace({ workspaceRoot }) }
+      : {}),
     // S5+（裁决 033）：双击 Ctrl+C / /quit 的真实退出路径——壳内已先 stop()
     //（dispose 对称、挂起审批 fail-closed），此处只释放当前运行面并退进程
     onExit: release,

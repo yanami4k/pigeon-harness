@@ -182,7 +182,10 @@ export function structuredOutcomeText(outcome: WorkerOutcome): string {
     }`,
     `Session record: ${outcome.transcript ?? `worker session ${outcome.sessionId}`}`,
   ];
-  if (outcome.start !== undefined && outcome.workspace.kind === "git-worktree") {
+  // 决策 448：收尾时没有改动、工作树与分支已删的，不再提示取用
+  if (outcome.worktreeRemoved === "unchanged") {
+    lines.push(SPAWN_WORKER_TEXTS.removedUnchanged);
+  } else if (outcome.start !== undefined && outcome.workspace.kind === "git-worktree") {
     lines.push(SPAWN_WORKER_TEXTS.start(outcome.start, outcome.name));
   }
   return lines.join("\n");
