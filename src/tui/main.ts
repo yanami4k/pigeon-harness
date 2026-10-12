@@ -23,6 +23,7 @@ import { pathToFileURL } from "node:url";
 import { ProcessTerminal } from "@earendil-works/pi-tui";
 import { createSessionAttemptRunner } from "../application/attempt-group.ts";
 import type { CheckpointAttachment } from "../application/checkpoints.ts";
+import { EnterWorktreeSlot, worktreeContinueNotice } from "../application/enter-worktree-tool.ts";
 import { runForkCommand } from "../application/fork-command.ts";
 import {
   type LaunchFlags,
@@ -40,9 +41,11 @@ import {
 } from "../application/memory-command.ts";
 import {
   closeNamedWorktree,
+  type NamedWorktree,
   namedWorktreeOpenedLine,
   namedWorktreeRepoRoot,
   openNamedWorktree,
+  reopenNamedWorktree,
 } from "../application/named-worktree.ts";
 import { restoreSessionWorkers } from "../application/previous-workers.ts";
 import { promptHistoryStore } from "../application/prompt-history.ts";
@@ -196,7 +199,12 @@ export async function main(argv: string[]): Promise<void> {
   if (namedWorktree !== undefined) {
     console.error(namedWorktreeOpenedLine(namedWorktree));
   }
-  const workspaceRoot = namedWorktree?.path ?? governanceRoot;
+  // 决策 446：会话移进工作树后换成工作树（worker 编排、取用、脚本等闭包按它取）
+  let workspaceRoot = namedWorktree?.path ?? governanceRoot;
+  // 决策 445、446：本会话当前所在的独立工作树（退出时按它清理）；待本轮结束后移入的
+  let activeWorktree: NamedWorktree | undefined = namedWorktree;
+  let pendingWorktree: { worktree: NamedWorktree; uncommitted: number } | undefined;
+  const enterWorktreeSlot = new EnterWorktreeSlot();
   // 决策 297–303：编排设定——设置的 orchestration 一节（缺失取缺省），--worker-concurrency 与 --worker-limit 优先
   let orchestration = orchestrationSettingsOf(flags, settings);
   // 决策 308：打转检测——设置的 loopGuard 一节（缺失取缺省即开着）
@@ -393,6 +401,7 @@ export async function main(argv: string[]): Promise<void> {
     governanceRoot: governanceRoot,
     // 决策 445：独立工作树里的会话，/reload 重建时工作区仍是工作树（第一条消息之前会话文件还没建，推导不出）
     ...(namedWorktree !== undefined ? { workspaceRoot: namedWorktree.path } : {}),
+    ...(sandbox === undefined ? { enterWorktree: enterWorktreeSlot } : {}),
     streamFn,
     flags,
     ...(sandbox !== undefined
@@ -409,6 +418,7 @@ export async function main(argv: string[]): Promise<void> {
   const mainOpened = await openSessionRuntime({
     governanceRoot: governanceRoot,
     ...(namedWorktree !== undefined ? { workspaceRoot: namedWorktree.path } : {}),
+    ...(sandbox === undefined ? { enterWorktree: enterWorktreeSlot } : {}),
     settings,
     sessionId,
     streamFn,
@@ -435,6 +445,8 @@ export async function main(argv: string[]): Promise<void> {
     throw error;
   });
   const mainBundle = mainOpened.bundle;
+  // 决策 445、446：续接的会话开在独立工作树里（--continue、--resume）：工作区与退出清理跟着它
+  adoptWorkspace(mainOpened.scope.workspaceRoot);
   guardMainAgent(mainBundle);
   // 当前运行面持有格（S4）：/resume 换绑整体替换；进程退出只释放当前格。沙箱里不派 worker（会越出容器）
   // 决策 350：checkpoints 为本格的快照挂载，换走本格之前先等它未完成的快照
@@ -501,44 +513,7 @@ export async function main(argv: string[]): Promise<void> {
           ? "有 worker 仍在运行：先 /cancel 或等其收尾，再 /reload"
           : undefined,
       sandboxSessionId: () => (sandbox !== undefined ? slot.sessionId : undefined),
-      apply: async (snapshot) => {
-        // 先建后换（复审 P2）：重建成功才换上这些闭包变量；重建失败时旧快照、旧编排设定与旧运行面都保持不变，
-        // /reload 会照当前快照重新列出待确认条目、可重试
-        const reloaded = await reopenMainSessionForReload(reloadContext, snapshot, slot);
-        const opened = reloaded.opened;
-        settings = snapshot;
-        orchestration = reloaded.orchestration;
-        loopGuard = reloaded.loopGuard;
-        webToolsOption = reloaded.webTools;
-        const bundle = opened.bundle;
-        guardMainAgent(bundle);
-        const workers =
-          sandbox === undefined ? workersFor(opened, opened.scope.parentSessionId) : undefined;
-        const previous = slot;
-        // 决策 350：换走旧运行面之前先等它未完成的快照拍完（新运行面在同一工作区上接着改文件）
-        await previous.checkpoints?.settle();
-        slot = {
-          sessionId: previous.sessionId,
-          bundle,
-          ...(workers !== undefined ? { workers } : {}),
-          ...(opened.checkpoints !== undefined ? { checkpoints: opened.checkpoints } : {}),
-        };
-        // 决策 323、324：换走旧运行面前跑旧会话的 SessionEnd（reason "switch"），记录落在本会话文件；
-        // 壳 rebindSession 随后会为重建后的会话跑 SessionStart（source "resume"）
-        await shellHolder.current?.endSession("switch");
-        await disposeRuntime(previous.bundle).catch(() => {});
-        shellHolder.current?.rebindSession(slot.sessionId, {
-          runtime: bundle.adapter,
-          grants: {
-            root: governanceRoot,
-            store: bundle.grantStore,
-            configRules: bundle.configGrants,
-            layeredRules: bundle.settings.grants,
-          },
-          ...(workers !== undefined ? { workers } : {}),
-          hooks: bundle.hooks,
-        });
-      },
+      apply: (snapshot) => rebuildMain(snapshot),
     }),
     // 决策 294 B1：/tasks 查看当前会话的任务清单（换绑后跟着当前会话）
     tasks: () => {
@@ -565,6 +540,8 @@ export async function main(argv: string[]): Promise<void> {
             spawnEditor(editor, file),
         }),
     },
+    // 决策 446：模型调了 enter_worktree 的那一轮收尾后，按 /reload 的先建后换移进工作树，再递一条通知让 agent 接着做
+    afterTurn: () => (pendingWorktree !== undefined ? switchIntoWorktree() : undefined),
     // 决策 448：/worktrees 列出与删除留下的 worker 工作树（git 仓库、不在沙箱里才有）
     ...(sandbox === undefined && isGitWorkspace(governanceRoot)
       ? {
@@ -608,6 +585,46 @@ export async function main(argv: string[]): Promise<void> {
       },
     });
   }
+  // 决策 340：/reload 的先建后换；决策 446：会话移进工作树时同样按这条路重建（reloadContext.workspaceRoot 先换成工作树）
+  async function rebuildMain(snapshot: typeof settings): Promise<void> {
+    // 先建后换（复审 P2）：重建成功才换上这些闭包变量；重建失败时旧快照、旧编排设定与旧运行面都保持不变，
+    // /reload 会照当前快照重新列出待确认条目、可重试
+    const reloaded = await reopenMainSessionForReload(reloadContext, snapshot, slot);
+    const opened = reloaded.opened;
+    settings = snapshot;
+    orchestration = reloaded.orchestration;
+    loopGuard = reloaded.loopGuard;
+    webToolsOption = reloaded.webTools;
+    const bundle = opened.bundle;
+    guardMainAgent(bundle);
+    const workers =
+      sandbox === undefined ? workersFor(opened, opened.scope.parentSessionId) : undefined;
+    const previous = slot;
+    // 决策 350：换走旧运行面之前先等它未完成的快照拍完（新运行面在同一工作区上接着改文件）
+    await previous.checkpoints?.settle();
+    slot = {
+      sessionId: previous.sessionId,
+      bundle,
+      ...(workers !== undefined ? { workers } : {}),
+      ...(opened.checkpoints !== undefined ? { checkpoints: opened.checkpoints } : {}),
+    };
+    // 决策 323、324：换走旧运行面前跑旧会话的 SessionEnd（reason "switch"），记录落在本会话文件；
+    // 壳 rebindSession 随后会为重建后的会话跑 SessionStart（source "resume"）
+    await shellHolder.current?.endSession("switch");
+    await disposeRuntime(previous.bundle).catch(() => {});
+    shellHolder.current?.rebindSession(slot.sessionId, {
+      runtime: bundle.adapter,
+      grants: {
+        root: governanceRoot,
+        store: bundle.grantStore,
+        configRules: bundle.configGrants,
+        layeredRules: bundle.settings.grants,
+      },
+      ...(workers !== undefined ? { workers } : {}),
+      hooks: bundle.hooks,
+    });
+  }
+
   function resumeOptions(): NonNullable<TuiShellOptions["resume"]> {
     return {
       root: governanceRoot,
@@ -618,6 +635,7 @@ export async function main(argv: string[]): Promise<void> {
           governanceRoot: governanceRoot,
           settings,
           sessionId: targetId,
+          ...(sandbox === undefined ? { enterWorktree: enterWorktreeSlot } : {}),
           streamFn,
           flags,
           ...spawnWorkerOption(flags, orchestration),
@@ -631,6 +649,8 @@ export async function main(argv: string[]): Promise<void> {
           hooksNotice: (line) => shellHolder.current?.addSystem(line),
         });
         const bundle = opened.bundle;
+        // 决策 445、446：换到的会话开在独立工作树里时，工作区与退出清理跟着它
+        adoptWorkspace(opened.scope.workspaceRoot);
         if (bundle.instructionsNotice !== undefined) {
           shellHolder.current?.addSystem(bundle.instructionsNotice);
         }
@@ -664,6 +684,52 @@ export async function main(argv: string[]): Promise<void> {
         };
       },
     };
+  }
+  // 决策 446：enter_worktree 的宿主——当前工作区、起点档位、建好后记下待移入（本轮结束后换运行面）
+  enterWorktreeSlot.bind({
+    governanceRoot,
+    workspaceRoot: () => workspaceRoot,
+    baseMode: () => worktreeBaseModeOf(worktreeSectionOf(settings)),
+    onEntered: (worktree, uncommitted) => {
+      pendingWorktree = { worktree, uncommitted };
+      shellHolder.current?.addSystem(
+        `本轮结束后移进工作树 ${worktree.path}（分支 ${worktree.branch}，${worktree.created ? `起点 ${worktree.baseLabel}` : "打开已有的"}）${
+          uncommitted > 0 ? `；主检出里 ${uncommitted} 个未提交的改动没有带过去` : ""
+        }`
+      );
+    },
+  });
+  // 决策 445、446：当前会话的工作区（主会话为治理根或独立工作树）；独立工作树记为退出时要清理的那个
+  function adoptWorkspace(root: string): void {
+    workspaceRoot = root;
+    reloadContext.workspaceRoot = root === governanceRoot ? undefined : root;
+    activeWorktree =
+      root === governanceRoot
+        ? undefined
+        : (reopenNamedWorktree(governanceRoot, root) ?? activeWorktree);
+  }
+  // 决策 446：移进工作树——重建运行面（工作区换成工作树），递一条通知开一轮接着做；重建失败即留在原处并说明
+  async function switchIntoWorktree(): Promise<void> {
+    const pending = pendingWorktree;
+    pendingWorktree = undefined;
+    if (pending === undefined) return;
+    const previous = reloadContext.workspaceRoot;
+    reloadContext.workspaceRoot = pending.worktree.path;
+    try {
+      await rebuildMain(settings);
+    } catch (error) {
+      reloadContext.workspaceRoot = previous;
+      shellHolder.current?.addSystem(
+        `没能移进工作树 ${pending.worktree.path}：${error instanceof Error ? error.message : String(error)}；会话留在原处`
+      );
+      return;
+    }
+    workspaceRoot = pending.worktree.path;
+    activeWorktree = pending.worktree;
+    shellHolder.current?.addSystem(
+      `会话已移进工作树 ${pending.worktree.path}（分支 ${pending.worktree.branch}）`
+    );
+    slot.bundle.adapter.notify(worktreeContinueNotice(pending.worktree, pending.uncommitted));
   }
   faceHolder.current = shell;
   shellHolder.current = shell;
@@ -704,8 +770,8 @@ export async function main(argv: string[]): Promise<void> {
         log: (line) => console.log(`[沙箱] ${line}`),
       });
       // 决策 445：独立工作树——没有改动即删；有改动在终端行内问保留还是删除（壳已停）
-      if (namedWorktree !== undefined) {
-        await closeNamedWorktree(namedWorktree, {
+      if (activeWorktree !== undefined) {
+        await closeNamedWorktree(activeWorktree, {
           ...(process.stdin.isTTY === true ? { ask: askOnStderr } : {}),
           write: (line) => console.error(line),
         });

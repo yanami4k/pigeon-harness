@@ -2,6 +2,7 @@
 // 有人对话入口的记忆写入照常带上（决策 331，重建后 update_memory 仍注册），/memory 的上限随新快照更新。
 // 先建后换：重建失败时抛出，调用方的快照、编排设定与旧运行面都不变（/memory 的上限也只在重建成功后才更新）。
 // 从 main.ts 抽出，使 /reload 的实际装配路径可测。
+import type { EnterWorktreeSlot } from "../application/enter-worktree-tool.ts";
 import { type LaunchFlags, orchestrationSettingsOf } from "../application/launch-flags.ts";
 import type { MemoryWriteConfig, RuntimeBundle } from "../application/runtime.ts";
 import { ScriptGate, scriptGateSettingsOf } from "../application/script-naming.ts";
@@ -40,7 +41,9 @@ export function spawnWorkerOption(
 export interface MainReloadContext {
   governanceRoot: string;
   // 决策 445、446：主会话的工作区根（独立工作树）；缺省按会话推导
-  workspaceRoot?: string;
+  workspaceRoot?: string | undefined;
+  // 决策 446：enter_worktree 的工具槽（重建的运行面照常注册）
+  enterWorktree?: EnterWorktreeSlot;
   streamFn: StreamFn;
   flags: LaunchFlags;
   workspaceHost?: WorkspaceHost;
@@ -80,6 +83,7 @@ export async function reopenMainSessionForReload(
   const opened = await openSessionRuntime({
     governanceRoot: context.governanceRoot,
     ...(context.workspaceRoot !== undefined ? { workspaceRoot: context.workspaceRoot } : {}),
+    ...(context.enterWorktree !== undefined ? { enterWorktree: context.enterWorktree } : {}),
     settings: snapshot,
     sessionId: current.sessionId,
     streamFn: context.streamFn,

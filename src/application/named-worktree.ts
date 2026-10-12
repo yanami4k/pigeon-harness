@@ -9,7 +9,7 @@
 // 会话记录、设置与记忆仍在主仓库根的 .pigeon（治理根是主仓库），工作区是工作树。
 import { execFileSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import {
   branchCreationCommit,
   createWorktreeAt,
@@ -285,4 +285,29 @@ export function namedWorktreeOpenedLine(worktree: NamedWorktree): string {
   return worktree.created
     ? `新建工作树 ${worktree.path}（分支 ${worktree.branch}，起点 ${worktree.baseLabel}）`
     : `打开已有的工作树 ${worktree.path}（分支 ${worktree.branch}）`;
+}
+
+// 路径在本仓库的独立工作树里（.pigeon/worktrees/<名字> 之下）
+export function insideNamedWorktree(repoRoot: string, path: string): boolean {
+  const rel = relative(namedWorktreesDirOf(repoRoot), resolve(path));
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+// 决策 446：会话移进工作树之后再打开它（续接、/reload）：按记下的路径找回，目录还在且仍是本仓库登记的工作树才算
+export function reopenNamedWorktree(repoRoot: string, path: string): NamedWorktree | undefined {
+  if (!insideNamedWorktree(repoRoot, path) || !existsSync(path)) return undefined;
+  const registered = listWorktrees(repoRoot).find((entry) => samePath(entry.path, path));
+  if (registered === undefined) return undefined;
+  const branch = registered.branch ?? namedWorktreeBranch(basename(path));
+  const base =
+    registered.branch !== undefined ? branchCreationCommit(repoRoot, registered.branch) : undefined;
+  return {
+    name: basename(path),
+    repoRoot,
+    path: resolve(path),
+    branch,
+    ...(base !== undefined ? { base } : {}),
+    baseLabel: base !== undefined ? `建立时的起点 ${base.slice(0, 12)}` : "不明",
+    created: false,
+  };
 }

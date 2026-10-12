@@ -54,6 +54,7 @@ export const SessionEntryType = {
   Prune: "pigeon.prune",
   BackgroundJob: "pigeon.background-job",
   RequestRetry: "pigeon.request-retry",
+  Worktree: "pigeon.worktree",
 } as const;
 export type SessionEntryTypeName = (typeof SessionEntryType)[keyof typeof SessionEntryType];
 
@@ -537,6 +538,20 @@ export const RequestRetryDataSchema = Type.Object({
 });
 export type RequestRetryData = Static<typeof RequestRetryDataSchema>;
 
+// 决策 446：会话移进独立工作树（enter_worktree）。主分支上最后一条决定续接、/reload 时的工作区（目录还在才用）
+export const WorktreeDataSchema = Type.Object({
+  version: VERSION,
+  name: Type.String({ minLength: 1 }),
+  path: Type.String({ minLength: 1 }),
+  branch: Type.String({ minLength: 1 }),
+  base: Type.Optional(Type.String()),
+  baseLabel: Type.String(),
+  // 这次新建的（false = 打开已有的同名工作树）
+  created: Type.Boolean(),
+  enteredAt: Type.Integer({ minimum: 0 }),
+});
+export type WorktreeData = Static<typeof WorktreeDataSchema>;
+
 // 一条待写的自定义条目：customType 与数据成对
 export type SessionCustomEntry =
   | { customType: typeof SessionEntryType.RunStart; data: RunStartData }
@@ -554,7 +569,8 @@ export type SessionCustomEntry =
   | { customType: typeof SessionEntryType.Status; data: StatusData }
   | { customType: typeof SessionEntryType.Prune; data: PruneData }
   | { customType: typeof SessionEntryType.BackgroundJob; data: BackgroundJobData }
-  | { customType: typeof SessionEntryType.RequestRetry; data: RequestRetryData };
+  | { customType: typeof SessionEntryType.RequestRetry; data: RequestRetryData }
+  | { customType: typeof SessionEntryType.Worktree; data: WorktreeData };
 
 // 各 customType 的数据 schema（读者校验用）
 export const SESSION_ENTRY_SCHEMAS = {
@@ -574,6 +590,7 @@ export const SESSION_ENTRY_SCHEMAS = {
   [SessionEntryType.Prune]: PruneDataSchema,
   [SessionEntryType.BackgroundJob]: BackgroundJobDataSchema,
   [SessionEntryType.RequestRetry]: RequestRetryDataSchema,
+  [SessionEntryType.Worktree]: WorktreeDataSchema,
 } as const;
 
 // 自定义条目的写入面：写者自身从不抛，写失败按内部故障处理（向标准错误输出去重告警），不中断运行。

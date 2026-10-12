@@ -186,6 +186,13 @@ import {
   lostJobsText,
   type PreviousJobs,
 } from "./background-jobs.ts";
+import {
+  createEnterWorktreeTool,
+  ENTER_WORKTREE_PROMPT_SENTENCE,
+  ENTER_WORKTREE_TOOL,
+  type EnterWorktreeSlot,
+  enterWorktreeRegistration,
+} from "./enter-worktree-tool.ts";
 import { createToolGovernance } from "./governance.ts";
 import { SessionHooks } from "./hooks.ts";
 import type { McpSession } from "./mcp.ts";
@@ -378,6 +385,8 @@ export interface RuntimeDeps {
   // 决策 294 D、309：提交编排脚本的工具。在场即给主 agent 注册 orchestrate（运行器建好后由装配方绑定到这个槽上）；能否执行由槽里的
   // 点名判定管。缺省关着（跑批器各条件不给）；委派策略在场（worker）或注入了执行端（沙箱）时不注册
   scriptOrchestration?: ScriptSlot;
+  // 决策 446：模型建工作树并把会话移进去的工具（终端界面主会话给；绑定由终端界面做）。worker、沙箱与非 git 工作区不注册
+  enterWorktree?: EnterWorktreeSlot;
   // 决策 294 B1：任务清单工具（update_tasks、list_tasks）。缺省关着（装配层缺省；终端界面与 pigeon run 按编排配置缺省打开，
   // 跑批器各条件不给）；只给主会话（委派策略在场时不注册）
   taskList?: boolean;
@@ -860,6 +869,17 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     // 决策 279：取用 worker 自身改动的工具与派 worker 同槽同范围（写档，按写操作审批）
     registry.register(takeWorkerRegistration());
   }
+  // 决策 446：enter_worktree——只给终端界面的主会话，git 工作区才注册（写档）
+  const enterWorktreeSlot =
+    deps.enterWorktree !== undefined &&
+    deps.workspaceHost === undefined &&
+    deps.toolPolicy === undefined &&
+    (environment.check("gitWorkspace") || skip([ENTER_WORKTREE_TOOL], "工作区不是 git 仓库"))
+      ? deps.enterWorktree
+      : undefined;
+  if (enterWorktreeSlot !== undefined) {
+    registry.register(enterWorktreeRegistration());
+  }
   // 决策 309：提交编排脚本的工具——只给主会话；worker 与沙箱不注册。决策 359：脚本派的 worker 要 git 工作区、脚本跑在
   // docker 里，两样缺一即不注册
   const scriptCandidate =
@@ -997,6 +1017,7 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
         ]
       : []),
     ...(takeSlot !== undefined ? [TAKE_WORKER_TOOL] : []),
+    ...(enterWorktreeSlot !== undefined ? [ENTER_WORKTREE_TOOL] : []),
     ...(scriptSlot !== undefined ? [ORCHESTRATE_TOOL] : []),
     ...(taskList !== undefined ? [UPDATE_TASKS_TOOL, LIST_TASKS_TOOL] : []),
     ...(webTools !== undefined ? [...(webSearch ? [WEB_SEARCH_TOOL] : []), WEB_FETCH_TOOL] : []),
@@ -1017,7 +1038,13 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
   const systemPrompt =
     recordedPrompt ??
     frozen?.systemPrompt ??
-    [basePrompt, deps.taskDirective ?? "", STATUS_AUTHORITY_SENTENCE]
+    [
+      basePrompt,
+      deps.taskDirective ?? "",
+      // 决策 446：注册了 enter_worktree 时写明只在使用者要求时用
+      enterWorktreeSlot !== undefined ? ENTER_WORKTREE_PROMPT_SENTENCE : "",
+      STATUS_AUTHORITY_SENTENCE,
+    ]
       .filter((section) => section !== "")
       .join("\n\n");
   // 决策 363、354：开工状态块的各节。文件类各节（项目说明、Skill 目录、记忆）、环境与 git 状态在 Run 开始与写档、命令档工具之后
@@ -1350,6 +1377,9 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
         ? [createSpawnWorkerTool(spawnSlot, policy.allow), ...createOrchestrationTools(spawnSlot)]
         : []),
       ...(takeSlot !== undefined ? [createTakeWorkerTool(takeSlot)] : []),
+      ...(enterWorktreeSlot !== undefined
+        ? [createEnterWorktreeTool(enterWorktreeSlot, sessionStore)]
+        : []),
       ...(scriptSlot !== undefined ? [createOrchestrateTool(scriptSlot)] : []),
       ...(taskList !== undefined ? createTaskListTools(taskList) : []),
       ...webToolset,

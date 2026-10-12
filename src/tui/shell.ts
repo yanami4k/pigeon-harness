@@ -244,6 +244,9 @@ export interface TuiShellOptions {
   memory?: TuiMemoryFace;
   // 决策 448：/worktrees 的命令面（留下的 worker 工作树与分支）；缺省 = 命令不可用
   worktrees?: TuiWorktreesFace;
+  // 决策 446：一轮真正收尾、空闲下来之前调用（会话移进工作树时在这里换运行面）；期间仍按在跑处理，输入排队
+  // 没有要做的返回 undefined（照常同步空闲下来）
+  afterTurn?: () => Promise<void> | undefined;
 }
 
 // 决策 301：界面所处的视图——主会话、整屏的树形视图、进入的 worker 会话
@@ -1843,8 +1846,25 @@ export class PigeonTuiShell
     }
   }
 
-  // 一轮真正收尾：空闲下来、刷新状态并发排队输入（Stop 钩子跑完之后）
+  // 一轮真正收尾：空闲下来、刷新状态并发排队输入（Stop 钩子跑完之后）。决策 446：先跑 afterTurn（换运行面），跑完才空闲
   private finishRun(): void {
+    const pending = this.options.afterTurn?.();
+    if (pending !== undefined) {
+      void pending.then(
+        () => this.finishRunNow(),
+        (error: unknown) => {
+          this.flow.addSystem(
+            `收尾时出错：${error instanceof Error ? error.message : String(error)}`
+          );
+          this.finishRunNow();
+        }
+      );
+      return;
+    }
+    this.finishRunNow();
+  }
+
+  private finishRunNow(): void {
     this.running = false;
     this.updateStatus();
     this.tui.requestRender();

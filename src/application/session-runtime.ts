@@ -20,6 +20,7 @@ import { emptySettingsSnapshot, mcpConfigOf, type SettingsSnapshot } from "../st
 import type { WorkspaceHost } from "../tools/workspace-host.ts";
 import { previousJobsOf } from "./background-jobs.ts";
 import { attachCheckpoints, type CheckpointAttachment } from "./checkpoints.ts";
+import type { EnterWorktreeSlot } from "./enter-worktree-tool.ts";
 import { describeMcpStartup, type McpSession, noMcpSession, startMcpSession } from "./mcp.ts";
 import {
   buildRuntime,
@@ -84,6 +85,8 @@ export interface OpenSessionRuntimeRequest {
   deferSessionFile?: boolean;
   // 决策 445、446：主会话的工作区根（独立工作树）；缺省按会话推导（新会话即治理根）。worker 会话不受它影响
   workspaceRoot?: string;
+  // 决策 446：enter_worktree 的工具槽（终端界面主会话给）；worker 会话与沙箱不注册
+  enterWorktree?: EnterWorktreeSlot;
   // MCP 启动提示（启动问题与注解配置冲突）：cli 打 stdout、tui 打 stderr，由调用方决定
   onMcpNote?: (note: string) => void;
   // 缺省按治理根与作用域工作区根启动真实 MCP 会话；测试注入替身。reuse 为 /reload 时的旧 MCP 会话（沿用未变的连接）
@@ -268,6 +271,12 @@ export async function openSessionRuntime(
         : {}),
       ...(spawnWorker !== undefined ? { spawnWorker } : {}),
       ...(scriptOrchestration !== undefined ? { scriptOrchestration } : {}),
+      // 决策 446：只给主会话（worker 会话与沙箱不注册）
+      ...(request.enterWorktree !== undefined &&
+      scope.parentSessionId === undefined &&
+      request.workspaceHost === undefined
+        ? { enterWorktree: request.enterWorktree }
+        : {}),
       ...(request.taskList === true ? { taskList: true } : {}),
       ...(request.webTools !== undefined ? { webTools: request.webTools } : {}),
       ...(request.warn !== undefined ? { storeWarn: request.warn } : {}),

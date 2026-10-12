@@ -6,9 +6,11 @@
 // worker 派出条目里；会话存储里没有这个会话的文件即按主会话处理（新会话尚未写出文件）。
 import { existsSync } from "node:fs";
 import { isAbsolute, relative } from "node:path";
+import type { StoredEntry } from "../persistence/session-reader.ts";
 import { loadStoreSession } from "../persistence/session-view.ts";
 import type { SessionId } from "../state/ids.ts";
 import { mapLegacyWorktreePath, namedWorktreesDirOf } from "../state/paths.ts";
+import { SessionEntryType } from "../state/session-entries.ts";
 import { storeWorkerSpawned } from "../state/session-judge.ts";
 import type { DelegatedPolicy, WorkerRole, WorkerWorkspace } from "../state/session-payloads.ts";
 import { sessionsDirOf } from "./workspace.ts";
@@ -38,7 +40,9 @@ export function sessionRuntimeScope(
   const worker = view.metadata?.worker;
   const parentSessionId = view.parentSessionId;
   if (worker === undefined || parentSessionId === undefined) {
-    return { workspaceRoot: mainSessionWorkspace(governanceRoot, loaded.file.header.cwd) };
+    return {
+      workspaceRoot: mainSessionWorkspace(governanceRoot, loaded.file.header.cwd, loaded.main),
+    };
   }
   const parent = loadStoreSession(dir, parentSessionId);
   if (parent === undefined) {
@@ -59,13 +63,25 @@ export function sessionRuntimeScope(
   });
 }
 
-// 决策 445：主会话开在独立工作树（.pigeon/worktrees/<名字>）里时，续接回到那里（会话文件头记着工作目录）；
-// 工作树已不在即回到治理根（主检出），不报错
-function mainSessionWorkspace(governanceRoot: string, cwd: string): string {
+// 决策 445、446：主会话开在独立工作树（.pigeon/worktrees/<名字>）里时，续接回到那里——主分支上最后一条 pigeon.worktree 条目
+//（enter_worktree 移进去的）优先，其次会话文件头记的工作目录（pigeon --worktree 开的）；工作树已不在即回到治理根（主检出），不报错
+function mainSessionWorkspace(
+  governanceRoot: string,
+  cwd: string,
+  entries: readonly StoredEntry[]
+): string {
   const dir = namedWorktreesDirOf(governanceRoot);
-  const rel = relative(dir, cwd);
-  const inside = rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
-  return inside && existsSync(cwd) ? cwd : governanceRoot;
+  const usable = (path: string): boolean => {
+    const rel = relative(dir, path);
+    return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel) && existsSync(path);
+  };
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry?.type !== "custom" || entry.customType !== SessionEntryType.Worktree) continue;
+    const path = (entry.data as { path?: unknown } | undefined)?.path;
+    if (typeof path === "string") return usable(path) ? path : governanceRoot;
+  }
+  return usable(cwd) ? cwd : governanceRoot;
 }
 
 // 决策 325：工作树移入 .pigeon/state/worktrees 之前的会话记着旧位置的绝对路径，按旧前缀到新前缀映射后再找
