@@ -457,6 +457,7 @@
 | 441 | 终端界面改用全屏渲染（pi-tui 的 TuiAltScreen），不保留主屏模式：消息区单独滚动，输入区与状态栏钉在底部；滚轮、程序内搜索与拖选复制用 pi-tui 自带的；退出时完整对话打印回普通屏幕 | 产品体验 | 终端界面 |
 | 442 | 终端界面加设置面板：/config 打开（pi-tui 的 SettingsList），只列一小组常用的个人选项，改了写进用户级设置并当场生效（走 /reload 的重建）；另支持 /config 键=值 直接改一项；结构化的配置照旧编辑文件 | 产品体验 | 终端界面 |
 | 443 | 会话面板（参照 Claude Code 的 agent view）先做进程内版：一个 Pigeon 进程里同时开多个独立会话，面板只列独立会话、不列 worker，可派新会话、偷看、回复、进入、停止，派出的会话进各自的 git 工作树、改动经 /take 取回；常驻托管进程、各会话独立进程与跨进程通道定为演进方向，面板按可沿用设计 | 产品体验 | 终端界面 / 编排 |
+| 444 | 不再写 .pigeon/.gitignore：.pigeon/state/ 等第一次真要写程序状态时才建；在 git 仓库里且尚未被忽略时，把 **/.pigeon/state/ 与 **/.pigeon/settings.local.json 写进使用者的全局 git 排除文件（与 Claude Code 同一做法），已有即不重复；非 git 目录不写忽略规则；已有的 .pigeon/.gitignore 不动 | 产品体验 | 配置 |
 
 ## 条目
 
@@ -3917,3 +3918,8 @@
 
 - 结论：参照 Claude Code 的 agent view，先做进程内版的会话面板——一个 Pigeon 进程里可同时开多个独立会话（各有自己的主 agent）；面板只列独立会话，worker 属于派出它的会话、不单列，进入会话后照旧在其树形视图里看；按状态分组（等待回应的在前），可派新会话、偷看、直接回复、进入、停止；派出的会话进各自的 git 工作树，改动经 /take 取回；摘要先取最后一条回复的开头。关掉 Pigeon 这些会话即停。演进方向是 Claude Code 的完整做法：常驻托管进程、各会话为独立进程、界面与会话之间的跨进程通道、闲置回收与命令行管理；面板按可沿用到该方向设计。
 - 理由：一屏看清哪个会话在干活、哪个在等回应是主要价值，进程内版即可提供，积木（运行面、审批、工作树、/take）大多现成；常驻与跨进程是另一层基础设施，约为进程内版的数倍工作量，待确有关掉终端仍继续跑的需要再做。
+
+### 444 程序状态的忽略规则与建目录时机（设计）
+
+- 结论：启动时不再建 .pigeon/state/、不再写 .pigeon/.gitignore；.pigeon/state/ 等第一次真要写程序状态时才建（与 432 同一时机）。此时若工作区是 git 仓库，且 .pigeon/state/ 与 .pigeon/settings.local.json 尚未被忽略，就把 `**/.pigeon/state/` 与 `**/.pigeon/settings.local.json` 两行写进使用者的全局 git 排除文件（core.excludesFile 设为绝对路径或 ~ 开头时用它，否则用 $XDG_CONFIG_HOME/git/ignore，未设时 ~/.config/git/ignore），已有即不重复写。非 git 目录不写任何忽略规则。已有的 .pigeon/.gitignore 不动，快照与沙箱交回照旧认得它。
+- 理由：忽略规则只与使用者本机的程序状态有关，写成项目里的 .gitignore 会自己出现在 git status 里、提交后带给不用 Pigeon 的人；全局排除文件写一次即覆盖所有仓库、工作树与新克隆，与 Claude Code 处理 settings.local.json 的做法一致。启动即建则打开就退出也会在任何目录留下 .pigeon。
