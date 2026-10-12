@@ -234,3 +234,19 @@ test("同一进程同一目录只做一次；ensureProjectStateDir 建目录并�
     else process.env.GIT_CONFIG_GLOBAL = previous.global;
   }
 });
+
+test("规则已在文件里却不生效（core.excludesFile 设为相对路径，git 不读 XDG 文件）：再调也不重复写", () => {
+  const s = sandbox();
+  const root = repo(s.env);
+  execFileSync("git", ["config", "--global", "core.excludesFile", "relative/excludes"], {
+    cwd: root,
+    env: s.env,
+  });
+  const file = join(s.xdg, "git", "ignore");
+  const first = ensureGlobalIgnoreRules(root, { env: s.env, homeDir: s.home });
+  assert.deepEqual(first.added, ALL);
+  const second = ensureGlobalIgnoreRules(root, { env: s.env, homeDir: s.home });
+  assert.equal(second.file, file);
+  assert.deepEqual(second.added, []);
+  assert.equal(readFileSync(file, "utf8"), `${ALL.join("\n")}\n`);
+});
