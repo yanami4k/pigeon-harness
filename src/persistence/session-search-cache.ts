@@ -30,6 +30,7 @@ import {
 import type { SessionView } from "../state/session-view.ts";
 import { readSessionView, sessionRefTime } from "./session-catalog.ts";
 import type { SessionFileRef } from "./session-reader.ts";
+import { ensureStateDirOf } from "./settings.ts";
 
 // 缓存格式版本：抽取口径或文件形状一变即加一，旧缓存随之整体重建。v2 = 决策 339 的初版；v3 = 决策 384
 //（每条消息加词频表与工具输出的来历）；v4 = 决策 428（工具输出来历里的"出错""退出码 N"改为英文）
@@ -132,6 +133,8 @@ function writeCacheFile(cacheDir: string, name: string, value: unknown): void {
   const target = join(cacheDir, name);
   const temp = `${target}.${process.pid}.${randomBytes(4).toString("hex")}${TEMP_SUFFIX}`;
   try {
+    // 决策 444：第一次写程序状态——建目录、确保全局忽略规则
+    ensureStateDirOf(cacheDir);
     mkdirSync(cacheDir, { recursive: true });
     writeFileSync(temp, JSON.stringify(value));
     renameSync(temp, target);

@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, test } from "vitest";
 import { snapshotWorkdir } from "../execution/workdir-snapshot.ts";
+import { globalExcludesFile } from "../persistence/global-ignore.ts";
 import { findLegacyLayout } from "../persistence/legacy-layout.ts";
 import { migrationBackupLocation } from "../persistence/migration-backup.ts";
 import { loadSettings } from "../persistence/settings.ts";
@@ -38,6 +39,13 @@ afterAll(() => {
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+// 决策 444：全局排除文件的内容（测试总装把全局配置与 XDG 目录指到临时位置；这里再核一遍确实不是真实用户目录）
+function globalIgnoreText(): string {
+  const file = globalExcludesFile(tmpdir());
+  assert.ok(realpathSync.native(file).startsWith(realpathSync.native(tmpdir())), file);
+  return existsSync(file) ? readFileSync(file, "utf8") : "";
 }
 
 function repo(): string {
@@ -209,10 +217,9 @@ test("旧位置的程序状态挪进 .pigeon/state/；worker 工作树经 git wo
   assert.ok(listed.includes(`worktree ${movedSlash}`), listed);
   assert.ok(!listed.includes(`worktree ${legacySlash}`), listed);
   assert.equal(git(moved, "rev-parse", "--abbrev-ref", "HEAD"), "pigeon/w1");
-  assert.equal(
-    readFileSync(join(root, ".pigeon", ".gitignore"), "utf8"),
-    "state/\nsettings.local.json\n"
-  );
+  // 决策 444：不再写 .pigeon/.gitignore，忽略规则写进全局 git 排除文件（测试总装把它指到临时的 XDG 目录）
+  assert.equal(existsSync(join(root, ".pigeon", ".gitignore")), false);
+  assert.match(globalIgnoreText(), /\*\*\/\.pigeon\/state\//);
   assert.deepEqual(findLegacyLayout(root), []);
 });
 
@@ -232,7 +239,7 @@ test("锁被存活进程占用（有会话或 worker 正在运行）或工作树
   assert.ok(existsSync(legacyTree));
 });
 
-test("迁移备份不在仓库里：git status 与快照提交里都没有备份文件与 key，备份里也没有 key 的值；仍写 .pigeon/.gitignore", () => {
+test("迁移备份不在仓库里：git status 与快照提交里都没有备份文件与 key，备份里也没有 key 的值；忽略规则在全局排除文件里", () => {
   const root = repo();
   const homeDir = home();
   const original = JSON.stringify({
@@ -248,10 +255,9 @@ test("迁移备份不在仓库里：git status 与快照提交里都没有备份
   assert.match(backedUp.search.tavily.apiKey, /TAVILY_API_KEY/);
   assert.throws(() => execFileSync("grep", ["-rl", "tvly-secret", homeDir]), "备份目录里没有 key");
   assert.ok(result.lines.join("\n").includes(`备份在 ${backupDir}`), "打印备份位置");
-  assert.equal(
-    readFileSync(join(root, ".pigeon", ".gitignore"), "utf8"),
-    "state/\nsettings.local.json\n"
-  );
+  // 决策 444：不再写 .pigeon/.gitignore；个人设置与程序状态的忽略规则在全局排除文件里
+  assert.equal(existsSync(join(root, ".pigeon", ".gitignore")), false);
+  assert.match(globalIgnoreText(), /\*\*\/\.pigeon\/settings\.local\.json/);
   const status = git(root, "status", "--porcelain", "--untracked-files=all", "--ignored");
   assert.ok(!/backup|\.bak|web\.json/.test(status), status);
   assert.match(status, /\.pigeon\/settings\.json/);

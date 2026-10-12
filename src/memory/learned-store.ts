@@ -14,6 +14,7 @@ import {
   migrationBackupLocation,
   userMigrationBackupLocation,
 } from "../persistence/migration-backup.ts";
+import { ensureStateDirOf } from "../persistence/settings.ts";
 import { sha256Hex } from "../state/hashing.ts";
 import {
   projectMemoryLockPathOf,
@@ -82,6 +83,8 @@ export function readMemoryFile(file: string): MemoryFileRead {
 }
 
 export function writeMemoryFile(file: string, text: string): void {
+  // 决策 444：项目级记忆是程序状态——第一次写时建目录、确保全局忽略规则（用户级不在项目里，不动）
+  ensureStateDirOf(file);
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileAtomic(file, text);
 }

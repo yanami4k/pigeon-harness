@@ -38,6 +38,7 @@ import {
   UPDATE_MEMORY_TOOL,
   updateMemoryRegistration,
 } from "../memory/update-memory-tool.ts";
+import { ensureProjectStateDir } from "../persistence/settings.ts";
 import { PiRuntimeAdapter, type StatusChannel } from "../pi-runtime/adapter.ts";
 import {
   type BeforeCompaction,
@@ -637,6 +638,10 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     cwd: deps.workspaceRoot,
     ...(deps.storeLineage !== undefined ? { lineage: deps.storeLineage } : {}),
     ...(deps.deferSessionFile === true ? { deferCreate: true } : {}),
+    // 决策 444：第一次真建会话文件时才建程序状态目录，并确保全局忽略规则（一行提示走存储告警口）
+    beforeCreate: () => {
+      ensureProjectStateDir(governanceRoot, deps.storeWarn);
+    },
     onFault: storeFaultWarner(deps.storeWarn),
     persistThinking: deps.persistThinking ?? true,
   });

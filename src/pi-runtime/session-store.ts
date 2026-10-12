@@ -100,6 +100,8 @@ export interface SessionStoreWriterOptions {
   persistThinking?: boolean;
   // 推迟建文件（432）：没有 existingPath 时等第一条真要落盘的写入才建文件、取锁；钩子运行记录不算，先留在内存里
   deferCreate?: boolean;
+  // 决策 444：新建会话文件之前调用一次（建程序状态目录、确保全局忽略规则）；抛错不挡建文件
+  beforeCreate?: () => void;
 }
 
 // 运行面写消息与自定义条目的写入面（Adapter 经它写，结构类型便于测试注入）。
@@ -169,6 +171,11 @@ async function openOrCreate(core: WriterCore, options: SessionStoreWriterOptions
       } as JsonlSessionMetadata);
       core.path = options.existingPath;
     } else {
+      try {
+        options.beforeCreate?.();
+      } catch {
+        // 准备程序状态目录的告警由调用方自己给出；建文件照常进行
+      }
       const session = await repo.create({
         id: options.sessionId,
         cwd: options.cwd,

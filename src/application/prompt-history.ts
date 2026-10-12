@@ -3,6 +3,7 @@
 // 读不出（文件缺失、畸形）按空历史处理；写失败静默放弃（历史是便利功能，不挡输入）。写入先写临时文件再改名，不留半截文件。
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { ensureStateDirOf } from "../persistence/settings.ts";
 import { promptHistoryPathOf } from "../state/paths.ts";
 
 export const PROMPT_HISTORY_LIMIT = 100;
@@ -46,6 +47,8 @@ export function promptHistoryStore(governanceRoot: string): PromptHistoryStore {
       const entries = readEntries(path);
       if (entries.at(-1) !== trimmed) entries.push(trimmed);
       try {
+        // 决策 444：第一次写程序状态——建目录、确保全局忽略规则
+        ensureStateDirOf(path);
         mkdirSync(dirname(path), { recursive: true });
         const temp = `${path}.${process.pid}.tmp`;
         writeFileSync(

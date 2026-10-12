@@ -36,7 +36,7 @@ import {
   moveToMigrationBackup,
   writeRedactedMigrationBackup,
 } from "../persistence/migration-backup.ts";
-import { ensurePigeonGitignore } from "../persistence/settings.ts";
+import { ensureLocalSettingsIgnored, ensureProjectStateDir } from "../persistence/settings.ts";
 import { canonicalJson } from "../state/hashing.ts";
 import {
   LEGACY_CONFIG_FILES,
@@ -268,7 +268,7 @@ export const legacyConfigStep: MigrationStep = {
     for (const [layer, target] of targets) {
       const file = targetPathOf(ctx.root, layer);
       mkdirSync(path.dirname(file), { recursive: true });
-      if (layer === "local") ensurePigeonGitignore(ctx.root, (line) => lines.push(line));
+      if (layer === "local") ensureLocalSettingsIgnored(ctx.root, (line) => lines.push(line));
       writeFileAtomic(file, `${JSON.stringify(target, null, 2)}\n`);
     }
     for (const item of converted) {
@@ -353,7 +353,7 @@ export const legacyStateStep: MigrationStep = {
       if (!existsSync(source)) continue;
       const target = entry.target(ctx.root);
       mkdirSync(path.dirname(target), { recursive: true });
-      ensurePigeonGitignore(ctx.root, (line) => lines.push(line));
+      ensureProjectStateDir(ctx.root, (line) => lines.push(line));
       renameSync(source, target);
       lines.push(`已移动 ${pigeonRel(entry.name)} → ${path.relative(ctx.root, target)}`);
     }
@@ -522,7 +522,7 @@ export const legacyWorktreesStep: MigrationStep = {
     for (const dir of legacyWorktreeDirs(ctx.root)) {
       const target = path.join(worktreesDirOf(ctx.root), path.basename(dir));
       mkdirSync(path.dirname(target), { recursive: true });
-      ensurePigeonGitignore(ctx.root, (line) => lines.push(line));
+      ensureProjectStateDir(ctx.root, (line) => lines.push(line));
       if (known.has(realOrSelf(dir))) {
         execFileSync("git", [...hardenedGitArgs(ctx.root), "worktree", "move", dir, target], {
           cwd: ctx.root,
@@ -670,9 +670,10 @@ export function runMigrateConfig(
     return { changed: false, lines: ["没有要迁移的内容：配置与程序状态已是新布局"] };
   }
   const lines: string[] = [];
-  // 每次迁移都确保 .pigeon/.gitignore（程序状态与个人设置不被提交；只迁项目共享层的文件时也一样）
+  // 决策 444：每次迁移都确保程序状态与个人设置的忽略规则在全局 git 排除文件里（只迁项目共享层的文件时也一样）；
+  // 不再写 .pigeon/.gitignore
   if (existsSync(projectPigeonDir(root))) {
-    ensurePigeonGitignore(root, (line) => lines.push(line));
+    ensureLocalSettingsIgnored(root, (line) => lines.push(line));
   }
   for (const { step } of pending) {
     lines.push(`${step.title}：`);

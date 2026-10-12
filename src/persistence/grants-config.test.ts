@@ -1,7 +1,7 @@
 // 固化 grant 配置文件读写测试（M4 S6 D6 + 收口决策 ②）：缺失 = 无规则、合法载入、畸形
 // fail-closed、升格追加、同 grantId 去重拒绝。
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
@@ -183,11 +183,8 @@ test("升格去重（note-6 / 决策 ②）：同一 grantId 二次升格响亮�
       promotedFrom: { ...rule.promotedFrom, grantId: newGrantId() },
     });
     appendGrantConfigRule(root, rule);
-    // 第一次建个人设置时写下 .pigeon/.gitignore
-    assert.equal(
-      readFileSync(join(root, ".pigeon", ".gitignore"), "utf8"),
-      "state/\nsettings.local.json\n"
-    );
+    // 决策 444：第一次建个人设置时不再写 .pigeon/.gitignore（忽略规则改写全局 git 排除文件，见 global-ignore.test）
+    assert.equal(existsSync(join(root, ".pigeon", ".gitignore")), false);
     assert.equal(findPromotedRuleIndex(loadGrantConfig(root), grantId), 1);
     const bytesBefore = readFileSync(grantsConfigPath(root), "utf8");
     assert.throws(

@@ -17,7 +17,7 @@ import {
   sandboxDockerfileContent,
 } from "../persistence/config-trust-store.ts";
 import { assertNoLegacyLayout } from "../persistence/legacy-layout.ts";
-import { ensureProjectStateDir, loadSettings } from "../persistence/settings.ts";
+import { loadSettings } from "../persistence/settings.ts";
 import {
   describeTrustEntry,
   type TrustEntry,
@@ -151,13 +151,12 @@ export async function confirmSessionConfig(
   throw new ConfigNotConfirmedError("未确认会执行命令或放权的配置，已退出");
 }
 
-// 会话开始：旧布局检查 → 程序状态目录 → 读设置 → 确认会执行命令的条目
+// 会话开始：旧布局检查 → 读设置 → 确认会执行命令的条目。决策 444：不在这里建程序状态目录（第一次真要写程序状态时才建）
 export async function openSessionSettings(
   root: string,
   options: OpenSessionSettingsOptions
 ): Promise<SettingsSnapshot> {
   assertNoLegacyLayout(root, options.homeDir !== undefined ? { homeDir: options.homeDir } : {});
-  ensureProjectStateDir(root, options.notice);
   const snapshot = loadSettings(
     root,
     options.homeDir !== undefined ? { homeDir: options.homeDir } : {}

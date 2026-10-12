@@ -15,7 +15,7 @@ import {
 import { describeSource, type SettingsSource, validateSettingsLayer } from "../state/settings.ts";
 import { type AtomicWriteIo, writeFileAtomic } from "./atomic-write.ts";
 import { acquireExclusiveLock } from "./exclusive-lock.ts";
-import { ensurePigeonGitignore } from "./settings.ts";
+import { ensureLocalSettingsIgnored } from "./settings.ts";
 
 export class GrantsConfigError extends Error {}
 // 升格去重（M4 收口决策 ②）：同一会话 grant 只允许升格一次——grantId 是固化规则的稳定身份
@@ -25,7 +25,7 @@ export class GrantAlreadyPromotedError extends GrantsConfigError {}
 export interface GrantConfigWriteOptions {
   // 写盘注入点（测试模拟写到一半崩溃）；缺省为同步写
   io?: AtomicWriteIo;
-  // .pigeon/.gitignore 缺行时的提示出口（缺省标准错误输出）
+  // 决策 444：忽略规则写进全局 git 排除文件时的一行提示出口（缺省不提示）
   notice?: (line: string) => void;
 }
 
@@ -82,7 +82,7 @@ function withGrantsConfigLock<T>(
   const path = grantsConfigPath(governanceRoot);
   if (!existsSync(path)) {
     mkdirSync(dirname(path), { recursive: true });
-    ensurePigeonGitignore(governanceRoot, options.notice);
+    ensureLocalSettingsIgnored(governanceRoot, options.notice);
   }
   const release = acquireExclusiveLock(grantsConfigLockPath(governanceRoot), CONTENDED);
   try {
