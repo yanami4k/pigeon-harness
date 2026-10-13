@@ -2,7 +2,7 @@
 //（项目共享层 .pigeon/settings.json 或项目个人层 .pigeon/settings.local.json）覆盖——覆盖时改用户级不生效。改动只写用户级
 // ~/.pigeon/settings.json（保留文件里的其余内容；写前按设置的校验规则核对整份文件），由调用方随后按 /reload 的重建当场生效。
 
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { accessSync, constants, existsSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
 import { writeFileAtomic } from "../persistence/atomic-write.ts";
@@ -18,6 +18,7 @@ import {
   type SettingsSnapshot,
   validateSettingsLayer,
 } from "../state/settings.ts";
+import { localSettingsTracked } from "./session-settings.ts";
 
 type ValueKind = "boolean" | "integer" | "string";
 
@@ -49,7 +50,7 @@ export const CONFIG_OPTIONS: readonly ConfigOption[] = [
     label: "思考档位",
     description: "模型推理的档位；缺省按模型（会推理的 high，其余 off）",
     kind: "string",
-    values: ["default", "off", "minimal", "low", "medium", "high", "xhigh"],
+    values: ["default", "off", "minimal", "low", "medium", "high", "xhigh", "max"],
     defaultLabel: "按模型",
   },
   {
@@ -129,10 +130,12 @@ function layerFiles(
   }));
 }
 
-// 面板的各项：生效值取会话快照（本会话正在用的），用户级与覆盖情况读三层文件
+// 面板的各项：生效值取会话快照里的设置（启动参数如 --thinking、--no-web 不算），用户级与覆盖情况读三层文件。
+// 决策 342：项目的 settings.local.json 被 git 跟踪时按共享层标（随仓库提交，不是个人设置）
 export function configView(
   snapshot: SettingsSnapshot,
-  homeDir: string = homedir()
+  homeDir: string = homedir(),
+  localTracked: boolean = localSettingsTracked(snapshot.root)
 ): ConfigItemView[] {
   const layers = layerFiles(snapshot.root, homeDir);
   return CONFIG_OPTIONS.map((option) => {
@@ -148,7 +151,12 @@ export function configView(
       effective: merged === undefined ? `${option.defaultLabel}（缺省）` : String(merged),
       user: user === undefined ? "default" : String(user),
       ...(higher !== undefined
-        ? { overriddenBy: higher.location.layer as Exclude<SettingsLayer, "user"> }
+        ? {
+            overriddenBy:
+              higher.location.layer === "local" && localTracked
+                ? ("project" as const)
+                : (higher.location.layer as Exclude<SettingsLayer, "user">),
+          }
         : {}),
     };
   });
@@ -175,13 +183,14 @@ export function configOptionOf(id: string): ConfigOption | undefined {
   return CONFIG_OPTIONS.find((option) => option.id === id.trim());
 }
 
-// 写进用户级设置：value 为 "default" 即删掉这个键（节空了一并删）；写前核对整份文件。返回写到的文件位置
+// 写进用户级设置：value 为 "default" 即删掉这个键（节空了一并删）；写前核对整份文件。返回写到的文件位置；值没变（文件
+// 不存在而要设成 default 也算没变）时不写，返回 undefined。文件是符号链接、是目录或只读时不写（不把链接换成普通文件、不改权限）
 export function setUserConfig(
   root: string,
   id: string,
   value: string,
   homeDir: string = homedir()
-): string {
+): string | undefined {
   const option = configOptionOf(id);
   if (option === undefined) {
     throw new ConfigError(
@@ -192,7 +201,18 @@ export function setUserConfig(
   const location = settingsLocations(root, homeDir).find((entry) => entry.layer === "user");
   if (location === undefined) throw new ConfigError("找不到用户级设置文件的位置");
   let raw: Record<string, unknown> = {};
-  if (existsSync(location.path)) {
+  const exists = existsSync(location.path);
+  if (exists) {
+    const stat = lstatSync(location.path);
+    if (stat.isSymbolicLink()) {
+      throw new ConfigError(`${location.path} 是符号链接，不改它（请直接改它指向的文件）`);
+    }
+    if (stat.isDirectory()) throw new ConfigError(`${location.path} 是目录，不是设置文件`);
+    try {
+      accessSync(location.path, constants.W_OK);
+    } catch {
+      throw new ConfigError(`${location.path} 是只读的，不改它`);
+    }
     try {
       const parsedFile: unknown = parseJsonText(readFileSync(location.path, "utf8"));
       if (typeof parsedFile !== "object" || parsedFile === null || Array.isArray(parsedFile)) {
@@ -207,6 +227,7 @@ export function setUserConfig(
     }
   }
   const section = { ...((raw[option.section] as Record<string, unknown> | undefined) ?? {}) };
+  if (section[option.key] === parsed) return undefined;
   if (parsed === undefined) delete section[option.key];
   else section[option.key] = parsed;
   const next = { ...raw };

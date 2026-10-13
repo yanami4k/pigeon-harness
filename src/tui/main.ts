@@ -502,6 +502,13 @@ export async function main(argv: string[]): Promise<void> {
     config: {
       view: () => configView(settings),
       set: (id: string, value: string) => setUserConfig(governanceRoot, id, value),
+      // 有 worker 在跑或排队时重建不了运行面（与 /reload 同一口径）：先不改，免得写了不生效
+      busy: () =>
+        slot.workers
+          ?.status()
+          .some((worker) => worker.state === "running" || worker.state === "queued") === true
+          ? "有 worker 在跑，重建不了运行面：等它们收尾或 /cancel 之后再改"
+          : undefined,
     },
     // 决策 439：输入框补全，路径与 @ 引用以工作区为根
     autocomplete: { basePath: workspaceRoot, fdPath: findFdPath() },

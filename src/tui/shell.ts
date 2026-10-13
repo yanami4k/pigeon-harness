@@ -266,7 +266,10 @@ export interface TuiShellOptions {
   // 决策 442：/config 的取数与改动（生效值、用户级的值与覆盖情况；改动写用户级设置，返回写到的文件）；缺省 = 不可用
   config?: {
     view(): ConfigItemView[];
-    set(id: string, value: string): string;
+    // 写到的文件；值没变、没有写时为 undefined
+    set(id: string, value: string): string | undefined;
+    // 现在不能改的原因（有 worker 在跑等）；能改为 undefined
+    busy?(): string | undefined;
   };
   // 决策 439：输入框补全（"/" 命令、Tab 路径、"@" 文件）；缺省不接
   autocomplete?: PromptAutocomplete;
@@ -813,7 +816,13 @@ export class PigeonTuiShell
   // 决策 297：worker 完成通知也从这里发出——有排队的输入时先发输入，这一轮由运行面在开头带上已到的通知（通知在前、输入在后）；
   // 没有排队的输入时，已到的通知单独跑一轮（只带通知）
   private drainQueue(): void {
-    while (!this.isBusy() && this.started && !this.picker.isOpen() && this.queue.size() > 0) {
+    while (
+      !this.isBusy() &&
+      this.started &&
+      !this.picker.isOpen() &&
+      !this.configPanel.isOpen() &&
+      this.queue.size() > 0
+    ) {
       const next = this.queue.take();
       if (next === undefined) break;
       this.submitNow(next);
@@ -823,6 +832,7 @@ export class PigeonTuiShell
       !this.isBusy() &&
       this.started &&
       !this.picker.isOpen() &&
+      !this.configPanel.isOpen() &&
       runtime.runNotices !== undefined &&
       (runtime.pendingNotices?.() ?? 0) > 0
     ) {
@@ -864,10 +874,16 @@ export class PigeonTuiShell
     if (face === undefined) return undefined;
     return (args) => {
       if (args === "") {
+        const items = this.configItems();
+        if (items === undefined) return;
         this.configPanel.open(
-          face.view(),
+          items,
           (id, value) => this.applyConfig(id, value),
-          () => this.tui.requestRender()
+          // 关面板时把面板开着期间排下的输入与通知发出去
+          () => {
+            this.drainQueue();
+            this.tui.requestRender();
+          }
         );
         this.tui.requestRender();
         return;
@@ -882,11 +898,45 @@ export class PigeonTuiShell
     };
   }
 
-  // 写进用户级设置，再按 /reload 的重建当场生效（重建期间与 Run 同样占住输入）；面板开着时随后刷新
+  // 读面板各项；三层设置有一层坏了（不是合法 JSON 等）即如实说明、不抛
+  private configItems(): ConfigItemView[] | undefined {
+    try {
+      return this.options.config?.view();
+    } catch (error) {
+      this.flow.addSystem(`读不了设置：${error instanceof Error ? error.message : String(error)}`);
+      this.tui.requestRender();
+      return undefined;
+    }
+  }
+
+  // 改设置之后刷新面板（读不了即关面板，说明已写在消息区）
+  private refreshConfigPanel(id: string): void {
+    if (!this.configPanel.isOpen()) return;
+    const items = this.configItems();
+    if (items === undefined) {
+      this.configPanel.close();
+      return;
+    }
+    this.configPanel.refresh(items, id);
+  }
+
+  // 写进用户级设置，再按 /reload 的重建当场生效（重建期间与 Run 同样占住输入）；面板开着时随后刷新。
+  // 主运行中、上一次重建还没完、或有 worker 在跑时不改（改了也重建不了），说明原因
   private applyConfig(id: string, value: string): void {
     const face = this.options.config;
     if (face === undefined) return;
-    let file: string;
+    if (this.isBusy()) {
+      this.flow.addSystem("正在运行或重建运行面，等它结束再改设置");
+      this.tui.requestRender();
+      return;
+    }
+    const busy = face.busy?.();
+    if (busy !== undefined) {
+      this.flow.addSystem(`没有改：${busy}`);
+      this.tui.requestRender();
+      return;
+    }
+    let file: string | undefined;
     try {
       file = face.set(id, value);
     } catch (error) {
@@ -894,15 +944,20 @@ export class PigeonTuiShell
       this.tui.requestRender();
       return;
     }
+    if (file === undefined) {
+      this.flow.addSystem(`${id} 已经是 ${value}，没有改`);
+      this.tui.requestRender();
+      return;
+    }
     this.flow.addSystem(`已写进 ${file}：${id} = ${value}`);
-    const view = face.view().find((item) => item.option.id === id);
+    const view = this.configItems()?.find((item) => item.option.id === id);
     if (view?.overriddenBy !== undefined) {
       this.flow.addSystem(`注意：${id} 被项目设置覆盖，改用户级不生效`);
     }
     const reload = this.options.reload;
     if (reload === undefined) {
       this.flow.addSystem("下次启动时生效");
-      this.configPanel.refresh(face.view(), id);
+      this.refreshConfigPanel(id);
       this.tui.requestRender();
       return;
     }
@@ -912,7 +967,7 @@ export class PigeonTuiShell
     const finish = (lines: readonly string[]): void => {
       this.running = false;
       for (const line of lines) this.flow.addSystem(line);
-      this.configPanel.refresh(face.view(), id);
+      this.refreshConfigPanel(id);
       this.updateStatus();
       this.tui.requestRender();
       this.drainQueue();
@@ -985,8 +1040,8 @@ export class PigeonTuiShell
   // ---- 决策 286：视图按键（选择器、Ctrl+O、退回排队）----
 
   private handleViewKey(data: string): { consume: true } | undefined {
-    // 决策 442：设置面板开着时按键归它（方向键、Enter/空格改值、Esc 关）
-    if (this.configPanel.isOpen()) {
+    // 决策 442：设置面板开着时按键归它（方向键、Enter/空格改值、Esc 关）；审批挂着（含写拒绝理由）时不归它
+    if (this.configPanel.isOpen() && this.pendingApprovalState === null) {
       this.configPanel.handleInput(data);
       this.tui.requestRender();
       return { consume: true };
@@ -1537,6 +1592,8 @@ export class PigeonTuiShell
 
   // 切换视图：重排组件、标题与状态行跟着变；消息区整体换掉，强制全量重绘
   private showView(view: ShellView): void {
+    // 决策 442：离开主视图即关设置面板（它不可见时不能再吞键）
+    if (view !== "main") this.configPanel.close();
     if (view !== "worker") this.leaveWorkerSession();
     if (view !== "history") this.historySession = undefined;
     this.view = view;
@@ -1753,6 +1810,8 @@ export class PigeonTuiShell
   // 编排视图的按键。Ctrl+C 与审批挂起期间放给壳级键控；树形视图打开时按键全归它
   private handleOrchestrationKey(data: string): { consume: true } | undefined {
     if (data === "\x03" || this.pendingApprovalState !== null) return undefined;
+    // 决策 442：设置面板开着时它独占方向键与回车，编排视图的入口（↓ 进 worker 面板等）不响应；切换树形视图照常（切过去即关面板）
+    if (this.configPanel.isOpen() && !isKey(data, "pigeon.tree")) return undefined;
     // 有一方接管了 Esc（/memory edit 排队保存时）：Esc 归它，排在视图与取消键之前
     if (this.escapeCapture !== undefined && matchesKey(data, "escape")) {
       this.escapeCapture();

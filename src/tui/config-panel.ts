@@ -21,6 +21,7 @@ const THEME: SettingsListTheme = {
 
 const HEADER = `settings (user level, ${userPigeonRel(SETTINGS_FILE)}): enter/space to change, esc to close`;
 
+// 被 git 跟踪的 settings.local.json 已按共享层给出（config-options.ts）
 const LAYER_LABEL = { project: "项目共享设置", local: "项目个人设置" } as const;
 
 export function settingItemOf(view: ConfigItemView): SettingItem {
@@ -30,8 +31,9 @@ export function settingItemOf(view: ConfigItemView): SettingItem {
       : "";
   return {
     id: view.option.id,
-    label: `${view.option.label}（${view.option.id}）`,
-    description: `${view.option.description}。生效值：${view.effective}${overridden}`,
+    // 标签只放中文名（pi-tui 的标签列最宽 36 列，长的会挤掉值列），选项名写在说明里
+    label: view.option.label,
+    description: `${view.option.id}：${view.option.description}。生效值（不含启动参数）：${view.effective}${overridden}`,
     currentValue: view.user,
     values: [...view.option.values],
   };
