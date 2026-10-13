@@ -1,5 +1,6 @@
 // 决策 446：壳的 afterTurn——一轮收尾后、空闲下来之前调用（会话移进工作树时在这里换运行面）。返回 Promise 时等它跑完才空闲，
-// 期间新的输入排队、跑完再发；返回 undefined 照常同步空闲；抛错时说明一行并照常空闲。
+// 期间新的输入排队、跑完再发；返回 undefined 照常同步空闲；抛错时说明一行并照常空闲；带上本轮是否被中止。
+// 随下一条输入带给模型的说明（不开新的一轮）。
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,7 +11,7 @@ import { ScriptedRuntime } from "./runtime-fixtures.ts";
 import { PigeonTuiShell } from "./shell.ts";
 import { MockTerminal, screenText, settle } from "./testing.ts";
 
-function makeShell(afterTurn: () => Promise<void> | undefined) {
+function makeShell(afterTurn: (info: { cancelled: boolean }) => Promise<void> | undefined) {
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-after-"));
   const sessionId = newSessionId();
   const term = new MockTerminal(90, 30);
@@ -57,6 +58,34 @@ test("afterTurn 返回 Promise：等它跑完才空闲，期间的输入排队�
   }
 });
 
+test("afterTurn 带上本轮是否被中止：Esc 取消的那轮为 true，下一轮正常收尾为 false", async () => {
+  const seen: boolean[] = [];
+  const { shell, term, runtime, cleanup } = makeShell((info) => {
+    seen.push(info.cancelled);
+    return undefined;
+  });
+  try {
+    shell.start();
+    await settle();
+    runtime.autoResolve = false;
+    term.input("做");
+    term.input("\r");
+    await settle();
+    term.input("\x1b");
+    await settle();
+    runtime.finishAll();
+    await settle();
+    runtime.autoResolve = true;
+    term.input("再做");
+    term.input("\r");
+    await settle();
+    assert.deepEqual(runtime.runs, ["做", "再做"]);
+    assert.deepEqual(seen, [true, false]);
+  } finally {
+    cleanup();
+  }
+});
+
 test("afterTurn 返回 undefined 照常空闲；抛错时说明一行并照常空闲", async () => {
   let mode: "none" | "throw" = "none";
   const { shell, term, runtime, cleanup } = makeShell(() =>
@@ -77,6 +106,26 @@ test("afterTurn 返回 undefined 照常空闲；抛错时说明一行并照常�
     await settle();
     assert.deepEqual(runtime.runs, ["一", "二", "三"]);
     assert.match(screenText(term), /收尾时出错：换不过去/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("随下一条输入带给模型的说明：不开新的一轮，人的下一条输入前缀带上，只带一次", async () => {
+  const { shell, term, runtime, cleanup } = makeShell(() => undefined);
+  try {
+    shell.start();
+    await settle();
+    shell.addNextInputNote("[Pigeon] note");
+    await settle();
+    assert.deepEqual(runtime.runs, [], "不自己开一轮");
+    term.input("继续");
+    term.input("\r");
+    await settle();
+    term.input("再来");
+    term.input("\r");
+    await settle();
+    assert.deepEqual(runtime.runs, ["[Pigeon] note\n\n继续", "再来"]);
   } finally {
     cleanup();
   }

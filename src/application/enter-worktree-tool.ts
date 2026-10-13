@@ -1,4 +1,4 @@
-// 模型自己建工作树的工具 enter_worktree（决策 446）：按 445 同一套建立（.pigeon/worktrees/<名字>、分支 pigeon-wt/<名字>、
+// 模型自己建工作树的工具 enter_worktree（决策 446）：按 445 同一套建立（.pigeon/wt/<名字>、分支 pigeon-wt/<名字>、
 // 起点缺省为远端默认分支、.worktreeinclude 复制、全局排除规则），在会话里记一条 pigeon.worktree 条目，由终端界面在本轮结束后
 // 按 /reload 的先建后换把会话移进去，并自动递一条通知让 agent 接着做。普通会话只在使用者明确要求时用（工具说明写明）；
 // 只给终端界面的主会话注册（命令行对话、pigeon run、worker、沙箱都不注册）。写档：建目录与分支，按本会话的审批模式请示。
@@ -45,6 +45,8 @@ export interface EnterWorktreeHost {
   governanceRoot: string;
   workspaceRoot: () => string;
   baseMode: () => WorktreeBaseMode;
+  // 现在不能移（有 worker 在跑或等补批、本轮已有待移入的）：给出英文原因；能移给 undefined
+  blocked?: () => string | undefined;
   onEntered: (worktree: NamedWorktree, uncommitted: number) => void;
 }
 
@@ -59,7 +61,7 @@ export class EnterWorktreeSlot {
 export interface EnterWorktreeDetails {
   worktree?: { name: string; path: string; branch: string; baseLabel: string; created: boolean };
   uncommitted?: number;
-  rejected?: "unbound" | "already-in-worktree" | "failed";
+  rejected?: "unbound" | "already-in-worktree" | "blocked" | "failed";
 }
 
 export const ENTER_WORKTREE_TEXTS = {
@@ -67,6 +69,8 @@ export const ENTER_WORKTREE_TEXTS = {
   already: (path: string) =>
     `This session is already working in the worktree ${path}; it cannot move into another one.`,
   failed: (reason: string) => `Creating the worktree failed: ${reason}`,
+  blocked: (reason: string) =>
+    `Not now: ${reason}. Wait until that is resolved, then call enter_worktree again.`,
   entered: (worktree: NamedWorktree, uncommitted: number) =>
     `${
       worktree.created
@@ -87,8 +91,7 @@ function reply(
 }
 
 export function createEnterWorktreeTool(
-  slot: EnterWorktreeSlot,
-  sink: SessionEntrySink
+  slot: EnterWorktreeSlot
 ): PigeonAgentTool<typeof EnterWorktreeParamsSchema, EnterWorktreeDetails> {
   return {
     name: ENTER_WORKTREE_TOOL,
@@ -102,6 +105,10 @@ export function createEnterWorktreeTool(
       const current = host.workspaceRoot();
       if (insideNamedWorktree(host.governanceRoot, current)) {
         return reply(ENTER_WORKTREE_TEXTS.already(current), { rejected: "already-in-worktree" });
+      }
+      const blocked = host.blocked?.();
+      if (blocked !== undefined) {
+        return reply(ENTER_WORKTREE_TEXTS.blocked(blocked), { rejected: "blocked" });
       }
       let worktree: NamedWorktree;
       try {
@@ -117,19 +124,6 @@ export function createEnterWorktreeTool(
         );
       }
       const uncommitted = uncommittedCount(current);
-      sink.append({
-        customType: SessionEntryType.Worktree,
-        data: {
-          version: SESSION_ENTRY_VERSION,
-          name: worktree.name,
-          path: worktree.path,
-          branch: worktree.branch,
-          ...(worktree.base !== undefined ? { base: worktree.base } : {}),
-          baseLabel: worktree.baseLabel,
-          created: worktree.created,
-          enteredAt: Date.now(),
-        },
-      });
       host.onEntered(worktree, uncommitted);
       return reply(ENTER_WORKTREE_TEXTS.entered(worktree, uncommitted), {
         worktree: {
@@ -145,6 +139,23 @@ export function createEnterWorktreeTool(
   };
 }
 
+// 移进工作树成功之后记一条 pigeon.worktree（续接、/reload 按主分支最后一条回到工作树）；换不成就不记
+export function recordWorktreeEntry(sink: SessionEntrySink, worktree: NamedWorktree): void {
+  sink.append({
+    customType: SessionEntryType.Worktree,
+    data: {
+      version: SESSION_ENTRY_VERSION,
+      name: worktree.name,
+      path: worktree.path,
+      branch: worktree.branch,
+      ...(worktree.base !== undefined ? { base: worktree.base } : {}),
+      baseLabel: worktree.baseLabel,
+      created: worktree.created,
+      enteredAt: Date.now(),
+    },
+  });
+}
+
 // 装配根注册用的元数据：写档（建目录与分支，按本会话的审批模式请示）、串行
 export function enterWorktreeRegistration(): ToolRegistration {
   return {
@@ -152,7 +163,7 @@ export function enterWorktreeRegistration(): ToolRegistration {
     description: "建一个独立工作树并在本轮结束后把会话移进去（只在使用者要求时用）",
     parameters: EnterWorktreeParamsSchema,
     tier: "write",
-    // 参数是名字不是路径：位置由工具自己定在主仓库的 .pigeon/worktrees 下
+    // 参数是名字不是路径：位置由工具自己定在主仓库的 .pigeon/wt 下
     pathConfinement: { kind: "none" },
     executionMode: "sequential",
   };

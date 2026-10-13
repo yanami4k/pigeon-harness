@@ -163,10 +163,14 @@ test("决策 325：受跟踪的 .pigeon/settings.json 是项目内容，改动�
     mkdirSync(join(dir, ".pigeon", "state", "sessions"), { recursive: true });
     writeFileSync(join(dir, ".pigeon", "state", "sessions", "s.jsonl"), "{}\n");
     writeFileSync(join(dir, ".pigeon", "settings.local.json"), "{}\n");
+    // 决策 445：独立工作树（全局排除没生效时也不收进快照）
+    mkdirSync(join(dir, ".pigeon", "wt", "feat"), { recursive: true });
+    writeFileSync(join(dir, ".pigeon", "wt", "feat", "b.txt"), "b\n");
     writeFileSync(join(dir, "a.txt"), "two\n");
     const snap = snapshotWorkdir({ repoRoot: dir, ref: REF });
     assert.equal(snap.snapshot, true);
     assert.deepEqual(snap.files, [".pigeon/settings.json", "a.txt"]);
+    assert.equal(git(dir, "ls-tree", "-r", "--name-only", snap.commit, ".pigeon/wt"), "");
     assert.equal(git(dir, "show", `${snap.commit}:.pigeon/settings.json`), '{"changed":1}');
     assert.equal(git(dir, "show", `${snap.commit}:.pigeon/verify.json`), "{}");
     assert.equal(git(dir, "ls-tree", "-r", "--name-only", snap.commit, ".pigeon/state"), "");

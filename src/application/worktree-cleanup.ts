@@ -23,12 +23,10 @@ import {
 } from "../orchestration/worktree.ts";
 import { loadSessionView } from "../persistence/session-catalog.ts";
 import { sessionFileHolder } from "../persistence/session-lock.ts";
-import {
-  locateSessionFile,
-  readSessionHeader,
-  sessionDirectoryName,
-} from "../persistence/session-reader.ts";
+import { locateSessionFile, readSessionHeader } from "../persistence/session-reader.ts";
+import { worktreeInUse } from "../persistence/worktree-in-use.ts";
 import { namedWorktreesDirOf, sessionsDirOf, worktreesDirOf } from "../state/paths.ts";
+import { namedWorktreeBase, namedWorktreeBranch } from "./named-worktree.ts";
 
 // 工作目录在 git 仓库里（/worktrees 只在这时提供）
 export function isGitWorkspace(workspaceRoot: string): boolean {
@@ -228,20 +226,6 @@ function workerFacts(
   return facts;
 }
 
-// 有会话开在这个独立工作树里（会话按工作目录分子目录存放；锁被仍在的进程持有，含本进程）
-function namedSessionHolder(governanceRoot: string, path: string): boolean {
-  const dir = join(sessionsDirOf(governanceRoot), sessionDirectoryName(path));
-  let names: string[];
-  try {
-    names = readdirSync(dir);
-  } catch {
-    return false;
-  }
-  return names
-    .filter((name) => name.endsWith(".jsonl"))
-    .some((name) => sessionFileHolder(join(dir, name)) !== undefined);
-}
-
 // 当前目录在 worker 工作树里（.pigeon/state/worktrees 之下）时拒绝：比较与删除都要从主检出做
 function assertNotInWorkerWorktree(scope: WorktreeScope, governanceRoot: string): void {
   const here = realOrResolved(scope.workspaceRoot);
@@ -293,23 +277,27 @@ export function listLeftoverWorktrees(scope: WorktreeScope): LeftoverWorktree[] 
       bytes: present ? directoryBytes(path) : 0,
     });
   }
-  // 决策 445、446：独立工作树（.pigeon/worktrees/<名字>）
+  // 决策 445、446：独立工作树（.pigeon/wt/<名字>）：分支一律按 pigeon-wt/<名字>（删除只删它）；起点取建立时记下的；
+  // 工作树当前不在这个分支上时改动按"不明"；有进程持有它的在用锁（含本进程）即在用
   const namedDir = realOrResolved(namedWorktreesDirOf(repoRoot));
   for (const entry of listWorktrees(repoRoot)) {
     const path = resolve(entry.path);
     if (!isInside(namedDir, path) || !existsSync(path)) continue;
-    const base =
-      entry.branch !== undefined ? branchCreationCommit(repoRoot, entry.branch) : undefined;
-    const holder = namedSessionHolder(governanceRoot, path);
+    const name = basename(path);
+    const branch = namedWorktreeBranch(name);
+    const holder = worktreeInUse(path);
     items.push({
       kind: "named",
-      name: basename(path),
+      name,
       path,
-      ...(entry.branch !== undefined ? { branch: entry.branch } : {}),
+      branch,
       legacy: false,
       inUse: holder,
       ...(holder ? { inUseReason: "有会话开在这个工作树里" } : {}),
-      untaken: untakenFiles(path, base, mainRoot),
+      untaken:
+        entry.branch === branch
+          ? untakenFiles(path, namedWorktreeBase(repoRoot, name), mainRoot)
+          : "unknown",
       bytes: directoryBytes(path),
     });
   }

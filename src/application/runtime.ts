@@ -1377,9 +1377,7 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
         ? [createSpawnWorkerTool(spawnSlot, policy.allow), ...createOrchestrationTools(spawnSlot)]
         : []),
       ...(takeSlot !== undefined ? [createTakeWorkerTool(takeSlot)] : []),
-      ...(enterWorktreeSlot !== undefined
-        ? [createEnterWorktreeTool(enterWorktreeSlot, sessionStore)]
-        : []),
+      ...(enterWorktreeSlot !== undefined ? [createEnterWorktreeTool(enterWorktreeSlot)] : []),
       ...(scriptSlot !== undefined ? [createOrchestrateTool(scriptSlot)] : []),
       ...(taskList !== undefined ? createTaskListTools(taskList) : []),
       ...webToolset,

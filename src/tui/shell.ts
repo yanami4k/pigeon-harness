@@ -246,7 +246,7 @@ export interface TuiShellOptions {
   worktrees?: TuiWorktreesFace;
   // 决策 446：一轮真正收尾、空闲下来之前调用（会话移进工作树时在这里换运行面）；期间仍按在跑处理，输入排队
   // 没有要做的返回 undefined（照常同步空闲下来）
-  afterTurn?: () => Promise<void> | undefined;
+  afterTurn?: (info: { cancelled: boolean }) => Promise<void> | undefined;
 }
 
 // 决策 301：界面所处的视图——主会话、整屏的树形视图、进入的 worker 会话
@@ -317,6 +317,8 @@ export class PigeonTuiShell
   };
   // 决策 323、324：SessionStart 补的上下文（待下一条输入前缀）；换绑换会话时清掉
   private hookContexts: string[] = [];
+  // 决策 446：要随人的下一条输入带给模型的说明（不叫醒 agent，例如没能移进工作树）
+  private nextInputNotes: string[] = [];
   // 决策 323：本轮是否被外部取消（Esc / 打转叫停）——取消过的一轮不跑 Stop 钩子
   private runCancelled = false;
   // start/stop 的 dispose 对称面：壳级监听器在此成对登记（S5 的同位置留位）；
@@ -658,10 +660,17 @@ export class PigeonTuiShell
         );
       }
     }
+    const notes = this.nextInputNotes.splice(0);
+    if (notes.length > 0) input = `${notes.join("\n\n")}\n\n${input}`;
     this.current.runtime.run(input).then(
       (result) => this.handleRunEnd(result),
       (error: unknown) => this.handleRunEnd(null, error)
     );
+  }
+
+  // 决策 446：一段说明随人的下一条输入前缀给模型（不开新的一轮）
+  addNextInputNote(text: string): void {
+    this.nextInputNotes.push(text);
   }
 
   // 空闲后发出排队的输入（pi 惯例逐条：一条跑完再发下一条）；即时完成的命令不占住，接着发下一条。
@@ -1848,7 +1857,7 @@ export class PigeonTuiShell
 
   // 一轮真正收尾：空闲下来、刷新状态并发排队输入（Stop 钩子跑完之后）。决策 446：先跑 afterTurn（换运行面），跑完才空闲
   private finishRun(): void {
-    const pending = this.options.afterTurn?.();
+    const pending = this.options.afterTurn?.({ cancelled: this.runCancelled });
     if (pending !== undefined) {
       void pending.then(
         () => this.finishRunNow(),

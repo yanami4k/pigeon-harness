@@ -19,6 +19,9 @@ export const STATE_DIR = "state";
 // 设置文件名
 export const SETTINGS_FILE = "settings.json";
 export const LOCAL_SETTINGS_FILE = "settings.local.json";
+// 决策 445（暂定改名，待确认）：独立工作树所在目录名（相对 .pigeon）。不用 worktrees——那是决策 325 之前 worker 工作树的旧位置，
+// 旧布局检查与迁移命令按"目录在即旧布局"处理它
+export const NAMED_WORKTREES_DIR = "wt";
 
 // 决策 444、445：写进使用者全局 git 排除文件的规则，与各自探测是否已被忽略的路径（相对治理根，正斜杠）
 export const GLOBAL_IGNORE_ENTRIES: readonly { rule: string; probe: string }[] = [
@@ -27,7 +30,10 @@ export const GLOBAL_IGNORE_ENTRIES: readonly { rule: string; probe: string }[] =
     rule: `**/${PIGEON_DIR}/${LOCAL_SETTINGS_FILE}`,
     probe: `${PIGEON_DIR}/${LOCAL_SETTINGS_FILE}`,
   },
-  { rule: `**/${PIGEON_DIR}/worktrees/`, probe: `${PIGEON_DIR}/worktrees/probe` },
+  {
+    rule: `**/${PIGEON_DIR}/${NAMED_WORKTREES_DIR}/`,
+    probe: `${PIGEON_DIR}/${NAMED_WORKTREES_DIR}/probe`,
+  },
 ];
 
 // 展示用的相对写法（报错、提示与系统提示里的路径说法；一律正斜杠）
@@ -115,9 +121,9 @@ export function worktreesDirOf(root: string): string {
   return path.join(projectStateDir(root), "worktrees");
 }
 
-// 决策 445：独立工作树（pigeon --worktree、enter_worktree）放在项目的 .pigeon/worktrees/ 下，与 worker 的分开
+// 决策 445：独立工作树（pigeon --worktree、enter_worktree）放在项目的 .pigeon/wt/ 下（暂定名），与 worker 的分开
 export function namedWorktreesDirOf(root: string): string {
-  return path.join(root, PIGEON_DIR, "worktrees");
+  return path.join(root, PIGEON_DIR, NAMED_WORKTREES_DIR);
 }
 
 // 旧的补做复盘记录（决策 331 删除补做；迁移命令挪出仓库进用户级备份）
@@ -174,6 +180,8 @@ export function isUnderPigeonDir(relativePosixPath: string): boolean {
 export const PROGRAM_OWNED_PATHS: readonly string[] = [
   pigeonRel(STATE_DIR),
   pigeonRel(LOCAL_SETTINGS_FILE),
+  // 决策 445：独立工作树（全局排除失效时也不被主检出的快照当内嵌仓库收进去）
+  pigeonRel(NAMED_WORKTREES_DIR),
 ];
 
 export function isProgramOwnedPath(relativePosixPath: string): boolean {

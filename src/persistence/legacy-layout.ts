@@ -3,7 +3,7 @@
 // ~/.pigeon/preferences.md；决策 322：验证门与 .pigeon/verify.json——迁移命令把它挪进备份目录并打印改写为
 // 收尾钩子的示例）。启动时（终端界面、pigeon run、--line、pigeon resume；worker 与沙箱会话随派出它的
 // 会话）发现任一项即报错，提示运行 pigeon migrate-config，不自动迁移。
-import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import {
@@ -17,41 +17,6 @@ import {
 } from "../state/paths.ts";
 
 export const MIGRATE_CONFIG_COMMAND = "pigeon migrate-config";
-
-// 决策 445：独立工作树放在 .pigeon/worktrees/<名字>（分支 pigeon-wt/<名字>），与决策 325 之前 worker 工作树的旧位置同一个目录。
-// 挂在 pigeon-wt/ 分支上的登记工作树不是旧布局：读 <目录>/.git 指向的登记目录里的 HEAD 判断（只读文件，不起 git）
-export function isNamedWorktreeDir(dir: string): boolean {
-  try {
-    const pointer = readFileSync(path.join(dir, ".git"), "utf8").trim();
-    const match = /^gitdir:\s*(.+)$/.exec(pointer);
-    if (match?.[1] === undefined) return false;
-    const head = readFileSync(path.join(path.resolve(dir, match[1]), "HEAD"), "utf8").trim();
-    return head.startsWith("ref: refs/heads/pigeon-wt/");
-  } catch {
-    return false;
-  }
-}
-
-// .pigeon/worktrees/ 下旧的 worker 工作树（独立工作树除外）
-export function legacyWorkerWorktreeEntries(root: string): string[] {
-  const dir = legacyStatePath(root, "worktrees");
-  if (!existsSync(dir)) return [];
-  let names: string[];
-  try {
-    names = readdirSync(dir);
-  } catch {
-    return [];
-  }
-  return names
-    .map((name) => path.join(dir, name))
-    .filter((entry) => {
-      try {
-        return !(lstatSync(entry).isDirectory() && isNamedWorktreeDir(entry));
-      } catch {
-        return false;
-      }
-    });
-}
 
 export interface LegacyItem {
   kind: "config" | "state" | "removed";
@@ -87,8 +52,6 @@ export function findLegacyLayout(root: string, options: { homeDir?: string } = {
   }
   for (const entry of LEGACY_STATE_ENTRIES) {
     const path = legacyStatePath(root, entry.name);
-    // 决策 445：.pigeon/worktrees/ 里只有独立工作树（或已空）时不算旧布局
-    if (entry.name === "worktrees" && legacyWorkerWorktreeEntries(root).length === 0) continue;
     if (existsSync(path)) {
       items.push({ kind: "state", name: entry.name, path });
     }

@@ -7,6 +7,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -17,12 +18,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "vitest";
 import { globalExcludesFile } from "../persistence/global-ignore.ts";
-import {
-  findLegacyLayout,
-  isNamedWorktreeDir,
-  legacyWorkerWorktreeEntries,
-} from "../persistence/legacy-layout.ts";
+import { findLegacyLayout } from "../persistence/legacy-layout.ts";
 import { sessionDirectoryName, sessionFileName } from "../persistence/session-reader.ts";
+import {
+  holdWorktreeInUse,
+  worktreeInUse,
+  worktreeInUseByOthers,
+} from "../persistence/worktree-in-use.ts";
 import { newSessionId } from "../state/ids.ts";
 import { sessionsDirOf } from "../state/paths.ts";
 import {
@@ -30,6 +32,7 @@ import {
   closeNamedWorktree,
   NamedWorktreeError,
   namedWorktreeUnchanged,
+  nonInteractiveGitEnv,
   openNamedWorktree,
   removeNamedWorktree,
   resolveWorktreeBase,
@@ -91,10 +94,10 @@ function plainRepo(): string {
   return repo;
 }
 
-test("位置 .pigeon/worktrees/<名字>、分支 pigeon-wt/<名字>；起点缺省为远端默认分支，远端引用过期就先取", () => {
+test("位置 .pigeon/wt/<名字>、分支 pigeon-wt/<名字>；起点缺省为远端默认分支，远端引用过期就先取", () => {
   const { repo, remoteTip } = cloned();
   const wt = openNamedWorktree({ cwd: repo, name: "feat-x" });
-  assert.equal(wt.path, join(repo, ".pigeon", "worktrees", "feat-x"));
+  assert.equal(wt.path, join(repo, ".pigeon", "wt", "feat-x"));
   assert.equal(wt.branch, "pigeon-wt/feat-x");
   assert.equal(wt.created, true);
   assert.equal(wt.base, remoteTip, "克隆之后从未取过：先取，起点是远端最新");
@@ -102,7 +105,7 @@ test("位置 .pigeon/worktrees/<名字>、分支 pigeon-wt/<名字>；起点缺�
   assert.equal(git(wt.path, ["rev-parse", "HEAD"]), remoteTip);
   assert.equal(git(wt.path, ["branch", "--show-current"]), "pigeon-wt/feat-x");
   // 全局排除规则（临时 XDG）里有工作树一行，主检出的 git status 不列 .pigeon
-  assert.match(readFileSync(globalExcludesFile(repo) ?? "", "utf8"), /\*\*\/\.pigeon\/worktrees\//);
+  assert.match(readFileSync(globalExcludesFile(repo) ?? "", "utf8"), /\*\*\/\.pigeon\/wt\//);
   assert.equal(git(repo, ["status", "--porcelain", "--untracked-files=all"]), "");
 });
 
@@ -137,7 +140,7 @@ test("同名目录已在即打开（不重建），起点取分支建立时的�
   assert.equal(again.path, first.path);
   assert.equal(again.base, first.base);
   assert.ok(existsSync(join(again.path, "work.txt")), "没有重建");
-  mkdirSync(join(repo, ".pigeon", "worktrees", "stray"), { recursive: true });
+  mkdirSync(join(repo, ".pigeon", "wt", "stray"), { recursive: true });
   assert.throws(() => openNamedWorktree({ cwd: repo, name: "stray" }), NamedWorktreeError);
   for (const bad of ["", "-x", "a/b", "../x", "a b", "Feat", "x".repeat(65)]) {
     assert.throws(() => assertWorktreeName(bad), NamedWorktreeError, bad);
@@ -210,24 +213,85 @@ test("退出清理：没有改动即删并说明；有改动时问——k 保留
   assert.equal(git(repo, ["branch", "--list", changed.branch]), "");
 });
 
-test("旧布局检查与迁移不把独立工作树当旧布局；同一目录里真有旧的 worker 工作树才算", () => {
+test("独立工作树在 .pigeon/wt 下，不触发旧布局检查；.pigeon/worktrees 仍按目录在即旧布局", () => {
   const repo = plainRepo();
-  const wt = openNamedWorktree({ cwd: repo, name: "keep-me" });
-  assert.equal(isNamedWorktreeDir(wt.path), true);
-  assert.deepEqual(
-    findLegacyLayout(repo).filter((item) => item.name === "worktrees"),
-    []
-  );
-  assert.deepEqual(legacyWorkerWorktreeEntries(repo), []);
-  mkdirSync(join(repo, ".pigeon", "worktrees", "sess-old"), { recursive: true });
-  assert.deepEqual(
-    legacyWorkerWorktreeEntries(repo).map((entry) => entry.endsWith("sess-old")),
-    [true]
-  );
+  openNamedWorktree({ cwd: repo, name: "keep-me" });
+  assert.deepEqual(findLegacyLayout(repo), []);
+  mkdirSync(join(repo, ".pigeon", "worktrees"), { recursive: true });
   assert.equal(
     findLegacyLayout(repo).some((item) => item.name === "worktrees"),
     true
   );
+});
+
+test("只删自己的分支 pigeon-wt/<名字>：工作树换到别的分支即按有改动，删除时别的分支不动", async () => {
+  const repo = plainRepo();
+  const wt = openNamedWorktree({ cwd: repo, name: "sw" });
+  git(wt.path, ["switch", "-q", "-c", "foreign"]);
+  const reopened = openNamedWorktree({ cwd: repo, name: "sw" });
+  assert.equal(reopened.branch, "pigeon-wt/sw");
+  assert.equal(reopened.currentBranch, "foreign");
+  assert.equal(namedWorktreeUnchanged(reopened), false, "不在自己的分支上按有改动");
+  const asked: string[] = [];
+  assert.equal(
+    await closeNamedWorktree(reopened, {
+      ask: async (prompt) => {
+        asked.push(prompt);
+        return "d";
+      },
+      write: () => {},
+      inUseByOthers: () => false,
+    }),
+    "removed"
+  );
+  assert.match(asked[0] ?? "", /当前在 foreign 上/);
+  assert.match(git(repo, ["branch", "--list", "foreign"]), /foreign/);
+  assert.equal(git(repo, ["branch", "--list", "pigeon-wt/sw"]), "");
+});
+
+test("起点建立时记在仓库配置里；记录丢了按不明（有改动），不再从分支历史猜", () => {
+  const repo = plainRepo();
+  const wt = openNamedWorktree({ cwd: repo, name: "rb" });
+  assert.equal(
+    git(repo, ["config", "--local", "--get", "branch.pigeon-wt/rb.pigeonBase"]),
+    wt.base
+  );
+  assert.equal(namedWorktreeUnchanged(openNamedWorktree({ cwd: repo, name: "rb" })), true);
+  git(repo, ["config", "--local", "--unset", "branch.pigeon-wt/rb.pigeonBase"]);
+  const lost = openNamedWorktree({ cwd: repo, name: "rb" });
+  assert.equal(lost.base, undefined);
+  assert.equal(lost.baseLabel, "不明");
+  assert.equal(namedWorktreeUnchanged(lost), false);
+});
+
+test("别的进程开着这个工作树（在用锁）时退出清理不删；本进程的锁不算别人；进程已不在的锁清掉", async () => {
+  const repo = plainRepo();
+  const home = temp("pigeon-wt-use-");
+  const wt = openNamedWorktree({ cwd: repo, name: "lk" });
+  const lines: string[] = [];
+  assert.equal(
+    await closeNamedWorktree(wt, { write: (line) => lines.push(line), inUseByOthers: () => true }),
+    "kept"
+  );
+  assert.match(lines.at(-1) ?? "", /另有会话开在工作树 lk 里/);
+  assert.equal(existsSync(wt.path), true);
+  const release = holdWorktreeInUse(wt.path, home);
+  assert.equal(worktreeInUseByOthers(wt.path, { homeDir: home }), false);
+  assert.equal(worktreeInUse(wt.path, { homeDir: home }), true);
+  release();
+  release();
+  assert.equal(worktreeInUse(wt.path, { homeDir: home }), false);
+  const dir = join(home, ".pigeon", "state", "worktree-use");
+  assert.deepEqual(readdirSync(dir), []);
+  // 别的进程留下的锁：仍在即算别人在用，已不在即清掉
+  const other = holdWorktreeInUse(wt.path, home);
+  const mine = readdirSync(dir)[0] ?? "";
+  other();
+  const foreign = mine.replace(`-${process.pid}.`, "-424242.");
+  writeFileSync(join(dir, foreign), `${JSON.stringify({ pid: 424242 })}\n`);
+  assert.equal(worktreeInUseByOthers(wt.path, { homeDir: home, alive: () => true }), true);
+  assert.equal(worktreeInUseByOthers(wt.path, { homeDir: home, alive: () => false }), false);
+  assert.deepEqual(readdirSync(dir), [], "已不在的进程的锁被清掉");
 });
 
 test("/worktrees 列出独立工作树、标明独立工作树；clean 缺省与 --all 都不挑，点名才删（不跟随链接的删除）", () => {
@@ -256,6 +320,37 @@ test("/worktrees 列出独立工作树、标明独立工作树；clean 缺省与
   assert.equal(git(repo, ["branch", "--list", wt.branch]), "");
 });
 
+test("/worktrees：有进程开着的独立工作树（在用锁，含没有会话文件的）点名也不删；换到别的分支的只删 pigeon-wt/<名字>", () => {
+  const repo = plainRepo();
+  const busy = openNamedWorktree({ cwd: repo, name: "busy" });
+  const release = holdWorktreeInUse(busy.path, temp("pigeon-wt-use-"));
+  const scope = { workspaceRoot: repo, now: () => Date.now() + 3_600_000 };
+  try {
+    const items = listLeftoverWorktrees(scope);
+    const held = items.find((item) => item.name === "busy");
+    assert.equal(held?.inUse, true);
+    const plan = planClean(items, ["busy"]);
+    assert.deepEqual(plan.remove, []);
+    assert.match(plan.refused.join("\n"), /busy：在用（有会话开在这个工作树里）/);
+  } finally {
+    release();
+  }
+  assert.equal(
+    listLeftoverWorktrees(scope).find((item) => item.name === "busy")?.inUse,
+    false,
+    "释放之后不再在用"
+  );
+  const moved = openNamedWorktree({ cwd: repo, name: "moved" });
+  git(moved.path, ["switch", "-q", "-c", "foreign"]);
+  const item = listLeftoverWorktrees(scope).find((entry) => entry.name === "moved");
+  assert.equal(item?.branch, "pigeon-wt/moved");
+  assert.equal(item?.untaken, "unknown", "不在自己的分支上：改动按不明");
+  executeClean(scope, planClean(listLeftoverWorktrees(scope), ["moved"]));
+  assert.equal(existsSync(moved.path), false);
+  assert.equal(git(repo, ["branch", "--list", "pigeon-wt/moved"]), "");
+  assert.match(git(repo, ["branch", "--list", "foreign"]), /foreign/);
+});
+
 test("续接开在独立工作树里的会话：工作区回到那个工作树（会话文件头记的工作目录）；工作树已不在即回到主检出", () => {
   const repo = plainRepo();
   const wt = openNamedWorktree({ cwd: repo, name: "resume-me" });
@@ -270,4 +365,12 @@ test("续接开在独立工作树里的会话：工作区回到那个工作树�
   assert.equal(sessionRuntimeScope(repo, sessionId).workspaceRoot, wt.path);
   removeNamedWorktree(wt);
   assert.equal(sessionRuntimeScope(repo, sessionId).workspaceRoot, repo);
+});
+
+test("取远端时的 ssh：使用者没指定 ssh 才加批处理方式；GIT_SSH_COMMAND、GIT_SSH、core.sshCommand 任一设了即沿用", () => {
+  assert.equal(nonInteractiveGitEnv({}).GIT_SSH_COMMAND, "ssh -o BatchMode=yes");
+  assert.equal(nonInteractiveGitEnv({ GIT_SSH_COMMAND: "my-ssh" }).GIT_SSH_COMMAND, "my-ssh");
+  assert.equal(nonInteractiveGitEnv({ GIT_SSH: "plink" }).GIT_SSH_COMMAND, undefined);
+  assert.equal(nonInteractiveGitEnv({}, true).GIT_SSH_COMMAND, undefined);
+  assert.equal(nonInteractiveGitEnv({}).GIT_TERMINAL_PROMPT, "0");
 });

@@ -91,7 +91,7 @@ test("git 仓库里三行都缺：写进 $XDG_CONFIG_HOME/git/ignore，提示一
   for (const path of [
     ".pigeon/state/sessions/x.jsonl",
     ".pigeon/settings.local.json",
-    ".pigeon/worktrees/w/a.txt",
+    ".pigeon/wt/w/a.txt",
     "sub/.pigeon/state/x",
   ]) {
     assert.equal(ignored(root, s.env, path), true, path);
@@ -113,17 +113,14 @@ test("已有的行不重复、没有末尾换行的先补换行、CRLF 的已有
   mkdirSync(join(root, ".pigeon"));
   writeFileSync(join(root, ".pigeon", ".gitignore"), "state/\nsettings.local.json\n");
   const result = ensureGlobalIgnoreRules(root, { env: s.env });
-  assert.deepEqual(result.added, ["**/.pigeon/worktrees/"]);
+  assert.deepEqual(result.added, ["**/.pigeon/wt/"]);
   assert.equal(
     readFileSync(file, "utf8"),
-    "*.log\r\n**/.pigeon/settings.local.json\n**/.pigeon/worktrees/\n"
+    "*.log\r\n**/.pigeon/settings.local.json\n**/.pigeon/wt/\n"
   );
   // 已有的那行在 CRLF 文件里：缺它时也不重复写
   rmSync(join(root, ".pigeon", ".gitignore"));
-  writeFileSync(
-    file,
-    "**/.pigeon/state/\r\n**/.pigeon/settings.local.json\r\n**/.pigeon/worktrees/\r\n"
-  );
+  writeFileSync(file, "**/.pigeon/state/\r\n**/.pigeon/settings.local.json\r\n**/.pigeon/wt/\r\n");
   assert.deepEqual(ensureGlobalIgnoreRules(root, { env: s.env }).added, []);
 });
 

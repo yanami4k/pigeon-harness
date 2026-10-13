@@ -337,11 +337,7 @@ test("决策 444：第一条消息建会话文件时才建 .pigeon/state/，忽�
     assert.ok(existsSync(join(root, ".pigeon", "state", "sessions")));
     assert.equal(existsSync(join(root, ".pigeon", ".gitignore")), false);
     const { text } = globalIgnore();
-    for (const rule of [
-      "**/.pigeon/state/",
-      "**/.pigeon/settings.local.json",
-      "**/.pigeon/worktrees/",
-    ]) {
+    for (const rule of ["**/.pigeon/state/", "**/.pigeon/settings.local.json", "**/.pigeon/wt/"]) {
       assert.ok(text.split("\n").includes(rule), text);
     }
     // 程序状态不出现在 git status 里

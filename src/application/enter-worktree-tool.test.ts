@@ -1,9 +1,16 @@
-// enter_worktree（决策 446）：工具本身（未绑定、已在工作树里、建好并记 pigeon.worktree 条目与回调、名字不合法、未带过去的改动数）；
+// enter_worktree（决策 446）：工具本身（未绑定、已在工作树里、宿主不许移、建好与回调、名字不合法、未带过去的改动数）；
 // 注册范围（终端界面主会话且 git 工作区才注册、系统提示带那一句；worker 委派、沙箱、非 git 不注册）；续接按主分支最后一条
 // pigeon.worktree 条目回到工作树（目录不在即回主检出）；按工作树重建运行面。全局配置与 XDG 由测试总装指到临时位置。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "vitest";
@@ -11,18 +18,20 @@ import { loadStoreSession } from "../persistence/session-view.ts";
 import { createFakeStreamFn } from "../pi-runtime/fixtures.ts";
 import { newSessionId } from "../state/ids.ts";
 import { sessionsDirOf } from "../state/paths.ts";
-import { type SessionCustomEntry, SessionEntryType } from "../state/session-entries.ts";
 import {
   createEnterWorktreeTool,
   ENTER_WORKTREE_PROMPT_SENTENCE,
   ENTER_WORKTREE_TOOL,
   EnterWorktreeSlot,
+  recordWorktreeEntry,
 } from "./enter-worktree-tool.ts";
 import { noMcpSession } from "./mcp.ts";
-import { removeNamedWorktree, reopenNamedWorktree } from "./named-worktree.ts";
+import { openNamedWorktree, removeNamedWorktree, reopenNamedWorktree } from "./named-worktree.ts";
 import { disposeRuntime } from "./runtime.ts";
 import { openSessionRuntime } from "./session-runtime.ts";
+import { takeWorkerChanges } from "./take-worker-tool.ts";
 import { sessionRuntimeScope } from "./worker-scope.ts";
+import { createSessionWorkers } from "./workers.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -48,12 +57,10 @@ function textOf(result: { content: Array<{ type: string; text?: string }> }): st
   return result.content.map((block) => block.text ?? "").join("");
 }
 
-test("工具：未绑定如实说明；建好后记 pigeon.worktree 条目、回调待移入，返回写明起点与没带过去的未提交改动数", async () => {
+test("工具：未绑定如实说明；建好后回调待移入（不在工具里记条目），返回写明起点与没带过去的未提交改动数；宿主说不能移即拒绝", async () => {
   const root = repo();
-  const appended: SessionCustomEntry[] = [];
-  const sink = { append: (entry: SessionCustomEntry) => appended.push(entry) };
   const slot = new EnterWorktreeSlot();
-  const tool = createEnterWorktreeTool(slot, sink);
+  const tool = createEnterWorktreeTool(slot);
   assert.match(textOf(await tool.execute("c0", { name: "x" })), /no terminal UI host/);
   const entered: Array<{ path: string; uncommitted: number }> = [];
   slot.bind({
@@ -66,15 +73,24 @@ test("工具：未绑定如实说明；建好后记 pigeon.worktree 条目、回
   writeFileSync(join(root, "new.txt"), "n\n");
   const result = await tool.execute("c1", { name: "feature" });
   const text = textOf(result);
-  const path = join(root, ".pigeon", "worktrees", "feature");
+  const path = join(root, ".pigeon", "wt", "feature");
   assert.match(text, /^Created the worktree .* on branch pigeon-wt\/feature, starting from HEAD\./);
   assert.match(text, /The 2 uncommitted files in the current checkout were NOT carried over/);
   assert.match(text, /End this turn now with a brief reply/);
   assert.deepEqual(entered, [{ path, uncommitted: 2 }]);
-  assert.equal(appended.length, 1);
-  assert.equal(appended[0]?.customType, SessionEntryType.Worktree);
-  assert.equal((appended[0]?.data as { path: string }).path, path);
   assert.ok(existsSync(join(path, "a.txt")));
+  // 宿主说现在不能移（有 worker 在跑、本轮已有待移入）：拒绝、不建
+  slot.bind({
+    governanceRoot: root,
+    workspaceRoot: () => root,
+    baseMode: () => "head",
+    blocked: () => "workers are still running or waiting for approval",
+    onEntered: () => assert.fail("不该回调"),
+  });
+  const blocked = await tool.execute("c1b", { name: "later" });
+  assert.match(textOf(blocked), /^Not now: workers are still running/);
+  assert.equal(blocked.details.rejected, "blocked");
+  assert.equal(existsSync(join(root, ".pigeon", "wt", "later")), false);
   // 已在工作树里：拒绝
   slot.bind({
     governanceRoot: root,
@@ -158,8 +174,14 @@ test("续接按主分支最后一条 pigeon.worktree 回到工作树；按工作
         path = worktree.path;
       },
     });
-    const tool = createEnterWorktreeTool(slot, first.bundle.sessionStore);
+    const tool = createEnterWorktreeTool(slot);
     await tool.execute("c1", { name: "moved" });
+    await first.bundle.sessionStore.flush();
+    // 工具本身不记条目：换成功之前续接仍回主检出
+    assert.equal(sessionRuntimeScope(root, sessionId).workspaceRoot, root);
+    const worktree = reopenNamedWorktree(root, path);
+    assert.ok(worktree !== undefined);
+    recordWorktreeEntry(first.bundle.sessionStore, worktree);
     await first.bundle.sessionStore.flush();
   } finally {
     await disposeRuntime(first.bundle);
@@ -183,4 +205,49 @@ test("续接按主分支最后一条 pigeon.worktree 回到工作树；按工作
   assert.ok(worktree !== undefined);
   removeNamedWorktree(worktree);
   assert.equal(sessionRuntimeScope(root, sessionId).workspaceRoot, root);
+});
+
+test("移进工作树之后：worker 从工作树开工（带上工作树里未提交的改动），/take 把改动写进工作树而不是主检出", async () => {
+  const root = repo();
+  const home = realpathSync.native(mkdtempSync(join(tmpdir(), "pigeon-enter-wt-home-")));
+  dirs.push(home);
+  const worktree = openNamedWorktree({ cwd: root, name: "moved", baseMode: "head" });
+  writeFileSync(join(worktree.path, "wt-only.txt"), "only in the worktree\n");
+  // 与终端界面重建时一样：按工作树打开运行面，worker 编排按运行面自己的工作区
+  const opened = await open(root, { workspaceRoot: worktree.path });
+  try {
+    assert.equal(opened.scope.workspaceRoot, worktree.path);
+    const orchestrator = createSessionWorkers({
+      governanceRoot: root,
+      workspaceRoot: opened.scope.workspaceRoot,
+      bundle: opened.bundle,
+      approvals: async () => ({ approved: true }),
+      streamFn: createFakeStreamFn({
+        replies: [
+          {
+            text: "写",
+            toolCalls: [{ name: "write_file", args: { path: "w.txt", content: "from worker\n" } }],
+          },
+          { text: "好了" },
+        ],
+      }),
+      provider: "custom",
+      modelId: "custom",
+      homeDir: home,
+    });
+    const id = orchestrator.spawn({ role: "implementer", task: "写一个文件", name: "w1" });
+    const outcome = await orchestrator.awaitResult(id);
+    assert.equal(outcome.status, "completed", JSON.stringify(outcome));
+    const workerPath = (outcome.workspace as { path: string }).path;
+    assert.ok(existsSync(join(workerPath, "wt-only.txt")), "worker 的起点是工作树的快照");
+    const taken = takeWorkerChanges(
+      { orchestrator, workspaceRoot: opened.scope.workspaceRoot },
+      "w1"
+    );
+    assert.equal(taken.details.rejected, undefined, taken.text);
+    assert.equal(readFileSync(join(worktree.path, "w.txt"), "utf8"), "from worker\n");
+    assert.equal(existsSync(join(root, "w.txt")), false, "主检出不动");
+  } finally {
+    await disposeRuntime(opened.bundle);
+  }
 });
