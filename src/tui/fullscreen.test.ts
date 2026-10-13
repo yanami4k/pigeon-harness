@@ -222,3 +222,23 @@ test("运行中打开搜索：Esc 关搜索框，不取消正在跑的这一轮"
     cleanup();
   }
 });
+
+test("状态行紧贴在输入框上沿、上方隔一行空白；窗口很矮时照样紧贴（先让出的是那行空白）", async () => {
+  for (const height of [20, 9]) {
+    const { shell, term, cleanup } = makeShell(80, height);
+    try {
+      shell.start();
+      await settle();
+      term.input("你好");
+      term.input("\r");
+      await settle();
+      const screen = rows(term);
+      const state = screen.findIndex((line) => line.includes("state: idle"));
+      assert.ok(state > 0, screen.join("\n"));
+      assert.match(screen[state + 1] ?? "", /^-{20,}/, `${height} 行：状态行下面就是输入框上沿`);
+      if (height === 20) assert.equal((screen[state - 1] ?? "").trim(), "", "上方隔一行空白");
+    } finally {
+      cleanup();
+    }
+  }
+});

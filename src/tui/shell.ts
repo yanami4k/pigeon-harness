@@ -49,6 +49,7 @@ import {
   isKeyRelease,
   Loader,
   matchesKey,
+  Spacer,
   type StackChild,
   type Terminal,
   Text,
@@ -369,8 +370,10 @@ export class PigeonTuiShell
   private readonly options: TuiShellOptions;
   private readonly tui: PigeonAltScreen;
   private readonly flow = new MessageFlow();
-  // 决策 454：状态行是次要信息（弱化样式）
-  private readonly statusLine = new Text("", 1, 1, secondary);
+  // 决策 454：状态行是次要信息（弱化样式）。验收修改：不带上下空行，紧贴在输入框上沿；与上方内容之间隔一行空白
+  //（statusGap，窗口装不下时先让出它），状态行本身不压缩
+  private readonly statusLine = new Text("", 1, 0, secondary);
+  private readonly statusGap = new Spacer(1);
   // M5.5 S4（决策 040）：worker 的刷新定时器（有 worker 在跑或还有结束的在淡出期内才开）
   private workerTimerHandle: ReturnType<typeof setInterval> | null = null;
   // 决策 301：worker 活动记录（面板、树形视图与状态栏花费同源）、编排面板、树形视图与当前视图
@@ -575,6 +578,8 @@ export class PigeonTuiShell
   // 按视图排布组件：排队内容与会话选择器在输入框上方，状态栏在输入框下方，编排面板在状态栏之下（决策 286、301）；
   // 树形视图整屏（标题、树、状态栏）；worker 会话的消息区换成它的对话，排队内容与会话选择器属于主会话，不显示
   private layout(): void {
+    // 状态行紧贴在输入框上沿（没有输入框的视图里在状态栏之上），上方隔一行空白
+    const status: StackChild[] = [this.statusGap, keep(this.statusLine)];
     const children: StackChild[] =
       this.view === "tree"
         ? [
@@ -593,8 +598,8 @@ export class PigeonTuiShell
           ? [
               this.title,
               fill(this.sessionPanel),
-              this.statusLine,
               this.approvalBox,
+              ...status,
               keep(this.input),
               this.statusBar,
             ]
@@ -602,8 +607,8 @@ export class PigeonTuiShell
             ? [
                 this.title,
                 fill(this.pooledSession.flow.view),
-                this.statusLine,
                 this.approvalBox,
+                ...status,
                 keep(this.input),
                 this.statusBar,
               ]
@@ -611,15 +616,15 @@ export class PigeonTuiShell
               ? [
                   this.title,
                   fill(this.historySession.flow.view),
-                  this.statusLine,
                   this.approvalBox,
+                  ...status,
                   this.statusBar,
                 ]
               : this.view === "worker" && this.workerSession !== undefined
                 ? [
                     this.title,
                     fill(this.workerSession.flow.view),
-                    this.statusLine,
+                    ...status,
                     keep(this.input),
                     this.statusBar,
                     this.panel,
@@ -628,10 +633,10 @@ export class PigeonTuiShell
                     this.title,
                     fill(this.flow.view),
                     ...(this.loader !== undefined ? [this.loader] : []),
-                    this.statusLine,
                     this.queue.view,
                     keep(this.picker.view),
                     keep(this.configPanel.view),
+                    ...status,
                     keep(this.input),
                     this.statusBar,
                     this.panel,

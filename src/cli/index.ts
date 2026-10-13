@@ -781,7 +781,7 @@ async function lineMain(argv: string[]): Promise<void> {
       : undefined;
   if (peerMessaging !== undefined) {
     peerSlot.bind(peerMessaging);
-    write(`本会话在本机会话名录里叫 ${peerMessaging.name}\n`);
+    // 决策 456：开局不再写"本会话在名录里叫…"一行（与终端界面同一口径）
   }
   try {
     await runRepl({

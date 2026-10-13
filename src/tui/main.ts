@@ -959,7 +959,7 @@ export async function main(argv: string[]): Promise<void> {
       if (peerMessaging.sessionId === slot.sessionId && peerMessaging.name !== sessionName) {
         peerMessaging.rename(sessionName);
       }
-      shell.addSystem(`本会话在本机会话名录里叫 ${peerMessaging.name}（/rename 改名）`);
+      // 决策 456：开局不再写"本会话在名录里叫…"一行（标题栏已写会话名）
     }
   }
   // 决策 439：项目共享层（或被 git 跟踪的 settings.local.json）写的键位不采用——仓库不能改审批键
