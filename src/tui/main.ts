@@ -105,6 +105,7 @@ import { asSessionId, newSessionId, type SessionId } from "../state/ids.ts";
 import { FROM_BUNDLE } from "../state/package-paths.ts";
 import { tuiLogDirOf } from "../state/paths.ts";
 import {
+  keybindingsSectionOf,
   loopGuardSettingsOf,
   memoryLimitsOf,
   withHooksDisabled,
@@ -112,6 +113,7 @@ import {
 } from "../state/settings.ts";
 import { worktreeBaseModeOf } from "../state/worktree-config.ts";
 import { createTuiApprovalHandler, type TuiApprovalFace } from "./approval.ts";
+import { readWindowsClipboard } from "./clipboard.ts";
 import { resolveStartTarget, takeContinueFlags } from "./continue-flags.ts";
 import { guardTuiAgent } from "./loop-guard-view.ts";
 import {
@@ -489,6 +491,12 @@ export async function main(argv: string[]): Promise<void> {
   };
   const shell = new PigeonTuiShell({
     terminal: new ProcessTerminal(),
+    // 决策 439：键位（设置的 keybindings 一节）
+    ...(keybindingsSectionOf(settings) !== undefined
+      ? { keybindings: keybindingsSectionOf(settings) }
+      : {}),
+    // 决策 441：Windows 上右键粘贴取系统剪贴板
+    ...(process.platform === "win32" ? { readClipboard: readWindowsClipboard } : {}),
     runtime: slot.bundle.adapter,
     sessionId: slot.sessionId,
     // 决策 325：终端界面日志在程序状态目录下
@@ -630,6 +638,8 @@ export async function main(argv: string[]): Promise<void> {
     const reloaded = await reopenMainSessionForReload(reloadContext, snapshot, slot);
     const opened = reloaded.opened;
     settings = snapshot;
+    // 决策 439：键位随新快照重装
+    shellHolder.current?.applyKeybindings(keybindingsSectionOf(snapshot));
     orchestration = reloaded.orchestration;
     loopGuard = reloaded.loopGuard;
     webToolsOption = reloaded.webTools;

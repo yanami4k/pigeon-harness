@@ -81,7 +81,7 @@ function makePanel(): {
 } {
   const root = mkdtempSync(join(tmpdir(), "pigeon-tui-approval-"));
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-log-"));
-  const term = new MockTerminal(80, 24);
+  const term = new MockTerminal(80, 60);
   const runtime = new StubRuntime();
   const store = new SessionGrantStore({ workspaceRoot: root });
   const shell = new PigeonTuiShell({ terminal: term, runtime, sessionId: SESSION_ID, logDir });
@@ -277,7 +277,7 @@ test("集成：真实 adapter 审批闸挂起等按键——[y] 批准后写副�
   const root = mkdtempSync(join(tmpdir(), "pigeon-tui-approval-e2e-"));
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-log-"));
   writeFileSync(join(root, "a.ts"), "alpha\n");
-  const term = new MockTerminal(80, 24);
+  const term = new MockTerminal(80, 60);
   const store = new SessionGrantStore({ workspaceRoot: root });
   const registry = new ToolRegistry();
   registry.register({

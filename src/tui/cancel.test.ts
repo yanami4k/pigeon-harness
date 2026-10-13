@@ -261,7 +261,7 @@ test("四分类徽章五档渲染：取消/治理熔断/业务失败/基础设�
 });
 
 test("listenerErrors 增量警告：启动即查 + run 收尾复查；同批故障不重复刷屏，新故障以累计数提醒", async () => {
-  const { shell, runtime, term, logDir } = makeShell(80, 24);
+  const { shell, runtime, term, logDir } = makeShell(80, 60);
   runtime.errors.push(new Error("模拟磁盘故障"));
   try {
     shell.start();

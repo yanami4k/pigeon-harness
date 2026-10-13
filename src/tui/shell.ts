@@ -48,9 +48,11 @@ import {
   type Component,
   type Editor,
   matchesKey,
+  type StackChild,
   type Terminal,
   Text,
-  TuiMainScreen,
+  TuiAltScreen,
+  VStack,
 } from "@earendil-works/pi-tui";
 import { compactionNoticeText, manualCompactionText } from "../application/compaction-text.ts";
 import { failureBadge } from "../application/format.ts";
@@ -111,6 +113,7 @@ import {
 import type { TuiHooksFace } from "./hooks-view.ts";
 import { createPromptEditor } from "./input-editor.ts";
 import { InputQueue } from "./input-queue.ts";
+import { installKeybindings, isKey } from "./keybindings.ts";
 import { attachToolResultTo, MessageFlow, projectRuntimeEvent } from "./message-flow.ts";
 import {
   askApprovalPanel,
@@ -252,6 +255,15 @@ export interface TuiShellOptions {
   onBusyChange?: (busy: boolean) => void;
   // 决策 450：/rename 改本会话在本机会话名录里的名字；返回给人看的一行。缺省 = 命令不可用
   renamePeer?: (name: string) => string;
+  // 决策 441：读系统剪贴板（Windows 上右键粘贴用）；缺省 = 右键不粘贴
+  readClipboard?: () => Promise<string>;
+  // 决策 439：设置里的键位（keybindings 一节）；缺省全用缺省键位
+  keybindings?: Record<string, string | string[]> | undefined;
+}
+
+// 决策 441：布局里占满剩余高度的那一块（消息区、树形视图）
+function fill(component: Component): StackChild {
+  return { component, basis: 0, grow: 1, minSize: 1 };
 }
 
 // 决策 301：界面所处的视图——主会话、整屏的树形视图、进入的 worker 会话
@@ -277,7 +289,7 @@ export class PigeonTuiShell
     ResumeViewHost<TuiSessionBinding>
 {
   private readonly options: TuiShellOptions;
-  private readonly tui: TuiMainScreen;
+  private readonly tui: TuiAltScreen;
   private readonly flow = new MessageFlow();
   private readonly statusLine = new Text("");
   // M5.5 S4（决策 040）：worker 的刷新定时器（有 worker 在跑或还有结束的在淡出期内才开）
@@ -374,7 +386,14 @@ export class PigeonTuiShell
     if (options.logDir !== undefined && process.env.PI_DEBUG_REDRAW === "1") {
       ensureStateDirOf(options.logDir);
     }
-    this.tui = new TuiMainScreen(options.terminal, false, options.logDir);
+    // 决策 439：键位表（pi-tui 部件与 Pigeon 自己的动作共用）；设置里有问题的条目在消息区提示
+    const keyNotices = installKeybindings(options.keybindings);
+    // 决策 441：全屏（备用屏）——程序自管滚动、鼠标滚轮、拖选复制与搜索；Windows 上右键粘贴剪贴板
+    this.tui = new TuiAltScreen(options.terminal, false, options.logDir, {
+      ...(process.platform === "win32" && options.readClipboard !== undefined
+        ? { onRightClickPaste: () => void this.pasteClipboard() }
+        : {}),
+    });
     this.input = createPromptEditor(this.tui, options.promptHistory?.load() ?? []);
     this.statusBar = new StatusBar({
       ...(options.model !== undefined ? { model: options.model } : {}),
@@ -411,6 +430,7 @@ export class PigeonTuiShell
       height: () => Math.max(3, this.options.terminal.rows - 2),
     });
     this.layout();
+    for (const line of keyNotices) this.flow.addSystem(line);
     this.input.onSubmit = (value) => this.handleSubmit(value);
     this.updateStatus();
   }
@@ -418,18 +438,18 @@ export class PigeonTuiShell
   // 按视图排布组件：排队内容与会话选择器在输入框上方，状态栏在输入框下方，编排面板在状态栏之下（决策 286、301）；
   // 树形视图整屏（标题、树、状态栏）；worker 会话的消息区换成它的对话，排队内容与会话选择器属于主会话，不显示
   private layout(): void {
-    const children: Component[] =
+    const children: StackChild[] =
       this.view === "tree"
         ? [
             this.title,
-            this.treeMode === "sessions" ? this.sessionTree : this.tree,
+            fill(this.treeMode === "sessions" ? this.sessionTree : this.tree),
             this.approvalBox,
             this.statusBar,
           ]
         : this.view === "history" && this.historySession !== undefined
           ? [
               this.title,
-              this.historySession.flow.view,
+              fill(this.historySession.flow.view),
               this.statusLine,
               this.approvalBox,
               this.statusBar,
@@ -437,7 +457,7 @@ export class PigeonTuiShell
           : this.view === "worker" && this.workerSession !== undefined
             ? [
                 this.title,
-                this.workerSession.flow.view,
+                fill(this.workerSession.flow.view),
                 this.statusLine,
                 this.input,
                 this.statusBar,
@@ -445,7 +465,7 @@ export class PigeonTuiShell
               ]
             : [
                 this.title,
-                this.flow.view,
+                fill(this.flow.view),
                 this.statusLine,
                 this.queue.view,
                 this.picker.view,
@@ -453,8 +473,35 @@ export class PigeonTuiShell
                 this.statusBar,
                 this.panel,
               ];
-    this.tui.clear();
-    for (const child of children) this.tui.addChild(child);
+    // 决策 441：每个视图一个 VStack 作布局根——中间的滚动区占满剩余高度，其余各条按自身高度排在上下
+    this.tui.setLayoutRoot(new VStack(children));
+  }
+
+  // 决策 441：Windows 上右键粘贴——取剪贴板文字，按粘贴（bracketed paste）交给输入框
+  private async pasteClipboard(): Promise<void> {
+    const read = this.options.readClipboard;
+    if (read === undefined) return;
+    let text: string;
+    try {
+      text = await read();
+    } catch {
+      return;
+    }
+    if (text === "" || !this.started) return;
+    this.input.handleInput(`\x1b[200~${text}\x1b[201~`);
+    this.tui.requestRender();
+  }
+
+  // 决策 439：/reload 之后按新快照重装键位表
+  applyKeybindings(section: Record<string, string | string[]> | undefined): void {
+    for (const line of installKeybindings(section)) this.flow.addSystem(line);
+  }
+
+  // 决策 441：Ctrl+C 在有拖选的选区时复制选区（不计退出布防）
+  copySelection(): boolean {
+    if (!this.tui.hasActiveSelection()) return false;
+    void this.tui.copyActiveSelectionToClipboard();
+    return true;
   }
 
   private now(): number {
@@ -469,11 +516,26 @@ export class PigeonTuiShell
     if (this.started) return;
     this.started = true;
     // 决策 301：编排视图的按键（树形视图、面板选择、worker 会话的 Esc）排在最前；审批挂起期间与 Ctrl+C 一律放给壳级键控
-    this.disposers.push(this.tui.addInputListener((data) => this.handleOrchestrationKey(data)));
+    // 决策 441：全屏的搜索框开着时（它是浮层）按键一律让给它，Ctrl+C 除外
+    this.disposers.push(
+      this.tui.addInputListener((data) =>
+        this.tui.hasOverlay() ? undefined : this.handleOrchestrationKey(data)
+      )
+    );
     // 壳级键控（S3 审批面板 + S4 恢复菜单 + S5 取消键）：模态挂起期间接管终端输入
-    this.disposers.push(this.tui.addInputListener((data) => handleShellKey(this, data)));
+    this.disposers.push(
+      this.tui.addInputListener((data) =>
+        this.tui.hasOverlay() && !isKey(data, "pigeon.exit")
+          ? undefined
+          : handleShellKey(this, data)
+      )
+    );
     // 决策 286：会话选择器、Ctrl+O 与退回排队内容的按键（模态与取消键之后、输入框之前）
-    this.disposers.push(this.tui.addInputListener((data) => this.handleViewKey(data)));
+    this.disposers.push(
+      this.tui.addInputListener((data) =>
+        this.tui.hasOverlay() ? undefined : this.handleViewKey(data)
+      )
+    );
     this.bindRuntime(this.current.runtime);
     this.resetCosts(this.current.sessionId, false);
     refreshWorkersView(this);
@@ -539,6 +601,8 @@ export class PigeonTuiShell
     }
     if (this.started) {
       this.started = false;
+      // 决策 441：离开全屏时把对话（标题与主会话的消息区）完整打印到普通屏幕
+      this.tui.setLayoutRoot(new VStack([this.title, this.flow.view]));
       this.tui.stop();
     }
   }
@@ -758,8 +822,9 @@ export class PigeonTuiShell
 
   // 决策 331：暂停界面执行一段要独占终端的动作（/memory edit 打开编辑器），结束后恢复界面并整屏重画
   suspendFor<T>(work: () => T): T {
+    // 决策 441：暂时离开全屏，不往普通屏幕打印对话
     if (!this.started) return work();
-    this.tui.stop();
+    this.tui.stop({ preserveScreen: true });
     try {
       return work();
     } finally {
@@ -816,7 +881,7 @@ export class PigeonTuiShell
       // 选择器打开期间其余按键吞掉，输入框内容不动
       return { consume: true };
     }
-    if (matchesKey(data, "ctrl+o")) {
+    if (isKey(data, "pigeon.toggleToolOutput")) {
       const expanded = !this.flow.toolsExpandedState();
       this.flow.setToolsExpanded(expanded);
       this.workerSession?.flow.setToolsExpanded(expanded);
@@ -824,7 +889,7 @@ export class PigeonTuiShell
       this.tui.requestRender();
       return { consume: true };
     }
-    if ((matchesKey(data, "alt+up") || matchesKey(data, "alt+q")) && this.queue.size() > 0) {
+    if (isKey(data, "pigeon.dequeue") && this.queue.size() > 0) {
       this.restoreQueueToEditor();
       return { consume: true };
     }
@@ -1580,7 +1645,7 @@ export class PigeonTuiShell
     const workers = this.current.workers;
     if (workers === undefined) return undefined;
     if (this.view === "tree" && this.treeMode === "sessions") {
-      if (matchesKey(data, "escape") || matchesKey(data, "ctrl+x")) {
+      if (matchesKey(data, "escape") || isKey(data, "pigeon.tree")) {
         this.returnTo = { view: "main" };
         this.showView("main");
       } else if (matchesKey(data, "tab")) {
@@ -1605,10 +1670,10 @@ export class PigeonTuiShell
         return { consume: true };
       }
       // Ctrl+O 交给视图按键；其余按键吞掉（只读）
-      return matchesKey(data, "ctrl+o") ? undefined : { consume: true };
+      return isKey(data, "pigeon.toggleToolOutput") ? undefined : { consume: true };
     }
     if (this.view === "tree") {
-      if (matchesKey(data, "escape") || matchesKey(data, "ctrl+x")) {
+      if (matchesKey(data, "escape") || isKey(data, "pigeon.tree")) {
         this.returnTo = { view: "main" };
         this.showView("main");
       } else if (matchesKey(data, "tab")) {
@@ -1671,7 +1736,7 @@ export class PigeonTuiShell
       this.tui.requestRender();
       return { consume: true };
     }
-    if (matchesKey(data, "ctrl+x")) {
+    if (isKey(data, "pigeon.tree")) {
       this.toggleTree();
       return { consume: true };
     }

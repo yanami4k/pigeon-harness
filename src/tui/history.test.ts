@@ -93,7 +93,8 @@ test("thinking 流式单独一段并视觉弱化（~ 前缀 + 暗色），正文
     assert.ok(screenText(term).includes("␛[2J"), "thinking 内容同样经 036 净化");
     const raw = term.writes.join("");
     assert.ok(raw.includes("\x1b[2m"), "thinking 段带暗色弱化");
-    assert.ok(!raw.includes("\x1b[2J"), "模型内容里的控制序列不写往终端");
+    // 全屏自己会写清屏序列（进入备用屏、整屏重画）；要证明的是模型内容里的那一个没有原样写出
+    assert.ok(!raw.includes("锚点\x1b[2J"), "模型内容里的控制序列不写往终端");
     runtime.finish();
   } finally {
     shell.stop();

@@ -338,9 +338,10 @@ test("dispose 对称：stop 退订全部监听并停 tui；迟到事件与增量
     term.input("\r");
     await settle();
     assert.deepEqual(runtime.runs, ["你好"]);
-    const before = screenText(term);
 
     shell.stop();
+    // 决策 441：停下时离开全屏、把对话打印到普通屏幕——之后不得再变
+    const before = screenText(term);
     assert.ok(term.stopped, "stop 必须停掉底层 tui/terminal");
     // 迟到事件与增量：不得抛、不得改变屏幕（上游 abort 竞态的防护）
     runtime.emit(RuntimeEventKind.TurnStarted, {});
@@ -407,7 +408,7 @@ test("集成：真实 PiRuntimeAdapter + fake streamFn 全链路——提交、�
 
 test("渲染注入防御（决策 036）：流式文本与审批块 diff 的控制序列在 Text 边界可见化，原始字节不落终端", async () => {
   const WIDTH = 60;
-  const { shell, runtime, term, logDir } = makeShell(WIDTH, 20);
+  const { shell, runtime, term, logDir } = makeShell(WIDTH, 50);
   try {
     shell.start();
     await settle();

@@ -28,6 +28,7 @@ import {
   mergeHookLayers,
   STOP_HOOK_BLOCK_CAP_KEY,
 } from "./hooks.ts";
+import { type KeybindingsSection, KeybindingsSectionSchema } from "./keybindings-config.ts";
 import {
   LoopGuardSectionSchema,
   type LoopGuardSettings,
@@ -123,6 +124,7 @@ export const SETTINGS_SECTIONS = {
   thinking: ThinkingSectionSchema,
   worktree: WorktreeSectionSchema,
   messaging: MessagingSectionSchema,
+  keybindings: KeybindingsSectionSchema,
   modelRequest: ModelRequestSectionSchema,
 } as const satisfies Record<string, TSchema>;
 export type SettingsSectionName = keyof typeof SETTINGS_SECTIONS;
@@ -155,6 +157,7 @@ export const SettingsFileSchema = Type.Object(
     thinking: Type.Optional(ThinkingSectionSchema),
     worktree: Type.Optional(WorktreeSectionSchema),
     messaging: Type.Optional(MessagingSectionSchema),
+    keybindings: Type.Optional(KeybindingsSectionSchema),
     modelRequest: Type.Optional(ModelRequestSectionSchema),
     [DISABLE_ALL_HOOKS_KEY]: Type.Optional(Type.Boolean()),
     [STOP_HOOK_BLOCK_CAP_KEY]: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -243,7 +246,20 @@ export function validateSettingsLayer(
     if (key === "hooks") {
       problems.push(...hooksSectionProblems(section as HooksSection));
     }
-    const known = new Set(Object.keys(schema.properties as Record<string, unknown>));
+    // 决策 439：keybindings 的键是动作名（pigeon.* 或 pi-tui 的 tui.*），不是固定的几个；具体动作在终端界面开局时核对
+    if (key === "keybindings") {
+      for (const inner of Object.keys(section)) {
+        if (!/^(pigeon|tui)\.[A-Za-z0-9.]+$/.test(inner)) {
+          problems.push(
+            `设置文件 ${where}：keybindings 里的 ${inner} 不是动作名（形如 pigeon.toggleToolOutput 或 tui.editor.undo）`
+          );
+        }
+      }
+      continue;
+    }
+    const known = new Set(
+      Object.keys(("properties" in schema ? schema.properties : {}) as Record<string, unknown>)
+    );
     for (const inner of Object.keys(section)) {
       if (!known.has(inner)) {
         problems.push(
@@ -317,6 +333,7 @@ export interface MergedSettings {
   thinking?: ThinkingSection;
   worktree?: WorktreeSection;
   messaging?: MessagingSection;
+  keybindings?: KeybindingsSection;
   modelRequest?: ModelRequestSection;
   trustedDirectories: string[];
   // 停用全部钩子（324）：三层按标量覆盖（高优先层说了算），缺省 false
@@ -536,6 +553,11 @@ export function sessionSearchEnabledOf(snapshot: SettingsSnapshot): boolean {
 // 推理档位（决策 390）：合并后的 thinking 一节（没写为 undefined，按模型信息定缺省档位）
 export function thinkingSectionOf(snapshot: SettingsSnapshot): ThinkingSection | undefined {
   return snapshot.merged.thinking;
+}
+
+// 决策 439：键位（合并后的 keybindings 一节；按动作名逐个覆盖）
+export function keybindingsSectionOf(snapshot: SettingsSnapshot): KeybindingsSection | undefined {
+  return snapshot.merged.keybindings;
 }
 
 // 决策 450：本机会话间通信（合并后的 messaging 一节）

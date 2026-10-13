@@ -229,7 +229,7 @@ test("/resume 全流程：报告将还原的上下文与悬空的工具调用 �
     const crashed = await writeStoreCrashedSession(sessionsDir, root, "edit_file");
     const tracker = makeRebindTracker();
     const oldRuntime = new FakeRuntime();
-    const term = new MockTerminal(90, 30);
+    const term = new MockTerminal(90, 60);
     const shell = new PigeonTuiShell({
       terminal: term,
       runtime: oldRuntime,

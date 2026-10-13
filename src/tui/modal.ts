@@ -8,10 +8,12 @@ import {
   APPROVAL_CANCEL_CLOSED,
   APPROVAL_WITHDRAWN,
   APPROVAL_YIELDED,
+  type ApprovalPanelKey,
   type ApprovalPanelResult,
   approvalBlockText,
   PEER_HOLD_WITHDRAWN,
 } from "./approval.ts";
+import { isKey } from "./keybindings.ts";
 
 // 挂起中的审批决议（resolve 四键或 cancel）；串行不变量（决策 002）下同时最多一个
 export interface PendingApproval {
@@ -49,6 +51,8 @@ export interface ModalHost {
   render(): void;
   updateStatus(): void;
   requestExit(): void;
+  // 决策 441：有拖选的选区时复制它并返回 true（Ctrl+C 即复制，不计退出布防）；缺省没有选区
+  copySelection?(): boolean;
   requestInterrupt(): void;
   // 决策 301：审批面板的各行（审批块、撤回、理由行提示）写到哪里——就地显示在当前视图；缺省即 addSystem
   addApprovalLine?(line: string): void;
@@ -144,7 +148,7 @@ export function closePendingModals(host: ModalHost): void {
 // 壳级键控路由：退出键（Ctrl+C）最先——模态吞键语义不得吃掉退出布防（033：模态
 // 单击仍计布防第一次）；其后模态键控（决策 029/031），最后是取消键（S5 裁决 032）
 export function handleShellKey(host: ModalHost, data: string): { consume: true } | undefined {
-  if (data === "\x03") {
+  if (isKey(data, "pigeon.exit")) {
     handleCtrlC(host);
     return { consume: true };
   }
@@ -152,7 +156,7 @@ export function handleShellKey(host: ModalHost, data: string): { consume: true }
   // 取消键（S5）：Esc = 裸 "\x1b"（方向键等转义序列是多字节，不会误判）；Ctrl+C 不进
   // 本路径——永不绑定取消（033），退出语义由 handleCtrlC 承载。仅运行中消费；
   // 空闲 Esc 放行给输入框（Editor 在没有补全菜单时不处理 Esc，语义为空）
-  if (data === "\x1b" && host.isRunning()) {
+  if (isKey(data, "pigeon.cancel") && host.isRunning()) {
     host.requestInterrupt();
     return { consume: true };
   }
@@ -164,6 +168,7 @@ export function handleShellKey(host: ModalHost, data: string): { consume: true }
 // 不留提示（029/031 吞键语义），但仍计布防第一次。窗口内第二次（任意模式含模态）
 // 优雅退出；窗口过期则本次退化为单击并重新布防
 export function handleCtrlC(host: ModalHost): void {
+  if (host.copySelection?.() === true) return;
   const now = Date.now();
   const last = host.lastCtrlCAt();
   if (last !== null && now - last <= host.exitWindowMs()) {
@@ -201,7 +206,20 @@ export function handleModalKey(host: ModalHost, data: string): { consume: true }
       }
       return undefined;
     }
-    const key = data.toLowerCase();
+    // 决策 439：面板的键从键位表取（缺省 y/n/r/a/d/s，字母不分大小写）
+    const key: ApprovalPanelKey | "r" | undefined = isKey(data, "pigeon.approval.approve")
+      ? "y"
+      : isKey(data, "pigeon.approval.reject")
+        ? "n"
+        : isKey(data, "pigeon.approval.rejectWithReason")
+          ? "r"
+          : isKey(data, "pigeon.approval.grant")
+            ? "a"
+            : isKey(data, "pigeon.approval.grantDirectory")
+              ? "d"
+              : isKey(data, "pigeon.approval.scriptKind")
+                ? "s"
+                : undefined;
     // 决策 450：扣住的消息是二选一的列表——方向键在"丢弃"（缺省）与"放行"之间切换，回车确认；没用方向键选过时回车
     // 不作答，字母键一律不作答（正在给 agent 打字的 "yes" 与回车不会放行消息，也不会丢掉它）
     if (approval.peerMessage === true) {

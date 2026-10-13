@@ -197,7 +197,7 @@ function makeResumeShell(root: string): {
 } {
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-picker-log-"));
   const sessionId = newSessionId();
-  const term = new MockTerminal(120, 40);
+  const term = new MockTerminal(120, 80);
   const rebinds: SessionId[] = [];
   const shell = new PigeonTuiShell({
     terminal: term,
