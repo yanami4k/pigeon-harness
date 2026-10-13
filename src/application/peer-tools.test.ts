@@ -12,6 +12,7 @@ import { createFakeStreamFn } from "../pi-runtime/fixtures.ts";
 import { newSessionId } from "../state/ids.ts";
 import { runHeadless } from "./headless-core.ts";
 import { PeerMessaging } from "./peer-messaging.ts";
+import { CROSS_PROCESS_MESSAGING } from "./peer-session.ts";
 import {
   createPeerTools,
   LIST_PEERS_TOOL,
@@ -135,4 +136,8 @@ test("pigeon run 的收件口：模型列出并给另一个会话发消息，对
     ["listener"],
     "运行结束收件口关掉、名录撤下"
   );
+});
+
+test("决策 450〔部分已改〕：跨进程的会话间通信在三个入口都关着（不开收件口、不注册两个工具）；本文件的用例直接在模块上打开", () => {
+  assert.equal(CROSS_PROCESS_MESSAGING, false);
 });

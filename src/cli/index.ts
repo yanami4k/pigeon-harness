@@ -30,7 +30,7 @@ import {
 } from "../application/launch-flags.ts";
 import { LOOP_GUARD_TEXTS } from "../application/loop-guard.ts";
 import { MIGRATE_CONFIG_USAGE, runMigrateConfig } from "../application/migrate-config.ts";
-import { openPeerInbox } from "../application/peer-session.ts";
+import { CROSS_PROCESS_MESSAGING, openPeerInbox } from "../application/peer-session.ts";
 import { PeerSlot } from "../application/peer-tools.ts";
 import { runResumeFlow } from "../application/resume.ts";
 import {
@@ -480,8 +480,8 @@ async function runMain(argv: string[]): Promise<void> {
     // 决策 287–291：联网工具缺省给出，--sandbox-network off 不给
     ...webToolsOptionOf(flags, settings),
     loopGuard,
-    // 决策 450：开本机会话间通信的收件口（--sandbox 时由 headless 略过）
-    peerInbox: {},
+    // 决策 450〔部分已改〕：跨进程的会话间通信先关闭（--sandbox 时本就由 headless 略过）
+    ...(CROSS_PROCESS_MESSAGING ? { peerInbox: {} } : {}),
   };
   // 决策 379：本机放手且联网工具开着时提示一行风险（写标准错误，不混进 --json 的一行结果）
   const riskNotice = localRiskNotice(flags, runOptions.webTools !== undefined);
@@ -739,7 +739,9 @@ async function lineMain(argv: string[]): Promise<void> {
       deferSessionFile: true,
       ...(sandbox !== undefined
         ? { workspaceHost: sandbox.host, statusFacts: sandboxStatusFacts(sandbox) }
-        : { peers: peerSlot }),
+        : CROSS_PROCESS_MESSAGING
+          ? { peers: peerSlot }
+          : {}),
       // 决策 294 B1：任务清单按编排配置（缺省开），与 pigeon run、终端界面一致
       taskList: orchestrationSettingsOf(flags, settings).taskList,
       ...webToolsOptionOf(flags, settings),
@@ -762,8 +764,9 @@ async function lineMain(argv: string[]): Promise<void> {
   if (bundle.toolsNotice !== undefined) write(`${bundle.toolsNotice}\n`);
   // 决策 450：本机会话间通信的收件口（沙箱里不开）。命令行对话没有放行面板：扣住的消息到时限丢弃并回告发送方；
   // 收到的消息进通知队列，下一条任务随之带上，空行回车即开一轮交给 agent
+  // 决策 450〔部分已改〕：跨进程的会话间通信先关闭（不开收件口、不写名录）
   const peerMessaging =
-    sandbox === undefined
+    sandbox === undefined && CROSS_PROCESS_MESSAGING
       ? await openPeerInbox({
           sessionId,
           cwd: workspaceRoot,

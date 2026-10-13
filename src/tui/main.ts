@@ -57,7 +57,7 @@ import {
   reopenNamedWorktree,
 } from "../application/named-worktree.ts";
 import { type PeerMessaging, validPeerName } from "../application/peer-messaging.ts";
-import { openPeerInbox } from "../application/peer-session.ts";
+import { CROSS_PROCESS_MESSAGING, openPeerInbox } from "../application/peer-session.ts";
 import { PeerSlot } from "../application/peer-tools.ts";
 import { restoreSessionWorkers } from "../application/previous-workers.ts";
 import { promptHistoryStore } from "../application/prompt-history.ts";
@@ -445,7 +445,13 @@ export async function main(argv: string[]): Promise<void> {
     governanceRoot: governanceRoot,
     // 决策 445：独立工作树里的会话，/reload 重建时工作区仍是工作树（第一条消息之前会话文件还没建，推导不出）
     ...(namedWorktree !== undefined ? { workspaceRoot: namedWorktree.path } : {}),
-    ...(sandbox === undefined ? { enterWorktree: enterWorktreeSlot, peers: peerSlot } : {}),
+    ...(sandbox === undefined
+      ? {
+          enterWorktree: enterWorktreeSlot,
+          // 决策 450〔部分已改〕：跨进程的会话间通信先关闭（不注册 list_peers 与 send_message）
+          ...(CROSS_PROCESS_MESSAGING ? { peers: peerSlot } : {}),
+        }
+      : {}),
     streamFn,
     flags,
     ...(sandbox !== undefined
@@ -464,7 +470,13 @@ export async function main(argv: string[]): Promise<void> {
     // 决策 436：会话回退要用发消息时的快照
     turnSnapshots: true,
     ...(namedWorktree !== undefined ? { workspaceRoot: namedWorktree.path } : {}),
-    ...(sandbox === undefined ? { enterWorktree: enterWorktreeSlot, peers: peerSlot } : {}),
+    ...(sandbox === undefined
+      ? {
+          enterWorktree: enterWorktreeSlot,
+          // 决策 450〔部分已改〕：跨进程的会话间通信先关闭（不注册 list_peers 与 send_message）
+          ...(CROSS_PROCESS_MESSAGING ? { peers: peerSlot } : {}),
+        }
+      : {}),
     settings,
     sessionId,
     streamFn,
@@ -778,7 +790,13 @@ export async function main(argv: string[]): Promise<void> {
           turnSnapshots: true,
           settings,
           sessionId: targetId,
-          ...(sandbox === undefined ? { enterWorktree: enterWorktreeSlot, peers: peerSlot } : {}),
+          ...(sandbox === undefined
+            ? {
+                enterWorktree: enterWorktreeSlot,
+                // 决策 450〔部分已改〕：跨进程的会话间通信先关闭（不注册 list_peers 与 send_message）
+                ...(CROSS_PROCESS_MESSAGING ? { peers: peerSlot } : {}),
+              }
+            : {}),
           streamFn,
           flags,
           ...spawnWorkerOption(flags, orchestration),
@@ -921,7 +939,12 @@ export async function main(argv: string[]): Promise<void> {
   );
   // 决策 450：本机会话间通信的收件口（沙箱会话不开；开局即续接 worker 会话时不开，worker 不登记名录）。消息进当前主会话的
   // 通知队列，空闲时叫醒；扣住的逐条弹到审批面板
-  if (sandbox === undefined && mainOpened.scope.parentSessionId === undefined) {
+  // 决策 450〔部分已改〕：跨进程的会话间通信先关闭——不开收件口、不写本机会话名录，扣住消息的面板也就不会出现
+  if (
+    CROSS_PROCESS_MESSAGING &&
+    sandbox === undefined &&
+    mainOpened.scope.parentSessionId === undefined
+  ) {
     const presenter = new HeldPresenter({
       ask: (request) => shell.askApproval(request),
       // 输入框里有字时不弹（不打断正在打字的人）

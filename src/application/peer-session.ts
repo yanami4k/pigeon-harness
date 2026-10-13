@@ -9,6 +9,11 @@ import { messagingSectionOf } from "../state/settings.ts";
 import { defaultPeerName, type HeldMessage, PeerMessaging } from "./peer-messaging.ts";
 import { sessionNameOf } from "./session-name.ts";
 
+// 决策 450〔部分已改〕：跨进程的会话间通信（收件口、本机会话名录、list_peers 与 send_message、系统提示里那句）先关闭，
+// 457 施工时删掉跨进程部分；现阶段通信与照看只在同一进程内。终端界面、命令行对话与 pigeon run 三个入口照这个常量决定开不开。
+// 它不是设置项，使用者打不开；测试直接在各模块上打开（收件口、工具与无人值守运行的 peerInbox 参数），不经入口
+export const CROSS_PROCESS_MESSAGING = false;
+
 export interface OpenPeerInboxInput {
   sessionId: string;
   cwd: string;
