@@ -2,6 +2,7 @@
 // 畸形文件 fail-closed 响亮失败；同 grantId 重复升格拒绝。正规写入方只有 /grants save 与
 // /revoke config#N（约束 3：agent / 模型 / 后台流程无写配置文件的代码路径）。
 // M5.5 S1（决策 040）：写入改为临时文件 fsync 后改名原子替换，写到一半崩溃不留半截文件。
+
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ConfigGrantRule } from "../state/grants.ts";
@@ -15,6 +16,7 @@ import {
 import { describeSource, type SettingsSource, validateSettingsLayer } from "../state/settings.ts";
 import { type AtomicWriteIo, writeFileAtomic } from "./atomic-write.ts";
 import { acquireExclusiveLock } from "./exclusive-lock.ts";
+import { parseJsonText } from "./json-text.ts";
 import { ensureLocalSettingsIgnored } from "./settings.ts";
 
 export class GrantsConfigError extends Error {}
@@ -59,7 +61,7 @@ function readLocalSettingsRaw(governanceRoot: string): Record<string, unknown> {
   }
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(path, "utf8"));
+    raw = parseJsonText(readFileSync(path, "utf8"));
   } catch (error) {
     throw new GrantsConfigError(
       `设置文件 ${describeSource(LOCAL_SOURCE)}不是合法 JSON：${path}：${error instanceof Error ? error.message : String(error)}`

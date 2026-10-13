@@ -180,15 +180,18 @@ export class MessageFlow {
   // 决策 439：工具结果里的图片（read_file 交给模型的）——能显示图片的终端里显示，不能的退回一行文字占位（pi-tui 的 Image）
   addImages(images: ReadonlyArray<{ data: string; mimeType: string }>): void {
     for (const image of images) {
+      const checked = checkedImage(image);
+      if (checked === undefined) {
+        // 类型不在白名单或数据不是合法的 base64：只显示固定的占位，不把对方给的类型与数据写进终端
+        this.append("[image: 不能显示（类型或数据不认得）]");
+        continue;
+      }
       this.list.addChild(
         new Image(
-          image.data,
-          image.mimeType,
-          { fallbackColor: (text) => text },
-          {
-            maxWidthCells: 60,
-            maxHeightCells: 20,
-          }
+          checked.data,
+          checked.mimeType,
+          { fallbackColor: (text) => sanitizeTerminalText(text) },
+          { maxWidthCells: 60, maxHeightCells: 20 }
         )
       );
     }
@@ -282,21 +285,56 @@ export function attachToolResultTo(
 }
 
 // 决策 439：网址与绝对路径输出成 OSC 8 链接（终端支持超链接时）；在净化之后加，序列来自受信代码
-// 网址；绝对路径（盘符或 / 开头、带扩展名，且前面不是路径或词的一部分）
-const LINK_PATTERN =
-  /(https?:\/\/[^\s<>"'`）」，。]+)|(?<![\w./\\-])((?:[A-Za-z]:\\|\/)[^\s<>"'`:*?|）」，。]+\.[A-Za-z0-9]{1,8})/g;
+// 网址与绝对路径（盘符或 / 开头、带扩展名）。按空白切成词逐个看（线性；不用会回溯的整段正则），词里先剥掉开头的引号括号与
+// 结尾的标点；网址可以在词中出现（"见https://…"），路径须从词首开始。超长的词（4096 字以上）不看。
+const MAX_TOKEN = 4096;
+const LEADING = /^[("'`（「“‘《<[]+/;
+const TRAILING = /[.,;:!?)\]）」”’》>，。；：！？、"'`]+$/;
+const PATH_TOKEN = /^(?:[A-Za-z]:\\|\/)[^<>"'`:*?|]+\.[A-Za-z0-9]{1,8}$/;
+
+function linkToken(token: string): string {
+  if (token.length > MAX_TOKEN) return token;
+  const lead = LEADING.exec(token)?.[0] ?? "";
+  const rest = token.slice(lead.length);
+  const tail = TRAILING.exec(rest)?.[0] ?? "";
+  const core = rest.slice(0, rest.length - tail.length);
+  if (core === "") return token;
+  const at = core.search(/https?:\/\//);
+  if (at >= 0) {
+    const url = core.slice(at);
+    return `${lead}${core.slice(0, at)}${hyperlink(url, url)}${tail}`;
+  }
+  if (!PATH_TOKEN.test(core)) return token;
+  try {
+    return `${lead}${hyperlink(core, pathToFileURL(core).href)}${tail}`;
+  } catch {
+    return token;
+  }
+}
 
 export function linkify(text: string, hyperlinks = getCapabilities().hyperlinks): string {
   if (!hyperlinks) return text;
-  return text.replace(LINK_PATTERN, (match, url: string | undefined) => {
-    // 句末标点不算进链接
-    const core = match.replace(/[.,;:)\]]+$/, "");
-    const tail = match.slice(core.length);
-    if (url !== undefined) return `${hyperlink(core, core)}${tail}`;
-    try {
-      return `${hyperlink(core, pathToFileURL(core).href)}${tail}`;
-    } catch {
-      return match;
-    }
-  });
+  return text.replace(/\S+/g, linkToken);
+}
+
+// 决策 439：显示的图片只认这几种类型，数据须是严格的 base64；类型一律换成白名单里的写法
+const IMAGE_TYPES = new Map([
+  ["image/png", "image/png"],
+  ["image/jpeg", "image/jpeg"],
+  ["image/jpg", "image/jpeg"],
+  ["image/gif", "image/gif"],
+  ["image/webp", "image/webp"],
+]);
+
+export function checkedImage(image: {
+  data: string;
+  mimeType: string;
+}): { data: string; mimeType: string } | undefined {
+  const mimeType = IMAGE_TYPES.get(image.mimeType.trim().toLowerCase());
+  if (mimeType === undefined) return undefined;
+  const data = image.data;
+  if (data.length === 0 || data.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) {
+    return undefined;
+  }
+  return { data, mimeType };
 }

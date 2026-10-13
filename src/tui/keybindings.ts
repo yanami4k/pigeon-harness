@@ -4,6 +4,8 @@
 // Ctrl+Shift+F 外另认 F3（Windows Terminal 缺省占用 Ctrl+Shift+F）。
 import {
   getKeybindings,
+  isKeyRelease,
+  isKeyRepeat,
   type KeybindingDefinitions,
   type KeybindingsConfig,
   KeybindingsManager,
@@ -119,7 +121,14 @@ function pigeonConflicts(manager: KeybindingsManager): string[] {
 }
 
 // 按键是否是某个 Pigeon 动作（字母键不分大小写）
+// 某个 Pigeon 动作当前绑的键（提示文字用）
+export function keyLabelsOf(id: keyof typeof PIGEON_KEYBINDINGS): string[] {
+  return getKeybindings().getKeys(id);
+}
+
+// kitty 键盘协议下的松键与按住重复不算一次按键（否则按一下 Ctrl+C 就退出、松开 Esc 又取消一次）
 export function isKey(data: string, id: keyof typeof PIGEON_KEYBINDINGS): boolean {
+  if (isKeyRelease(data) || isKeyRepeat(data)) return false;
   const keybindings = getKeybindings();
   return (
     keybindings.matches(data, id) ||

@@ -22,4 +22,38 @@ export const MARKDOWN_THEME: MarkdownTheme = {
   underline: sgr(4, 24),
 };
 
-export const MARKDOWN_OPTIONS: MarkdownOptions = { renderLatex: false };
+// 决策 439：链接文字与网址不同时，在文字后面把网址也显示出来（pi-tui 在支持超链接的终端里只显示文字、把网址藏进 OSC 8，
+// 网址可以伪装，退出后回滚里也只剩文字）。代码块与行内代码里的不动。
+export function revealLinkTargets(markdown: string): string {
+  let fenced = false;
+  return markdown
+    .split("\n")
+    .map((line) => {
+      if (/^\s*(```|~~~)/.test(line)) {
+        fenced = !fenced;
+        return line;
+      }
+      if (fenced) return line;
+      // 反引号之间的段落（奇数段）是行内代码，不动
+      return line
+        .split("`")
+        .map((part, index) =>
+          index % 2 === 1
+            ? part
+            : part.replace(
+                /\[([^\]\n]{1,500})\]\(([^()\s]{1,2000})\)/g,
+                (match, text: string, href: string) =>
+                  text.trim() === href || `mailto:${text.trim()}` === href
+                    ? match
+                    : `${match} (<${href}>)`
+              )
+        )
+        .join("`");
+    })
+    .join("\n");
+}
+
+export const MARKDOWN_OPTIONS: MarkdownOptions = {
+  renderLatex: false,
+  transform: (markdown) => revealLinkTargets(markdown),
+};

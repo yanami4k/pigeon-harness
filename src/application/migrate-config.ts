@@ -15,6 +15,7 @@
 //   ⑥ 退役的 verify.json（决策 322）：不并入设置——挪进备份目录，并打印把原验证命令改写为收尾（Stop）钩子的
 //      配置示例（分步配置按各步命令以 && 连接）。
 // 有锁被存活进程占用（会话正开着、worker 正在运行）或工作树被锁定时拒绝并说明。可重复执行：没有要做的事即如实说明。
+
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
@@ -30,6 +31,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { writeFileAtomic } from "../persistence/atomic-write.ts";
 import { lockHeldByLiveProcess } from "../persistence/exclusive-lock.ts";
+import { parseJsonText } from "../persistence/json-text.ts";
 import {
   migrationBackupConflict,
   migrationBackupLocation,
@@ -127,7 +129,7 @@ function convertLegacyConfig(root: string, file: string, section: string): Conve
   const source = legacyConfigPath(root, file);
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(source, "utf8"));
+    raw = parseJsonText(readFileSync(source, "utf8"));
   } catch (error) {
     // web.json 可能含 key，解析报错会摘录原文片段：不打印细节
     const detail =
@@ -179,7 +181,7 @@ function readTarget(file: string, label: string): Record<string, unknown> {
   if (!existsSync(file)) return {};
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(file, "utf8"));
+    raw = parseJsonText(readFileSync(file, "utf8"));
   } catch (error) {
     throw new MigrationError(
       `${label} 不是合法 JSON，无法合并：${error instanceof Error ? error.message : String(error)}`
@@ -579,7 +581,7 @@ export const verifyJsonStep: MigrationStep = {
     // 校验在 plan 阶段（复审 P2：先检查后执行——不合法即拦住，不走到 apply 才炸）
     let raw: unknown;
     try {
-      raw = JSON.parse(readFileSync(source, "utf8"));
+      raw = parseJsonText(readFileSync(source, "utf8"));
     } catch (error) {
       return {
         todo: [],
@@ -610,7 +612,7 @@ export const verifyJsonStep: MigrationStep = {
     const source = verifyConfigPathOf(ctx.root);
     let raw: unknown;
     try {
-      raw = JSON.parse(readFileSync(source, "utf8"));
+      raw = parseJsonText(readFileSync(source, "utf8"));
     } catch (error) {
       throw new MigrationError(
         `${pigeonRel("verify.json")} 不是合法 JSON：${error instanceof Error ? error.message : String(error)}`

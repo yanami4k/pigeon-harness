@@ -126,6 +126,7 @@ import {
 import { HeldPresenter } from "./peer-inbox.ts";
 import { MainPeerRoute } from "./peer-route.ts";
 import { PigeonTuiShell, type TuiShellOptions, type TuiWorkersFace } from "./shell.ts";
+import { installTerminalReset } from "./terminal-reset.ts";
 import { switchableWarn } from "./warn-sink.ts";
 import { takeWorktreeFlag } from "./worktree-flag.ts";
 import { createWorktreeSwitch } from "./worktree-switch.ts";
@@ -820,6 +821,13 @@ export async function main(argv: string[]): Promise<void> {
   // "resume"，否则 "startup"；补的上下文存进壳、下一条输入带上
   await shell.beginSession(resumed ? "resume" : "startup");
   shell.start();
+  // 决策 441：未捕获的异常、未处理的拒绝与其余退出路径上把终端复位（离开全屏、关鼠标上报、开自动换行、显示光标）
+  const terminalReset = installTerminalReset(
+    (data) => process.stdout.write(data),
+    (error) =>
+      console.error(error instanceof Error ? (error.stack ?? error.message) : String(error)),
+    (code) => process.exit(code)
+  );
   // 决策 450：本机会话间通信的收件口（沙箱会话不开；开局即续接 worker 会话时不开，worker 不登记名录）。消息进当前主会话的
   // 通知队列，空闲时叫醒；扣住的逐条弹到审批面板
   if (sandbox === undefined && mainOpened.scope.parentSessionId === undefined) {
@@ -857,6 +865,12 @@ export async function main(argv: string[]): Promise<void> {
       shell.addSystem(`本会话在本机会话名录里叫 ${peerMessaging.name}（/rename 改名）`);
     }
   }
+  // 决策 439：项目共享层（或被 git 跟踪的 settings.local.json）写的键位不采用——仓库不能改审批键
+  if (settings.merged.keybindingsIgnored !== undefined) {
+    shell.addSystem(
+      "项目设置里的 keybindings 没有采用（键位只认用户级与未被 git 跟踪的 settings.local.json）"
+    );
+  }
   // 决策 330：人写的说明超出上限被截断时在消息区提示一行
   if (mainBundle.instructionsNotice !== undefined) shell.addSystem(mainBundle.instructionsNotice);
   if (mainBundle.toolsNotice !== undefined) shell.addSystem(mainBundle.toolsNotice);
@@ -872,6 +886,8 @@ export async function main(argv: string[]): Promise<void> {
   // 进程级退出（283）：立即收尾——取消在跑的 worker 并等其收尾记录落盘（有上限），释放当前运行面，沙箱会话交回，退进程。
   // 壳已停止，worker 排队中的审批按拒绝处理，不会吊住取消
   function release(): void {
+    // 壳已正常停下（pi-tui 已复位终端）：之后的退出不再写复位序列
+    terminalReset.markClean();
     const current = slot;
     // 壳已停：此后的告警写回标准错误输出
     warnSink.detach();

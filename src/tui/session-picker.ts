@@ -1,7 +1,7 @@
 // 会话选择器（决策 286 第 5 项）：/resume 与 pigeon --resume 不带会话号时弹出，列本项目可续接的主会话
-// （application/recent-sessions.ts：worker、分支与复盘会话不列）。↑↓ 选（PageUp/PageDown 翻页）、回车进、Esc 退；每行最近活动时间、
+// （application/recent-sessions.ts：worker、分支与复盘会话不列）。↑↓ 选、回车进、Esc 退（PageUp/PageDown 归全屏的消息区）；每行最近活动时间、
 // 轮数、沙箱标记与首条输入摘要。显示在输入框上方，打开期间按键归选择器（输入框内容不动）。
-// 决策 439：列表本身改用 pi-tui 的 SelectList（滚动、选中、翻页由它做），键位取键位表的 tui.select.*；选中前缀换成 ASCII。
+// 决策 439：列表本身改用 pi-tui 的 SelectList（滚动与选中由它做），键位取键位表的 tui.select.*；选中前缀换成 ASCII。
 import {
   Container,
   type SelectItem,

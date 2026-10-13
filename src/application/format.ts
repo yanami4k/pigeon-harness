@@ -179,6 +179,9 @@ export function sanitizeTerminalText(text: string): string {
       out += "␡";
     } else if (code < 0x20) {
       out += String.fromCodePoint(0x2400 + code);
+    } else if (code >= 0x80 && code <= 0x9f) {
+      // C1 控制字符（其中 0x9b 在部分终端里等同 ESC [）：换成替换字符
+      out += String.fromCodePoint(0xfffd);
     } else {
       out += ch;
     }

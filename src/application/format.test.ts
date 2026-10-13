@@ -53,3 +53,11 @@ test("幂等：净化两次结果相同（流式累积 setText 每帧重净化�
   assert.equal(sanitizeTerminalText(once), once);
   assert.ok(!once.includes("\x1b"), "净化后不得残留任何 ESC");
 });
+
+test("C1 控制字符（0x80–0x9f，0x9b 在部分终端里等同 ESC [）换成替换字符；幂等", () => {
+  const raw = `a${String.fromCharCode(0x9b)}2Jb${String.fromCharCode(0x85)}c${String.fromCharCode(0xa0)}d`;
+  const cleaned = sanitizeTerminalText(raw);
+  const replacement = String.fromCharCode(0xfffd);
+  assert.equal(cleaned, `a${replacement}2Jb${replacement}c${String.fromCharCode(0xa0)}d`);
+  assert.equal(sanitizeTerminalText(cleaned), cleaned);
+});

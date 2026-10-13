@@ -47,12 +47,12 @@
 import {
   type Component,
   type Editor,
+  isKeyRelease,
   Loader,
   matchesKey,
   type StackChild,
   type Terminal,
   Text,
-  TuiAltScreen,
   VStack,
 } from "@earendil-works/pi-tui";
 import { compactionNoticeText, manualCompactionText } from "../application/compaction-text.ts";
@@ -99,6 +99,7 @@ import type { TurnCompletedPayload } from "../state/runtime-events.ts";
 import { RuntimeEventKind } from "../state/runtime-events.ts";
 import type { RunStopCause } from "../state/session-entries.ts";
 import { toolResultModelUsage } from "../state/tool-usage.ts";
+import { openExternalUrl, PigeonAltScreen, TrimmedTranscript } from "./alt-screen.ts";
 import type { ApprovalPanelResult, TuiApprovalFace } from "./approval.ts";
 import {
   lookupSlashCommand,
@@ -258,6 +259,8 @@ export interface TuiShellOptions {
   onBusyChange?: (busy: boolean) => void;
   // 决策 450：/rename 改本会话在本机会话名录里的名字；返回给人看的一行。缺省 = 命令不可用
   renamePeer?: (name: string) => string;
+  // 决策 439：点链接时打开网址（缺省用系统缺省方式，见 alt-screen.ts）；测试注入
+  openUrl?: (url: string) => void;
   // 决策 441：读系统剪贴板（Windows 上右键粘贴用）；缺省 = 右键不粘贴
   readClipboard?: () => Promise<string>;
   // 决策 442：/config 的取数与改动（生效值、用户级的值与覆盖情况；改动写用户级设置，返回写到的文件）；缺省 = 不可用
@@ -301,7 +304,7 @@ export class PigeonTuiShell
     ResumeViewHost<TuiSessionBinding>
 {
   private readonly options: TuiShellOptions;
-  private readonly tui: TuiAltScreen;
+  private readonly tui: PigeonAltScreen;
   private readonly flow = new MessageFlow();
   private readonly statusLine = new Text("");
   // M5.5 S4（决策 040）：worker 的刷新定时器（有 worker 在跑或还有结束的在淡出期内才开）
@@ -417,10 +420,14 @@ export class PigeonTuiShell
     // 决策 439：键位表（pi-tui 部件与 Pigeon 自己的动作共用）；设置里有问题的条目在消息区提示
     const keyNotices = installKeybindings(options.keybindings);
     // 决策 441：全屏（备用屏）——程序自管滚动、鼠标滚轮、拖选复制与搜索；Windows 上右键粘贴剪贴板
-    this.tui = new TuiAltScreen(options.terminal, false, options.logDir, {
+    this.tui = new PigeonAltScreen(options.terminal, false, options.logDir, {
       ...(process.platform === "win32" && options.readClipboard !== undefined
         ? { onRightClickPaste: () => void this.pasteClipboard() }
         : {}),
+      // 决策 439：点链接用系统缺省方式打开（只开 http、https、file；点了才开）
+      openUrl: (url) => {
+        (this.options.openUrl ?? openExternalUrl)(url);
+      },
     });
     this.input = createPromptEditor(
       this.tui,
@@ -521,15 +528,18 @@ export class PigeonTuiShell
     } catch {
       return;
     }
-    if (text === "" || !this.started) return;
+    // 审批或消息面板挂着时不接受粘贴（吞键的约定不能被右键粘贴绕过）
+    if (text === "" || !this.started || this.pendingApprovalState !== null) return;
     this.input.handleInput(`\x1b[200~${text}\x1b[201~`);
     this.tui.requestRender();
   }
 
   // 按键让给别人：全屏的搜索框开着（浮层），或输入框的补全列表开着（Esc、方向键、回车归它）；审批面板挂着时不让
   private keysToOthers(_data: string): boolean {
+    // 查找框开着时一律让给它——审批或消息面板挂着也让（键入查找框的字母不能被面板拿去作答）
+    if (this.tui.hasOverlay()) return true;
     if (this.pendingApprovalState !== null) return false;
-    return this.tui.hasOverlay() || this.input.isShowingAutocomplete();
+    return this.input.isShowingAutocomplete();
   }
 
   // 决策 439：/reload 之后按新快照重装键位表
@@ -540,7 +550,9 @@ export class PigeonTuiShell
   // 决策 441：Ctrl+C 在有拖选的选区时复制选区（不计退出布防）
   copySelection(): boolean {
     if (!this.tui.hasActiveSelection()) return false;
-    void this.tui.copyActiveSelectionToClipboard();
+    const copied = this.tui.copyActiveSelectionToClipboard();
+    // 复制之后清掉选区：下一次 Ctrl+C 照常清输入、两下退出
+    void copied.finally(() => this.tui.clearSelection());
     return true;
   }
 
@@ -559,13 +571,15 @@ export class PigeonTuiShell
     // 决策 441：全屏的搜索框开着时（它是浮层）按键一律让给它，Ctrl+C 除外
     this.disposers.push(
       this.tui.addInputListener((data) =>
-        this.keysToOthers(data) ? undefined : this.handleOrchestrationKey(data)
+        isKeyRelease(data) || this.keysToOthers(data)
+          ? undefined
+          : this.handleOrchestrationKey(data)
       )
     );
     // 壳级键控（S3 审批面板 + S4 恢复菜单 + S5 取消键）：模态挂起期间接管终端输入
     this.disposers.push(
       this.tui.addInputListener((data) =>
-        this.keysToOthers(data) && !isKey(data, "pigeon.exit")
+        isKeyRelease(data) || (this.keysToOthers(data) && !isKey(data, "pigeon.exit"))
           ? undefined
           : handleShellKey(this, data)
       )
@@ -573,7 +587,7 @@ export class PigeonTuiShell
     // 决策 286：会话选择器、Ctrl+O 与退回排队内容的按键（模态与取消键之后、输入框之前）
     this.disposers.push(
       this.tui.addInputListener((data) =>
-        this.keysToOthers(data) ? undefined : this.handleViewKey(data)
+        isKeyRelease(data) || this.keysToOthers(data) ? undefined : this.handleViewKey(data)
       )
     );
     this.bindRuntime(this.current.runtime);
@@ -644,7 +658,7 @@ export class PigeonTuiShell
     if (this.started) {
       this.started = false;
       // 决策 441：离开全屏时把对话（标题与主会话的消息区）完整打印到普通屏幕
-      this.tui.setLayoutRoot(new VStack([this.title, this.flow.view]));
+      this.tui.setLayoutRoot(new TrimmedTranscript(new VStack([this.title, this.flow.view])));
       this.tui.stop();
     }
   }

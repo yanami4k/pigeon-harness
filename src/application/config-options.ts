@@ -1,10 +1,12 @@
 // /config 设置面板的选项（决策 442）：只列一小组常用的个人选项。每项给出生效值、用户级写的值，以及是否被项目设置
 //（项目共享层 .pigeon/settings.json 或项目个人层 .pigeon/settings.local.json）覆盖——覆盖时改用户级不生效。改动只写用户级
 // ~/.pigeon/settings.json（保留文件里的其余内容；写前按设置的校验规则核对整份文件），由调用方随后按 /reload 的重建当场生效。
+
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
 import { writeFileAtomic } from "../persistence/atomic-write.ts";
+import { parseJsonText } from "../persistence/json-text.ts";
 import {
   readSettingsLayer,
   type SettingsLocation,
@@ -192,7 +194,7 @@ export function setUserConfig(
   let raw: Record<string, unknown> = {};
   if (existsSync(location.path)) {
     try {
-      const parsedFile: unknown = JSON.parse(readFileSync(location.path, "utf8"));
+      const parsedFile: unknown = parseJsonText(readFileSync(location.path, "utf8"));
       if (typeof parsedFile !== "object" || parsedFile === null || Array.isArray(parsedFile)) {
         throw new ConfigError(`${location.path} 顶层不是对象，不改它`);
       }

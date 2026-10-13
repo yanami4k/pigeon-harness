@@ -43,6 +43,7 @@ import {
   outsidePathLine,
   protectedPathLine,
 } from "../approvals/handler.ts";
+import { keyLabelsOf } from "./keybindings.ts";
 
 // 取消路径的逐字理由（fail-closed 按拒绝处理）
 export const APPROVAL_CANCEL_CLOSED = "TUI 已停止，审批面板关闭，本次调用按拒绝处理";
@@ -138,16 +139,18 @@ export function approvalBlockText(
       ? ` / ${SCRIPT_KIND_KEY_LABEL}`
       : "";
   lines.push(
-    // 决策 326 ①：受保护路径的请示只有批准一次或拒绝，不提供放权键与"同类都允许"
-    (request.protectedPath !== undefined
-      ? "批准执行？[y] 批准一次 / [n] 拒绝 / [r] 拒绝并说明"
-      : request.host !== undefined
-        ? `批准执行？[y] 批准一次 / [n] 拒绝 / [r] 拒绝并说明 / ${hostGrantKeyLabel(request)}`
-        : request.tier === "exec"
-          ? `批准执行？[y] 批准一次 / [n] 拒绝 / [r] 拒绝并说明 / ${execGrantKeyLabel(request)}`
-          : directoryGrant
-            ? "批准执行？[y] 批准一次 / [n] 拒绝 / [r] 拒绝并说明 / [a] 本会话允许 / [d] 本会话允许(仅限当前调用所在目录)"
-            : "批准执行？[y] 批准一次 / [n] 拒绝 / [r] 拒绝并说明 / [a] 本会话允许") + scriptKey
+    approvalKeyLabels(
+      // 决策 326 ①：受保护路径的请示只有批准一次或拒绝，不提供放权键与"同类都允许"
+      (request.protectedPath !== undefined
+        ? "批准执行？[y] 批准一次 / [n] 拒绝 / [r] 拒绝并说明"
+        : request.host !== undefined
+          ? `批准执行？[y] 批准一次 / [n] 拒绝 / [r] 拒绝并说明 / ${hostGrantKeyLabel(request)}`
+          : request.tier === "exec"
+            ? `批准执行？[y] 批准一次 / [n] 拒绝 / [r] 拒绝并说明 / ${execGrantKeyLabel(request)}`
+            : directoryGrant
+              ? "批准执行？[y] 批准一次 / [n] 拒绝 / [r] 拒绝并说明 / [a] 本会话允许 / [d] 本会话允许(仅限当前调用所在目录)"
+              : "批准执行？[y] 批准一次 / [n] 拒绝 / [r] 拒绝并说明 / [a] 本会话允许") + scriptKey
+    )
   );
   return lines.join("\n");
 }
@@ -231,4 +234,21 @@ export function createTuiApprovalHandler(
     panel.noteApproval(verdictLine("rejected", "human"));
     return { approved: false };
   };
+}
+
+// 决策 439：提示里的 [y] [n] [r] [a] [d] [s] 按实际生效的键位写（改过键位时提示跟着变）；键位表取不到时照原样
+const PANEL_KEY_IDS = {
+  y: "pigeon.approval.approve",
+  n: "pigeon.approval.reject",
+  r: "pigeon.approval.rejectWithReason",
+  a: "pigeon.approval.grant",
+  d: "pigeon.approval.grantDirectory",
+  s: "pigeon.approval.scriptKind",
+} as const;
+
+export function approvalKeyLabels(text: string): string {
+  return text.replace(/\[([ynrads])\]/g, (match, key: keyof typeof PANEL_KEY_IDS) => {
+    const keys = keyLabelsOf(PANEL_KEY_IDS[key]);
+    return keys.length > 0 ? `[${keys.join("/")}]` : match;
+  });
 }

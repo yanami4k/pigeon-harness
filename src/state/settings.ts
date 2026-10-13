@@ -334,6 +334,8 @@ export interface MergedSettings {
   worktree?: WorktreeSection;
   messaging?: MessagingSection;
   keybindings?: KeybindingsSection;
+  // 决策 439：写了 keybindings 却不被采用的层（项目共享层、被 git 跟踪的 settings.local.json）
+  keybindingsIgnored?: SettingsLayer[];
   modelRequest?: ModelRequestSection;
   trustedDirectories: string[];
   // 停用全部钩子（324）：三层按标量覆盖（高优先层说了算），缺省 false
@@ -401,6 +403,22 @@ export function mergeSettingsLayers(
       ...(file.messaging?.inbound !== undefined ? { inbound: file.messaging.inbound } : {}),
     }))
   );
+  // 决策 439：键位只认个人层（用户级、未被 git 跟踪的 settings.local.json）——仓库提交的设置不能改审批键；写了的层记下来提示
+  const personalKeys = layers.filter(
+    ({ layer }) => layer === "user" || (layer === "local" && options.localLayerTracked !== true)
+  );
+  const ignoredKeys = layers
+    .filter(({ file }) => file.keybindings !== undefined)
+    .filter((entry) => !personalKeys.includes(entry))
+    .map(({ layer }) => layer);
+  const keybindings: Record<string, string | string[]> = {};
+  for (const { file } of personalKeys) Object.assign(keybindings, file.keybindings ?? {});
+  const { keybindings: _mergedKeys, ...withoutKeys } = merged as { keybindings?: unknown };
+  merged = {
+    ...withoutKeys,
+    ...(Object.keys(keybindings).length > 0 ? { keybindings } : {}),
+    ...(ignoredKeys.length > 0 ? { keybindingsIgnored: ignoredKeys } : {}),
+  };
   const mergedMessaging = merged.messaging as MessagingSection | undefined;
   if (mergedMessaging !== undefined) {
     const { inbound: _merged, ...rest } = mergedMessaging;

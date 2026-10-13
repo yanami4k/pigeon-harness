@@ -3,6 +3,7 @@
 // worker 与沙箱会话用派出它的会话的快照。文件缺失 = 该层为空（合法）；存在但不是合法 JSON、有未知键、写了 key、项目级写了
 // trustedDirectories、或合并后语义不明 → 响亮失败并指出文件、键与所在层。
 // 另含：项目程序状态目录 .pigeon/state/ 的建立（决策 444：第一次真要写程序状态时才建，忽略规则写进全局 git 排除文件）。
+
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -32,6 +33,7 @@ import {
   validateSettingsLayer,
 } from "../state/settings.ts";
 import { ensureGlobalIgnoreRulesOnce, type GlobalIgnoreOptions } from "./global-ignore.ts";
+import { parseJsonText } from "./json-text.ts";
 import { readDotMcpJson } from "./mcp-config.ts";
 
 export class SettingsError extends Error {}
@@ -56,7 +58,7 @@ export function readSettingsLayer(location: SettingsLocation): SettingsFile | un
   }
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(location.path, "utf8"));
+    raw = parseJsonText(readFileSync(location.path, "utf8"));
   } catch (error) {
     throw new SettingsError(
       `设置文件 ${describeSource(location)}不是合法 JSON：${location.path}：${error instanceof Error ? error.message : String(error)}`
