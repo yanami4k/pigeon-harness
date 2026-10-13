@@ -134,7 +134,7 @@ test("parallel 为屏障：全部结束才返回；pipeline 每项各自走完�
   assert.ok(!started.some((task) => task.startsWith("s1")));
   gate("p2").resolve();
   await until(() => started.includes("s1 x") && started.includes("s1 y"));
-  assert.ok(harness.lines.some((line) => line === "[脚本 t] 并行结束 2"));
+  assert.ok(harness.lines.some((line) => line === "[script t] 并行结束 2"));
   // 流水线：x 的第一步做完即进第二步，不等 y 的第一步
   gate("s1 x").resolve();
   await until(() => started.includes("s2 x"));

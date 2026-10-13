@@ -188,15 +188,15 @@ test("pigeon --help 列出终端界面与各子命令（没有 --line）", () =>
   assert.equal(child.status, 0, child.stderr);
   assert.equal(child.stdout.trim(), TOP_LEVEL_HELP.trim());
   assert.doesNotMatch(child.stdout, /--line/);
-  assert.match(child.stdout, /--no-spawn-workers/);
+  assert.match(child.stdout, /pigeon run \[task\]/);
 });
 
 test("pigeon 带未知参数（含旧的 --line）：交给终端界面报错并给出用法", () => {
   for (const flag of ["--no-such-flag", "--line"]) {
     const child = runCli([flag]);
     assert.equal(child.status, 1);
-    assert.match(child.stderr, new RegExp(`未知参数：${flag}`));
-    assert.match(child.stderr, /用法：pigeon \[--yolo\]/);
+    assert.match(child.stderr, new RegExp(`unknown option: ${flag}`));
+    assert.match(child.stderr, /usage: pigeon \[--yolo\]/);
     assert.doesNotMatch(child.stderr, /pigeon --line/);
   }
 });
@@ -218,7 +218,7 @@ test("决策 461：pigeon resume <会话号> 进终端界面续接（等同 pige
     stream,
   ]);
   assert.equal(child.status, 1);
-  assert.match(child.stderr, /会话不存在：sess_01JZZZZZZZZZZZZZZZZZZZZZZZ/);
+  assert.match(child.stderr, /session not found: sess_01JZZZZZZZZZZZZZZZZZZZZZZZ/);
 });
 
 test("启动参数：--no-spawn-workers 只在能派 worker 的入口接受，缺省开着", () => {
@@ -227,7 +227,7 @@ test("启动参数：--no-spawn-workers 只在能派 worker 的入口接受，�
     parseLaunchFlags(["--no-spawn-workers"], { usage: "u", spawnWorkers: true }).spawnWorkers,
     false
   );
-  assert.throws(() => parseLaunchFlags(["--no-spawn-workers"], { usage: "u" }), /未知参数/);
+  assert.throws(() => parseLaunchFlags(["--no-spawn-workers"], { usage: "u" }), /unknown option/);
 });
 
 test("启动参数：--worker-concurrency 与 --worker-limit 调两个上限，缺省同时 8 个、不设总数上限；只在能派 worker 的入口接受", () => {
@@ -251,10 +251,13 @@ test("启动参数：--worker-concurrency 与 --worker-limit 调两个上限，�
   for (const bad of ["0", "1.5", "x"]) {
     assert.throws(
       () => parseLaunchFlags(["--worker-limit", bad], { usage: "u", spawnWorkers: true }),
-      /--worker-limit 需要正整数/
+      /--worker-limit needs a positive integer/
     );
   }
-  assert.throws(() => parseLaunchFlags(["--worker-concurrency", "2"], { usage: "u" }), /未知参数/);
+  assert.throws(
+    () => parseLaunchFlags(["--worker-concurrency", "2"], { usage: "u" }),
+    /unknown option/
+  );
 });
 
 test("pigeon run --worker-limit 1：同一次回复派两个，第二个按冻结文字拒绝", () => {

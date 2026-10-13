@@ -62,13 +62,13 @@ export function probeUpstreamVersions(
   const warnings = packages.flatMap((entry) => {
     if (entry.version === undefined) {
       return [
-        `上游版本告警：读不出 ${entry.name} 的版本，已验证版本为 ${VERIFIED_UPSTREAM_VERSION}（会话树格式与运行语义未经验证）`,
+        `upstream version warning: can't read the ${entry.name} version; verified with ${VERIFIED_UPSTREAM_VERSION}`,
       ];
     }
     return entry.version === VERIFIED_UPSTREAM_VERSION
       ? []
       : [
-          `上游版本告警：${entry.name} 实际为 ${entry.version}，已验证版本为 ${VERIFIED_UPSTREAM_VERSION}（会话树格式与运行语义未经验证）`,
+          `upstream version warning: ${entry.name} is ${entry.version}; verified with ${VERIFIED_UPSTREAM_VERSION}`,
         ];
   });
   return { packages, warnings };

@@ -258,10 +258,13 @@ test("没有快照的会话（非 git 工作区）只退对话；退对话后原
   const tree = await loadRewindTree(watched);
   const prepared = await prepareRewind(watched, messageNode(tree, "second").target);
   assert.deepEqual(prepared.plan.files, []);
-  await assert.rejects(() => checkCode(watched, prepared), /只能退对话/);
+  await assert.rejects(() => checkCode(watched, prepared), /conversation only/);
   // 选点之后又有了新内容：不按旧规划做
   await bundle.adapter.run("third");
-  await assert.rejects(() => applyRewind(watched, prepared, { mode: "conversation" }), /新内容/);
+  await assert.rejects(
+    () => applyRewind(watched, prepared, { mode: "conversation" }),
+    /session changed after/
+  );
   const fresh = await prepareRewind(
     watched,
     messageNode(await loadRewindTree(watched), "second").target
@@ -426,7 +429,7 @@ test("agent 改 .gitignore 放出原本被忽略的文件：退代码不删它�
   const code = await checkCode(host, prepared);
   assert.deepEqual(
     code.classified.conflicts.map((action) => [action.path, action.reason]),
-    [[".env", "这段里忽略规则变过，删掉拿不准"]]
+    [[".env", "ignore rules changed in this range; unsure to delete"]]
   );
   const outcome = await applyRewind(host, prepared, { mode: "code", code });
   assert.deepEqual(outcome.restore?.written, [".gitignore"]);
@@ -553,8 +556,8 @@ test("回退点之后有消息没有发消息时的快照：只给退对话并�
     host,
     messageNode(await loadRewindTree(host), "first").target
   );
-  assert.match(prepared.plan.codeBlocked ?? "", /没有发消息时的快照/);
-  await assert.rejects(() => checkCode(host, prepared), /没有发消息时的快照/);
+  assert.match(prepared.plan.codeBlocked ?? "", /has no snapshot/);
+  await assert.rejects(() => checkCode(host, prepared), /has no snapshot/);
 });
 
 test.skipIf(process.platform === "win32")(
@@ -657,7 +660,7 @@ test("回退跨了移进独立工作树：只给退对话，退后在新位置�
     host,
     messageNode(await loadRewindTree(host), "second").target
   );
-  assert.match(prepared.plan.codeBlocked ?? "", /不在同一个工作区/);
+  assert.match(prepared.plan.codeBlocked ?? "", /not in the same workspace/);
   await applyRewind(host, prepared, { mode: "conversation" });
   const last = mainEntries(root, bundle.adapter.sessionId)
     .filter((entry) => entry.customType === SessionEntryType.Worktree)
@@ -698,7 +701,7 @@ test("目标分支在独立工作树里、现在在主检出：不能切过去",
     warnings: [],
   } as unknown as SessionFileView;
   const plan = planRewind({ file, trees: undefined, from: "e2", to: "e5" });
-  assert.match(plan.conversationBlocked ?? "", /不能切过去/);
+  assert.match(plan.conversationBlocked ?? "", /can't switch/);
 });
 
 test("切回 agent 删过使用者文件的分支：删掉不是这段里 agent 新建的文件拿不准，列为冲突、缺省保留", async () => {
@@ -719,7 +722,7 @@ test("切回 agent 删过使用者文件的分支：删掉不是这段里 agent 
   const code = await checkCode(host, again);
   assert.deepEqual(
     code.classified.conflicts.map((action) => [action.path, action.reason]),
-    [["m.txt", "不是这段里 agent 新建的文件，删掉拿不准"]]
+    [["m.txt", "not created by the agent in this range; unsure to delete"]]
   );
   await applyRewind(host, again, { mode: "code", code });
   assert.equal(readFileSync(join(root, "m.txt"), "utf8"), "mine\n", "缺省保留");
@@ -764,7 +767,7 @@ test("两次 agent 改动中间夹的手改：退到最早一条之前时列为�
   const code = await checkCode(host, prepared);
   assert.deepEqual(
     code.classified.conflicts.map((action) => [action.path, action.reason]),
-    [["x.txt", "两条消息之间被手改过"]]
+    [["x.txt", "edited by hand between messages"]]
   );
   await applyRewind(host, prepared, { mode: "code", code });
   assert.equal(readFileSync(join(root, "x.txt"), "utf8"), "agent 2\n", "缺省保留");
@@ -851,8 +854,8 @@ test("退代码之后移进过独立工作树：不能撤销（不在同一个�
   });
   await bundle.sessionStore.flush();
   const undo = await prepareUndo(host);
-  assert.match(undo?.plan.codeBlocked ?? "", /不能撤销/);
-  await assert.rejects(async () => checkCode(host, undo as never), /不能撤销/);
+  assert.match(undo?.plan.codeBlocked ?? "", /can't undo/);
+  await assert.rejects(async () => checkCode(host, undo as never), /can't undo/);
 });
 
 // ---- 终审 ----
@@ -873,14 +876,14 @@ test("agent 在这段里改过 .gitattributes：没有原样字节的文件不�
     host,
     messageNode(await loadRewindTree(host), "first").target
   );
-  assert.match(prepared.plan.attributesChanged ?? "", /\.gitattributes 变过/);
+  assert.match(prepared.plan.attributesChanged ?? "", /\.gitattributes changed/);
   const outcome = await applyRewind(host, prepared, {
     mode: "code",
     code: await checkCode(host, prepared),
   });
   assert.deepEqual(outcome.restore?.written, []);
   const skipped = new Map((outcome.restore?.skipped ?? []).map((item) => [item.path, item.reason]));
-  assert.match(skipped.get("notes.txt") ?? "", /无法保真还原/);
+  assert.match(skipped.get("notes.txt") ?? "", /can't restore faithfully/);
   assert.equal(readFileSync(join(root, "notes.txt"), "utf8"), "two\n", "没有被写成 CRLF");
 });
 
@@ -917,7 +920,7 @@ test("撤销时工作区与退代码时不同：不撤代码并说明", async ()
   cleanups.push(elsewhere.cleanup);
   initRepo(elsewhere.root, { "a.txt": "x\n" });
   const undo = await prepareUndo({ ...host, workspaceRoot: elsewhere.root });
-  assert.match(undo?.plan.codeBlocked ?? "", /工作区.*不同或已不在/);
+  assert.match(undo?.plan.codeBlocked ?? "", /workspace .*differs or is gone/);
 });
 
 test("撤销时写到一半出错的文件：现状与出错当时记下的一样即照退，不一样即列为冲突", () => {

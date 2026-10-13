@@ -137,12 +137,12 @@ test("/grants 按层列出三层的放权规则；/revoke config#N 只移除项�
   };
   runGrantCommand(["grants"], ctx);
   const listed = lines.join("");
-  assert.match(listed, /固化规则（4，三层设置的 permissions 一节）/);
-  assert.match(listed, /config#0 ｜ edit_file/);
-  assert.match(listed, /config#1 ｜ run_command/);
-  assert.match(listed, /项目共享#0 ｜ web_fetch/);
-  assert.match(listed, /用户级#0 ｜ read_file/);
-  assert.doesNotMatch(listed, /不能用 \/revoke 移除/);
+  assert.match(listed, /saved rules \(4\):/);
+  assert.match(listed, /config#0 \| edit_file/);
+  assert.match(listed, /config#1 \| run_command/);
+  assert.match(listed, /project#0 \| web_fetch/);
+  assert.match(listed, /user#0 \| read_file/);
+  assert.doesNotMatch(listed, /\/revoke/);
   runGrantCommand(["revoke", "config#1"], ctx);
   const after = loadSettings(root, { homeDir: home });
   assert.deepEqual(

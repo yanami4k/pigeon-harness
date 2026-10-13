@@ -94,8 +94,11 @@ test("grants 配置：畸形文件响亮失败（JSON 语法错 / schema 违反�
       () => loadGrantConfig(root),
       (error: unknown) => {
         assert.ok(error instanceof GrantsConfigError);
-        assert.ok(error.message.includes("不是合法 JSON"), error.message);
-        assert.ok(error.message.includes("settings.local.json（项目个人）"), error.message);
+        assert.ok(error.message.includes("is not valid JSON"), error.message);
+        assert.ok(
+          error.message.includes("settings.local.json (project local settings)"),
+          error.message
+        );
         return true;
       }
     );

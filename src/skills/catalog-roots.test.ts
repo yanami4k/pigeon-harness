@@ -69,7 +69,9 @@ test("Skill 显式根：根自身有 SKILL.md 即一个 Skill（展示路径为 
       catalog.manifest[0]?.files.map((file) => file.path),
       ["SKILL.md"]
     );
-    assert.ok(catalog.problems.some((problem) => /missing：Skill 根不存在/.test(problem)));
+    assert.ok(
+      catalog.problems.some((problem) => /missing: Skill root doesn't exist/.test(problem))
+    );
 
     const none = loadSkillCatalog({ workspaceRoot: workspace, homeDir: home, roots: [] });
     assert.deepEqual(none.skills, []);

@@ -3,6 +3,7 @@
 
 // run_command 结果正文里文件变化一段的开头（tools/run-command.ts 写，pi-runtime/context-prune.ts 截取）
 export const FILE_CHANGES_HEAD = "File changes:";
+// 旧会话里的中文原文，只用来认出旧记录
 export const LEGACY_FILE_CHANGES_HEAD = "文件变化：";
 
 // 正文里最后一段文件变化的起点（含前面的换行）；新旧说法都认，没有为 -1

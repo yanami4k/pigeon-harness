@@ -127,25 +127,25 @@ const TOOL_HOOK: LayeredHook = {
 test("决策 324：/hooks 列出生效的钩子（事件、matcher、命令、层、执行位置、超时）与停用开关", () => {
   const hooks = new FakeHooks([STOP_HOOK, TOOL_HOOK]);
   const text = renderHooksView(hooks);
-  assert.ok(text.startsWith("== 钩子 ==\n"), text);
-  assert.ok(text.includes("disableAllHooks：未生效"), text);
+  assert.ok(text.startsWith("== hooks ==\n"), text);
+  assert.ok(text.includes("disableAllHooks: off"), text);
   assert.ok(
-    text.includes("- Stop | node stop.mjs | 项目共享 | 在工作区所在处执行 | 超时 600 秒"),
+    text.includes("- Stop | node stop.mjs | project settings | runs in workspace | timeout 600s"),
     text
   );
   assert.ok(
     text.includes(
-      "- PreToolUse（matcher：edit_file） | audit.sh | 用户级 | 在宿主执行 | 超时 5 秒"
+      "- PreToolUse (matcher: edit_file) | audit.sh | user settings | runs on host | timeout 5s"
     ),
     text
   );
-  assert.ok(text.includes("共 2 条"), text);
+  assert.ok(text.includes("2 hooks"), text);
   // 停用（--no-hooks 或设置里的 disableAllHooks）：开关写明，清单为空
   const off = new FakeHooks([STOP_HOOK]);
   off.disabled = true;
   const disabledText = renderHooksView(off);
-  assert.ok(disabledText.includes("disableAllHooks：生效"), disabledText);
-  assert.ok(disabledText.includes("生效的钩子：无"), disabledText);
+  assert.ok(disabledText.includes("disableAllHooks: on"), disabledText);
+  assert.ok(disabledText.includes("active hooks: none"), disabledText);
   assert.ok(!disabledText.includes("node stop.mjs"), disabledText);
 });
 
@@ -159,10 +159,10 @@ test("决策 324：/hooks 在壳里可用（只读，命令表放行）并落消
     term.input("\r");
     await settle();
     const screen = screenText(term);
-    assert.ok(screen.includes("== 钩子 =="), screen);
-    assert.ok(screen.includes("disableAllHooks：未生效"), screen);
+    assert.ok(screen.includes("== hooks =="), screen);
+    assert.ok(screen.includes("disableAllHooks: off"), screen);
     assert.ok(screen.includes("node stop.mjs"), screen);
-    assert.ok(screen.includes("项目共享"), screen);
+    assert.ok(screen.includes("project settings"), screen);
   } finally {
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });
@@ -248,7 +248,7 @@ test("决策 323：Stop 连续拦到上限（stopHookBlockCap）后不再跑并�
     await settle();
     assert.deepEqual(runtime.runs, ["干活", "再来", "再来"], "到上限即不再继续");
     assert.ok(
-      screenText(term).includes("Stop 钩子连续拦下 2 次，已到上限，不再接着跑"),
+      screenText(term).includes("Stop hook blocked 2 times in a row; not continuing"),
       screenText(term)
     );
   } finally {

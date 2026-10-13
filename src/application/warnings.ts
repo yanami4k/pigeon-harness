@@ -9,12 +9,12 @@ export const stderrWarn: WarnSink = (line) => {
   process.stderr.write(`${line}\n`);
 };
 
-// 故障类别：错误类型 + 首个"："之前的摘要。git 失败的具体 stderr（含临时索引路径等一次性内容）不进类别，
+// 故障类别：错误类型 + 首个"："或": "之前的摘要。git 失败的具体 stderr（含临时索引路径等一次性内容）不进类别，
 // 同一类故障因此只告警一次。
 export function failureKey(error: unknown): string {
   const name = error instanceof Error ? error.name : typeof error;
   const message = error instanceof Error ? error.message : String(error);
-  return `${name}|${(message.split("：")[0] ?? "").slice(0, 120)}`;
+  return `${name}|${(message.split(/：|: /)[0] ?? "").slice(0, 120)}`;
 }
 
 export function failureDetail(error: unknown): string {

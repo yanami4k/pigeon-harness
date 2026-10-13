@@ -24,8 +24,8 @@ export const MEMORY_LAYER_PREFIX: Readonly<Record<MemoryLayer, string>> = {
   user: "U",
 };
 export const MEMORY_LAYER_LABELS: Readonly<Record<MemoryLayer, string>> = {
-  project: "项目级",
-  user: "用户级",
+  project: "project memory",
+  user: "user memory",
 };
 
 // 展示路径（推送段、工具说明与 /memory 里的写法）

@@ -71,7 +71,7 @@ function gitBuffer(cwd: string, args: string[], input?: Buffer): Buffer {
           : error instanceof Error
             ? error.message
             : String(error);
-    throw new OverlayError(`git ${args.join(" ")} 失败：${detail}`);
+    throw new OverlayError(`git ${args.join(" ")} failed: ${detail}`);
   }
 }
 

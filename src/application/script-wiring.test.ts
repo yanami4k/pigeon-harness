@@ -206,7 +206,7 @@ test("斜杠命令点名：交给模型的文字带关键词；额度照写；�
   assert.deepEqual(parseScriptBudget("额度 2m"), { unit: "tokens", amount: 2_000_000 });
   assert.deepEqual(parseScriptBudget("额度 3万"), { unit: "tokens", amount: 30_000 });
   assert.equal(parseScriptBudget("没有额度"), undefined);
-  assert.throws(() => parseBudgetSetting("很多"), /缺省额度写法不对/);
+  assert.throws(() => parseBudgetSetting("很多"), /invalid default script budget/);
 });
 
 // 主 agent 与 worker 各走各的回复：按首条人输入的用户消息里有没有 worker 任务的标记分流

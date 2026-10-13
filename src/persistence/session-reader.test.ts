@@ -120,7 +120,7 @@ test("读取器：不认识的条目类型记告警并跳过，其子条目接�
     assert.equal(view.lanes.get("main"), "e3");
     assert.equal(view.lanes.get("side"), "e1");
     assert.equal(view.warnings.length, 1);
-    assert.match(view.warnings[0] ?? "", /第 3 行.*pigeon_raw/);
+    assert.match(view.warnings[0] ?? "", /line 3: .*pigeon_raw/);
     assert.deepEqual(
       branchEntries(view, "e3").map((entry) => entry.id),
       ["e1", "e3"]
@@ -157,7 +157,7 @@ test("读取器：中段坏行记告警并跳过，不让整个文件读失败",
       ["e1", "e3"]
     );
     assert.equal(view?.warnings.length, 1);
-    assert.match(view?.warnings[0] ?? "", /第 3 行/);
+    assert.match(view?.warnings[0] ?? "", /line 3:/);
   });
 });
 

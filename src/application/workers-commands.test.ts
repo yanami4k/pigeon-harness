@@ -68,12 +68,14 @@ test("收尾摘要：状态、分支、改动文件、自述与工作树位置�
     },
   });
   assert.ok(
-    text.includes(`== worker fix-a（implementer）收尾：完成 ｜ 2 轮 ｜ 会话 ${sessionId} ==`),
+    text.includes(
+      `== worker fix-a (implementer) finished: completed | 2 turns | session ${sessionId} ==`
+    ),
     text
   );
-  assert.ok(text.includes("分支 pigeon/fix-a ｜ 改动 2 个文件：a.ts、b.ts\n"), text);
-  assert.ok(text.includes("自述：改好了（已截断）"), text);
-  assert.ok(text.includes("工作树 /repo/.pigeon/state/worktrees/x-fix-a"), text);
+  assert.ok(text.includes("branch pigeon/fix-a | 2 files changed: a.ts, b.ts\n"), text);
+  assert.ok(text.includes("summary: 改好了 (truncated)"), text);
+  assert.ok(text.includes("worktree /repo/.pigeon/state/worktrees/x-fix-a"), text);
 
   const failed = renderWorkerOutcome({
     sessionId,
@@ -84,8 +86,8 @@ test("收尾摘要：状态、分支、改动文件、自述与工作树位置�
     turns: 0,
     workspace: { kind: "git-worktree", path: "/w", branch: "pigeon/fix-a" },
   });
-  assert.ok(failed.includes("收尾：派出失败"), failed);
-  assert.ok(failed.includes("原因：工作树建不起来"), failed);
+  assert.ok(failed.includes("finished: spawn failed"), failed);
+  assert.ok(failed.includes("reason: 工作树建不起来"), failed);
 });
 
 test("/cancel 定位：按名或会话 id；未知报错", () => {

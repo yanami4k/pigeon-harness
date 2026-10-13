@@ -23,55 +23,61 @@ export function approvalSourceLine(request: {
   // 决策 443：会话面板派出的会话
   if (request.pooled !== undefined) {
     return (
-      `来源：会话 ${request.pooled.name}` +
-      (request.sessionId !== undefined ? ` ｜ 会话号 ${shortId(request.sessionId)}` : "")
+      `source: session ${request.pooled.name}` +
+      (request.sessionId !== undefined ? ` | session ID ${shortId(request.sessionId)}` : "")
     );
   }
   if (request.worker === undefined) {
     return undefined;
   }
   return (
-    `来源：worker ${request.worker.name}（${request.worker.role}）` +
-    (request.sessionId !== undefined ? ` ｜ 会话 ${shortId(request.sessionId)}` : "")
+    `source: worker ${request.worker.name} (${request.worker.role})` +
+    (request.sessionId !== undefined ? ` | session ID ${shortId(request.sessionId)}` : "")
   );
 }
 
 // 稳定 id 短哈希：`exec_` 等前缀 + ULID 前 8 位 + 省略号；非稳定 id（toolCallId 等）原样
 // 撞上限续跑（决策 367）的一行（trace 与 replay 共用）
 export function continuationLine(data: ContinuationData): string {
-  const why = data.cause === "repetition" ? "被重复检测掐断" : "撞输出上限被截断";
-  return `续跑第 ${data.attempt} 次：上条回复${why}，未执行工具`;
+  const why =
+    data.cause === "repetition" ? "cut off by repetition detection" : "truncated at output limit";
+  return `continuation #${data.attempt}: last reply ${why}, tools not run`;
 }
 
 // 上下文裁剪（决策 361）的一行（trace 与 replay 共用）：时机、裁了几条、前后的上下文 token 数、估算的节省与代价
 // （按命中价折算的 token 当量）
 const PRUNE_TRIGGERS: Record<PruneData["trigger"], string> = {
-  compaction: "压缩之前",
-  model: "模型变了",
-  tools: "工具集变了",
-  "system-prompt": "系统提示变了",
-  idle: "空闲超过缓存保留时长",
-  paid: "按价格比",
-  images: "图片超过预算",
-  rejected: "服务方拒收图片",
+  compaction: "before compaction",
+  model: "model changed",
+  tools: "tools changed",
+  "system-prompt": "system prompt changed",
+  idle: "idle past cache retention",
+  paid: "price ratio",
+  images: "images over budget",
+  rejected: "provider rejected images",
 };
 
 export function pruneLine(data: PruneData): string {
   return (
-    `上下文裁剪（${PRUNE_TRIGGERS[data.trigger]}）：裁了 ${data.items.length} 条 ｜ ` +
-    `${data.tokensBefore} → ${data.tokensAfter} token ｜ ` +
-    `估算节省 ${Math.round(data.estimatedSaving)}、代价 ${Math.round(data.estimatedCost)}`
+    `context pruned (${PRUNE_TRIGGERS[data.trigger]}): ${plural(data.items.length, "item")} | ` +
+    `${data.tokensBefore} → ${data.tokensAfter} tokens | ` +
+    `est. saving ${Math.round(data.estimatedSaving)}, cost ${Math.round(data.estimatedCost)}`
   );
+}
+
+// 英文数量写法："1 file"、"3 files"；复数不是加 s 的词传第三个参数
+export function plural(count: number, noun: string, nouns = `${noun}s`): string {
+  return `${count} ${count === 1 ? noun : nouns}`;
 }
 
 // 流式重复检测命中（决策 367）的一行：判据（通道）、周期、重复次数、掐断与否
 export function repetitionLine(data: RepetitionData): string {
-  const criterion = data.criterion === "cycle" ? "逐字周期" : "段落相似度";
-  const channel = data.channel === "text" ? "正文" : "思考";
-  const period = data.criterion === "cycle" ? "周期" : "段长";
+  const criterion = data.criterion === "cycle" ? "exact cycle" : "paragraph similarity";
+  const channel = data.channel === "text" ? "text" : "thinking";
+  const period = data.criterion === "cycle" ? "period" : "segment";
   return (
-    `重复检测命中：${criterion}（${channel}）｜ ${period} ${data.periodChars} 字 ｜ ` +
-    `重复 ${data.repeats} 次 ｜ ${data.mode === "abort" ? "已掐断" : "只记录"}`
+    `repetition detected: ${criterion} (${channel}) | ${period} ${data.periodChars} chars | ` +
+    `${plural(data.repeats, "repeat")} | ${data.mode === "abort" ? "cut off" : "logged only"}`
   );
 }
 
@@ -80,8 +86,8 @@ export function requestRetryLine(data: RequestRetryData): string {
   const cause =
     data.status !== undefined
       ? `HTTP ${data.status}`
-      : `连接失败${data.error !== undefined ? `（${data.error}）` : ""}`;
-  return `模型请求重试第 ${data.retry} 次：上一次 ${cause} ｜ 等待 ${(data.waitMs / 1000).toFixed(1)} 秒`;
+      : `connection failed${data.error !== undefined ? ` (${data.error})` : ""}`;
+  return `model request retry #${data.retry}: last attempt ${cause} | waited ${(data.waitMs / 1000).toFixed(1)}s`;
 }
 
 export function shortId(id: string): string {
@@ -89,13 +95,13 @@ export function shortId(id: string): string {
   return match === null ? id : `${match[0]}…`;
 }
 
-// 模型原始参数的单行摘要；不可序列化时如实说明。english：给模型看的地方用（决策 428），其余给人看照旧中文
+// 模型原始参数的单行摘要；不可序列化时如实说明。english：给模型看的地方用（决策 428），说法完整些；给人看的写短
 export function summarizeArgs(args: unknown, english = false): string {
   let json: string;
   try {
     json = JSON.stringify(args) ?? "undefined";
   } catch {
-    return english ? "<arguments that cannot be serialized>" : "<不可序列化参数>";
+    return english ? "<arguments that cannot be serialized>" : "<unserializable arguments>";
   }
   if (json.length <= ARGS_SUMMARY_LIMIT) {
     return json;
@@ -108,17 +114,17 @@ export function summarizeArgs(args: unknown, english = false): string {
   }
   return english
     ? `${json.slice(0, cut)}… (${json.length} characters in total)`
-    : `${json.slice(0, cut)}…（共 ${json.length} 字符）`;
+    : `${json.slice(0, cut)}… (${json.length} chars)`;
 }
 
 // 批准来源 → 通俗措辞（决策 4 证据链：策略决定不能伪装成人工；M4 S6：grant 出处如实标明）
 const APPROVED_BY_LABEL: Record<string, string> = {
-  human: "人工",
-  "policy:yolo": "yolo 批发授权",
-  "policy:auto": "策略自动放行",
-  "policy:deny": "策略拒绝",
-  "human:grant": "人工授权（会话 grant）",
-  "policy:config": "策略放行（固化配置）",
+  human: "human",
+  "policy:yolo": "yolo",
+  "policy:auto": "auto-allowed by policy",
+  "policy:deny": "denied by policy",
+  "human:grant": "session grant",
+  "policy:config": "saved rule",
 };
 
 // 审批决定 → 通俗措辞裁决：人工区分批准/拒绝；策略来源直接给标签（不伪装成人工）。
@@ -127,7 +133,11 @@ export function approvalVerdict(
   decision: Pick<ToolExecutionDecision, "outcome"> & { approvedBy: string }
 ): string {
   const label = APPROVED_BY_LABEL[decision.approvedBy] ?? decision.approvedBy;
-  return label === "人工" ? (decision.outcome === "approved" ? "人工批准" : "人工拒绝") : label;
+  return decision.approvedBy === "human"
+    ? decision.outcome === "approved"
+      ? "approved by human"
+      : "rejected by human"
+    : label;
 }
 
 // FailureClass → 通俗措辞徽章（D7：「用户取消」与「治理熔断」必须一眼可分）。
@@ -135,17 +145,17 @@ export function approvalVerdict(
 // tui 终态摘要同一口径），不是冷投影结构——state 只留判据（classification.ts），措辞归本模块
 export function failureBadge(failure: FailureClass | null | undefined): string {
   if (failure === null || failure === undefined) {
-    return "正常";
+    return "ok";
   }
   switch (failure.category) {
     case "cancelled":
-      return failure.breaker ? "治理熔断" : "取消";
+      return failure.breaker ? "breaker" : "cancelled";
     case "business":
-      return "业务失败";
+      return "business failure";
     case "infrastructure":
-      return "基础设施错误";
+      return "infrastructure error";
     case "unknown":
-      return "未知";
+      return "unknown";
   }
 }
 
@@ -207,7 +217,7 @@ export function workEndLine(facts: WorkEndFacts, elapsedMs?: number): string {
 
 // Eval 验证器三值判决（M6.5 S3，决策 058）→ 通俗措辞：trace Run 头、replay 时间线与 Eval 报告同一口径
 export function evalVerdictLabel(verdict: "pass" | "fail" | "undetermined"): string {
-  return verdict === "pass" ? "通过" : verdict === "fail" ? "失败" : "未判定";
+  return verdict === "pass" ? "pass" : verdict === "fail" ? "fail" : "undetermined";
 }
 
 // 终端控制序列净化（决策 036，M2 审计 P2-1）：半信任内容——模型流式文本、工具参数、

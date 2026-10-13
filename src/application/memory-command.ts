@@ -13,7 +13,6 @@ import path from "node:path";
 import {
   entriesSection,
   MEMORY_FILE_HEADERS,
-  MEMORY_LAYER_LABELS,
   type MemoryLayer,
   memoryFactsOfText,
   parseMemory,
@@ -30,9 +29,9 @@ import {
 import { migrateMemoryFileLocked, readMemoryLayer } from "../memory/memory-migration.ts";
 import { ensureStateDirOf } from "../persistence/settings.ts";
 import type { MemoryLimits } from "../state/memory-config.ts";
+import { plural } from "./format.ts";
 
-export const MEMORY_COMMAND_USAGE =
-  "用法：/memory 查看两层记忆；/memory edit project|user 用编辑器修改一层";
+export const MEMORY_COMMAND_USAGE = "usage: /memory | /memory edit project|user";
 
 export interface MemoryCommandContext {
   governanceRoot: string;
@@ -49,7 +48,12 @@ function locationOf(ctx: MemoryCommandContext, layer: MemoryLayer): MemoryLocati
 }
 
 // 主目录下启动：项目级记忆与用户级是同一个文件，只有用户级一层
-const PROJECT_IS_USER_NOTE = "主目录下没有单独的项目级记忆，用 /memory edit user";
+const PROJECT_IS_USER_NOTE = "in the home directory, project memory is user memory";
+
+// 层名：project memory / user memory
+function layerLabel(layer: MemoryLayer): string {
+  return `${layer} memory`;
+}
 
 // 回话末尾附上迁移的结果与告警（每条一行）
 function withNotes(text: string, notes: readonly string[]): string {
@@ -61,23 +65,23 @@ function layerView(ctx: MemoryCommandContext, layer: MemoryLayer, notes: string[
   const location = locationOf(ctx, layer);
   const read = readMemoryLayer(location, (line) => notes.push(line));
   const limit = ctx.limits[layer];
-  const title = `${MEMORY_LAYER_LABELS[layer]}（${location.display}，${location.file}）`;
+  const title = `${layerLabel(layer)} (${location.display}, ${location.file})`;
   const section = entriesSection(read.text).trimEnd();
   if (section === "") {
-    return `${title}：没有条目，上限 ${limit} 字符`;
+    return `${title}: no entries, limit ${limit} chars`;
   }
   const facts = memoryFactsOfText(read.text);
   const parsed = parseMemory(read.text, layer);
   const broken = parsed.ok
     ? ""
-    : `\n（第 ${parsed.line} 行起格式不对：update_memory 拒绝写入这一层，请用 /memory edit ${layer} 修复）`;
-  return `${title}：共 ${facts.entries} 条，${facts.entryChars}/${limit} 字符\n${section}${broken}`;
+    : `\nbad format from line ${parsed.line}; update_memory refuses this layer`;
+  return `${title}: ${plural(facts.entries, "entry", "entries")}, ${facts.entryChars}/${limit} chars\n${section}${broken}`;
 }
 
 export function memoryViewText(ctx: MemoryCommandContext): string {
   const notes: string[] = [];
   const view = [
-    "学到的记忆",
+    "memory",
     ...availableMemoryLayers(ctx).map((layer) => layerView(ctx, layer, notes)),
   ].join("\n\n");
   return notes.length === 0 ? view : `${view}\n\n${notes.join("\n")}`;
@@ -110,7 +114,7 @@ export const spawnEditor: EditorRunner = (editor, file) => {
   if (result.status !== 0) {
     return {
       ok: false,
-      error: `编辑器以退出码 ${result.status ?? `信号 ${result.signal ?? "未知"}`} 结束`,
+      error: `editor exited with ${result.status !== null ? `code ${result.status}` : `signal ${result.signal ?? "unknown"}`}`,
     };
   }
   return { ok: true };
@@ -122,10 +126,10 @@ export function memoryDraftPathOf(file: string): string {
 }
 
 // 保存时排队等别处写完：等待超过 1 秒才提示（一闪而过的不提示）；人取消时草稿保留
-export const MEMORY_SAVE_WAITING_TEXT = "正在保存记忆…（Esc 取消）";
+export const MEMORY_SAVE_WAITING_TEXT = "saving memory… (Esc to cancel)";
 export const MEMORY_SAVE_WAITING_DELAY_MS = 1000;
 export function memorySaveCancelledText(draft: string): string {
-  return `没有保存，你改的内容留在 ${draft}。`;
+  return `not saved; edits kept in ${draft}`;
 }
 
 export interface EditMemoryOptions {
@@ -147,10 +151,10 @@ export async function editMemoryLayer(
 ): Promise<string> {
   if (!availableMemoryLayers(ctx).includes(layer)) return PROJECT_IS_USER_NOTE;
   const location = locationOf(ctx, layer);
-  const label = MEMORY_LAYER_LABELS[layer];
+  const label = layerLabel(layer);
   const editor = options.editor;
   if (editor === undefined) {
-    return `没有设置编辑器（$VISUAL 或 $EDITOR）：请直接编辑 ${location.file}（${label}，一行一条，见文件头的说明），改动从下一条消息起生效`;
+    return `no editor set ($VISUAL/$EDITOR); edit ${location.file} directly`;
   }
   const notes: string[] = [];
   const original = readMemoryLayer(location, (line) => notes.push(line));
@@ -160,28 +164,25 @@ export async function editMemoryLayer(
   mkdirSync(path.dirname(draft), { recursive: true });
   writeFileSync(draft, original.exists ? original.text : MEMORY_FILE_HEADERS[layer]);
   const ran = (options.run ?? spawnEditor)(editor, draft);
-  const keep = `改过的内容留在 ${draft}`;
+  const keep = `edits kept in ${draft}`;
   if (!ran.ok) {
-    return withNotes(`${label}记忆没有保存：${ran.error}；原内容未动，${keep}`, notes);
+    return withNotes(`${label} not saved: ${ran.error}; ${keep}`, notes);
   }
   const edited = existsSync(draft) ? readFileSync(draft, "utf8") : "";
   const before = original.exists ? original.text : MEMORY_FILE_HEADERS[layer];
   if (edited === before) {
     rmSync(draft, { force: true });
-    return withNotes(`${label}记忆没有改动`, notes);
+    return withNotes(`${label} unchanged`, notes);
   }
   const parsed = parseMemory(edited, layer);
   if (!parsed.ok) {
-    return withNotes(
-      `${label}记忆没有保存：第 ${parsed.line} 行起格式不对（一行一条：- [${layer === "project" ? "P" : "U"}编号] 内容，行末 (recorded 日期 · 来源 · session 会话号) 一段可省）；原内容未动，${keep}`,
-      notes
-    );
+    return withNotes(`${label} not saved: bad format from line ${parsed.line}; ${keep}`, notes);
   }
   const used = usedChars(parsed.doc.entries, layer);
   const limit = ctx.limits[layer];
   if (used > limit) {
     return withNotes(
-      `${label}记忆没有保存：条目共 ${used} 字符，超出上限 ${limit} 字符 ${used - limit} 字符；原内容未动，${keep}`,
+      `${label} not saved: ${used} chars, ${used - limit} over the ${limit} limit; ${keep}`,
       notes
     );
   }
@@ -197,17 +198,17 @@ export async function editMemoryLayer(
           current = migrateMemoryFileLocked(location);
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
-          return `${label}记忆没有保存：旧格式的原文件没能备份或改写（${detail}）；原内容未动，${keep}`;
+          return `${label} not saved: migrating the old-format file failed (${detail}); ${keep}`;
         }
         if (current.backup !== undefined) {
         }
         // 编辑期间原文件被另一处（另一个会话的 update_memory）改过：不覆盖
         if (current.hash !== original.hash) {
-          return `${label}记忆没有保存：编辑期间这一层被另一处改过；原内容未动，${keep}`;
+          return `${label} not saved: changed elsewhere while editing; ${keep}`;
         }
         writeMemoryFile(location.file, edited);
         rmSync(draft, { force: true });
-        return `已保存${label}记忆（${location.display}）：共 ${parsed.doc.entries.length} 条，${used}/${limit} 字符，从下一条消息起生效`;
+        return `saved ${label} (${location.display}): ${plural(parsed.doc.entries.length, "entry", "entries")}, ${used}/${limit} chars`;
       },
       Number.POSITIVE_INFINITY,
       {

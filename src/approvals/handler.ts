@@ -120,7 +120,7 @@ export function execCommandLine(request: ApprovalRequest): string | undefined {
   if (command === undefined) {
     return undefined;
   }
-  return `命令${request.needsShell === true ? "（经 shell）" : ""}：${command}`;
+  return `command${request.needsShell === true ? " (shell)" : ""}: ${command}`;
 }
 
 // 受保护路径一行（决策 326 ①，cli 与 tui 共用）；不是受保护路径返回 undefined
@@ -128,7 +128,7 @@ export function protectedPathLine(request: ApprovalRequest): string | undefined 
   if (request.protectedPath === undefined) {
     return undefined;
   }
-  return `受保护路径：${request.protectedPath}（Pigeon 的配置与状态目录；须逐次批准，会话放权与配置放权都不适用）`;
+  return `protected path: ${request.protectedPath} (approve each time only)`;
 }
 
 // 工作区以外的读取一行（决策 355，cli 与 tui 共用）；不是工作区外读取返回 undefined
@@ -136,14 +136,14 @@ export function outsidePathLine(request: ApprovalRequest): string | undefined {
   if (request.outsidePath === undefined) {
     return undefined;
   }
-  return `工作区以外（只读）：${request.outsidePath}`;
+  return `outside workspace (read-only): ${request.outsidePath}`;
 }
 
 // exec 档 [a] 键的提示文案（cli 与 tui 共用）
 export function execGrantKeyLabel(request: ApprovalRequest): string {
   return request.needsShell === true
-    ? "[a] 本会话允许这条命令（精确匹配，经 shell）"
-    : "[a] 本会话允许这条命令（精确匹配）";
+    ? "[a] allow this exact command for this session (shell)"
+    : "[a] allow this exact command for this session";
 }
 
 // 放权作用域（M5.5 S5，决策 048 及其修订）：exec 档 [a]/[d] 都收窄为这条一模一样的命令串（精确匹配，§3.9
@@ -174,5 +174,5 @@ export function grantScopeFor(
 
 // 网络档 [a] 键的提示文案（cli 与 tui 共用，决策 290）：以后都允许访问这个网站
 export function hostGrantKeyLabel(request: ApprovalRequest): string {
-  return `[a] 以后都允许访问 ${request.host ?? ""}`;
+  return `[a] allow ${request.host ?? ""} for this session`;
 }

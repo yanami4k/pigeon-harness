@@ -209,7 +209,7 @@ test("/tasks：清单开着显示当前清单，关着如实说明", async () =>
     assert.ok(screenFlat(term).includes("1. [待办] 查 a"), screenFlat(term));
     text = undefined;
     await submit(term, "/tasks");
-    assert.ok(screenFlat(term).includes("任务清单没有开"), screenFlat(term));
+    assert.ok(screenFlat(term).includes("task list is off"), screenFlat(term));
   } finally {
     shell.stop();
   }
@@ -231,7 +231,7 @@ test("worker 的请示等满时限被撤回：审批面板撤下，按取消收�
       signal: controller.signal,
     });
     await settle();
-    assert.ok(screenFlat(term).includes("—— 人工审批 ——"), screenFlat(term));
+    assert.ok(screenFlat(term).includes("-- approval --"), screenFlat(term));
     controller.abort();
     assert.deepEqual(await answer, { key: "cancel", reason: APPROVAL_WITHDRAWN });
     await settle();
@@ -241,7 +241,7 @@ test("worker 的请示等满时限被撤回：审批面板撤下，按取消收�
       flat.includes("[runner] ✗ approval timed out: run_command (worker runner stopped)"),
       flat
     );
-    assert.ok(!flat.includes("—— 人工审批 ——"), flat);
+    assert.ok(!flat.includes("-- approval --"), flat);
   } finally {
     shell.stop();
   }
@@ -268,12 +268,12 @@ test("通知与排队输入同一个出口：有排队的输入先发输入（�
     runtime.finish();
     await settle();
     assert.deepEqual(runtime.runs, ["run:第一句", "run:第二句"]);
-    // 未知命令的提示里有 /tasks
+    // 未知命令只报命令词（可用命令靠输入 "/" 时的补全）
     runtime.pending = 0;
     runtime.finish();
     await settle();
     await submit(term, "/nope");
-    assert.ok(screenFlat(term).includes("/tasks"), screenFlat(term));
+    assert.ok(screenFlat(term).includes("unknown command: /nope"), screenFlat(term));
   } finally {
     shell.stop();
   }

@@ -124,10 +124,7 @@ export function attachCheckpoints(options: {
   const warn = dedupedWarner(options.warn);
   const report = (error: unknown) => {
     errors.push(error);
-    warn(
-      error,
-      `工作区快照告警：${failureDetail(error)}（该时点的快照没有拍成，从这里分叉会明确报错，不退回更早的快照）`
-    );
+    warn(error, `workspace snapshot warning: ${failureDetail(error)}`);
   };
   const tierOf = (toolName: string) => bundle.toolTiers.get(toolName);
   const writeMark = (mark: Mark, state: CheckpointMarkState, reason?: string) =>
@@ -202,7 +199,7 @@ export function attachCheckpoints(options: {
         job.finished = true;
         job.controller.abort();
         const error = new CheckpointWaitTimeoutError(
-          `快照等待超时：超过 ${waitMs} 毫秒没有拍完，已中止`
+          `snapshot timed out after ${waitMs} ms; aborted`
         );
         if (job.mark !== undefined) {
           writeMark(job.mark, "failed", error.message);

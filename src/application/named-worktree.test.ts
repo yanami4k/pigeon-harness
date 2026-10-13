@@ -123,12 +123,12 @@ test("起点：24 小时内取过就不取；取不到（远端不可达）退�
   rmSync(origin, { recursive: true, force: true });
   const failed = resolveWorktreeBase(repo, "fresh");
   assert.equal(failed.commit, localHead);
-  assert.match(failed.label, /^HEAD（取远端/);
+  assert.match(failed.label, /^HEAD \(fetching origin/);
   assert.deepEqual(resolveWorktreeBase(repo, "head"), { commit: localHead, label: "HEAD" });
   const plain = plainRepo();
   const none = resolveWorktreeBase(plain, "fresh");
   assert.equal(none.commit, git(plain, ["rev-parse", "HEAD"]));
-  assert.equal(none.label, "HEAD（没有远端默认分支）");
+  assert.equal(none.label, "HEAD (no remote default branch)");
 });
 
 test("同名目录已在即打开（不重建），起点取分支建立时的那条；不是本仓库工作树的同名目录拒绝", () => {
@@ -147,7 +147,7 @@ test("同名目录已在即打开（不重建），起点取分支建立时的�
   }
   assert.throws(
     () => openNamedWorktree({ cwd: temp("pigeon-nwt-nogit-"), name: "x" }),
-    /不在 git 仓库里/
+    /not in a git repository/
   );
 });
 
@@ -200,13 +200,13 @@ test("退出清理：没有改动即删并说明；有改动时问——k 保留
   const changed = openNamedWorktree({ cwd: repo, name: "c2" });
   writeFileSync(join(changed.path, "x.txt"), "x\n");
   assert.equal(await closeNamedWorktree(changed, { write }), "kept", "没有终端可问即保留");
-  assert.match(lines.at(-1) ?? "", /下次进入：pigeon --worktree c2/);
+  assert.match(lines.at(-1) ?? "", /^worktree c2 kept at /);
   const answers = ["?", "k"];
   assert.equal(
     await closeNamedWorktree(changed, { ask: async () => answers.shift() ?? null, write }),
     "kept"
   );
-  assert.ok(lines.includes("请输入 k 或 d"));
+  assert.ok(lines.includes("k or d"));
   assert.equal(await closeNamedWorktree(changed, { ask: async () => null, write }), "kept");
   assert.equal(await closeNamedWorktree(changed, { ask: async () => "d", write }), "removed");
   assert.equal(existsSync(changed.path), false);
@@ -244,7 +244,7 @@ test("只删自己的分支 pigeon-wt/<名字>：工作树换到别的分支即�
     }),
     "removed"
   );
-  assert.match(asked[0] ?? "", /当前在 foreign 上/);
+  assert.match(asked[0] ?? "", /is on foreign/);
   assert.match(git(repo, ["branch", "--list", "foreign"]), /foreign/);
   assert.equal(git(repo, ["branch", "--list", "pigeon-wt/sw"]), "");
 });
@@ -260,7 +260,7 @@ test("起点建立时记在仓库配置里；记录丢了按不明（有改动�
   git(repo, ["config", "--local", "--unset", "branch.pigeon-wt/rb.pigeonBase"]);
   const lost = openNamedWorktree({ cwd: repo, name: "rb" });
   assert.equal(lost.base, undefined);
-  assert.equal(lost.baseLabel, "不明");
+  assert.equal(lost.baseLabel, "unknown");
   assert.equal(namedWorktreeUnchanged(lost), false);
 });
 
@@ -273,7 +273,7 @@ test("别的进程开着这个工作树（在用锁）时退出清理不删；�
     await closeNamedWorktree(wt, { write: (line) => lines.push(line), inUseByOthers: () => true }),
     "kept"
   );
-  assert.match(lines.at(-1) ?? "", /另有会话开在工作树 lk 里/);
+  assert.match(lines.at(-1) ?? "", /worktree lk is open in another session; kept/);
   assert.equal(existsSync(wt.path), true);
   const release = holdWorktreeInUse(wt.path, home);
   assert.equal(worktreeInUseByOthers(wt.path, { homeDir: home }), false);
@@ -307,7 +307,7 @@ test("/worktrees 列出独立工作树、标明独立工作树；clean 缺省与
   assert.ok(named !== undefined, JSON.stringify(items));
   assert.equal(named.name, "solo");
   assert.equal(named.untaken, 1);
-  assert.match(formatLeftoverList(items), /solo {2}独立工作树，分支 pigeon-wt\/solo/);
+  assert.match(formatLeftoverList(items), /solo {2}worktree, branch pigeon-wt\/solo/);
   assert.deepEqual(planClean(items, []).remove, []);
   assert.deepEqual(planClean(items, ["--all"]).remove, []);
   const plan = planClean(items, ["solo"]);
@@ -315,7 +315,7 @@ test("/worktrees 列出独立工作树、标明独立工作树；clean 缺省与
     plan.remove.map((item) => item.name),
     ["solo"]
   );
-  assert.match(formatCleanResult(executeClean(scope, plan)), /已删除 1 项：solo/);
+  assert.match(formatCleanResult(executeClean(scope, plan)), /removed 1 item: solo/);
   assert.equal(existsSync(wt.path), false);
   assert.equal(git(repo, ["branch", "--list", wt.branch]), "");
 });
@@ -331,7 +331,7 @@ test("/worktrees：有进程开着的独立工作树（在用锁，含没有会�
     assert.equal(held?.inUse, true);
     const plan = planClean(items, ["busy"]);
     assert.deepEqual(plan.remove, []);
-    assert.match(plan.refused.join("\n"), /busy：在用（有会话开在这个工作树里）/);
+    assert.match(plan.refused.join("\n"), /busy: in use \(a session is open in it\)/);
   } finally {
     release();
   }

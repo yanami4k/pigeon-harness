@@ -202,14 +202,14 @@ test("会话家谱：从分支的分支上溯到根主会话，列出这一家�
     assert.equal(nodes.get(family.main)?.cost?.cost, 0.5);
     assert.equal(nodes.get(family.branch)?.kind, "branch");
     assert.equal(nodes.get(family.retry)?.kind, "retry");
-    assert.equal(nodes.get(family.retry)?.result, "error，验证未过");
+    assert.equal(nodes.get(family.retry)?.result, "error, verification failed");
     assert.equal(nodes.get(family.worker)?.kind, "worker");
     assert.deepEqual(nodes.get(family.worker)?.worker, { name: "look-old", role: "explorer" });
-    assert.equal(nodes.get(family.worker)?.result, "完成");
+    assert.equal(nodes.get(family.worker)?.result, "completed");
     assert.equal(nodes.get(family.review)?.kind, "review");
     assert.equal(nodes.get(family.review)?.review, "closing");
     assert.equal(nodes.get(family.branchReview)?.review, "pre-compaction");
-    assert.equal(nodes.get(family.branchWorker)?.unreadable, "全文读不出");
+    assert.equal(nodes.get(family.branchWorker)?.unreadable, "unreadable file");
     // 这一家合计等于各节点之和（节点只计自己的花费）
     const total = familyTotal(loaded.root);
     const sum = flattenFamily(loaded.root).reduce(
@@ -290,27 +290,27 @@ test("会话树：树形视图里 Tab 在运行中与会话树两种模式间切
     const lines = term.screen.contentLines();
     assert.ok(lines.some((line) => line.startsWith("== sessions tree ==")));
     assert.ok(
-      lines.some((line) => /^ {2}这一家合计：8 个会话 {2}\d+t {2}\$0\.50/.test(line)),
+      lines.some((line) => /^ {2}total: 8 sessions {2}\d+t {2}\$0\.50/.test(line)),
       lines.join("\n")
     );
     const lineOf = (id: string) =>
       lines.find((line) => line.includes(id) && !/^\s*==/.test(line)) ?? "";
     assert.match(
       lineOf(family.main),
-      new RegExp(`主会话  ${family.main}  \\d\\d-\\d\\d \\d\\d:\\d\\d  2t  \\$0\\.50`)
+      new RegExp(`main  ${family.main}  \\d\\d-\\d\\d \\d\\d:\\d\\d  2t  \\$0\\.50`)
     );
-    assert.match(lineOf(family.branch), /分支 {2}.* {2}1t {2}/);
-    assert.match(lineOf(family.branchOfBranch), /分支 .*\(current\)$/);
+    assert.match(lineOf(family.branch), /branch {2}.* {2}1t {2}/);
+    assert.match(lineOf(family.branchOfBranch), /branch .*\(current\)$/);
     assert.ok(selectedLine(term).includes(family.branchOfBranch), "光标落在当前会话");
-    assert.match(lineOf(family.retry), /失败重试 .*error，验证未过/);
-    assert.match(lineOf(family.worker), /worker look-old（explorer） .*完成/);
-    assert.match(lineOf(family.branchWorker), /worker fix-b（implementer）/);
-    assert.match(lineOf(family.review), /复盘（收尾）/);
-    assert.match(lineOf(family.branchReview), /复盘（压缩前）/);
+    assert.match(lineOf(family.retry), /retry .*error, verification failed/);
+    assert.match(lineOf(family.worker), /worker look-old \(explorer\) .*completed/);
+    assert.match(lineOf(family.branchWorker), /worker fix-b \(implementer\)/);
+    assert.match(lineOf(family.review), /review \(closing\)/);
+    assert.match(lineOf(family.branchReview), /review \(pre-compaction\)/);
     assert.equal(lineOf(family.other), "", "不列别家");
     // 逐层嵌套：分支的分支比分支多缩进一层
     assert.ok(
-      lineOf(family.branchOfBranch).indexOf("分支") > lineOf(family.branch).indexOf("分支")
+      lineOf(family.branchOfBranch).indexOf("branch") > lineOf(family.branch).indexOf("branch")
     );
     await press(term, TAB);
     assert.ok(screenFlat(term).includes("== workers tree =="));
@@ -369,13 +369,13 @@ test("会话树的动作：Enter 只读看历史、Esc 回树；当前会话、�
     // 当前会话、复盘、worker 不能续接
     await moveTo(term, family.branchOfBranch);
     await press(term, "r");
-    assert.ok(screenFlat(term).includes("当前会话不能续接"));
+    assert.ok(screenFlat(term).includes("can't resume the current session"));
     await moveTo(term, family.review);
     await press(term, "r");
-    assert.ok(screenFlat(term).includes("复盘会话只能查看，不能续接"));
+    assert.ok(screenFlat(term).includes("review sessions can't be resumed"));
     await moveTo(term, family.worker);
     await press(term, "r");
-    assert.ok(screenFlat(term).includes("worker 会话在这里只能查看，不能续接"));
+    assert.ok(screenFlat(term).includes("worker sessions can't be resumed here"));
     // 以前运行的 worker：只看历史
     await press(term, "\r");
     assert.equal(shell.currentView(), "history");
@@ -401,7 +401,7 @@ test("会话树的动作：Enter 只读看历史、Esc 回树；当前会话、�
     assert.equal(rebinds.length, 0);
     // 分支：在此续接（/resume 同一流程：有 worker 在跑时照旧拒绝，先停掉本次派出的）
     await harness.stopAll();
-    await moveTo(term, `分支  ${family.branch}`);
+    await moveTo(term, `branch  ${family.branch}`);
     await press(term, "r");
     await settle(200);
     assert.deepEqual(rebinds, [family.branch]);
@@ -426,7 +426,7 @@ test("会话树的续接：沙箱会话不换绑、给出 pigeon --sandbox --res
     await moveTo(term, family.main);
     await press(term, "r");
     assert.ok(
-      screenFlat(term).includes(`请用 pigeon --sandbox --resume ${family.main}`),
+      screenFlat(term).includes(`resume with: pigeon --sandbox --resume ${family.main}`),
       screenFlat(term)
     );
     assert.equal(shell.currentView(), "tree");
@@ -437,14 +437,9 @@ test("会话树的续接：沙箱会话不换绑、给出 pigeon --sandbox --res
     await press(term, "\r");
     await press(term, CTRL_X);
     await press(term, TAB);
-    await moveTo(term, `分支  ${family.branch}`);
+    await moveTo(term, `branch  ${family.branch}`);
     await press(term, "r");
-    assert.ok(
-      screenFlat(term).includes(
-        "运行中不能在此续接：它会改动主会话状态（换到另一个会话）。等本轮结束或按 Esc 中断后再用"
-      ),
-      screenFlat(term)
-    );
+    assert.ok(screenFlat(term).includes("can't resume while running"), screenFlat(term));
     assert.equal(shell.currentView(), "tree");
     assert.deepEqual(rebinds, []);
     runtime.finishAll();
@@ -471,14 +466,14 @@ test("会话树：父会话没有文件时根写一行读不到，不中断，�
     const lines = term.screen.contentLines();
     assert.ok(
       lines.some(
-        (line) => line.includes(`读不到  ${missing}`) && line.includes("读不到（没有会话文件）")
+        (line) => line.includes(`unreadable  ${missing}`) && line.includes("unreadable (")
       ),
       lines.join("\n")
     );
     assert.ok(lines.some((line) => line.includes(orphan.sessionId) && line.includes("(current)")));
     await moveTo(term, missing);
     await press(term, "\r");
-    assert.ok(screenFlat(term).includes("读不到这个会话，不能查看"));
+    assert.ok(screenFlat(term).includes("can't read this session"));
     assert.equal(shell.currentView(), "tree");
   } finally {
     shell.stop();
@@ -506,7 +501,7 @@ test("会话树：当前会话还没有对话、会话文件推迟建还没建�
       lines.some((line) => line.includes(current) && line.includes("(current)")),
       lines.join("\n")
     );
-    assert.ok(!lines.some((line) => line.includes("读不到")), lines.join("\n"));
+    assert.ok(!lines.some((line) => line.includes("unreadable")), lines.join("\n"));
   } finally {
     shell.stop();
     await harness.stopAll();

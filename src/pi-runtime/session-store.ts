@@ -76,7 +76,7 @@ export class SessionStoreFault extends Error {
   override name = "SessionStoreFault";
   readonly action: string;
   constructor(action: string, cause: unknown) {
-    super(`新会话存储${action}失败：${cause instanceof Error ? cause.message : String(cause)}`, {
+    super(`${action} failed: ${cause instanceof Error ? cause.message : String(cause)}`, {
       cause,
     });
     this.action = action;
@@ -213,7 +213,7 @@ async function openOrCreate(core: WriterCore, options: SessionStoreWriterOptions
     if (openCores.get(core.key) === core) {
       openCores.delete(core.key);
     }
-    report(options.onFault, "打开", error);
+    report(options.onFault, "opening the session file", error);
   }
 }
 
@@ -285,7 +285,7 @@ export function openSessionStoreWriter(options: SessionStoreWriterOptions): Sess
     held = false
   ): void => {
     if (closed) {
-      report(options.onFault, action, new Error("写者已关闭"));
+      report(options.onFault, action, new Error("writer closed"));
       return;
     }
     const queued: QueuedWrite = { action, write, onFault: options.onFault };
@@ -300,7 +300,7 @@ export function openSessionStoreWriter(options: SessionStoreWriterOptions): Sess
   const request = <T>(action: string, work: (session: Session) => Promise<T>) => {
     const { promise, resolve } = Promise.withResolvers<T | undefined>();
     if (closed) {
-      report(options.onFault, action, new Error("写者已关闭"));
+      report(options.onFault, action, new Error("writer closed"));
       resolve(undefined);
       return promise;
     }
@@ -328,13 +328,13 @@ export function openSessionStoreWriter(options: SessionStoreWriterOptions): Sess
       try {
         clean = stripUndefined(options.persistThinking === false ? omitThinking(message) : message);
       } catch (error) {
-        report(options.onFault, "写入消息", error);
+        report(options.onFault, "writing a message", error);
         return;
       }
-      enqueue("写入消息", (session) => session.appendMessage(clean));
+      enqueue("writing a message", (session) => session.appendMessage(clean));
     },
     append: (entry) => {
-      const action = `写入 ${entry.customType} 条目`;
+      const action = `writing a ${entry.customType} entry`;
       let data: unknown;
       try {
         data = stripUndefined(entry.data);
@@ -349,20 +349,20 @@ export function openSessionStoreWriter(options: SessionStoreWriterOptions): Sess
       );
     },
     setName: (name) => {
-      enqueue("记会话名", (session) => session.setName(name), true);
+      enqueue("saving the session name", (session) => session.setName(name), true);
     },
     // 推迟建文件还没建：主分支上还没有条目（留在内存里的钩子运行记录不算），不为读而建文件
     branch: () =>
       shared.deferred !== undefined && !closed
         ? Promise.resolve([])
-        : request("读主分支", readBranch),
+        : request("reading the main branch", readBranch),
     dropTruncatedReply: () => {
-      enqueue("移出截断的回复", (session) => dropTruncatedReply(session));
+      enqueue("dropping the truncated reply", (session) => dropTruncatedReply(session));
     },
     leafId: () =>
       shared.deferred !== undefined && !closed
         ? Promise.resolve(null)
-        : request("读主分支叶子", (session) => session.getLeafId()),
+        : request("reading the main branch leaf", (session) => session.getLeafId()),
     rewindLane: async (input) => {
       let entries: Array<{ customType: string; data: unknown }>;
       try {
@@ -371,16 +371,16 @@ export function openSessionStoreWriter(options: SessionStoreWriterOptions): Sess
           data: stripUndefined(entry.data),
         }));
       } catch (error) {
-        report(options.onFault, "写回退记录", error);
+        report(options.onFault, "writing the rewind record", error);
         return "failed";
       }
       return (
-        (await request("回退主分支", async (session) => {
+        (await request("rewinding the main branch", async (session) => {
           if ((await session.getLeafId()) !== input.expectLeaf) return "changed" as const;
           const to = input.to;
           if (to !== undefined) {
             if (to !== null && (await session.getEntry(to)) === undefined) {
-              throw new Error(`会话里没有条目 ${to}`);
+              throw new Error(`no entry ${to} in the session`);
             }
             await session.moveLane("main", to);
           }
@@ -405,10 +405,10 @@ export function openSessionStoreWriter(options: SessionStoreWriterOptions): Sess
           ...(result.usage !== undefined ? { usage: result.usage } : {}),
         });
       } catch (error) {
-        report(options.onFault, "写入压缩条目", error);
+        report(options.onFault, "writing the compaction entry", error);
         return Promise.resolve(undefined);
       }
-      return request("写入压缩条目", async (session) => {
+      return request("writing the compaction entry", async (session) => {
         await session.appendEntry({ ...entry, id: session.idGenerator.next() }, "main");
         return readBranch(session);
       });
@@ -433,7 +433,7 @@ export function openSessionStoreWriter(options: SessionStoreWriterOptions): Sess
         try {
           shared.release?.();
         } catch (error) {
-          report(options.onFault, "释放锁", error);
+          report(options.onFault, "releasing the session lock", error);
         }
         shared.release = undefined;
         shared.session = undefined;
@@ -451,13 +451,13 @@ async function dropTruncatedReply(session: Session): Promise<void> {
       break;
     }
     if (entry.type !== "custom") {
-      throw new Error(`主分支末条消息之后有 ${entry.type} 条目`);
+      throw new Error(`${entry.type} entry after the last message on the main branch`);
     }
     trailing.push(entry);
   }
   const message = reply?.message;
   if (reply === undefined || message?.role !== "assistant" || message.stopReason !== "length") {
-    throw new Error("主分支末条消息不是撞输出上限的助手回复");
+    throw new Error("last message on the main branch is not a reply cut off at the output limit");
   }
   await session.moveLane("main", reply.parentId);
   for (const entry of trailing.reverse()) {

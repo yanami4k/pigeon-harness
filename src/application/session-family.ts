@@ -104,13 +104,15 @@ function reviewTimingOf(view: SessionView): ReviewTiming | undefined {
 function branchResultOf(view: SessionView): string | undefined {
   const lastRun = view.runs.at(-1);
   if (lastRun === undefined) return undefined;
-  const parts = [lastRun.end !== undefined ? lastRun.end.ending : "未收尾"];
+  const parts = [lastRun.end !== undefined ? lastRun.end.ending : "unfinished"];
   const verification = view.items.findLast((item) => item.kind === "verification");
   if (verification !== undefined && verification.kind === "verification") {
     const data = verification.data;
-    parts.push(data.exitCode === 0 && !data.timedOut ? "验证通过" : "验证未过");
+    parts.push(
+      data.exitCode === 0 && !data.timedOut ? "verification passed" : "verification failed"
+    );
   }
-  return parts.join("，");
+  return parts.join(", ");
 }
 
 export function loadSessionFamily(
@@ -174,7 +176,7 @@ export function loadSessionFamily(
       const node: FamilyNode = {
         sessionId: id,
         kind: "unreadable",
-        unreadable: info === undefined ? "没有会话文件" : "文件头读不出",
+        unreadable: info === undefined ? "no session file" : "unreadable header",
         children: [],
       };
       if (info !== undefined) node.createdAt = info.ref.createdAt;
@@ -197,7 +199,7 @@ export function loadSessionFamily(
       };
     }
     if (view === undefined) {
-      node.unreadable = "全文读不出";
+      node.unreadable = "unreadable file";
     } else {
       if (node.kind === "fork") {
         const timing = reviewTimingOf(view);
@@ -222,7 +224,7 @@ export function loadSessionFamily(
       if (settled !== undefined) {
         node.result =
           workerStateLabel(settled.status) +
-          (settled.errorKind !== undefined ? `（${settled.errorKind}）` : "");
+          (settled.errorKind !== undefined ? ` (${settled.errorKind})` : "");
       }
     }
     node.children = kids.map((child) => build(child, view, next));

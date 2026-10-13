@@ -155,7 +155,7 @@ async function restoreContext(bundle: RuntimeBundle): Promise<{
   const path = await bundle.sessionStore.filePath();
   const loaded = path !== undefined ? loadStoreSessionFile(path) : undefined;
   if (loaded === undefined) {
-    throw new Error("会话文件没有打开（会话存储告警已给出原因），无法还原对话上下文，续跑中止");
+    throw new Error("resume failed: session file not open");
   }
   const { messages, interrupted } = restoreSessionContext(loaded.main);
   for (const message of interrupted) {
@@ -265,7 +265,7 @@ export async function openSessionRuntime(
       ...(request.flags.sessionSearch === false
         ? {
             sessionSearch: false,
-            sessionSearchOffReason: "使用者以 --no-session-search 关掉了会话检索",
+            sessionSearchOffReason: "--no-session-search",
           }
         : {}),
       ...(request.createApprovalHandler !== undefined

@@ -151,11 +151,11 @@ test("列出：三类条目、所属会话、在用、未取走的改动、旧�
   assert.equal(byName(items, "ahead").untaken, "commits");
   assert.equal(byName(items, "junk").kind, "orphan-dir");
   const text = formatLeftoverList(items);
-  assert.match(text, /留下的 worker 工作树与分支（7 项）/);
-  assert.match(text, /dirty .*未取走的改动 1 个文件/);
-  assert.match(text, /old（旧命名）/);
-  assert.match(text, /stale（旧命名） {2}分支 pigeon\/stale（工作树已不在）/);
-  assert.match(text, /busy .*在用（worker 在跑），不能删/);
+  assert.match(text, /leftover worktrees and branches \(7\)/);
+  assert.match(text, /dirty .*untaken changes: 1 file/);
+  assert.match(text, /old \(old naming\)/);
+  assert.match(text, /stale \(old naming\) {2}branch pigeon\/stale \(worktree gone\)/);
+  assert.match(text, /busy .*in use \(worker running\)/);
 });
 
 test("挑选：缺省只挑没有可丢东西且不在用的；--all 挑全部不在用的；点名照挑；在用的、不认得的列为不删", () => {
@@ -175,61 +175,64 @@ test("挑选：缺省只挑没有可丢东西且不在用的；--all 挑全部�
   const index = items.findIndex((item) => item.name === "dirty") + 1;
   const named = planClean(items, [String(index), "busy", "nope"]);
   assert.deepEqual(names(named), ["dirty"]);
-  assert.deepEqual(named.refused, ["busy：在用（worker 在跑），不删", "nope：没有这一项"]);
+  assert.deepEqual(named.refused, ["busy: in use (worker running)", "nope: not found"]);
 });
 
 test("终端界面 /worktrees：clean 先给清单并写明会丢的改动，confirm 才删；中间打别的 /worktrees 即作罢", () => {
   const f = fixture();
   const face = createTuiWorktreesFace({ workspaceRoot: f.repo, now: later });
-  assert.doesNotMatch(face.run([]), /删除：/, "列表后不附删除用法");
+  assert.doesNotMatch(face.run([]), /usage:/, "列表后不附删除用法");
   const plan = face.run(["clean", "dirty"]);
-  assert.match(plan, /dirty（pigeon\/[0-9a-z]{8}-dirty）——未取走的改动 1 个文件，删除后丢失/);
+  assert.match(
+    plan,
+    /dirty \(pigeon\/[0-9a-z]{8}-dirty\): untaken changes: 1 file, lost on removal/
+  );
   assert.match(plan, /\/worktrees confirm/);
   assert.ok(existsSync(f.dirty.path), "确认之前不删");
   face.run(["list"]);
-  assert.match(face.run(["confirm"]), /没有待确认的删除/);
+  assert.match(face.run(["confirm"]), /nothing pending to confirm/);
   face.run(["clean", "dirty"]);
-  assert.match(face.run(["confirm"]), /已删除 1 项：dirty/);
+  assert.match(face.run(["confirm"]), /removed 1 item: dirty/);
   assert.equal(existsSync(f.dirty.path), false);
   assert.equal(git(f.repo, ["branch", "--list", f.dirty.branch]), "");
   // 缺省清理：没有可丢东西的三项
   face.run(["clean"]);
-  assert.match(face.run(["confirm"]), /已删除 3 项/);
+  assert.match(face.run(["confirm"]), /removed 3 items/);
   assert.equal(existsSync(f.taken.path), false);
   assert.equal(existsSync(f.legacyPath), false);
   assert.equal(git(f.repo, ["branch", "--list", "pigeon/old"]), "");
   assert.equal(git(f.repo, ["branch", "--list", "pigeon/stale"]), "");
   assert.ok(existsSync(f.busy.path), "在用的不动");
   assert.equal(git(f.repo, ["branch", "--list", "pigeon/ahead"]), "pigeon/ahead");
-  assert.match(face.run(["clean", "--bogus"]), /未知参数/);
+  assert.match(face.run(["clean", "--bogus"]), /unknown option/);
 });
 
 test("命令行 pigeon worktrees：list 列出；clean 没有终端时不删、提示加 --yes；--yes 直接删；确认被拒即不删", async () => {
   const f = fixture();
   const scope = { workspaceRoot: f.repo, now: later };
-  assert.doesNotMatch(await runWorktreesCommand(["list"], scope), /删除：/);
-  assert.match(await runWorktreesCommand(["clean", "--all"], scope), /加 --yes/);
+  assert.doesNotMatch(await runWorktreesCommand(["list"], scope), /usage:/);
+  assert.match(await runWorktreesCommand(["clean", "--all"], scope), /rerun with --yes/);
   assert.ok(existsSync(f.dirty.path));
   assert.match(
     await runWorktreesCommand(["clean", "--all"], scope, async () => false),
-    /已取消，没有删除/
+    /cancelled/
   );
   assert.ok(existsSync(f.dirty.path));
   const done = await runWorktreesCommand(["clean", "--all", "--yes"], scope);
-  assert.match(done, /删除后丢失/);
-  assert.match(done, /已删除 6 项/);
+  assert.match(done, /lost on removal/);
+  assert.match(done, /removed 6 items/);
   assert.equal(existsSync(f.dirty.path), false);
   assert.equal(existsSync(join(f.repo, ".pigeon", "state", "worktrees", "junk")), false);
   assert.ok(existsSync(f.busy.path));
-  assert.match(await runWorktreesCommand(["list"], scope), /（1 项）/);
-  await assert.rejects(runWorktreesCommand(["nope"], scope), /用法/);
+  assert.match(await runWorktreesCommand(["list"], scope), /\(1\):/);
+  await assert.rejects(runWorktreesCommand(["nope"], scope), /usage/);
 });
 
 test("没有留下的：列出一句；不是 git 仓库时 /worktrees 不提供", () => {
   const repo = makeRepo();
   assert.equal(
     formatLeftoverList(listLeftoverWorktrees({ workspaceRoot: repo })),
-    "没有留下的 worker 工作树与分支"
+    "no leftover worktrees or branches"
   );
   const plain = realpathSync.native(mkdtempSync(join(tmpdir(), "pigeon-wt-plain-")));
   dirs.push(plain);
@@ -242,8 +245,11 @@ test("在 worker 工作树里执行：拒绝列出与删除（比较基准与删
   const f = fixture();
   const inside = { workspaceRoot: f.dirty.path, now: later };
   assert.throws(() => listLeftoverWorktrees(inside), WorktreeCleanupError);
-  await assert.rejects(runWorktreesCommand(["clean", "--yes"], inside), /在主检出里执行/);
-  assert.match(createTuiWorktreesFace(inside).run(["clean"]), /在主检出里执行/);
+  await assert.rejects(
+    runWorktreesCommand(["clean", "--yes"], inside),
+    /run from the main checkout/
+  );
+  assert.match(createTuiWorktreesFace(inside).run(["clean"]), /run from the main checkout/);
   assert.ok(existsSync(f.dirty.path));
 });
 
@@ -257,7 +263,7 @@ test("起点取不到（没有引用日志、也没有派出记录）：未取�
   const item = byName(items, "nolog");
   assert.equal(item.untaken, "unknown");
   assert.deepEqual(planClean(items, []).remove, []);
-  assert.match(formatLeftoverList(items), /有无未取走的改动不明（按有改动对待）/);
+  assert.match(formatLeftoverList(items), /untaken changes: unknown/);
 });
 
 test("起点优先取派出记录：没有引用日志时按派出记录里的起点比，算得出未取走的改动", async () => {
@@ -302,7 +308,7 @@ test("按名字点名：同名多项时不删，要求给编号或完整分支�
   const items = listLeftoverWorktrees({ workspaceRoot: repo, now: later });
   const plan = planClean(items, ["fix"]);
   assert.deepEqual(plan.remove, []);
-  assert.deepEqual(plan.refused, ["fix：对应 2 项，请改用编号或完整分支名"]);
+  assert.deepEqual(plan.refused, ["fix: ambiguous (2 matches)"]);
   const byBranch = planClean(items, [a.branch]);
   assert.deepEqual(
     byBranch.remove.map((item) => item.branch),
@@ -318,9 +324,9 @@ test("确认之后、删之前重新核一遍：期间又改了文件的、变�
   assert.match(face.run(["clean"]), /\/worktrees confirm/);
   writeFileSync(join(f.taken.path, "late.txt"), "late\n");
   const done = face.run(["confirm"]);
-  assert.match(done, /taken：确认期间改动有变化/);
+  assert.match(done, /taken: changed since listing/);
   assert.ok(existsSync(f.taken.path), "又有改动的没删");
-  assert.match(done, /已删除 \d+ 项/);
+  assert.match(done, /removed \d+ items?/);
   // 命令行：确认期间 dirty 的 worker 开跑了（会话被锁）
   const answered = await runWorktreesCommand(["clean", "dirty"], scope, async () => {
     const dir = join(sessionsDirOf(f.repo), sessionDirectoryName(f.repo));
@@ -332,7 +338,7 @@ test("确认之后、删之前重新核一遍：期间又改了文件的、变�
     );
     return true;
   });
-  assert.match(answered, /dirty：确认期间变成在用（worker 在跑），不删/);
+  assert.match(answered, /dirty: now in use \(worker running\)/);
   assert.ok(existsSync(f.dirty.path));
 });
 
@@ -355,14 +361,14 @@ test("在用的另几种：所属会话被另一个仍在的进程打开、刚�
   );
   const fresh = addWorktree({ repoRoot: repo, sessionId: newSessionId(), name: "fresh" });
   const items = listLeftoverWorktrees({ workspaceRoot: repo });
-  assert.equal(byName(items, "owned").inUseReason, "所属会话正开着");
-  assert.equal(byName(items, "fresh").inUseReason, "刚建，还没有 worker 会话记录");
+  assert.equal(byName(items, "owned").inUseReason, "owner session is open");
+  assert.equal(byName(items, "fresh").inUseReason, "just created, no worker session yet");
   assert.deepEqual(planClean(items, ["--all"]).remove, []);
   const live = listLeftoverWorktrees({
     workspaceRoot: repo,
     now: later,
     liveWorkers: () => new Set([fresh.sessionId]),
   });
-  assert.match(byName(live, "fresh").inUseReason ?? "", /本会话里还在用/);
+  assert.match(byName(live, "fresh").inUseReason ?? "", /in use in this session/);
   void w;
 });

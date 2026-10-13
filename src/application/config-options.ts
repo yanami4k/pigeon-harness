@@ -47,18 +47,18 @@ export const CONFIG_OPTIONS: readonly ConfigOption[] = [
     id: "thinking.level",
     section: "thinking",
     key: "level",
-    label: "思考档位",
-    description: "模型推理的档位；缺省按模型（会推理的 high，其余 off）",
+    label: "thinking level",
+    description: "model reasoning level; default by model (high if it reasons, else off)",
     kind: "string",
     values: ["default", "off", "minimal", "low", "medium", "high", "xhigh", "max"],
-    defaultLabel: "按模型",
+    defaultLabel: "by model",
   },
   {
     id: "web.enabled",
     section: "web",
     key: "enabled",
-    label: "联网工具",
-    description: "web_search 与 web_fetch 的总开关",
+    label: "web tools",
+    description: "web_search and web_fetch on or off",
     kind: "boolean",
     values: ["default", "true", "false"],
     defaultLabel: "true",
@@ -67,8 +67,8 @@ export const CONFIG_OPTIONS: readonly ConfigOption[] = [
     id: "loopGuard.enabled",
     section: "loopGuard",
     key: "enabled",
-    label: "打转检测",
-    description: "同样的工具调用反复出现时提醒并叫停",
+    label: "loop detection",
+    description: "warn and stop when the same tool call repeats",
     kind: "boolean",
     values: ["default", "true", "false"],
     defaultLabel: "true",
@@ -77,8 +77,8 @@ export const CONFIG_OPTIONS: readonly ConfigOption[] = [
     id: "modelRequest.maxRetries",
     section: "modelRequest",
     key: "maxRetries",
-    label: "模型请求重试次数",
-    description: "连接失败、限流与服务端错误时的重试次数（0 不重试）",
+    label: "model request retries",
+    description: "retries on connection failures, rate limits and server errors",
     kind: "integer",
     values: ["default", "0", "1", "2", "4", "6", "8"],
     defaultLabel: "4",
@@ -87,8 +87,8 @@ export const CONFIG_OPTIONS: readonly ConfigOption[] = [
     id: "contextPrune.enabled",
     section: "contextPrune",
     key: "enabled",
-    label: "上下文裁剪",
-    description: "裁掉早先的大块工具结果以省上下文",
+    label: "context pruning",
+    description: "drop large old tool results to save context",
     kind: "boolean",
     values: ["default", "true", "false"],
     defaultLabel: "true",
@@ -97,8 +97,8 @@ export const CONFIG_OPTIONS: readonly ConfigOption[] = [
     id: "truncationContinuation.enabled",
     section: "truncationContinuation",
     key: "enabled",
-    label: "撞上限续跑",
-    description: "回复因输出上限被截断时自动续上",
+    label: "continue at output limit",
+    description: "continue a reply cut off at the output limit",
     kind: "boolean",
     values: ["default", "true", "false"],
     defaultLabel: "true",
@@ -148,7 +148,7 @@ export function configView(
       );
     return {
       option,
-      effective: merged === undefined ? `${option.defaultLabel}（缺省）` : String(merged),
+      effective: merged === undefined ? `${option.defaultLabel} (default)` : String(merged),
       user: user === undefined ? "default" : String(user),
       ...(higher !== undefined
         ? {
@@ -168,12 +168,12 @@ function parseValue(option: ConfigOption, raw: string): unknown {
   const text = raw.trim();
   if (text === "default") return undefined;
   if (!option.values.includes(text) && option.kind !== "integer") {
-    throw new ConfigError(`${option.id} 只能是 ${option.values.join("、")}`);
+    throw new ConfigError(`${option.id} must be one of ${option.values.join(", ")}`);
   }
   if (option.kind === "boolean") return text === "true";
   if (option.kind === "integer") {
     if (!/^\d{1,3}$/.test(text))
-      throw new ConfigError(`${option.id} 须是 0 到 999 的整数或 default`);
+      throw new ConfigError(`${option.id} must be an integer 0-999 or default`);
     return Number(text);
   }
   return text;
@@ -193,36 +193,34 @@ export function setUserConfig(
 ): string | undefined {
   const option = configOptionOf(id);
   if (option === undefined) {
-    throw new ConfigError(
-      `没有这个选项：${id}（可用 ${CONFIG_OPTIONS.map((item) => item.id).join("、")}）`
-    );
+    throw new ConfigError(`unknown option: ${id}`);
   }
   const parsed = parseValue(option, value);
   const location = settingsLocations(root, homeDir).find((entry) => entry.layer === "user");
-  if (location === undefined) throw new ConfigError("找不到用户级设置文件的位置");
+  if (location === undefined) throw new ConfigError("user settings location not found");
   let raw: Record<string, unknown> = {};
   const exists = existsSync(location.path);
   if (exists) {
     const stat = lstatSync(location.path);
     if (stat.isSymbolicLink()) {
-      throw new ConfigError(`${location.path} 是符号链接，不改它（请直接改它指向的文件）`);
+      throw new ConfigError(`${location.path} is a symlink; not changed`);
     }
-    if (stat.isDirectory()) throw new ConfigError(`${location.path} 是目录，不是设置文件`);
+    if (stat.isDirectory()) throw new ConfigError(`${location.path} is a directory; not changed`);
     try {
       accessSync(location.path, constants.W_OK);
     } catch {
-      throw new ConfigError(`${location.path} 是只读的，不改它`);
+      throw new ConfigError(`${location.path} is read-only; not changed`);
     }
     try {
       const parsedFile: unknown = parseJsonText(readFileSync(location.path, "utf8"));
       if (typeof parsedFile !== "object" || parsedFile === null || Array.isArray(parsedFile)) {
-        throw new ConfigError(`${location.path} 顶层不是对象，不改它`);
+        throw new ConfigError(`${location.path}: top level is not an object; not changed`);
       }
       raw = parsedFile as Record<string, unknown>;
     } catch (error) {
       if (error instanceof ConfigError) throw error;
       throw new ConfigError(
-        `${location.path} 不是合法 JSON，不改它：${error instanceof Error ? error.message : String(error)}`
+        `${location.path} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }
@@ -235,7 +233,9 @@ export function setUserConfig(
   else next[option.section] = section;
   const checked = validateSettingsLayer(next, location);
   if ("problems" in checked) {
-    throw new ConfigError(`改完的用户级设置校验不过，没有写：${checked.problems.join("；")}`);
+    throw new ConfigError(
+      `user settings would be invalid; not written: ${checked.problems.join("; ")}`
+    );
   }
   mkdirSync(dirname(location.path), { recursive: true });
   writeFileAtomic(location.path, `${JSON.stringify(next, null, 2)}\n`);

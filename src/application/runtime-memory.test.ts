@@ -116,7 +116,7 @@ test("沙箱会话（注入执行端）读宿主上的工作区（治理根）�
     try {
       assert.match(
         truncated.instructionsNotice ?? "",
-        /^\[说明\] AGENTS\.md 等人写的说明合计超出 32 KiB 上限/
+        /^\[instructions\] AGENTS\.md files over the 32 KiB limit; truncated: /
       );
     } finally {
       await disposeRuntime(truncated);

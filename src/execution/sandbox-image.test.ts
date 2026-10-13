@@ -122,7 +122,7 @@ test("项目配置可改用任一镜像名或项目自己的 Dockerfile；畸形
     });
     assert.throws(
       () => resolveSandboxImage(byFile, loadSandboxConfig(byFile)),
-      /Dockerfile 不存在/
+      /Dockerfile not found/
     );
     mkdirSync(join(byFile, "ci"));
     writeFileSync(join(byFile, "ci", "Dockerfile"), "FROM alpine\n");
@@ -158,7 +158,7 @@ test("通用镜像首次使用时构建、之后用缓存；构建失败时报�
     assert.equal(build[build.indexOf("-t") + 1], spec.image);
     assert.equal(build[build.indexOf("-f") + 1], GENERIC_DOCKERFILE);
     assert.ok(build.includes("APT_MIRROR=https://m.example/ubuntu"));
-    assert.ok(logs.some((line) => line.includes("首次使用")));
+    assert.ok(logs.some((line) => line.includes("first use")));
     // 第二次直接用缓存
     await ensureSandboxImage(spec, { docker: fake.docker });
     assert.equal(fake.state().builds.length, 1);

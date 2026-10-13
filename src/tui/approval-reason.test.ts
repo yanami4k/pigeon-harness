@@ -89,11 +89,14 @@ test("面板提示含 [r] 拒绝并说明；[r] 打开理由行，回车提交�
     await settle();
     const pending = handler(REQUEST);
     await settle();
-    assert.ok(screenFlat(term).includes("[r] 拒绝并说明"), `面板提示应含 [r]\n${screenText(term)}`);
+    assert.ok(
+      screenFlat(term).includes("[r] reject with reason"),
+      `面板提示应含 [r]\n${screenText(term)}`
+    );
 
     term.input("r");
     await settle();
-    assert.ok(screenText(term).includes("拒绝理由"), `[r] 应打开理由行\n${screenText(term)}`);
+    assert.ok(screenText(term).includes("reason:"), `[r] 应打开理由行\n${screenText(term)}`);
 
     term.input("这个文件不该动");
     term.input("\r");
@@ -126,7 +129,7 @@ test("理由行按 Esc 回到面板：不算拒绝，审批仍挂起，随后 [n
     term.input("\x1b");
     await settle();
     assert.ok(
-      screenText(term).includes("—— 人工审批 ——"),
+      screenText(term).includes("-- approval --"),
       `Esc 后仍在审批面板\n${screenText(term)}`
     );
     let settled = false;

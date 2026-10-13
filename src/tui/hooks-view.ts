@@ -23,28 +23,22 @@ export interface TuiHooksFace {
 
 // /hooks 的输出：停用开关 + 生效的钩子逐条（事件、matcher、命令、来自哪一层、在哪执行、超时秒数）
 export function renderHooksView(hooks: TuiHooksFace): string {
-  const lines = ["== 钩子 =="];
-  lines.push(
-    hooks.disabled ? "disableAllHooks：生效（本会话不跑任何钩子）" : "disableAllHooks：未生效"
-  );
+  const lines = ["== hooks =="];
+  lines.push(hooks.disabled ? "disableAllHooks: on" : "disableAllHooks: off");
   const effective = hooks.list();
   if (effective.length === 0) {
-    lines.push(
-      hooks.disabled
-        ? "生效的钩子：无（disableAllHooks 生效或本次运行带 --no-hooks）"
-        : "生效的钩子：无（三层设置里没有钩子）"
-    );
+    lines.push("active hooks: none");
     return lines.join("\n");
   }
   for (const hook of effective) {
     lines.push(
       `- ${hook.event}${
-        hook.matcher !== undefined && hook.matcher !== "" ? `（matcher：${hook.matcher}）` : ""
+        hook.matcher !== undefined && hook.matcher !== "" ? ` (matcher: ${hook.matcher})` : ""
       } | ${hook.command} | ${SETTINGS_LAYER_LABELS[hook.layer]} | ${
-        hook.host ? "在宿主执行" : "在工作区所在处执行"
-      } | 超时 ${hookTimeoutMs(hook.event, hook) / 1000} 秒`
+        hook.host ? "runs on host" : "runs in workspace"
+      } | timeout ${hookTimeoutMs(hook.event, hook) / 1000}s`
     );
   }
-  lines.push(`共 ${effective.length} 条`);
+  lines.push(`${effective.length} ${effective.length === 1 ? "hook" : "hooks"}`);
   return lines.join("\n");
 }

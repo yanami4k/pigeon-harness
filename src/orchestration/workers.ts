@@ -436,18 +436,9 @@ export function previousRunWorkerText(
   status: Pick<WorkerStatus, "name" | "previousRun">,
   action: "cancel" | "send" | "resume"
 ): string {
-  const base =
-    status.previousRun === "interrupted"
-      ? `Worker ${status.name} was spawned by an earlier run and was interrupted when that process exited`
-      : `Worker ${status.name} was spawned by an earlier run and already finished in that run`;
-  switch (action) {
-    case "cancel":
-      return `${base}; it is not running, so there is nothing to cancel.`;
-    case "send":
-      return `${base}; it is not running, so it cannot receive messages.`;
-    case "resume":
-      return `${base}; after resuming it cannot be approved and continued, so spawn another worker to carry on.`;
-  }
+  const state = status.previousRun === "interrupted" ? "was interrupted" : "already finished";
+  const verb = action === "cancel" ? "cancel" : action === "send" ? "message" : "resume";
+  return `can't ${verb} worker ${status.name}: it is from a previous run and ${state}`;
 }
 
 // 决策 303：搁下的请示——补批续做时据此放行同一个调用
@@ -593,11 +584,11 @@ export class WorkerOrchestrator {
   constructor(options: WorkerOrchestratorOptions) {
     const max = options.maxConcurrent ?? DEFAULT_MAX_CONCURRENT_WORKERS;
     if (!Number.isInteger(max) || max < 1) {
-      throw new WorkerSpawnError(`同时在跑的 worker 上限需要正整数：${max}`);
+      throw new WorkerSpawnError(`max concurrent workers must be a positive integer: ${max}`);
     }
     const maxDepth = options.maxDepth ?? DEFAULT_MAX_WORKER_DEPTH;
     if (!Number.isInteger(maxDepth) || maxDepth < 1) {
-      throw new WorkerSpawnError(`worker 层数上限需要正整数：${maxDepth}`);
+      throw new WorkerSpawnError(`max worker depth must be a positive integer: ${maxDepth}`);
     }
     this.#options = options;
     this.#maxConcurrent = max;

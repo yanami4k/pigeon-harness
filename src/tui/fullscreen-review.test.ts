@@ -96,7 +96,7 @@ test("kitty 键盘协议：Ctrl+C 的松键不算第二下（不退出）；运�
     term.input("\x1b[99;5:3u");
     await settle();
     assert.equal(exits(), 0, "按一次 Ctrl+C 不退出");
-    assert.match(screenText(term), /\[cleared\]/);
+    assert.match(screenText(term), /press Ctrl\+C again to exit/);
     runtime.autoResolve = false;
     term.input("跑");
     term.input("\r");
@@ -128,10 +128,10 @@ test("拖选后 Ctrl+C 复制并清掉选区：下一次 Ctrl+C 照常清输入"
     await settle();
     term.input("\x03");
     await settle(150);
-    assert.doesNotMatch(screenText(term), /\[cleared\]/);
+    assert.doesNotMatch(screenText(term), /press Ctrl\+C again to exit/);
     term.input("\x03");
     await settle();
-    assert.match(screenText(term), /\[cleared\]/, "选区已清，这一下是清输入");
+    assert.match(screenText(term), /press Ctrl\+C again to exit/, "选区已清，这一下是清输入");
     assert.equal(exits(), 0);
   } finally {
     cleanup();
@@ -186,7 +186,7 @@ test("图片：只认 png/jpeg/gif/webp 与严格 base64；不合格的只显示
       images: [{ data: "QUJD", mimeType: "image/png\x1b]0;X\x07\x1b[2J" }],
     });
     await settle();
-    assert.match(screenText(term), /\[image: 不能显示（类型或数据不认得）\]/);
+    assert.match(screenText(term), /\[image: can't display\]/);
     assert.ok(!term.writes.join("").includes("\x1b]0;X"));
     runtime.finishAll();
     await settle();

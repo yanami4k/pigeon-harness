@@ -35,7 +35,7 @@ export function newTaskKey(): string {
 
 export async function runAttemptGroup(input: AttemptGroupInput): Promise<AttemptGroupResult> {
   if (!Number.isInteger(input.count) || input.count < 2) {
-    throw new Error("并行同任务派发至少需要 2 个尝试");
+    throw new Error("parallel attempts need at least 2 attempts");
   }
   const taskKey = input.taskKey ?? newTaskKey();
   const ids = Array.from({ length: input.count }, () =>

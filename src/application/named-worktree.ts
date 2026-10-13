@@ -52,9 +52,7 @@ export interface NamedWorktree {
 
 export function assertWorktreeName(name: string): void {
   if (!NAME.test(name)) {
-    throw new NamedWorktreeError(
-      `工作树名字不合法：${JSON.stringify(name)}（小写字母或数字开头，只含小写字母、数字、下划线与连字符，最长 64）`
-    );
+    throw new NamedWorktreeError(`invalid worktree name: ${JSON.stringify(name)}`);
   }
 }
 
@@ -138,11 +136,9 @@ function existingNamedWorktree(
     path: resolve(path),
     branch,
     ...(base !== undefined ? { base } : {}),
-    baseLabel: base !== undefined ? `建立时的起点 ${base.slice(0, 12)}` : "不明",
+    baseLabel: base !== undefined ? `commit ${base.slice(0, 12)}` : "unknown",
     created: false,
-    ...(registered.branch !== branch
-      ? { currentBranch: registered.branch ?? "（分离头指针）" }
-      : {}),
+    ...(registered.branch !== branch ? { currentBranch: registered.branch ?? "(detached)" } : {}),
   };
 }
 
@@ -159,18 +155,18 @@ export function resolveWorktreeBase(
 ): BaseResolution {
   const head = resolveCommit(repoRoot, "HEAD");
   if (head === undefined) {
-    throw new NamedWorktreeError("仓库还没有任何提交，建不了工作树");
+    throw new NamedWorktreeError("repository has no commits; can't create a worktree");
   }
   if (mode === "head") return { commit: head, label: "HEAD" };
   let remoteHead: string;
   try {
     remoteHead = git(repoRoot, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]).trim();
   } catch {
-    return { commit: head, label: "HEAD（没有远端默认分支）" };
+    return { commit: head, label: "HEAD (no remote default branch)" };
   }
   const branch = remoteHead.replace(/^refs\/remotes\/origin\//, "");
   if (branch === "" || branch.startsWith("-"))
-    return { commit: head, label: "HEAD（没有远端默认分支）" };
+    return { commit: head, label: "HEAD (no remote default branch)" };
   const commonDir = resolve(
     git(repoRoot, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).trim()
   );
@@ -185,14 +181,16 @@ export function resolveWorktreeBase(
       });
     } catch (error) {
       const reason =
-        error instanceof Error && /ETIMEDOUT|timed out/i.test(error.message) ? "超时" : "失败";
-      return { commit: head, label: `HEAD（取远端${reason}）` };
+        error instanceof Error && /ETIMEDOUT|timed out/i.test(error.message)
+          ? "timed out"
+          : "failed";
+      return { commit: head, label: `HEAD (fetching origin ${reason})` };
     }
   }
   const commit = resolveCommit(repoRoot, `refs/remotes/origin/${branch}`);
   return commit !== undefined
     ? { commit, label: `origin/${branch}` }
-    : { commit: head, label: "HEAD（没有远端默认分支）" };
+    : { commit: head, label: "HEAD (no remote default branch)" };
 }
 
 // 打开或新建 <主仓库根>/.pigeon/wt/<名字>
@@ -211,14 +209,14 @@ export function openNamedWorktree(input: {
   try {
     repoRoot = mainRepoRoot(input.cwd);
   } catch {
-    throw new NamedWorktreeError("当前目录不在 git 仓库里，不能建工作树");
+    throw new NamedWorktreeError("not in a git repository; can't create a worktree");
   }
   const path = join(namedWorktreesDirOf(repoRoot), input.name);
   const branch = namedWorktreeBranch(input.name);
   if (existsSync(path)) {
     const existing = existingNamedWorktree(repoRoot, path, input.name);
     if (existing === undefined) {
-      throw new NamedWorktreeError(`${path} 已存在但不是本仓库的 git 工作树，不打开`);
+      throw new NamedWorktreeError(`${path} exists but is not a worktree of this repository`);
     }
     return existing;
   }
@@ -280,11 +278,6 @@ export function uncommittedCount(cwd: string): number {
   }
 }
 
-// 下次进入的命令
-export function reenterCommand(name: string): string {
-  return `pigeon --worktree ${name}`;
-}
-
 // 退出时的清理（决策 445）：没有改动即删工作树与分支；有改动问保留还是删除（ask 不给即没有终端可问，保留）。
 // 问答在壳退出之后的终端行内进行（照启动时确认配置的写法），EOF 按保留。删除不跟随链接（worktree.ts）
 export async function closeNamedWorktree(
@@ -297,13 +290,11 @@ export async function closeNamedWorktree(
   }
 ): Promise<"removed" | "kept"> {
   if ((io.inUseByOthers ?? (() => worktreeInUseByOthers(worktree.path)))()) {
-    io.write(`另有会话开在工作树 ${worktree.name} 里，保留不删（${worktree.path}）`);
+    io.write(`worktree ${worktree.name} is open in another session; kept`);
     return "kept";
   }
   const kept = (): "kept" => {
-    io.write(
-      `工作树 ${worktree.name} 保留在 ${worktree.path}（分支 ${worktree.branch}）；下次进入：${reenterCommand(worktree.name)}`
-    );
+    io.write(`worktree ${worktree.name} kept at ${worktree.path}`);
     return "kept";
   };
   const remove = (): "removed" | "kept" => {
@@ -312,7 +303,7 @@ export async function closeNamedWorktree(
       return "removed";
     } catch (error) {
       io.write(
-        `删除工作树 ${worktree.name} 失败：${error instanceof Error ? error.message : String(error)}`
+        `removing worktree ${worktree.name} failed: ${error instanceof Error ? error.message : String(error)}`
       );
       return kept();
     }
@@ -321,17 +312,17 @@ export async function closeNamedWorktree(
   if (io.ask === undefined) return kept();
   for (;;) {
     const answer = await io.ask(
-      `工作树 ${worktree.name}（${worktree.path}）${
+      `worktree ${worktree.name} (${worktree.path}) ${
         worktree.currentBranch !== undefined
-          ? `当前在 ${worktree.currentBranch} 上（删除只删分支 ${worktree.branch}，不动 ${worktree.currentBranch}）`
-          : "有改动或新提交"
-      }：k 保留 ｜ d 删除（工作树里的改动与分支 ${worktree.branch} 上的提交都会丢失）\n> `
+          ? `is on ${worktree.currentBranch} (delete removes only ${worktree.branch})`
+          : "has changes or new commits"
+      }: k keep | d delete (changes and commits on ${worktree.branch} are lost)\n> `
     );
     if (answer === null) return kept();
     const choice = answer.trim().toLowerCase();
     if (choice === "k" || choice === "") return kept();
     if (choice === "d") return remove();
-    io.write("请输入 k 或 d");
+    io.write("k or d");
   }
 }
 
@@ -340,7 +331,7 @@ export function namedWorktreeRepoRoot(cwd: string): string {
   try {
     return mainRepoRoot(cwd);
   } catch {
-    throw new NamedWorktreeError("当前目录不在 git 仓库里，不能用 --worktree");
+    throw new NamedWorktreeError("not in a git repository; can't use --worktree");
   }
 }
 

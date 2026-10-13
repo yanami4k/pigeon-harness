@@ -105,7 +105,7 @@ test("续跑：进程死在工具执行途中——还原上下文，悬空调�
     const report = written.join("");
     // 续跑报告只写悬空的工具调用
     assert.doesNotMatch(report, /还原对话上下文|没有收尾记录/);
-    assert.match(report, /1 个工具调用中断、结果未知：edit_file/);
+    assert.match(report, /1 tool call interrupted, results unknown: edit_file/);
     assert.deepEqual(opened?.restored, { messages: 2, interrupted: 1 });
 
     // 交给模型的上下文：原任务、带调用的助手消息、补的工具结果、续跑输入
@@ -194,10 +194,9 @@ test("续跑：旧格式会话明确报错、不进入续会话；不存在的�
         },
       }),
       (error: Error) =>
-        error.message ===
-        `会话 ${legacyId} 是旧格式会话（迁移之前创建），不能续跑；${LEGACY_READER_HINT}`
+        error.message === `can't resume ${legacyId}: old-format session; ${LEGACY_READER_HINT}`
     );
-    assert.equal(LEGACY_READER_HINT, "旧格式会话请用只读的旧版代码 455d88d 读取");
+    assert.equal(LEGACY_READER_HINT, "readable with legacy code 455d88d");
     assert.equal(entered, false);
     // 不在会话存储里建文件
     assert.deepEqual(listSessionFiles(sessionsDir), []);
@@ -207,7 +206,8 @@ test("续跑：旧格式会话明确报错、不进入续会话；不存在的�
     const { sessionId } = await present.close();
     assert.throws(
       () => describeResume(dir, newSessionId()),
-      (error: Error) => error.message.includes("会话不存在") && !error.message.includes(sessionId)
+      (error: Error) =>
+        error.message.includes("session not found") && !error.message.includes(sessionId)
     );
   } finally {
     cleanup();

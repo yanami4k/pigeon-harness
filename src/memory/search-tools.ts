@@ -574,19 +574,20 @@ export function sessionToolRegistrations(sessionsDir: string): ToolRegistration[
   return [
     {
       name: SEARCH_SESSIONS_TOOL,
-      description: "检索本项目以前会话（按会话归并，BM25 打分，工具输出也在范围内）",
+      description:
+        "search this project's past sessions (grouped by session, BM25 ranking, tool output included)",
       parameters: SearchSessionsParamsSchema,
       ...base,
     },
     {
       name: READ_SESSION_ENTRY_TOOL,
-      description: "按 entryId 读取以前会话的消息原文（有上限，可分页续读）",
+      description: "read a past session's message by entryId (capped, pageable)",
       parameters: ReadSessionEntryParamsSchema,
       ...base,
     },
     {
       name: LIST_SESSIONS_TOOL,
-      description: "列出本项目以前的会话（可按时间与改动过的文件筛选）",
+      description: "list this project's past sessions (filter by time and changed files)",
       parameters: ListSessionsParamsSchema,
       ...base,
     },

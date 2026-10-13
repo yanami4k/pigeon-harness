@@ -190,7 +190,7 @@ test("相对路径的 core.excludesFile：不写任何文件，提示自行加�
   assert.equal(existsSync(join(s.xdg, "git")), false);
   assert.equal(existsSync(join(root, "relative")), false);
   assert.equal(notices.length, 1);
-  assert.match(notices[0] ?? "", /相对路径.*没有写入；请自行把/);
+  assert.match(notices[0] ?? "", /relative path.*not added to the global excludes file/);
 });
 
 test("写进去了 git 却没有忽略（仓库里有取反规则）：如实提示，再调也不重复写", () => {
@@ -200,7 +200,7 @@ test("写进去了 git 却没有忽略（仓库里有取反规则）：如实提
   const notices: string[] = [];
   const first = ensureGlobalIgnoreRules(root, { env: s.env, notice: (line) => notices.push(line) });
   assert.equal(first.error, "ineffective");
-  assert.match(notices[0] ?? "", /git 仍没有忽略/);
+  assert.match(notices[0] ?? "", /git still doesn't ignore/);
   const file = join(s.xdg, "git", "ignore");
   const second = ensureGlobalIgnoreRules(root, {
     env: s.env,
@@ -221,10 +221,7 @@ test("写不进（目标位置是个目录）：只提示一行（带自行加�
   });
   assert.ok(result.error !== undefined);
   assert.equal(notices.length, 1);
-  assert.match(
-    notices[0] ?? "",
-    /没能把 Pigeon 程序状态的忽略规则写进 git 全局排除文件.*可自行加入/
-  );
+  assert.match(notices[0] ?? "", /adding .* to the git global excludes file.* failed: /);
 });
 
 // 在本进程的环境下跑（ensureGlobalIgnoreRulesOnce 与 ensureProjectStateDir 不带 env）

@@ -63,7 +63,7 @@ function run(cwd: string, prefix: string[], args: string[], input?: Buffer): Buf
         : error instanceof Error
           ? error.message
           : String(error);
-    throw new RewindRestoreError(`git ${args.join(" ")} 失败：${detail}`);
+    throw new RewindRestoreError(`git ${args.join(" ")} failed: ${detail}`);
   }
 }
 
@@ -300,9 +300,9 @@ function parentProblem(top: string, path: string): string | undefined {
     at = join(at, part);
     const stat = lstatOrUndefined(at);
     if (stat === undefined) return undefined;
-    if (stat.isSymbolicLink()) return "上级目录是符号链接或目录联接";
-    if (!stat.isDirectory()) return "上级路径不是目录";
-    if (!inside(top, realpathSync(at))) return "上级目录实际在仓库之外";
+    if (stat.isSymbolicLink()) return "parent directory is a symlink or junction";
+    if (!stat.isDirectory()) return "parent path is not a directory";
+    if (!inside(top, realpathSync(at))) return "parent directory is outside the repository";
   }
   return undefined;
 }
@@ -333,7 +333,7 @@ function toCrlf(content: Buffer): Buffer {
   return Buffer.from(out);
 }
 
-const UNFAITHFUL = "无法保真还原";
+const UNFAITHFUL = "can't restore faithfully";
 
 // 写回的字节：存下过原样字节的写它；否则取快照里的对象，按工作区当前的属性判断能不能保真、怎么转换行尾
 function contentFor(
@@ -351,34 +351,40 @@ function contentFor(
     try {
       return trees.blob(raw);
     } catch {
-      return { path, reason: `${UNFAITHFUL}（存下的原样字节已被回收）` };
+      return { path, reason: `${UNFAITHFUL} (saved original bytes were garbage-collected)` };
     }
   }
   // 属性在这段里变过：快照里的形态与现在的属性对不上，没有原样字节即不写
-  if (requireSaved !== undefined) return { path, reason: `${UNFAITHFUL}（${requireSaved}）` };
+  if (requireSaved !== undefined) return { path, reason: `${UNFAITHFUL} (${requireSaved})` };
   if (!trees.faithful) {
     return {
       path,
-      reason: `${UNFAITHFUL}（这个 git 不支持 --attr-source，快照内容可能被过滤器改过）`,
+      reason: `${UNFAITHFUL} (this git has no --attr-source; the snapshot may have been filtered)`,
     };
   }
   const attrs = trees.attributesOf(path);
   if (attrs.filter !== "unspecified" && attrs.filter !== "unset") {
-    return { path, reason: `${UNFAITHFUL}（属性里配了过滤器，快照里可能是过滤后的形态）` };
+    return {
+      path,
+      reason: `${UNFAITHFUL} (a filter is set in attributes; the snapshot may be filtered)`,
+    };
   }
   if (attrs.encoding !== "unspecified" && attrs.encoding !== "unset") {
-    return { path, reason: `${UNFAITHFUL}（属性里配了 working-tree-encoding）` };
+    return { path, reason: `${UNFAITHFUL} (working-tree-encoding is set in attributes)` };
   }
   const content = trees.blob(target.blob);
   if (content.subarray(0, LFS_POINTER.length).equals(LFS_POINTER)) {
-    return { path, reason: `${UNFAITHFUL}（快照里是 LFS 指针）` };
+    return { path, reason: `${UNFAITHFUL} (the snapshot holds an LFS pointer)` };
   }
   if (!isText(content)) return content;
   const autocrlf = trees.autocrlf === "true" || trees.autocrlf === "input";
   if (attrs.text === "unset") {
     // -text：快照时按没有属性规范化过行尾，原来的行尾找不回
     return autocrlf
-      ? { path, reason: `${UNFAITHFUL}（-text 文件的行尾在快照里已被规范化）` }
+      ? {
+          path,
+          reason: `${UNFAITHFUL} (line endings of this -text file were normalized in the snapshot)`,
+        }
       : content;
   }
   if (hasCrlf(content)) return content;
@@ -422,7 +428,7 @@ export async function restoreFiles(input: {
   }
   const actions = input.actions.filter((action) => {
     if ((counts.get(keyOf(action.path)) ?? 0) > 1) {
-      skip(action.path, "与另一条只差大小写（这个文件系统不分大小写），不写");
+      skip(action.path, "differs only in case from another path on this file system; not written");
       return false;
     }
     return true;
@@ -450,7 +456,7 @@ export async function restoreFiles(input: {
     } catch (error) {
       prepared.set(action.path, {
         path: action.path,
-        reason: `取快照内容失败：${error instanceof Error ? error.message : String(error)}`,
+        reason: `reading snapshot content failed: ${error instanceof Error ? error.message : String(error)}`,
       });
     }
   }
@@ -460,17 +466,17 @@ export async function restoreFiles(input: {
     let saved: SavedBlob | undefined;
     try {
       if (hasProgramSegment(path)) {
-        skip(path, `${PIGEON_DIR} 下的文件不碰`);
+        skip(path, `files under ${PIGEON_DIR} are not touched`);
         continue;
       }
       // 快照树与现状里本不会有 .git（git 不收），这里再显式挡一道：版本库元数据能让 git 执行任意命令
       if (insideGitMetadata(path)) {
-        skip(path, "版本库元数据（.git）不碰");
+        skip(path, "repository metadata (.git) is not touched");
         continue;
       }
       const target = action.target;
       if (target !== undefined && target.mode !== "100644" && target.mode !== "100755") {
-        skip(path, "目标是符号链接或子模块，不写");
+        skip(path, "target is a symlink or submodule; not written");
         continue;
       }
       const content = target !== undefined ? prepared.get(path) : undefined;
@@ -486,27 +492,27 @@ export async function restoreFiles(input: {
       const absolute = join(top, ...path.split("/"));
       const stat = lstatOrUndefined(absolute);
       if (stat !== undefined && (stat.isSymbolicLink() || !stat.isFile())) {
-        skip(path, "磁盘上是符号链接或目录，不碰");
+        skip(path, "symlink or directory on disk; not touched");
         continue;
       }
       if (stat !== undefined && stat.nlink > 1) {
-        skip(path, "有别的硬链接，写了会改到别处，不碰");
+        skip(path, "has other hard links; not touched");
         continue;
       }
       let rawHash: string | undefined;
       if (stat === undefined) {
         if (action.current !== undefined) {
-          skip(path, "规划之后已被删掉");
+          skip(path, "deleted after planning");
           continue;
         }
       } else {
         if (action.current === undefined) {
-          skip(path, "没进现状快照（被忽略、过大或刚新建）");
+          skip(path, "not in the current snapshot (ignored, too large or just created)");
           continue;
         }
         const bytes = readFileSync(absolute);
         if (trees.hash(path, bytes) !== action.current.blob) {
-          skip(path, "规划之后又被改过");
+          skip(path, "changed after planning");
           continue;
         }
         rawHash = sha1(bytes);
@@ -520,11 +526,11 @@ export async function restoreFiles(input: {
           ? again !== undefined
           : again?.isFile() !== true || again.isSymbolicLink() || again.nlink > 1
       ) {
-        skip(path, "核对之后被改动或换成了别的东西");
+        skip(path, "changed or replaced after checking");
         continue;
       }
       if (rawHash !== undefined && sha1(readFileSync(absolute)) !== rawHash) {
-        skip(path, "核对之后又被改过");
+        skip(path, "changed after checking");
         continue;
       }
       if (target === undefined) {

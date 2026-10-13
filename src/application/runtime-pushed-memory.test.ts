@@ -353,9 +353,9 @@ test("日常入口：推送缺省开着，--no-pushed-memory 关掉；--memory-l
   );
   assert.throws(
     () => parseLaunchFlags(["--memory-limit", "4000"], { usage, pushedMemory: true }),
-    /未知参数/
+    /unknown option/
   );
-  assert.throws(() => parseLaunchFlags(["--no-pushed-memory"], { usage }), /未知参数/);
+  assert.throws(() => parseLaunchFlags(["--no-pushed-memory"], { usage }), /unknown option/);
 });
 
 test("日常入口：会话检索缺省开着，--no-session-search 关掉（决策 382）；不接受的入口当作未知参数", () => {
@@ -365,7 +365,7 @@ test("日常入口：会话检索缺省开着，--no-session-search 关掉（决
     parseLaunchFlags(["--no-session-search"], { usage, sessionSearch: true }).sessionSearch,
     false
   );
-  assert.throws(() => parseLaunchFlags(["--no-session-search"], { usage }), /未知参数/);
+  assert.throws(() => parseLaunchFlags(["--no-session-search"], { usage }), /unknown option/);
 });
 
 // 决策 331：worker 只推送记忆、不带记忆工具；父会话带写入配置也一样。与角色无关（装配根只看委派策略在不在场），取一个角色

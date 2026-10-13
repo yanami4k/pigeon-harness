@@ -115,7 +115,7 @@ test("收件口地址：Windows 上在 \\\\.\\pipe\\LOCAL\\ 命名空间；前�
   } else {
     assert.ok(a.messaging.address.startsWith(peersDirOf(dir)), a.messaging.address);
   }
-  await assert.rejects(box(dir, "b", "approving", "../escape"), /前缀只能用/);
+  await assert.rejects(box(dir, "b", "approving", "../escape"), /invalid inbox prefix/);
 });
 
 test("鉴权之前：首行超长即断开、不说话到时限（10 秒）即断开；什么都不送达", async () => {

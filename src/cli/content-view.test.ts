@@ -20,15 +20,15 @@ test("trace / replay 默认不带正文；--with-content 打开后呈现正文�
     const replayPlain = runReplayCommand({ root, runId, sessionId });
     assert.doesNotMatch(replayPlain, /我来改/);
     const replayContent = runReplayCommand({ root, runId, sessionId, withContent: true });
-    assert.match(replayContent, /正文：我来改/);
-    assert.match(replayContent, /正文：~ 先确认锚点/);
-    assert.match(replayContent, /正文：\[result\] edit_file ok/);
+    assert.match(replayContent, /content: 我来改/);
+    assert.match(replayContent, /content: ~ 先确认锚点/);
+    assert.match(replayContent, /content: \[result\] edit_file ok/);
 
     const tracePlain = runTraceCommand({ root, sessionId });
     assert.doesNotMatch(tracePlain, /改好了/);
     const traceContent = runTraceCommand({ root, sessionId, withContent: true });
-    assert.match(traceContent, /正文：> 把 beta 改成大写/);
-    assert.match(traceContent, /正文：改好了/);
+    assert.match(traceContent, /content: > 把 beta 改成大写/);
+    assert.match(traceContent, /content: 改好了/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -58,7 +58,7 @@ test("工具结果里的图片块（决策 414）：trace 与 replay 带正文�
       runReplayCommand({ root, runId, sessionId, withContent: true }),
       runTraceCommand({ root, sessionId, withContent: true }),
     ]) {
-      assert.match(out, /\[result\] read_file ok（\d+ 字符，1 张图片，已折叠）/);
+      assert.match(out, /\[result\] read_file ok \(\d+ chars, 1 image, collapsed\)/);
       assert.ok(!out.includes(data));
     }
   } finally {

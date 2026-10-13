@@ -59,10 +59,10 @@ test("选项关闭：历史与读原文提示未持久化与字节数，检索�
     // 决策 363：开工状态块回看时只占一行，与本测无关，去掉
     const history = loadSessionHistory(t.root, t.sessionId)
       .map((line) => line.text)
-      .filter((line) => !line.startsWith("[开工状态"));
+      .filter((line) => !line.startsWith("[status"));
     assert.deepEqual(history.slice(0, 3), [
       "> 说一句",
-      `~ thinking（未持久化，${bytes} 字节）`,
+      `~ thinking (not persisted, ${bytes} bytes)`,
       "好的",
     ]);
     const assistant = loadSessionView(t.sessionsDir, t.sessionId)?.messages.find(
@@ -94,7 +94,7 @@ test("选项缺省：思考照存，历史与读原文照常呈现思考正文�
     // 决策 363：开工状态块回看时只占一行，与本测无关，去掉
     const history = loadSessionHistory(t.root, t.sessionId)
       .map((line) => line.text)
-      .filter((line) => !line.startsWith("[开工状态"));
+      .filter((line) => !line.startsWith("[status"));
     assert.equal(history[1], `~ ${THINKING}`);
     const assistant = loadSessionView(t.sessionsDir, t.sessionId)?.messages.find(
       (message) => message.role === "assistant"

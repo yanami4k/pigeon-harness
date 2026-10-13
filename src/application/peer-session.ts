@@ -57,7 +57,7 @@ export async function openPeerInbox(input: OpenPeerInboxInput): Promise<PeerMess
     });
   } catch (error) {
     input.ui?.(
-      `会话间通信的收件口没开起来：${error instanceof Error ? error.message : String(error)}（本会话收不到也发不出别的会话的消息）`
+      `opening the cross-session inbox failed: ${error instanceof Error ? error.message : String(error)}`
     );
     return undefined;
   }

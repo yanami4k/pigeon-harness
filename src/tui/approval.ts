@@ -13,7 +13,7 @@
 //   addInputListener 接管四键，按键 resolve；接口形状不动。
 // - 面板期间普通输入忽略（简单语义）：除四键外一律吞掉——不进输入缓冲、不提交、不回显。
 // - 无墙钟审批超时（与 cli 版一致：等人是审批语义本身）；取消路径一律 fail-closed
-//   按拒绝处理、理由逐字回模型（决策 001 的自我修正闭环不断；决策 428：交给模型的为英文，面板与消息区显示中文）：壳停止
+//   按拒绝处理、理由逐字回模型（决策 001 的自我修正闭环不断；决策 428：交给模型的为完整英文句，面板与消息区显示短语）：壳停止
 //   （APPROVAL_CANCEL_CLOSED）、面板未装配（APPROVAL_CANCEL_DETACHED）、并发审批防御
 //   （APPROVAL_CANCEL_BUSY）。
 // - [n] 单按即拒绝、不带理由：reason 缺省，由治理层落默认文案「人工拒绝」并记为系统默认。
@@ -38,11 +38,13 @@ import {
 } from "../approvals/handler.ts";
 import { keyLabelsOf } from "./keybindings.ts";
 
-// 取消路径的逐字理由（fail-closed 按拒绝处理）：面板与消息区显示中文
-export const APPROVAL_CANCEL_CLOSED = "TUI 已停止，审批面板关闭，本次调用按拒绝处理";
-export const APPROVAL_CANCEL_DETACHED = "TUI 审批面板未装配，本次调用按拒绝处理";
-export const APPROVAL_CANCEL_BUSY = "已有另一审批进行中，本次调用按拒绝处理（串行不变量防御）";
-// 决策 428、455：同一理由交给模型（成为工具的错误结果）时用英文
+// 取消路径的逐字理由（fail-closed 按拒绝处理）：面板与消息区显示的短语
+export const APPROVAL_CANCEL_CLOSED = "terminal UI stopped";
+export const APPROVAL_CANCEL_DETACHED = "no approval panel attached";
+export const APPROVAL_CANCEL_BUSY = "another approval in progress";
+// 决策 303：worker 的请求等满时限无人批，面板撤下（显示给人，交给模型的见下表）
+export const APPROVAL_WITHDRAWN = "approval timed out and was withdrawn";
+// 决策 428、455：同一理由交给模型（成为工具的错误结果）时用完整的句子
 const CANCEL_REASON_FOR_MODEL: Readonly<Record<string, string>> = {
   [APPROVAL_CANCEL_CLOSED]:
     "The terminal UI stopped and closed the approval panel, so this call is treated as rejected.",
@@ -50,19 +52,17 @@ const CANCEL_REASON_FOR_MODEL: Readonly<Record<string, string>> = {
     "No approval panel is attached to the terminal UI, so this call is treated as rejected.",
   [APPROVAL_CANCEL_BUSY]:
     "Another approval is already in progress, so this call is treated as rejected.",
+  [APPROVAL_WITHDRAWN]:
+    "The approval request timed out and was withdrawn, so this call is treated as rejected. This worker stops and hands back; it can continue after a later approval.",
 };
 
 export function cancelReasonForModel(reason: string): string {
   return CANCEL_REASON_FOR_MODEL[reason] ?? reason;
 }
-// 决策 303：worker 的请求等满时限无人批，面板撤下
-export const APPROVAL_WITHDRAWN =
-  "[审批] 请求等待超时，已撤回；这个 worker 停下交回，可稍后补批续做";
-
 // 决策 450：扣住待放行的消息为工具审批让位（稍后再弹）
-export const APPROVAL_YIELDED = "让位给工具审批，稍后再问";
+export const APPROVAL_YIELDED = "yielded to a tool approval; will ask again";
 // 决策 450：扣住的消息等放行超时或已被丢弃，面板撤下
-export const PEER_HOLD_WITHDRAWN = "[消息] 这条扣住的消息已不在（等放行超时或被丢弃），面板撤下";
+export const PEER_HOLD_WITHDRAWN = "[message] held message expired or was dropped";
 // 面板里显示的消息内容上限（全文在放行后交给 agent）
 const PEER_TEXT_SHOWN = 2000;
 
@@ -89,7 +89,10 @@ export interface TuiApprovalFace {
 // 审批块文本：与 cli 版同口径（工具名 + exec 命令行 + pretty JSON 参数 + diff 预览 + 四键提示）；
 // [d] 仅在调用可定位目录时提供（决策 3a）；exec 档 [a] 为精确命令放权（决策 048 及其修订）
 // 决策 301：主会话自己的请求的来源行
-export const MAIN_SOURCE_LINE = "来源：主会话";
+export const MAIN_SOURCE_LINE = "source: main session";
+
+// 每个审批块都有的三键
+const APPROVAL_KEYS_BASE = "[y] approve once / [n] reject / [r] reject with reason";
 
 export function approvalBlockText(
   request: ApprovalRequest,
@@ -99,17 +102,17 @@ export function approvalBlockText(
 ): string {
   // 决策 450：别的会话发来、被扣住的消息
   if (request.peerMessage !== undefined) {
+    // 二选一的选项与按键写在状态行（peerChoiceStatus）
     return [
-      "—— 别的会话发来的消息（扣住，等你放行）——",
-      `来自：${request.peerMessage.from}（工作目录 ${request.peerMessage.cwd}）`,
-      "内容：",
+      "-- held message from another session --",
+      `from: ${request.peerMessage.from} (cwd ${request.peerMessage.cwd})`,
+      "text:",
       request.peerMessage.text.length > PEER_TEXT_SHOWN
-        ? `${request.peerMessage.text.slice(0, PEER_TEXT_SHOWN)}…（共 ${request.peerMessage.text.length} 字，只显示开头）`
+        ? `${request.peerMessage.text.slice(0, PEER_TEXT_SHOWN)}... (${request.peerMessage.text.length} chars, truncated)`
         : request.peerMessage.text,
-      '用方向键在"丢弃"（缺省）与"放行"之间选、回车确认，选项在状态行；字母键不作答（放行不算你的授权，agent 的审批照常）',
     ].join("\n");
   }
-  const lines = ["—— 人工审批 ——"];
+  const lines = ["-- approval --"];
   // M5.5 S3（决策 040）：worker 请求标明来源
   const source = approvalSourceLine(request);
   if (source !== undefined) {
@@ -120,7 +123,7 @@ export function approvalBlockText(
   } else if (labelMainSource) {
     lines.push(MAIN_SOURCE_LINE);
   }
-  lines.push(`工具：${request.toolName}`);
+  lines.push(`tool: ${request.toolName}`);
   const protectedLine = protectedPathLine(request);
   if (protectedLine !== undefined) {
     lines.push(protectedLine);
@@ -134,12 +137,12 @@ export function approvalBlockText(
     lines.push(commandLine);
   }
   if (request.host !== undefined) {
-    lines.push(`网站：${request.host}`);
+    lines.push(`site: ${request.host}`);
   }
-  lines.push("参数：");
+  lines.push("args:");
   lines.push(JSON.stringify(request.args, null, 2) ?? "undefined");
   if (request.diffPreview !== undefined) {
-    lines.push("改动预览：", request.diffPreview);
+    lines.push("diff:", request.diffPreview);
   }
   const scriptKey =
     request.script?.kind !== undefined && request.protectedPath === undefined
@@ -149,14 +152,14 @@ export function approvalBlockText(
     approvalKeyLabels(
       // 决策 326 ①：受保护路径的请示只有批准一次或拒绝，不提供放权键与"同类都允许"
       (request.protectedPath !== undefined
-        ? "批准执行？[y] 批准一次 / [n] 拒绝 / [r] 拒绝并说明"
+        ? APPROVAL_KEYS_BASE
         : request.host !== undefined
-          ? `批准执行？[y] 批准一次 / [n] 拒绝 / [r] 拒绝并说明 / ${hostGrantKeyLabel(request)}`
+          ? `${APPROVAL_KEYS_BASE} / ${hostGrantKeyLabel(request)}`
           : request.tier === "exec"
-            ? `批准执行？[y] 批准一次 / [n] 拒绝 / [r] 拒绝并说明 / ${execGrantKeyLabel(request)}`
+            ? `${APPROVAL_KEYS_BASE} / ${execGrantKeyLabel(request)}`
             : directoryGrant
-              ? "批准执行？[y] 批准一次 / [n] 拒绝 / [r] 拒绝并说明 / [a] 本会话允许 / [d] 本会话允许(仅限当前调用所在目录)"
-              : "批准执行？[y] 批准一次 / [n] 拒绝 / [r] 拒绝并说明 / [a] 本会话允许") + scriptKey
+              ? `${APPROVAL_KEYS_BASE} / [a] allow for this session / [d] allow for this session (this directory)`
+              : `${APPROVAL_KEYS_BASE} / [a] allow for this session`) + scriptKey
     )
   );
   return lines.join("\n");
@@ -222,7 +225,11 @@ export function createTuiApprovalHandler(
     const result = await panel.askApproval(request, offersDirectoryGrant(request, target));
     // 决策 303：请求已撤回，这次决定不被采用，不再回显裁决
     if (request.signal?.aborted === true) {
-      return { approved: false, reason: APPROVAL_WITHDRAWN, reasonSource: "system-default" };
+      return {
+        approved: false,
+        reason: cancelReasonForModel(APPROVAL_WITHDRAWN),
+        reasonSource: "system-default",
+      };
     }
     if (result.key === "cancel") {
       panel.noteApproval(rejectedLine(request, result.reason));

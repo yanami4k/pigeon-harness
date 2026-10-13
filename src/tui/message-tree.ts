@@ -17,10 +17,10 @@ export type MessageTreeStage = "loading" | "tree" | "choose" | "conflicts" | "bu
 export type RewindChoice = RewindMode | "undo";
 
 const CHOICES: ReadonlyArray<{ mode: RewindChoice; label: string }> = [
-  { mode: "both", label: "代码与对话都退" },
-  { mode: "conversation", label: "只退对话" },
-  { mode: "code", label: "只退代码" },
-  { mode: "undo", label: "撤销上次退代码（写回那次之前的样子）" },
+  { mode: "both", label: "rewind code and conversation" },
+  { mode: "conversation", label: "rewind conversation only" },
+  { mode: "code", label: "rewind code only" },
+  { mode: "undo", label: "undo last code rewind" },
 ];
 
 function oneLine(text: string): string {
@@ -36,10 +36,10 @@ function timeOf(at: number): string {
 export function messageNodeText(node: RewindNode): string {
   const mark = node.onMain ? "*" : " ";
   if (node.kind === "message") {
-    return `${mark} ${oneLine(node.text) || "(空消息)"}  ${timeOf(node.timestamp)}`;
+    return `${mark} ${oneLine(node.text) || "(empty message)"}  ${timeOf(node.timestamp)}`;
   }
   const reply = oneLine(node.text);
-  return `${mark} (end) ${reply === "" ? "(没有回复)" : reply}${node.current ? "  (current)" : ""}`;
+  return `${mark} (end) ${reply === "" ? "(no reply)" : reply}${node.current ? "  (current)" : ""}`;
 }
 
 export interface MessageTreeSource {
@@ -177,10 +177,10 @@ export class MessageTree implements Component {
       lines.push(
         clipToWidth(
           node.current
-            ? "  当前位置"
+            ? "  current position"
             : node.kind === "message"
-              ? `  退到这条消息之前：${oneLine(node.text)}`
-              : `  切到这条分支的末端：${oneLine(node.text)}`,
+              ? `  rewind to before: ${oneLine(node.text)}`
+              : `  switch to branch end: ${oneLine(node.text)}`,
           width
         )
       );
@@ -194,11 +194,11 @@ export class MessageTree implements Component {
         lines.push(clipToWidth(`  ${oneLine(this.chooseNote)}`, width));
       return lines;
     }
-    lines.push(clipToWidth("  这些文件拿不准（后面写着原因）：缺省保留，空格切换为退回", width));
+    lines.push(clipToWidth("  uncertain files (kept by default; space to toggle)", width));
     this.conflictList.forEach((item, index) => {
       lines.push(
         clipToWidth(
-          ` ${index === this.conflictCursor ? ">" : " "} [${item.revert ? "revert" : "keep"}] ${oneLine(item.path)}（${oneLine(item.reason)}）`,
+          ` ${index === this.conflictCursor ? ">" : " "} [${item.revert ? "revert" : "keep"}] ${oneLine(item.path)} (${oneLine(item.reason)})`,
           width
         )
       );

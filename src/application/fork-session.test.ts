@@ -96,13 +96,13 @@ test("/fork 命令：解析 --at 与新输入；缺省分叉点是最近一次 R
       while (common < a.length && a[common] === b[common]) common += 1;
       assert.throws(
         () => resolveForkPoint(session, { runPrefix: a.slice(0, common), runSeq: 1 }),
-        /不唯一（2 个）/
+        /ambiguous \(2 matches\)/
       );
       assert.deepEqual(
         resolveForkPoint(session, { runPrefix: a.slice(0, common + 1), runSeq: 1 }),
         { runId: first, runSeq: 1 }
       );
-      assert.throws(() => resolveForkPoint(session, { runSeq: 99 }), /没有/);
+      assert.throws(() => resolveForkPoint(session, { runSeq: 99 }), /no entry 99/);
       const text = await runForkCommand({
         governanceRoot: dir,
         opened,
@@ -114,7 +114,7 @@ test("/fork 命令：解析 --at 与新输入；缺省分叉点是最近一次 R
           startMcp: noMcp,
         },
       });
-      assert.ok(text.includes("分支会话"), text);
+      assert.ok(text.includes("branch session"), text);
     } finally {
       await disposeRuntime(opened.bundle);
     }
@@ -163,7 +163,7 @@ test("/fork 命令：新开的会话还没有对话、会话文件推迟建还�
             startMcp: noMcp,
           },
         }),
-        /本会话还没有任何 Run，没有可分叉的位置/
+        /no runs in this session yet; nothing to fork/
       );
       assert.equal(opened.bundle.sessionStore.fileDeferred?.(), true);
     } finally {

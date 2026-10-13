@@ -135,17 +135,15 @@ test("决策 382：使用者开关关掉即不注册检索三件、开局记录�
   const bySettings = await run({ settingsEnabled: false });
   assert.ok(searchTools.every((name) => !bySettings.tools.includes(name)));
   assert.deepEqual(bySettings.skipped, [
-    { tools: searchTools, reason: "设置 sessionSearch.enabled 为 false（使用者关掉了会话检索）" },
+    { tools: searchTools, reason: "sessionSearch.enabled is false" },
   ]);
   // 启动参数关掉（session-runtime 把 flags 译成 deps 与原因）：不注册，记原因
   const byFlag = await run({
     sessionSearch: false,
-    offReason: "使用者以 --no-session-search 关掉了会话检索",
+    offReason: "--no-session-search",
   });
   assert.ok(searchTools.every((name) => !byFlag.tools.includes(name)));
-  assert.deepEqual(byFlag.skipped, [
-    { tools: searchTools, reason: "使用者以 --no-session-search 关掉了会话检索" },
-  ]);
+  assert.deepEqual(byFlag.skipped, [{ tools: searchTools, reason: "--no-session-search" }]);
   // 跑批按条件关掉：不注册，照旧不记
   const byCondition = await run({ sessionSearch: false });
   assert.ok(searchTools.every((name) => !byCondition.tools.includes(name)));

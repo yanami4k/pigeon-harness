@@ -168,10 +168,10 @@ export function interpretHookRun(
     // 钩子自身出错（拉不起来、超时、非 0 非 2）：不拦只提示
     record.conclusion = "error";
     record.reason = outcome.timedOut
-      ? `钩子超时（${outcome.durationMs} 毫秒）`
+      ? `hook timed out (${outcome.durationMs} ms)`
       : outcome.spawnError !== undefined
-        ? `钩子拉不起来：${outcome.spawnError.message}`
-        : `钩子以退出码 ${outcome.exitCode ?? "无"}结束${stderrText !== "" ? `：${stderrText}` : ""}`;
+        ? `starting hook failed: ${outcome.spawnError.message}`
+        : `hook exited with code ${outcome.exitCode ?? "none"}${stderrText !== "" ? `: ${stderrText}` : ""}`;
     return record;
   }
   const json = maybeJson(outcome.stdout);
@@ -419,11 +419,13 @@ export class SessionHooks {
     const notice = this.#options.notice;
     if (notice === undefined) return;
     if (record.conclusion === "deny" || record.conclusion === "block") {
-      notice(`钩子拦下（${record.hook.event}）：${record.reason ?? record.hook.command}`);
+      notice(`hook blocked (${record.hook.event}): ${record.reason ?? record.hook.command}`);
     } else if (record.continueFalse === true) {
-      notice(`钩子要求停止（${record.hook.event}）：${record.stopReason ?? record.hook.command}`);
+      notice(
+        `hook asked to stop (${record.hook.event}): ${record.stopReason ?? record.hook.command}`
+      );
     } else if (record.conclusion === "error") {
-      notice(`钩子出错（${record.hook.event}）：${record.reason ?? record.hook.command}`);
+      notice(`hook error (${record.hook.event}): ${record.reason ?? record.hook.command}`);
     }
   }
 }

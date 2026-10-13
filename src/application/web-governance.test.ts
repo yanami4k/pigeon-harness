@@ -123,12 +123,12 @@ test("web_search 免审批；web_fetch 第一次访问某网站问人，[a] 以�
   ]);
   // 只问了两次：docs.example 一次、other.example 一次；提示点名网站，不提供 [d]
   assert.equal(prompts.length, 2);
-  assert.match(prompts[0] ?? "", /\[a\] 以后都允许访问 docs\.example/);
+  assert.match(prompts[0] ?? "", /\[a\] allow docs\.example for this session/);
   assert.doesNotMatch(prompts[0] ?? "", /\[d\]/);
-  assert.match(prompts[1] ?? "", /\[a\] 以后都允许访问 other\.example/);
-  assert.match(outputs.join(""), /网站：docs\.example/);
+  assert.match(prompts[1] ?? "", /\[a\] allow other\.example for this session/);
+  assert.match(outputs.join(""), /site: docs\.example/);
   // 提示里工具、网站、参数三行相连
-  assert.match(outputs.join(""), /工具：web_fetch\n网站：docs\.example\n参数：/);
+  assert.match(outputs.join(""), /tool: web_fetch\nsite: docs\.example\nargs:/);
   assert.match(outputs.join(""), /✓ allowed for this session: web_fetch docs\.example/);
   const grants = store.list();
   assert.deepEqual(

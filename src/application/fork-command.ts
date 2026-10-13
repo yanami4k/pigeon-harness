@@ -13,8 +13,7 @@ import { ForkError, type ForkRunOptions, runForkBranch } from "./fork.ts";
 import type { OpenedSessionRuntime } from "./session-runtime.ts";
 import { sessionsDirOf } from "./workspace.ts";
 
-export const FORK_USAGE =
-  '用法：/fork [--at <条目号> | --at <Run 号前缀>:<条目号>] ["新输入"]（缺省从最近一次 Run 的任务开始处分叉）';
+export const FORK_USAGE = 'usage: /fork [--at <entry> | --at <run prefix>:<entry>] ["new input"]';
 
 export class ForkCommandError extends Error {}
 
@@ -33,7 +32,7 @@ export function parseForkCommand(raw: string): { at?: ForkAt; input?: string } {
     const runPrefix = colon >= 0 ? spec.slice(0, colon) : undefined;
     const runSeq = Number(colon >= 0 ? spec.slice(colon + 1) : spec);
     if (!Number.isInteger(runSeq) || runSeq < 1 || runPrefix === "") {
-      throw new ForkCommandError(`--at 需要 <条目号> 或 <Run 号前缀>:<条目号>（${FORK_USAGE}）`);
+      throw new ForkCommandError(`--at needs <entry> or <run prefix>:<entry> (${FORK_USAGE})`);
     }
     at = { ...(runPrefix !== undefined ? { runPrefix } : {}), runSeq };
     rest = rest.slice(atMatch[0].length);
@@ -59,7 +58,7 @@ function taskSeqOf(session: StoreSessionView, runId: RunId): number {
   return index >= 0 ? index + 1 : 1;
 }
 
-const NO_RUN_TO_FORK = "本会话还没有任何 Run，没有可分叉的位置";
+const NO_RUN_TO_FORK = "no runs in this session yet; nothing to fork";
 
 // 分叉点定位：Run 顺序取会话里 Run 开始条目的先后
 export function resolveForkPoint(session: StoreSessionView, at: ForkAt): ForkPoint {
@@ -71,8 +70,8 @@ export function resolveForkPoint(session: StoreSessionView, at: ForkAt): ForkPoi
     if (matches.length !== 1) {
       throw new ForkCommandError(
         matches.length === 0
-          ? `本会话没有以 ${prefix} 开头的 Run`
-          : `Run 号前缀 ${prefix} 不唯一（${matches.length} 个），请给更长的前缀`
+          ? `no run starting with ${prefix} in this session`
+          : `run prefix ${prefix} is ambiguous (${matches.length} matches)`
       );
     }
     runId = matches[0];
@@ -84,7 +83,7 @@ export function resolveForkPoint(session: StoreSessionView, at: ForkAt): ForkPoi
   }
   const runSeq = at.runSeq ?? taskSeqOf(session, runId);
   if (storeMessageAt(session, { runId, runSeq }) === undefined) {
-    throw new ForkCommandError(`该 Run 里没有第 ${runSeq} 条`);
+    throw new ForkCommandError(`run has no entry ${runSeq}`);
   }
   return { runId, runSeq };
 }
@@ -98,7 +97,7 @@ export async function runForkCommand(input: {
   const { at, input: nextInput } = parseForkCommand(input.args);
   const sessionId = input.opened.bundle.adapter.sessionId;
   if (input.opened.bundle.adapter.isRunning()) {
-    throw new ForkCommandError("当前 Run 还在进行中，收尾后再分叉");
+    throw new ForkCommandError("can't fork while running");
   }
   // 决策 432：会话文件推迟建、还没建——本会话还没有对话
   if (input.opened.bundle.sessionStore.fileDeferred?.() === true) {
@@ -108,7 +107,7 @@ export async function runForkCommand(input: {
   await input.opened.bundle.sessionStore.flush();
   const loaded = loadStoreSession(sessionsDirOf(input.governanceRoot), sessionId);
   if (loaded === undefined) {
-    throw new ForkError(`本会话 ${sessionId} 在会话存储里没有文件（会话存储打开失败），不能分叉`);
+    throw new ForkError(`can't fork: session ${sessionId} has no file in the session store`);
   }
   const forkPoint = resolveForkPoint(loaded.view, at ?? {});
   const result = await runForkBranch({
@@ -133,9 +132,8 @@ export async function runForkCommand(input: {
     },
   });
   return [
-    `已分叉：分叉点 ${forkPoint.runId} 第 ${forkPoint.runSeq} 条 ｜ 快照 ${result.checkpoint.commit.slice(0, 12)}`,
-    `  分支会话 ${result.branchSessionId} ｜ 工作树 ${result.workspace.path}（分支 ${result.workspace.branch}）`,
-    `  终态 ${result.status} ｜ 标签 ${result.label}`,
-    `  进入分支：resume ${result.branchSessionId}`,
+    `forked at ${forkPoint.runId} #${forkPoint.runSeq} | snapshot ${result.checkpoint.commit.slice(0, 12)}`,
+    `  branch session ${result.branchSessionId} | worktree ${result.workspace.path} (branch ${result.workspace.branch})`,
+    `  status ${result.status} | label ${result.label}`,
   ].join("\n");
 }

@@ -160,7 +160,8 @@ export function recordWorktreeEntry(sink: SessionEntrySink, worktree: NamedWorkt
 export function enterWorktreeRegistration(): ToolRegistration {
   return {
     name: ENTER_WORKTREE_TOOL,
-    description: "建一个独立工作树并在本轮结束后把会话移进去（只在使用者要求时用）",
+    description:
+      "create a worktree and move the session into it after this turn (only when the user asks)",
     parameters: EnterWorktreeParamsSchema,
     tier: "write",
     // 参数是名字不是路径：位置由工具自己定在主仓库的 .pigeon/wt 下

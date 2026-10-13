@@ -10,6 +10,7 @@ import { loadStoreSession } from "../persistence/session-view.ts";
 import { sessionContextMessages } from "../pi-runtime/session-store.ts";
 import { sessionsDirOf } from "../state/paths.ts";
 import { danglingToolCalls, type StoreMessage } from "../state/session-judge.ts";
+import { plural } from "./format.ts";
 
 // 输出函数
 export type WriteFn = (text: string) => void;
@@ -29,18 +30,16 @@ export function describeResume(root: string, sessionId: string): string[] {
   const loaded = loadStoreSession(sessionsDir, sessionId);
   if (loaded === undefined) {
     if (hasLegacySessionFile(sessionsDir, sessionId)) {
-      throw new Error(
-        `会话 ${sessionId} 是旧格式会话（迁移之前创建），不能续跑；${LEGACY_READER_HINT}`
-      );
+      throw new Error(`can't resume ${sessionId}: old-format session; ${LEGACY_READER_HINT}`);
     }
-    throw new Error(`会话不存在：${sessionId}`);
+    throw new Error(`session not found: ${sessionId}`);
   }
   const messages = sessionContextMessages(loaded.main);
   const lines: string[] = [];
   const dangling = danglingToolCalls(messages as unknown as StoreMessage[]);
   if (dangling.length > 0) {
     lines.push(
-      `${dangling.length} 个工具调用中断、结果未知：${dangling.map((call) => call.name).join("、")}`
+      `${plural(dangling.length, "tool call")} interrupted, results unknown: ${dangling.map((call) => call.name).join(", ")}`
     );
   }
   return lines;

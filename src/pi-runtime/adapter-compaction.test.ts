@@ -442,7 +442,7 @@ test("手动压缩：重点作为摘要的附加说明，替换上下文并发�
       [["manual", "保留 a.ts 的改动"]]
     );
     const running = h.adapter.run("后续");
-    await assert.rejects(h.adapter.compact(), /Run 进行中/);
+    await assert.rejects(h.adapter.compact(), /while a Run is running/);
     await running;
   } finally {
     await h.cleanup();
@@ -643,7 +643,7 @@ test("超长出错而压缩没压成（摘要请求失败）：不重试，按�
     assert.equal(h.streamFn.calls.length, 2);
     const [problem] = h.problems;
     assert.ok(problem?.kind === "incomplete" && problem.trigger === "overflow");
-    assert.match(compactionNoticeText(problem), /网关拒绝.*按原错误收尾/);
+    assert.match(compactionNoticeText(problem), /网关拒绝.*ended with the original error/);
     await h.store.flush();
     const end = mainBranch(h.sessions, h.sessionId).findLast(
       (entry) => (entry as { customType?: string }).customType === SessionEntryType.RunEnd

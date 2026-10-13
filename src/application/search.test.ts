@@ -36,9 +36,9 @@ test("/search 命中排版：按会话归并——会话行带命中条目数，
     assert.equal(
       conversationOnly,
       [
-        `命中 1 个会话（关键词：部署、网关；范围：仅对话正文）`,
-        `${time(sessionCreatedAt(sessionId))}  ${sessionId}  命中 1 条`,
-        `  第 1 条 user  ${user?.entryId}  命中：部署、网关`,
+        `1 session matched (keywords: 部署, 网关; scope: conversation only)`,
+        `${time(sessionCreatedAt(sessionId))}  ${sessionId}  1 hit`,
+        `  #1 user  ${user?.entryId}  matched: 部署, 网关`,
         "  部署网关",
         "",
       ].join("\n")
@@ -47,24 +47,24 @@ test("/search 命中排版：按会话归并——会话行带命中条目数，
     assert.equal(
       all,
       [
-        "命中 1 个会话（关键词：部署；范围：对话正文与工具输出）",
-        `${time(sessionCreatedAt(sessionId))}  ${sessionId}  命中 2 条`,
-        `  第 1 条 user  ${user?.entryId}  命中：部署`,
+        "1 session matched (keywords: 部署; scope: conversation and tool output)",
+        `${time(sessionCreatedAt(sessionId))}  ${sessionId}  2 hits`,
+        `  #1 user  ${user?.entryId}  matched: 部署`,
         "  部署网关",
-        `  第 3 条 toolResult（read_file）  ${result?.entryId}  命中：部署`,
+        `  #3 toolResult (read_file)  ${result?.entryId}  matched: 部署`,
         "  部署日志第一行",
         "",
       ].join("\n")
     );
 
     const onlyResults = await runSearchCommand({ root, args: ["部署", "--role", "toolResult"] });
-    assert.match(onlyResults, /命中 1 个会话/);
-    assert.doesNotMatch(onlyResults, /第 1 条 user/);
+    assert.match(onlyResults, /1 session matched/);
+    assert.doesNotMatch(onlyResults, /#1 user/);
 
     // 旧版 --tool-output 已成未知选项（工具输出现在缺省在范围内），响亮报错
     await assert.rejects(
       runSearchCommand({ root, args: ["部署", "--tool-output"] }),
-      /未知选项：--tool-output/
+      /unknown option: --tool-output/
     );
   }));
 
@@ -73,22 +73,22 @@ test("/search 末尾提示会话根下未列出的旧格式会话条数；没有
     const session = createFixtureSession({ sessionsDir });
     session.startRun({ task: "部署网关" });
     await session.close();
-    assert.doesNotMatch(await runSearchCommand({ root, args: ["部署"] }), /旧格式会话/);
+    assert.doesNotMatch(await runSearchCommand({ root, args: ["部署"] }), /old-format session/);
 
     writeLegacySessionFile(sessionsDir);
     writeLegacySessionFile(sessionsDir);
     const output = await runSearchCommand({ root, args: ["部署"] });
-    assert.match(output, /命中 1 条/);
-    assert.ok(
-      output.endsWith(`另有 2 个旧格式会话（迁移之前创建）未列出；${LEGACY_READER_HINT}\n`),
-      output
-    );
+    assert.match(output, /1 hit/);
+    assert.ok(output.endsWith(`2 old-format sessions not listed; ${LEGACY_READER_HINT}\n`), output);
   }));
 
 test("/search 无关键词给用法；未知角色响亮报错", () =>
   withRoot(async (root) => {
-    assert.match(await runSearchCommand({ root, args: [] }), /用法：\/search/);
-    await assert.rejects(runSearchCommand({ root, args: ["x", "--role", "wizard"] }), /未知角色/);
+    assert.match(await runSearchCommand({ root, args: [] }), /usage: \/search/);
+    await assert.rejects(
+      runSearchCommand({ root, args: ["x", "--role", "wizard"] }),
+      /unknown role/
+    );
   }));
 
 test("/search 片段净化：正文里的终端控制序列可见化，原始 ESC 与 BEL 不出命令层（去净化变红）", () =>

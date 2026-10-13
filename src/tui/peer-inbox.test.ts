@@ -68,8 +68,8 @@ test("扣住的消息弹到面板：写明来源与内容；二选一缺省丢�
     presenter.held(held("m2", "second"));
     await settle();
     const screen = screenText(term);
-    assert.match(screen, /别的会话发来的消息（扣住，等你放行）/);
-    assert.match(screen, /来自：other（工作目录 \/work\/other）/);
+    assert.match(screen, /-- held message from another session --/);
+    assert.match(screen, /from: other \(cwd \/work\/other\)/);
     assert.match(screen, /please look at the failing test/);
     assert.match(screen, /state: held message \| \[ drop \] {3}deliver/);
     await guard();
@@ -110,7 +110,7 @@ test("工具审批要上面板时扣住的消息让位，工具审批照常；�
       command: "npm test",
     });
     await settle();
-    assert.match(screenText(term), /工具：run_command/);
+    assert.match(screenText(term), /tool: run_command/);
     // 顶替消息面板的工具审批同样有防误触
     term.input("y");
     await settle();
@@ -141,7 +141,7 @@ test("到时限被丢弃（gone）：面板撤下，不再处理；还在队里�
     presenter.gone("m2");
     presenter.gone("m1");
     await settle();
-    assert.match(screenText(term), /这条扣住的消息已不在/);
+    assert.match(screenText(term), /held message expired or was dropped/);
     term.input("y");
     await settle();
     assert.deepEqual(decided, []);

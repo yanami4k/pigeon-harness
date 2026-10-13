@@ -57,7 +57,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { compactionNoticeText, manualCompactionText } from "../application/compaction-text.ts";
 import { type ConfigItemView, parseConfigAssignment } from "../application/config-options.ts";
-import { workEndLine } from "../application/format.ts";
+import { plural, workEndLine } from "../application/format.ts";
 import { loadSessionHistory } from "../application/history.ts";
 import type { HookEventReport } from "../application/hooks.ts";
 import type { PromptHistoryStore } from "../application/prompt-history.ts";
@@ -83,6 +83,7 @@ import type {
   PooledSessionState,
   SessionPanelSource,
 } from "../application/session-pool.ts";
+import { SETTINGS_RELOADED_PREFIX, SETTINGS_UNCHANGED } from "../application/settings-reload.ts";
 import type { TaskItem } from "../application/task-list-tool.ts";
 import {
   previousRunWorkerText,
@@ -134,6 +135,8 @@ import { MessageTree, type RewindChoice } from "./message-tree.ts";
 import {
   askApprovalPanel,
   closePendingModals,
+  disarmExitOnInput,
+  EXIT_HINT,
   handleShellKey,
   type ModalHost,
   type PendingApproval,
@@ -499,6 +502,9 @@ export class PigeonTuiShell
   // S5+ 退出布防（裁决 033）：上一次 Ctrl+C 的墙钟时刻（窗口内再来一次即优雅退出）；
   // exitRequested 保证退出恰好一次（stop 后输入监听已退订，重入仅作幂等防御）
   private lastCtrlCAtValue: number | null = null;
+  // 退出布防的状态行提示（EXIT_HINT）开着与它的到期计时
+  private exitHintOn = false;
+  private exitHintTimer: ReturnType<typeof setTimeout> | undefined;
   private exitRequested = false;
   // 决策 294 B1：/tasks 的取数（装配方给了才有这条命令）
   tasks?: () => string | undefined;
@@ -704,6 +710,13 @@ export class PigeonTuiShell
       this.tui.requestRender();
     });
     if (unsubscribePool !== undefined) this.disposers.push(unsubscribePool);
+    // 退出布防之后的别的输入撤销布防（最先看到每个按键，只看不吞）
+    this.disposers.push(
+      this.tui.addInputListener((data) => {
+        if (!isKeyRelease(data)) disarmExitOnInput(this, data);
+        return undefined;
+      })
+    );
     // 决策 301：编排视图的按键（树形视图、面板选择、worker 会话的 Esc）排在最前；审批挂起期间与 Ctrl+C 一律放给壳级键控
     // 决策 441：全屏的搜索框开着时（它是浮层）按键一律让给它，Ctrl+C 除外
     this.disposers.push(
@@ -788,6 +801,10 @@ export class PigeonTuiShell
   stop(): void {
     // fail-closed（决策 029）：壳停止时挂起的审批按拒绝处理、恢复菜单按 EOF 语义回 null
     closePendingModals(this);
+    if (this.exitHintTimer !== undefined) {
+      clearTimeout(this.exitHintTimer);
+      this.exitHintTimer = undefined;
+    }
     this.workerSession?.unsubscribe();
     this.leavePooledSession();
     for (const dispose of this.disposers.splice(0)) dispose();
@@ -807,6 +824,11 @@ export class PigeonTuiShell
   }
 
   updateStatus(): void {
+    // 单击 Ctrl+C 布防期间状态行只写退出提示
+    if (this.exitHintOn) {
+      this.statusLine.setText(EXIT_HINT);
+      return;
+    }
     // 决策 301：worker 会话里状态行说明这个 worker 的状态与可用的动作
     // 决策 443：面板上的状态行（审批挂着时照常说明审批）
     if (this.view === "panel" && this.pendingApprovalState === null) {
@@ -814,7 +836,7 @@ export class PigeonTuiShell
       const cards = [this.mainCard(), ...(this.options.pool?.source.list() ?? [])];
       const waiting = cards.filter((card) => card.state === "waiting").length;
       this.statusLine.setText(
-        `panel: ${cards.length} sessions${waiting > 0 ? `, ${waiting} waiting` : ""}`
+        `panel: ${plural(cards.length, "session")}${waiting > 0 ? `, ${waiting} waiting` : ""}`
       );
       return;
     }
@@ -953,7 +975,7 @@ export class PigeonTuiShell
         const blocked =
           report.blocked?.reason ??
           (report.continueFalse !== undefined
-            ? (report.continueFalse.stopReason ?? "钩子要求整个会话停止")
+            ? (report.continueFalse.stopReason ?? "hook stopped the session")
             : undefined);
         if (blocked !== undefined) {
           this.finishRun();
@@ -964,7 +986,7 @@ export class PigeonTuiShell
         if (contexts.length > 0) input = `${contexts.join("\n\n")}\n\n${value}`;
       } catch (error) {
         this.flow.addAlert(
-          `钩子出错（UserPromptSubmit）：${error instanceof Error ? error.message : String(error)}`
+          `UserPromptSubmit hook failed: ${error instanceof Error ? error.message : String(error)}`
         );
       }
     }
@@ -1064,7 +1086,7 @@ export class PigeonTuiShell
       }
       const assignment = parseConfigAssignment(args);
       if (assignment === undefined) {
-        this.flow.addSystem("用法：/config 或 /config 选项=值（例如 /config web.enabled=false）");
+        this.flow.addSystem("usage: /config [key=value]");
         this.tui.requestRender();
         return;
       }
@@ -1077,7 +1099,9 @@ export class PigeonTuiShell
     try {
       return this.options.config?.view();
     } catch (error) {
-      this.flow.addAlert(`读不了设置：${error instanceof Error ? error.message : String(error)}`);
+      this.flow.addAlert(
+        `reading settings failed: ${error instanceof Error ? error.message : String(error)}`
+      );
       this.tui.requestRender();
       return undefined;
     }
@@ -1108,13 +1132,13 @@ export class PigeonTuiShell
       else this.flow.addAlert(line);
     };
     if (this.isBusy()) {
-      say("正在运行或重建运行面，等它结束再改设置");
+      say("running; change settings later");
       this.tui.requestRender();
       return;
     }
     const busy = face.busy?.();
     if (busy !== undefined) {
-      say(`没有改：${busy}`);
+      say(`not changed: ${busy}`);
       this.tui.requestRender();
       return;
     }
@@ -1122,7 +1146,7 @@ export class PigeonTuiShell
     try {
       file = face.set(id, value);
     } catch (error) {
-      say(`没有改：${error instanceof Error ? error.message : String(error)}`);
+      say(`not changed: ${error instanceof Error ? error.message : String(error)}`);
       this.tui.requestRender();
       return;
     }
@@ -1154,17 +1178,22 @@ export class PigeonTuiShell
     const finish = (lines: readonly string[], failed: boolean): void => {
       this.running = false;
       if (inPanel) {
-        // 由面板触发的重读不单独报"已重读设置"；别的提示（外部同时改了 MCP 等）并进这一句
+        // 由面板触发的重读不单独报重读结果（SETTINGS_RELOADED_PREFIX）；别的提示（外部同时改了 MCP 等）并进这一句
         const extra = lines.filter(
-          (line) => !line.startsWith("已重读设置") && line !== "设置没有变化"
+          (line) => !line.startsWith(SETTINGS_RELOADED_PREFIX) && line !== SETTINGS_UNCHANGED
         );
-        this.configPanel.setNote(failed ? (lines[0] ?? "重读设置失败") : extra.join("；"), failed);
+        this.configPanel.setNote(
+          failed ? (lines[0] ?? "reloading settings failed") : extra.join("; "),
+          failed
+        );
       } else if (failed) {
         for (const line of lines) this.flow.addAlert(line);
       } else {
         // 重读设置的"已重读""没有变化"两句不写（上面那一行就是结果），别的提示照写
         for (const line of lines) {
-          if (!line.startsWith("已重读设置") && line !== "设置没有变化") this.flow.addSystem(line);
+          if (!line.startsWith(SETTINGS_RELOADED_PREFIX) && line !== SETTINGS_UNCHANGED) {
+            this.flow.addSystem(line);
+          }
         }
       }
       this.refreshConfigPanel(id);
@@ -1175,7 +1204,10 @@ export class PigeonTuiShell
     reload([]).then(
       (lines) => finish(lines, false),
       (error: unknown) =>
-        finish([`重读设置失败：${error instanceof Error ? error.message : String(error)}`], true)
+        finish(
+          [`reloading settings failed: ${error instanceof Error ? error.message : String(error)}`],
+          true
+        )
     );
   }
 
@@ -1184,7 +1216,9 @@ export class PigeonTuiShell
     const source = this.options.pool?.source;
     const card = source?.list().find((item) => item.name === name);
     if (source === undefined || card === undefined) return undefined;
-    return source.take?.(card.id) ?? Promise.resolve("这个会话没有工作树可取回");
+    return (
+      source.take?.(card.id) ?? Promise.resolve("this session has no worktree; nothing to take")
+    );
   }
 
   // 决策 443：会话面板里有没有这个名字的会话（/take 先判歧义，不取）
@@ -1223,7 +1257,10 @@ export class PigeonTuiShell
   // 决策 458：偷看当前会话——在等什么，加最近几条对话
   private mainPeekLines(): string[] {
     const waiting = this.pendingApprovalState?.mainWaiting;
-    return [...(waiting !== undefined ? [`等：${waiting}`] : []), ...this.flow.digest().recent];
+    return [
+      ...(waiting !== undefined ? [`waiting: ${waiting}`] : []),
+      ...this.flow.digest().recent,
+    ];
   }
 
   // 决策 458：/take 用到当前会话的名字时说明（CommandsHost）
@@ -1307,11 +1344,11 @@ export class PigeonTuiShell
     // 决策 458：当前会话的"停止"是中断它这一轮，不是退出程序
     const main = this.sessionPanel.isMain(card);
     if (main && !this.running) {
-      this.sessionPanel.setNote(`${card.name} 没在跑，没有可停的`);
+      this.sessionPanel.setNote(`${card.name} is not running`);
       return;
     }
     if (card.state === "stopped") {
-      this.sessionPanel.setNote(`${card.name} 已经停了`);
+      this.sessionPanel.setNote(`${card.name} already stopped`);
       return;
     }
     const now = Date.now();
@@ -1332,7 +1369,7 @@ export class PigeonTuiShell
         () => this.tui.requestRender(),
         (error: unknown) => {
           this.sessionPanel.setNote(
-            `停 ${card.name} 失败：${error instanceof Error ? error.message : String(error)}`
+            `stopping ${card.name} failed: ${error instanceof Error ? error.message : String(error)}`
           );
           this.tui.requestRender();
         }
@@ -1341,7 +1378,9 @@ export class PigeonTuiShell
     }
     this.lastPanelStop = { id: card.id, at: now, work };
     this.sessionPanel.setNote(
-      main ? `再按一次 Ctrl+X 中断 ${card.name} 这一轮` : `再按一次 Ctrl+X 停止 ${card.name}`
+      main
+        ? `press Ctrl+X again to interrupt ${card.name}`
+        : `press Ctrl+X again to stop ${card.name}`
     );
   }
 
@@ -1351,7 +1390,7 @@ export class PigeonTuiShell
     if (pool === undefined) return;
     const pooled = this.view === "pooled" ? this.pooledSession : undefined;
     if (value.startsWith("/")) {
-      const line = "会话面板里不用斜杠命令：Esc 回主会话再用";
+      const line = "slash commands don't work in the session panel";
       if (pooled !== undefined) pooled.flow.addSystem(line);
       else this.sessionPanel.setNote(line);
       this.input.setText(value);
@@ -1396,12 +1435,14 @@ export class PigeonTuiShell
     pool.source.spawn(value).then(
       (card) => {
         this.sessionPanel.selectName(card.name);
-        this.sessionPanel.setNote(card.state === "failed" ? `没派成：${card.error ?? ""}` : "");
+        this.sessionPanel.setNote(
+          card.state === "failed" ? `spawn failed: ${card.error ?? ""}` : ""
+        );
         this.tui.requestRender();
       },
       (error: unknown) => {
         this.sessionPanel.setNote(
-          `没派成：${error instanceof Error ? error.message : String(error)}`
+          `spawn failed: ${error instanceof Error ? error.message : String(error)}`
         );
         this.tui.requestRender();
       }
@@ -1416,7 +1457,7 @@ export class PigeonTuiShell
     const flow = new MessageFlow();
     flow.setToolsExpanded(this.flow.toolsExpandedState());
     if (card.id.startsWith("pending:")) {
-      flow.addSystem("会话还在开，稍后再进");
+      flow.addSystem("session is still opening");
     } else {
       this.renderHistoryInto(flow, card.id, "--- live ---");
     }
@@ -1473,7 +1514,7 @@ export class PigeonTuiShell
     const rewind = this.options.rewind;
     if (rewind === undefined) return;
     if (this.isBusy()) {
-      this.flow.addSystem("运行中不能回退：等它结束或先中断");
+      this.flow.addSystem("can't rewind while running");
       this.tui.requestRender();
       return;
     }
@@ -1488,7 +1529,7 @@ export class PigeonTuiShell
       },
       (error: unknown) => {
         this.messageTree.fail(
-          `读消息树失败：${error instanceof Error ? error.message : String(error)}`
+          `reading message tree failed: ${error instanceof Error ? error.message : String(error)}`
         );
         this.tui.requestRender();
       }
@@ -1557,7 +1598,9 @@ export class PigeonTuiShell
 
   private rewindFailed(error: unknown): void {
     this.rewinding = false;
-    this.messageTree.back(`没有回退：${error instanceof Error ? error.message : String(error)}`);
+    this.messageTree.back(
+      `rewind failed: ${error instanceof Error ? error.message : String(error)}`
+    );
     this.updateStatus();
     this.tui.requestRender();
   }
@@ -1582,14 +1625,14 @@ export class PigeonTuiShell
               ? ["both", "conversation", "code"]
               : ["conversation"];
         if (choices.length === 0) {
-          this.messageTree.back(`不能回退：${plan.conversationBlocked ?? ""}`);
+          this.messageTree.back(`can't rewind: ${plan.conversationBlocked ?? ""}`);
         } else {
           this.messageTree.choose(
             node,
             choices,
             code
               ? plan.untouchable.length > 0
-                ? `过大没进快照的不碰：${plan.untouchable.join("、")}`
+                ? `too large to snapshot; left alone: ${plan.untouchable.join(", ")}`
                 : undefined
               : plan.codeBlocked
           );
@@ -1610,7 +1653,7 @@ export class PigeonTuiShell
       (prepared) => {
         this.rewinding = false;
         if (prepared === undefined || prepared.plan.files.length === 0) {
-          this.messageTree.back("已经在这里");
+          this.messageTree.back("already here");
         } else {
           this.rewindPrepared = prepared;
           this.rewindCode = undefined;
@@ -1689,48 +1732,56 @@ export class PigeonTuiShell
       this.renderHistoryInto(this.flow, this.current.sessionId, "--- rewound ---");
     }
     const what =
-      outcome.mode === "both" ? "代码与对话" : outcome.mode === "conversation" ? "对话" : "代码";
+      outcome.mode === "both"
+        ? "code and conversation"
+        : outcome.mode === "conversation"
+          ? "conversation"
+          : "code";
     if (outcome.undo === true) {
       this.flow.addSystem(
-        outcome.failed === undefined ? "已撤销上次退代码" : "撤销上次退代码没有做完"
+        outcome.failed === undefined
+          ? "undid last code rewind"
+          : "undo of last code rewind incomplete"
       );
     } else if (outcome.failed !== undefined) {
-      this.flow.addAlert("写回中途出错，停在出错的那个文件：对话没有退");
+      this.flow.addAlert("restoring files failed partway; conversation not rewound");
     } else {
       this.flow.addSystem(
-        node.kind === "message" ? `已退回（${what}）到这条消息之前` : `已切到这条分支（${what}）`
+        node.kind === "message"
+          ? `rewound ${what} to before this message`
+          : `switched ${what} to this branch`
       );
     }
     const restore = outcome.restore;
     if (restore !== undefined) {
       const list = (paths: readonly string[]) =>
         paths.length > 6
-          ? `${paths.slice(0, 6).join("、")} 等 ${paths.length} 个`
-          : paths.join("、");
-      if (restore.written.length > 0) this.flow.addSystem(`写回：${list(restore.written)}`);
-      if (restore.removed.length > 0) this.flow.addSystem(`删掉：${list(restore.removed)}`);
+          ? `${paths.slice(0, 6).join(", ")} +${paths.length - 6} more`
+          : paths.join(", ");
+      if (restore.written.length > 0) this.flow.addSystem(`restored: ${list(restore.written)}`);
+      if (restore.removed.length > 0) this.flow.addSystem(`removed: ${list(restore.removed)}`);
       if (restore.removedDirs.length > 0) {
-        this.flow.addSystem(`删掉空目录：${list(restore.removedDirs)}`);
+        this.flow.addSystem(`removed empty dirs: ${list(restore.removedDirs)}`);
       }
       for (const skipped of restore.skipped) {
-        this.flow.addSystem(`没动：${skipped.path}（${skipped.reason}）`);
+        this.flow.addSystem(`skipped: ${skipped.path} (${skipped.reason})`);
       }
       if (
         restore.written.length + restore.removed.length + restore.skipped.length === 0 &&
         outcome.failed === undefined
       ) {
-        this.flow.addSystem("没有要写回的文件");
+        this.flow.addSystem("no files to restore");
       }
     }
     if (outcome.failed !== undefined) {
       this.flow.addAlert(
-        `出错：${outcome.failed.path === "" ? "" : `${outcome.failed.path}：`}${outcome.failed.reason}`
+        `failed: ${outcome.failed.path === "" ? "" : `${outcome.failed.path}: `}${outcome.failed.reason}`
       );
     }
     if (outcome.conversationSkipped !== undefined) this.flow.addSystem(outcome.conversationSkipped);
-    for (const problem of outcome.problems) this.flow.addSystem(`没做成：${problem}`);
+    for (const problem of outcome.problems) this.flow.addSystem(`problem: ${problem}`);
     for (const path of outcome.untouchable) {
-      this.flow.addSystem(`没动：${path}（过大没进快照）`);
+      this.flow.addSystem(`skipped: ${path} (too large to snapshot)`);
     }
     if (moved && node.kind === "message" && node.prefill !== undefined) {
       this.input.setText(node.prefill);
@@ -1942,7 +1993,7 @@ export class PigeonTuiShell
   openSessionPicker(): void {
     const root = this.options.resume?.root;
     if (root === undefined) {
-      this.flow.addSystem("本会话不支持 /resume");
+      this.flow.addSystem("/resume is not available in this session");
       this.tui.requestRender();
       return;
     }
@@ -1958,13 +2009,13 @@ export class PigeonTuiShell
       );
     } catch (error) {
       this.flow.addAlert(
-        `读会话列表失败：${error instanceof Error ? error.message : String(error)}`
+        `reading session list failed: ${error instanceof Error ? error.message : String(error)}`
       );
       this.tui.requestRender();
       return;
     }
     if (sessions.length === 0) {
-      this.flow.addSystem("没有可续接的会话");
+      this.flow.addSystem("no sessions to resume");
       this.tui.requestRender();
       return;
     }
@@ -2099,6 +2150,25 @@ export class PigeonTuiShell
 
   lastCtrlCAt(): number | null {
     return this.lastCtrlCAtValue;
+  }
+
+  // 退出布防的状态行提示：开着时窗口一过即自己关
+  setExitHint(on: boolean): void {
+    if (this.exitHintTimer !== undefined) {
+      clearTimeout(this.exitHintTimer);
+      this.exitHintTimer = undefined;
+    }
+    this.exitHintOn = on;
+    if (on) {
+      this.exitHintTimer = setTimeout(() => {
+        this.exitHintTimer = undefined;
+        this.exitHintOn = false;
+        this.updateStatus();
+        this.tui.requestRender();
+      }, this.exitWindowMs());
+      this.exitHintTimer.unref?.();
+    }
+    this.updateStatus();
   }
 
   setLastCtrlCAt(at: number | null): void {
@@ -2272,7 +2342,9 @@ export class PigeonTuiShell
         this.drainQueue();
       };
       reload(args).then(finish, (error: unknown) =>
-        finish([`重读设置失败：${error instanceof Error ? error.message : String(error)}`])
+        finish([
+          `reloading settings failed: ${error instanceof Error ? error.message : String(error)}`,
+        ])
       );
     };
   }
@@ -2282,7 +2354,7 @@ export class PigeonTuiShell
   compactCommand(focus: string | undefined): void {
     const runtime = this.current.runtime;
     if (runtime.compact === undefined) {
-      this.flow.addSystem("本会话不支持 /compact");
+      this.flow.addSystem("/compact is not available in this session");
       this.tui.requestRender();
       return;
     }
@@ -2303,7 +2375,7 @@ export class PigeonTuiShell
     runtime.compact(focus).then(
       (outcome) => settleCompact(manualCompactionText(outcome)),
       (error: unknown) =>
-        settleCompact(`压缩失败：${error instanceof Error ? error.message : String(error)}`)
+        settleCompact(`failed: ${error instanceof Error ? error.message : String(error)}`)
     );
   }
 
@@ -2363,7 +2435,7 @@ export class PigeonTuiShell
   private warnEvidenceGaps(): void {
     const count = this.current.runtime.listenerErrors().length;
     if (count > this.reportedListenerErrors) {
-      this.flow.addAlert(`警告：本会话有 ${count} 条会话记录写入失败，证据链不完整。`);
+      this.flow.addAlert(`${count} session ${count === 1 ? "record" : "records"} failed to write`);
       this.reportedListenerErrors = count;
     }
   }
@@ -2382,7 +2454,7 @@ export class PigeonTuiShell
       this.hookContexts = [...report.additionalContext];
     } catch (error) {
       this.flow.addAlert(
-        `钩子出错（SessionStart）：${error instanceof Error ? error.message : String(error)}`
+        `SessionStart hook failed: ${error instanceof Error ? error.message : String(error)}`
       );
     }
     this.tui.requestRender();
@@ -2477,7 +2549,7 @@ export class PigeonTuiShell
   // /agents 与 Ctrl+X：打开或关上树形视图（没有编排面时说明）
   toggleTree(): void {
     if (this.current.workers === undefined) {
-      this.flow.addSystem("本会话不支持 worker（没有编排面）");
+      this.flow.addSystem("workers are not available in this session");
       this.tui.requestRender();
       return;
     }
@@ -2501,14 +2573,14 @@ export class PigeonTuiShell
   private loadSessionTree(): void {
     const root = this.options.sessions?.root;
     if (root === undefined) {
-      this.sessionTree.fail("本会话不支持会话树（没有会话存储）");
+      this.sessionTree.fail("session tree is not available in this session");
       return;
     }
     try {
       this.sessionTree.load(loadSessionFamily(sessionsDirOf(root), this.current.sessionId));
     } catch (error) {
       this.sessionTree.fail(
-        `读会话树失败：${error instanceof Error ? error.message : String(error)}`
+        `reading session tree failed: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }
@@ -2516,7 +2588,7 @@ export class PigeonTuiShell
   // 会话树里 Enter：本次运行编排器里的 worker 进入其会话（实时加历史），其余只读看历史
   private viewFamilyNode(node: FamilyNode): void {
     if (node.kind === "unreadable") {
-      this.sessionTree.setNote("读不到这个会话，不能查看");
+      this.sessionTree.setNote("can't read this session");
       return;
     }
     this.returnTo = { view: "tree", mode: "sessions" };
@@ -2549,7 +2621,9 @@ export class PigeonTuiShell
       flow.addHistory(lines);
       flow.addSystem(endLine);
     } catch (error) {
-      flow.addAlert(`历史渲染失败：${error instanceof Error ? error.message : String(error)}`);
+      flow.addAlert(
+        `rendering history failed: ${error instanceof Error ? error.message : String(error)}`
+      );
     }
   }
 
@@ -2557,19 +2631,19 @@ export class PigeonTuiShell
   private resumeFamilyNode(node: FamilyNode): void {
     const refusal =
       node.kind === "review"
-        ? "复盘会话只能查看，不能续接"
+        ? "review sessions can't be resumed"
         : node.kind === "worker"
-          ? "worker 会话在这里只能查看，不能续接"
+          ? "worker sessions can't be resumed here"
           : node.kind === "fork"
-            ? "未标明种类的分叉只能查看，不能续接"
+            ? "forks of unknown kind can't be resumed"
             : node.kind === "unreadable"
-              ? "读不到这个会话，不能续接"
+              ? "can't read this session"
               : node.sessionId === this.current.sessionId
-                ? "当前会话不能续接"
+                ? "can't resume the current session"
                 : this.isBusy()
                   ? resumeWhileRunningText()
                   : !this.resumeConfigured()
-                    ? "本会话不支持续接"
+                    ? "resume is not available in this session"
                     : undefined;
     if (refusal !== undefined) {
       this.sessionTree.setNote(refusal);
@@ -2635,7 +2709,7 @@ export class PigeonTuiShell
     if (event.kind === "worker.settled") {
       session.flow.addSystem(renderWorkerOutcome(event.outcome));
     } else if (event.kind === "worker.blocked") {
-      session.flow.addSystem(`== worker 停在等审批：${event.action} ==`);
+      session.flow.addSystem(`== worker waiting for approval: ${event.action} ==`);
     }
     this.updateStatus();
   }
@@ -2815,7 +2889,7 @@ export class PigeonTuiShell
       return;
     }
     if (!isActiveWorker(status)) {
-      write(`worker ${status.name} 已收尾（${workerStateWord(status)}），无需停止`);
+      write(`worker ${status.name} already finished (${workerStateWord(status)})`);
       return;
     }
     workers.cancel(sessionId).then(
@@ -2825,7 +2899,7 @@ export class PigeonTuiShell
       },
       (error: unknown) => {
         write(
-          `停止 worker ${status.name} 失败：${error instanceof Error ? error.message : String(error)}`
+          `stopping worker ${status.name} failed: ${error instanceof Error ? error.message : String(error)}`
         );
         this.tui.requestRender();
       }
@@ -2864,9 +2938,7 @@ export class PigeonTuiShell
       } else if (name === "workers") {
         flow.addSystem(renderWorkersTable(workers.status(), this.tracker, this.now()));
       } else if (name === "tasks") {
-        flow.addSystem(
-          this.tasks?.() ?? "任务清单没有开（设置 orchestration 一节的 taskList 为 false）。"
-        );
+        flow.addSystem(this.tasks?.() ?? "task list is off");
       } else if (name === "quit") {
         this.requestExit();
       }
@@ -2883,25 +2955,27 @@ export class PigeonTuiShell
       this.input.setText(value);
       flow.addSystem(
         isBlockedWorker(status)
-          ? `${WORKER_ENDED_READ_ONLY}；它停在等审批，可用 /approve 补批续做`
+          ? `${WORKER_ENDED_READ_ONLY}; waiting for approval`
           : WORKER_ENDED_READ_ONLY
       );
       return;
     }
     flow.addUserEcho(value);
     if (workers.send === undefined) {
-      flow.addSystem("当前编排面不支持给 worker 发消息");
+      flow.addSystem("messaging workers is not supported");
       return;
     }
     workers.send(sessionId, value).then(
       (result) => {
         if (result !== "delivered") {
-          flow.addAlert(`未送达：worker ${status.name} 已结束或正在收尾`);
+          flow.addAlert(`not delivered: worker ${status.name} has ended or is finishing`);
         }
         this.tui.requestRender();
       },
       (error: unknown) => {
-        flow.addAlert(`发消息失败：${error instanceof Error ? error.message : String(error)}`);
+        flow.addAlert(
+          `sending message failed: ${error instanceof Error ? error.message : String(error)}`
+        );
         this.tui.requestRender();
       }
     );
@@ -2911,7 +2985,7 @@ export class PigeonTuiShell
   private approveWorker(status: WorkerStatus, extra: string, flow: MessageFlow): void {
     const blocked = status.outcome?.blocked;
     if (!isBlockedWorker(status) || blocked === undefined) {
-      flow.addSystem(`worker ${status.name} 没有停在等审批，不需要补批`);
+      flow.addSystem(`worker ${status.name} is not waiting for approval`);
       return;
     }
     this.resumeWorker(
@@ -2931,13 +3005,15 @@ export class PigeonTuiShell
   ): void {
     const workers = this.current.workers;
     if (workers?.resume === undefined) {
-      flow.addSystem("当前编排面不支持让 worker 接着做");
+      flow.addSystem("resuming workers is not supported");
       return;
     }
     try {
       workers.resume(status.sessionId, options);
     } catch (error) {
-      flow.addAlert(`续做失败：${error instanceof Error ? error.message : String(error)}`);
+      flow.addAlert(
+        `resuming worker failed: ${error instanceof Error ? error.message : String(error)}`
+      );
     }
     refreshWorkersView(this);
   }
@@ -3002,7 +3078,7 @@ export class PigeonTuiShell
         () => this.finishRunNow(),
         (error: unknown) => {
           this.flow.addAlert(
-            `收尾时出错：${error instanceof Error ? error.message : String(error)}`
+            `finishing the turn failed: ${error instanceof Error ? error.message : String(error)}`
           );
           this.finishRunNow();
         }
@@ -3036,7 +3112,7 @@ export class PigeonTuiShell
           await hooks.runEvent("StopFailure", "", { error: result.errorMessage ?? "unknown" });
         } catch (error) {
           this.flow.addAlert(
-            `钩子出错（StopFailure）：${error instanceof Error ? error.message : String(error)}`
+            `StopFailure hook failed: ${error instanceof Error ? error.message : String(error)}`
           );
         }
         return;
@@ -3050,7 +3126,7 @@ export class PigeonTuiShell
           report = await hooks.runEvent("Stop", "", { stop_hook_active: stopHookActive });
         } catch (error) {
           this.flow.addAlert(
-            `钩子出错（Stop）：${error instanceof Error ? error.message : String(error)}`
+            `Stop hook failed: ${error instanceof Error ? error.message : String(error)}`
           );
           return;
         }
@@ -3060,7 +3136,7 @@ export class PigeonTuiShell
         const wantsContinue = report.blocked !== undefined || report.additionalContext.length > 0;
         if (!wantsContinue) return;
         if (blockedCount >= cap) {
-          this.flow.addSystem(`[hooks] Stop 钩子连续拦下 ${cap} 次，已到上限，不再接着跑`);
+          this.flow.addSystem(`[hooks] Stop hook blocked ${cap} times in a row; not continuing`);
           return;
         }
         blockedCount += 1;
@@ -3085,7 +3161,7 @@ export class PigeonTuiShell
             });
           } catch (error) {
             this.flow.addAlert(
-              `钩子出错（StopFailure）：${error instanceof Error ? error.message : String(error)}`
+              `StopFailure hook failed: ${error instanceof Error ? error.message : String(error)}`
             );
           }
           return;
@@ -3137,22 +3213,17 @@ export class PigeonTuiShell
   }
 }
 
-// 决策 304：主 agent 运行中按 r 在此续接——照 /resume 运行中被拒的同一原因
+// 决策 304：主 agent 运行中按 r 在此续接——同 /resume 运行中被拒
 function resumeWhileRunningText(): string {
-  const spec = lookupSlashCommand(["resume"]);
-  const reason =
-    spec !== undefined && !spec.whileRunning.allow
-      ? spec.whileRunning.reason
-      : "它会改动主会话状态";
-  return `运行中不能在此续接：${reason}。等本轮结束或按 Esc 中断后再用`;
+  return "can't resume while running";
 }
 
 // 决策 301：已收尾的 worker 会话只读
-export const WORKER_ENDED_READ_ONLY = "这个 worker 已结束，只能查看";
+export const WORKER_ENDED_READ_ONLY = "worker has ended; read-only";
 
 // 沙箱会话在本机界面里不续接（续接要在同一容器配方里开箱）：给出命令行用法
 function sandboxResumeHint(sessionId: string): string {
-  return `会话 ${sessionId} 是沙箱会话，不能在本机会话里续接；请用 pigeon --sandbox --resume ${sessionId}`;
+  return `${sessionId} is a sandbox session; resume with: pigeon --sandbox --resume ${sessionId}`;
 }
 
 function isSandboxSession(root: string, sessionId: string): boolean {

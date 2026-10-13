@@ -10,27 +10,27 @@ import { TreeList } from "./tree-list.ts";
 export const SESSION_TREE_HEADER = "== sessions tree ==";
 
 const REVIEW_TIMING: Readonly<Record<string, string>> = {
-  closing: "收尾",
-  "pre-compaction": "压缩前",
-  backfill: "补做",
+  closing: "closing",
+  "pre-compaction": "pre-compaction",
+  backfill: "backfill",
 };
 
 export function familyKindLabel(node: FamilyNode): string {
   switch (node.kind) {
     case "main":
-      return "主会话";
+      return "main";
     case "branch":
-      return "分支";
+      return "branch";
     case "retry":
-      return "失败重试";
+      return "retry";
     case "worker":
-      return `worker ${node.worker?.name ?? "?"}（${node.worker?.role ?? "?"}）`;
+      return `worker ${node.worker?.name ?? "?"} (${node.worker?.role ?? "?"})`;
     case "review":
-      return `复盘（${REVIEW_TIMING[node.review ?? ""] ?? "未注明"}）`;
+      return `review (${REVIEW_TIMING[node.review ?? ""] ?? "unspecified"})`;
     case "fork":
-      return "分叉（无复盘标记）";
+      return "fork";
     default:
-      return "读不到";
+      return "unreadable";
   }
 }
 
@@ -45,7 +45,7 @@ function timeOf(at: number | undefined): string {
 export function familyNodeText(node: FamilyNode, currentSessionId: string): string {
   const parts = [familyKindLabel(node), node.sessionId, timeOf(node.createdAt)];
   if (node.unreadable !== undefined) {
-    parts.push(`读不到（${node.unreadable}）`);
+    parts.push(`unreadable (${node.unreadable})`);
   } else {
     parts.push(`${node.turns ?? 0}t`);
     if (node.cost !== undefined) parts.push(formatCost(node.cost, true));
@@ -123,7 +123,7 @@ export class SessionTree implements Component {
       const total = familyTotal(this.family.root);
       lines.push(
         clipToWidth(
-          `  这一家合计：${total.sessions} 个会话  ${total.turns}t  ${formatCost(total.cost, true)}`,
+          `  total: ${total.sessions} ${total.sessions === 1 ? "session" : "sessions"}  ${total.turns}t  ${formatCost(total.cost, true)}`,
           width
         )
       );

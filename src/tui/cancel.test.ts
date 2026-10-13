@@ -168,7 +168,7 @@ test("模态键控优先：审批面板挂起期间 Esc 吞掉不取消 Run；�
     // 审批面板挂起（Run 阻塞在 beforeToolCall 的人工决议上）
     const panel = shell.askApproval(request);
     await settle();
-    assert.ok(screenText(term).includes("—— 人工审批 ——"), "审批面板挂着");
+    assert.ok(screenText(term).includes("-- approval --"), "审批面板挂着");
 
     // Esc 与面板非决议键同待遇：吞掉——此时 interrupt 的 waitForIdle 会吊在挂起
     // Promise 上直到人按键，「取消」名不副实；模态先决议再 Esc 是唯一次序（裁决 032）
@@ -323,9 +323,9 @@ test("listenerErrors 增量警告：启动即查 + run 收尾复查；同批故�
     const warnings = (): string[] =>
       screenText(term)
         .split("\n")
-        .filter((line) => line.includes("证据链不完整"));
+        .filter((line) => line.includes("failed to write"));
     assert.deepEqual(warnings().length, 1, "启动即查一次：已有故障应立即警告");
-    assert.ok(warnings()[0]?.includes("1 条"), "警告措辞与 repl 同口径（累计条数）");
+    assert.ok(warnings()[0]?.includes("1 session record failed"), "警告措辞（累计条数）");
 
     // 同批故障：run 收尾后不再重复警告
     term.input("任务一");
@@ -339,7 +339,7 @@ test("listenerErrors 增量警告：启动即查 + run 收尾复查；同批故�
     term.input("\r");
     await settle();
     assert.deepEqual(warnings().length, 2, "新故障应再次警告");
-    assert.ok(warnings()[1]?.includes("3 条"), "再警告报累计条数");
+    assert.ok(warnings()[1]?.includes("3 session records failed"), "再警告报累计条数");
   } finally {
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });

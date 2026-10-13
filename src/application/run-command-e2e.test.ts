@@ -107,7 +107,7 @@ test("run_command：exec 每次都问且显示完整命令；[a] 精确命令放
 
     // 两次人工审批：第一次的 A 与换参数的 B；同一条 A 免审
     assert.equal(asked, 2);
-    assert.ok(prompts[0]?.includes("[a] 本会话允许这条命令（精确匹配）"), prompts[0]);
+    assert.ok(prompts[0]?.includes("[a] allow this exact command for this session"), prompts[0]);
     assert.ok(screen.includes(`"command": ${JSON.stringify(COMMAND_A)}`), screen);
     assert.ok(screen.includes(`✓ allowed for this session: run_command ${COMMAND_A}`), screen);
     assert.deepEqual(

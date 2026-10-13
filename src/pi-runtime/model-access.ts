@@ -43,9 +43,9 @@ export function parseModelInfoDeclaration(
   }
   const problems = [...Value.Errors(ModelInfoDeclarationSchema, value)].map((failure) => {
     const path = "instancePath" in failure ? String(failure.instancePath) : "";
-    return `${path === "" ? "/" : path}：${failure.message}`;
+    return `${path === "" ? "/" : path}: ${failure.message}`;
   });
-  throw new Error(`${where} 导出的 modelInfo 不合规：${problems.join("；")}`);
+  throw new Error(`modelInfo exported by ${where} is invalid: ${problems.join("; ")}`);
 }
 
 // 声明是否已给全价格、窗口、输出上限、是否支持推理与输入类型（给全了就不必加载目录）
@@ -76,12 +76,12 @@ export async function loadCatalogLookup(
   try {
     const catalog = (await importModule(CATALOG_MODULE)) as { getBuiltinModel?: unknown };
     if (typeof catalog?.getBuiltinModel !== "function") {
-      throw new Error("没有 getBuiltinModel");
+      throw new Error("no getBuiltinModel");
     }
     lookup = catalog.getBuiltinModel as (provider: string, id: string) => unknown;
   } catch (error) {
     warn(
-      `pi-ai 自带模型目录加载失败，未声明的模型信息按未知处理：${error instanceof Error ? error.message : String(error)}`
+      `loading the pi-ai model catalog failed: ${error instanceof Error ? error.message : String(error)}`
     );
     return undefined;
   }

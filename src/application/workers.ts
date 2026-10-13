@@ -587,7 +587,7 @@ function restoreWorkerSession(request: WorkerRuntimeRequest): {
   const sessionsDir = sessionsDirOf(request.governanceRoot);
   const loaded = loadStoreSession(sessionsDir, request.sessionId);
   if (loaded === undefined) {
-    throw new Error(`找不到 worker 会话 ${request.sessionId} 的会话文件，无法续做`);
+    throw new Error(`can't resume worker: session file for ${request.sessionId} not found`);
   }
   const { messages, interrupted } = restoreSessionContext(loaded.main);
   const start = loaded.view.runs.at(-1)?.start;

@@ -60,7 +60,7 @@ test("session list：一会话一行安静行（时间 + Run 数 + 会话 id）�
     });
     assert.equal(
       runSessionListCommand({ root }),
-      `${minute(FIRST)}  ${defaultPeerName(root, FIRST)}  2 个 Run  ${FIRST}\n${minute(SECOND)}  ${defaultPeerName(root, SECOND)}  1 个 Run  ${SECOND}\n`
+      `${minute(FIRST)}  ${defaultPeerName(root, FIRST)}  2 runs  ${FIRST}\n${minute(SECOND)}  ${defaultPeerName(root, SECOND)}  1 run  ${SECOND}\n`
     );
   } finally {
     cleanup();
@@ -70,7 +70,7 @@ test("session list：一会话一行安静行（时间 + Run 数 + 会话 id）�
 test("session list：过滤器透传（tool / class / since / until）与空目录文案", async () => {
   const { root, sessionsDir, cleanup } = makeRoot();
   try {
-    assert.equal(runSessionListCommand({ root }), "尚无会话记录。\n");
+    assert.equal(runSessionListCommand({ root }), "no sessions\n");
     await seed(sessionsDir, FIRST, (s) => {
       s.startRun({ task: "a" });
       s.toolTurn({ name: "read_file" });
@@ -95,7 +95,7 @@ test("session list：过滤器透传（tool / class / since / until）与空目�
       root,
       filters: { since: Date.now() + 86_400_000 },
     });
-    assert.equal(sinceFuture, "尚无会话记录。\n");
+    assert.equal(sinceFuture, "no sessions\n");
   } finally {
     cleanup();
   }
@@ -109,14 +109,14 @@ test("session list：旧格式会话（会话根下平铺的 sess_<ULID>.jsonl�
     writeFileSync(join(sessionsDir, `${SECOND}.jsonl`), "");
     writeFileSync(join(sessionsDir, `${FIRST}.jsonl`), "");
     writeFileSync(join(sessionsDir, `${FIRST}.messages.jsonl`), "");
-    const notice = `另有 1 个旧格式会话（迁移之前创建）未列出；${LEGACY_READER_HINT}`;
+    const notice = `1 old-format session not listed; ${LEGACY_READER_HINT}`;
     assert.equal(
       runSessionListCommand({ root }),
-      `${minute(SECOND)}  ${defaultPeerName(root, SECOND)}  1 个 Run  ${SECOND}\n${notice}\n`
+      `${minute(SECOND)}  ${defaultPeerName(root, SECOND)}  1 run  ${SECOND}\n${notice}\n`
     );
     assert.equal(
       runSessionListCommand({ root, filters: { tool: "无此工具" } }),
-      `尚无会话记录。\n${notice}\n`
+      `no sessions\n${notice}\n`
     );
   } finally {
     cleanup();
@@ -132,11 +132,8 @@ test("决策 456（验收修改）：改过名的会话在列表里显示它的�
     });
     await seed(sessionsDir, SECOND, (s) => s.startRun({ task: "b" }));
     const lines = runSessionListCommand({ root }).trimEnd().split("\n");
-    assert.equal(lines[0], `${minute(FIRST)}  api-fix  1 个 Run  ${FIRST}`);
-    assert.equal(
-      lines[1],
-      `${minute(SECOND)}  ${defaultPeerName(root, SECOND)}  1 个 Run  ${SECOND}`
-    );
+    assert.equal(lines[0], `${minute(FIRST)}  api-fix  1 run  ${FIRST}`);
+    assert.equal(lines[1], `${minute(SECOND)}  ${defaultPeerName(root, SECOND)}  1 run  ${SECOND}`);
   } finally {
     cleanup();
   }

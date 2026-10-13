@@ -109,7 +109,7 @@ export function loadAgentsInstructions(options: AgentsMdOptions): AgentsMdInstru
   ];
   const manifest: MemoryManifestEntry[] = [];
   const parts: string[] = [];
-  // 截断说明两份：给模型的（英文，进「项目说明」一节）与给人的（中文，终端一行）
+  // 截断说明两份：给模型的（完整句子，进「项目说明」一节）与给人的（短的一行，终端里）
   const truncated: string[] = [];
   const truncatedForModel: string[] = [];
   const skipped: string[] = [];
@@ -126,7 +126,7 @@ export function loadAgentsInstructions(options: AgentsMdOptions): AgentsMdInstru
       const partial = utf8Prefix(raw, remaining);
       parts.push(`### ${file.display}\n${partial.trimEnd()}`);
       manifest.push({ ...identity, truncated: true, included: true });
-      truncated.push(`${file.display} 只放入前 ${Buffer.byteLength(partial)} 字节`);
+      truncated.push(`${file.display}: first ${Buffer.byteLength(partial)} bytes only`);
       truncatedForModel.push(
         `${file.display}: only the first ${Buffer.byteLength(partial)} bytes are included`
       );
@@ -141,10 +141,10 @@ export function loadAgentsInstructions(options: AgentsMdOptions): AgentsMdInstru
   }
   const overflowed = truncated.length > 0 || skipped.length > 0;
   const overflow = overflowed
-    ? `合计超出 ${limit / 1024} KiB 上限，已截断：${[
+    ? `over the ${limit / 1024} KiB limit; truncated: ${[
         ...truncated,
-        ...(skipped.length > 0 ? [`${skipped.join("、")} 未放入`] : []),
-      ].join("；")}`
+        ...(skipped.length > 0 ? [`${skipped.join(", ")}: not included`] : []),
+      ].join("; ")}`
     : undefined;
   const overflowForModel = overflowed
     ? `(The human-written instructions exceed the ${limit / 1024} KiB total limit and were truncated: ${[
@@ -161,6 +161,6 @@ export function loadAgentsInstructions(options: AgentsMdOptions): AgentsMdInstru
   return {
     section: blocks.join("\n\n"),
     manifest,
-    ...(overflow !== undefined ? { notice: `[说明] AGENTS.md 等人写的说明${overflow}` } : {}),
+    ...(overflow !== undefined ? { notice: `[instructions] AGENTS.md files ${overflow}` } : {}),
   };
 }

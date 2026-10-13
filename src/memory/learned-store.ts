@@ -42,7 +42,7 @@ export interface MemoryLocation {
 export const MEMORY_BACKUP_NAME = path.join("state", "memory.md");
 
 // 记忆锁被占时报错里的说法
-const MEMORY_LOCK_DETAIL = "学到的记忆正被另一处写入";
+const MEMORY_LOCK_DETAIL = "memory is being written by another process";
 
 // 主目录下启动时项目的 .pigeon 就是用户级的 ~/.pigeon，项目级记忆与用户级是同一个文件：只有用户级这一层可用——不重复推送、
 // 不把两层的编号混进一个文件（混了两层都判格式不对、拒绝写入），也不让"只对本项目"的条目随用户级推给所有项目
@@ -145,7 +145,7 @@ export async function withMemoryLock<T>(
   let contended = false;
   for (;;) {
     if (wait.signal?.aborted === true) {
-      throw new MemoryLockAbortedError("等锁途中已取消");
+      throw new MemoryLockAbortedError("cancelled while waiting for the memory lock");
     }
     let release: (() => void) | undefined;
     try {

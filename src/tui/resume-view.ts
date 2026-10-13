@@ -47,7 +47,7 @@ export function handleResumeCommand<Binding>(
 ): void {
   const resume = host.resumeOptions();
   if (resume === undefined) {
-    host.addSystem("本会话不支持 /resume");
+    host.addSystem("/resume is not available in this session");
     return;
   }
   // 不带会话号的 /resume 由壳弹出会话选择器（决策 286）；走到这里说明没有选择器可用，给用法（从命令表取）
@@ -57,20 +57,18 @@ export function handleResumeCommand<Binding>(
   }
   // 恢复当前会话会让两个写者写同一个会话文件——且语义上无意义（人就活在该会话里）：响亮拒绝
   if (arg === host.sessionId()) {
-    host.addSystem(`已在会话 ${arg} 中，无需恢复`);
+    host.addSystem(`already in session ${arg}`);
     return;
   }
   // 决策 443：会话面板里还开着的会话有自己的运行面在写会话文件与工作树，换过去会有两个运行面写同一处
   if (host.pooledSessionIds?.().has(arg) === true) {
-    host.addSystem(
-      `会话 ${arg} 在会话面板里开着：先在面板里停下它（连按两次 Ctrl+X），或用 /panel 进入它`
-    );
+    host.addSystem(`session ${arg} is open in the session panel`);
     return;
   }
   // M5.5 S4（决策 040）：worker 的收尾记录写在当前会话文件里——有 worker 在跑时换绑会让它们
   // 写向已关闭的会话，响亮拒绝
   if (host.hasRunningWorkers()) {
-    host.addSystem("有 worker 仍在运行：先 /cancel 或等其收尾，再 /resume");
+    host.addSystem("workers are running; wait for them to finish or /cancel them");
     return;
   }
   host.setResuming(true);
@@ -79,7 +77,7 @@ export function handleResumeCommand<Binding>(
   const finish = (error?: unknown): void => {
     host.setResuming(false);
     if (error !== undefined) {
-      host.addAlert(`恢复失败：${error instanceof Error ? error.message : String(error)}`);
+      host.addAlert(`resume failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     host.updateStatus();
     host.render();
@@ -120,7 +118,9 @@ export function renderHistory<Binding>(
     host.addHistoryLines(lines);
     host.addSystem("--- resumed ---");
   } catch (error) {
-    host.addAlert(`历史渲染失败：${error instanceof Error ? error.message : String(error)}`);
+    host.addAlert(
+      `rendering history failed: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
   host.render();
 }

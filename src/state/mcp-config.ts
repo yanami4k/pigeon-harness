@@ -115,7 +115,7 @@ export function mergeMcpConfig(
   const servers: McpServerConfig[] = [];
   for (const name of names) {
     if (!MCP_SERVER_NAME_PATTERN.test(name)) {
-      problems.push(`server 名不合法：${name}`);
+      problems.push(`invalid server name: ${name}`);
       continue;
     }
     const entry = Object.hasOwn(fromPigeon, name) ? fromPigeon[name] : undefined;
@@ -129,15 +129,15 @@ export function mergeMcpConfig(
       launch = dotLaunch;
       launchSource = ".mcp.json";
     } else {
-      problems.push(
-        `server ${name} 没有启动定义（设置的 mcp 一节未给 launch，.mcp.json 也没有同名 server）`
-      );
+      problems.push(`server ${name} has no launch definition in settings or .mcp.json`);
       continue;
     }
     const tools = { ...(entry?.tools ?? {}) };
     for (const [toolName, override] of Object.entries(tools)) {
       if (override.pathConfinement !== undefined && override.tier !== "read") {
-        problems.push(`server ${name} 的工具 ${toolName} 不是 read 档，不能带 pathConfinement`);
+        problems.push(
+          `server ${name}: tool ${toolName} is not read tier and can't have pathConfinement`
+        );
       }
     }
     servers.push({

@@ -122,7 +122,7 @@ test("退出码 2：PreToolUse 记拒绝（标准错误为理由）；Stop 记�
   const report = await deny.hooks.runEvent("PreToolUse", PATH_TARGET, EDIT_FIELDS);
   assert.deepEqual(report.blocked, { reason: "参数里不许带 rm" });
   assert.equal(report.runs[0]?.conclusion, "deny");
-  assert.deepEqual(deny.notices, ["钩子拦下（PreToolUse）：参数里不许带 rm"]);
+  assert.deepEqual(deny.notices, ["hook blocked (PreToolUse): 参数里不许带 rm"]);
 
   const stop = harness([hook({ event: "Stop", command: "gate.sh" })], {
     script: () => outcome({ exitCode: 2, stderr: "测试没过" }),
@@ -137,12 +137,12 @@ test("其他退出码（含超时与拉不起来）：钩子自身出错，不�
   const report = await h.hooks.runEvent("PreToolUse", PATH_TARGET, EDIT_FIELDS);
   assert.equal(report.blocked, undefined);
   assert.equal(report.runs[0]?.conclusion, "error");
-  assert.match(h.notices[0] ?? "", /钩子出错/);
+  assert.match(h.notices[0] ?? "", /hook error/);
 
   const timedOut = harness([hook()], { script: () => outcome({ exitCode: null, timedOut: true }) });
   const timedReport = await timedOut.hooks.runEvent("PreToolUse", PATH_TARGET, EDIT_FIELDS);
   assert.equal(timedReport.blocked, undefined);
-  assert.match(timedReport.runs[0]?.reason ?? "", /超时/);
+  assert.match(timedReport.runs[0]?.reason ?? "", /timed out/);
 });
 
 test("PreToolUse 的 JSON 决策：allow / ask / deny 与理由；updatedInput 透传", async () => {

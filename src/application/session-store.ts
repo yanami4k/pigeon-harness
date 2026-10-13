@@ -47,8 +47,7 @@ export type StoreFaultHandler = (fault: SessionStoreFault) => void;
 // 新存储故障的告警器：同一类（同一动作）只报一次
 export function storeFaultWarner(sink?: WarnSink): StoreFaultHandler {
   const warn = dedupedWarner(sink);
-  return (fault) =>
-    warn(fault, `会话存储告警：${failureDetail(fault)}（会话记录缺这一条，运行不受影响）`);
+  return (fault) => warn(fault, `session store warning: ${failureDetail(fault)}`);
 }
 
 // worker 与分支会话的来历（新建会话文件时写进文件头）
@@ -116,7 +115,7 @@ export function openSessionStore(input: {
   try {
     existingPath = locateSessionFile(input.sessionsDir, input.sessionId)?.path;
   } catch (error) {
-    input.onFault(new SessionStoreFault("定位会话文件", error));
+    input.onFault(new SessionStoreFault("locating the session file", error));
   }
   return openSessionStoreWriter({
     sessionsRoot: input.sessionsDir,
@@ -384,7 +383,9 @@ export async function beginStoreFork(input: {
   if (store === undefined) {
     const located = locateSessionFile(input.sessionsDir, input.sourceSessionId);
     if (located === undefined) {
-      input.onFault(new SessionStoreFault("分叉", new Error("来源会话在会话存储里没有会话文件")));
+      input.onFault(
+        new SessionStoreFault("fork", new Error("source session has no file in the session store"))
+      );
       return undefined;
     }
     store = openSessionStoreWriter({
@@ -423,7 +424,7 @@ export async function beginStoreFork(input: {
       forkBranch: async ({ branchSessionId, cwd, branch }) => {
         try {
           if (forkEntryId === undefined) {
-            throw new Error("分叉点在来源会话里没有对应消息");
+            throw new Error("fork point has no matching message in the source session");
           }
           return await forkSessionFile({
             sessionsRoot: input.sessionsDir,
@@ -434,7 +435,7 @@ export async function beginStoreFork(input: {
             metadata: { version: SESSION_ENTRY_VERSION, branch: branchMetadata(branch) },
           });
         } catch (error) {
-          input.onFault(new SessionStoreFault("分叉", error));
+          input.onFault(new SessionStoreFault("fork", error));
           return undefined;
         } finally {
           await release();
@@ -443,7 +444,7 @@ export async function beginStoreFork(input: {
       release,
     };
   } catch (error) {
-    input.onFault(new SessionStoreFault("分叉", error));
+    input.onFault(new SessionStoreFault("fork", error));
     await release();
     return undefined;
   }

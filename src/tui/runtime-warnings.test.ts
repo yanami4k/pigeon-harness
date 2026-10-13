@@ -87,11 +87,14 @@ test("会话存储告警：终端界面运行期间落消息区、只说一次�
     rmSync(root, { recursive: true, force: true });
   }
   const flat = screenFlat(term);
-  assert.ok(flat.includes("会话存储告警：新会话存储打开失败"), screenText(term));
-  assert.equal(flat.split("会话存储告警").length - 1, 1, "同一类只说一次");
+  assert.ok(
+    flat.includes("session store warning: opening the session file failed"),
+    screenText(term)
+  );
+  assert.equal(flat.split("session store warning").length - 1, 1, "同一类只说一次");
   assert.ok(flat.includes("二好"), "运行不受影响");
   assert.deepEqual(
-    stderr.lines.filter((line) => line.includes("告警")),
+    stderr.lines.filter((line) => line.includes("warning")),
     [],
     "运行期间告警不写标准错误输出"
   );

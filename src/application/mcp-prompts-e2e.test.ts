@@ -57,7 +57,7 @@ test("MCP prompts 进 Skill Catalog 并可由 load_skill 读取留痕；需要�
       [["mcp__fx__greet", "打招呼", "fx", "greet", "你好，Pigeon"]]
     );
     assert.ok(
-      mcp.problems.some((problem) => problem.includes("needs") && problem.includes("参数")),
+      mcp.problems.some((problem) => problem.includes("needs arguments")),
       JSON.stringify(mcp.problems)
     );
     assert.deepEqual(await fixtures[0]?.listRoots(), {

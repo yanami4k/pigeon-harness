@@ -405,7 +405,7 @@ export function updateMemoryRegistration(input: {
 }): ToolRegistration {
   return {
     name: UPDATE_MEMORY_TOOL,
-    description: `新增、替换或删除学到的记忆（${MEMORY_DISPLAY_PATHS.project}、${MEMORY_DISPLAY_PATHS.user}）`,
+    description: `add, replace or delete learned memory (${MEMORY_DISPLAY_PATHS.project}, ${MEMORY_DISPLAY_PATHS.user})`,
     parameters: UpdateMemoryParamsSchema,
     tier: "write",
     approvalFree: true,

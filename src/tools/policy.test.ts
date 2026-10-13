@@ -97,13 +97,13 @@ test("排律：grant 命中压过 yolo / read 自动 / prompt，回指出场", (
   const granted = evaluateToolPolicy(registry, "edit_file", promptPolicy, sessionHit);
   assert.equal(granted.kind, "auto-allow");
   assert.deepEqual(granted.grant, sessionHit);
-  assert.match(granted.reason, /会话放权/);
+  assert.match(granted.reason, /session grant/);
 
   // grant 压过 read 层自动放行（grant 出处优先于 policy:auto）
   const readGranted = evaluateToolPolicy(registry, "read_file", promptPolicy, configHit);
   assert.equal(readGranted.kind, "auto-allow");
   assert.deepEqual(readGranted.grant, configHit);
-  assert.match(readGranted.reason, /固化规则/);
+  assert.match(readGranted.reason, /saved rule/);
 
   // grant 压过 yolo（出处记 grant 而非 policy:yolo——可审计"凭什么没问人"）
   const yoloGranted = evaluateToolPolicy(

@@ -284,7 +284,7 @@ export class MockTerminal implements Terminal {
 
   // 测试注入一段终端输入（经 TuiBase.handleTerminalInput → 输入监听器 → 聚焦组件）
   input(data: string): void {
-    assert.ok(this.onInput !== undefined, "tui 尚未 start");
+    assert.ok(this.onInput !== undefined, "tui not started");
     this.onInput(data);
   }
 }
@@ -320,6 +320,9 @@ export function squashSpaces(text: string): string {
 
 export function assertWidthsWithin(term: MockTerminal, width: number): void {
   for (const row of term.screen.contentLines()) {
-    assert.ok(visibleWidth(row) <= width, `行宽越界（${visibleWidth(row)} > ${width}）：${row}`);
+    assert.ok(
+      visibleWidth(row) <= width,
+      `line too wide (${visibleWidth(row)} > ${width}): ${row}`
+    );
   }
 }

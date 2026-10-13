@@ -237,9 +237,9 @@ test("无头运行：自动压缩没压成时向标准错误输出告警，同�
       warn: (line) => lines.push(line),
     });
     assert.equal(result.status, "completed");
-    const incomplete = lines.filter((line) => line.startsWith("上下文压缩未完成"));
+    const incomplete = lines.filter((line) => line.startsWith("compaction incomplete"));
     assert.deepEqual(incomplete, [
-      "上下文压缩未完成（自动，轮间）：网关拒绝：花费上限；本轮按原上下文继续",
+      "compaction incomplete (auto, between turns): 网关拒绝：花费上限; continuing with the full context",
     ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -277,8 +277,8 @@ test("无头运行：压缩前回调失败时向标准错误输出告警，文�
       warn: (line) => lines.push(line),
     });
     assert.deepEqual(
-      lines.filter((line) => line.startsWith("压缩前回调失败")),
-      ["压缩前回调失败：复盘失败：记忆文件被锁；压缩照常进行"]
+      lines.filter((line) => line.startsWith("pre-compaction callback failed")),
+      ["pre-compaction callback failed: 复盘失败：记忆文件被锁; compacting anyway"]
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

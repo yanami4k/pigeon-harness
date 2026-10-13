@@ -17,7 +17,7 @@ export function takeContinueFlags(argv: readonly string[]): {
   let mode: ContinueMode = { kind: "new" };
   const claim = (next: ContinueMode): void => {
     if (mode.kind !== "new") {
-      throw new Error("--continue 与 --resume 只能给一个");
+      throw new Error("--continue can't be used with --resume");
     }
     mode = next;
   };
@@ -66,27 +66,25 @@ export function resolveStartTarget(
       return {
         kind: "new",
         picker: false,
-        note: `本项目没有可续接的${sandbox ? "沙箱" : ""}会话，开一个新会话`,
+        note: `no ${sandbox ? "sandbox " : ""}session to continue; started a new session`,
       };
     }
     return resumeTarget(governanceRoot, recent.sessionId);
   }
   if (mode.sessionId === undefined) {
     if (sandbox) {
-      throw new Error(
-        "沙箱会话续接请给会话号：pigeon --sandbox --resume <sessionId>，或用 pigeon --sandbox --continue"
-      );
+      throw new Error("--sandbox --resume needs a session ID");
     }
     return { kind: "new", picker: true };
   }
   const isSandbox = sandboxOf(governanceRoot, mode.sessionId);
   if (isSandbox && !sandbox) {
     throw new Error(
-      `会话 ${mode.sessionId} 是沙箱会话，请用 pigeon --sandbox --resume ${mode.sessionId}`
+      `${mode.sessionId} is a sandbox session; resume with: pigeon --sandbox --resume ${mode.sessionId}`
     );
   }
   if (!isSandbox && sandbox) {
-    throw new Error(`会话 ${mode.sessionId} 不是沙箱会话，续接时去掉 --sandbox`);
+    throw new Error(`${mode.sessionId} is not a sandbox session; resume without --sandbox`);
   }
   return resumeTarget(governanceRoot, mode.sessionId);
 }

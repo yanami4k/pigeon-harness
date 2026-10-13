@@ -63,14 +63,13 @@ function acquireLockAt(lockPath: string): () => void {
     }
     if (holder !== "malformed" && holder.pid !== process.pid && isProcessAlive(holder.pid)) {
       throw new SessionLockedError(
-        `会话已被另一个进程打开（pid ${holder.pid}）：${lockPath}。` +
-          "关闭那个窗口后再恢复；确认该进程已不存在时可删除锁文件"
+        `session is open in another process (pid ${holder.pid}): ${lockPath}`
       );
     }
     // 残留锁：持有进程已死、内容畸形，或 pid 与本进程相同但本进程并未持有（pid 复用）
     rmSync(lockPath, { force: true });
   }
-  throw new SessionLockedError(`会话锁争用，多次重试仍未取得：${lockPath}`);
+  throw new SessionLockedError(`couldn't acquire session lock ${lockPath} after several retries`);
 }
 
 function releaser(lockPath: string): () => void {

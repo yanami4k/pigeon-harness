@@ -64,12 +64,12 @@ test("/memory 查看；/memory edit project|user 编辑那一层、结果落消�
   ]);
   const none = stubHost(undefined);
   handleSlashCommand(none.host, "/memory");
-  assert.match(none.lines[0] ?? "", /^未知命令：\/memory/);
+  assert.match(none.lines[0] ?? "", /^unknown command: \/memory/);
 });
 
 test("运行中：/memory 可以查看，/memory edit 被拒并说明原因", () => {
   assert.equal(rejectWhileRunning("/memory"), undefined);
-  assert.match(rejectWhileRunning("/memory edit project") ?? "", /暂停界面、打开编辑器/);
+  assert.equal(rejectWhileRunning("/memory edit project"), "can't use /memory edit while running");
 });
 
 test("编辑时暂停界面：编辑器跑的时候终端已交还，结束后恢复界面并照常显示", async () => {

@@ -56,12 +56,12 @@ test("运行面范围：worker 会话的工作树取自文件头、委派策略�
 
     const orphan = newSessionId();
     await workerFile(orphan, newSessionId(), worktree);
-    assert.throws(() => sessionRuntimeScope(root, orphan), /父会话记录不存在/);
+    assert.throws(() => sessionRuntimeScope(root, orphan), /parent session .* not found/);
     const unspawned = newSessionId();
     await workerFile(unspawned, parentId, worktree);
-    assert.throws(() => sessionRuntimeScope(root, unspawned), /没有派出/);
+    assert.throws(() => sessionRuntimeScope(root, unspawned), /has no spawn record/);
     rmSync(worktree, { recursive: true, force: true });
-    assert.throws(() => sessionRuntimeScope(root, workerId), /工作树已不存在/);
+    assert.throws(() => sessionRuntimeScope(root, workerId), /worktree is gone/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -184,7 +184,7 @@ test("worker 崩溃冷恢复：父会话标注未收尾，worker 会话留悬空
     });
     assert.equal(entered, true);
     const report = output.join("");
-    assert.ok(report.includes("1 个工具调用中断、结果未知：edit_file"), report);
+    assert.ok(report.includes("1 tool call interrupted, results unknown: edit_file"), report);
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }

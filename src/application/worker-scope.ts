@@ -35,7 +35,7 @@ export function sessionRuntimeScope(
   // M7（决策 077）：分支会话回到它自己的工作树（主会话形态，不是委派）
   const branch = view.metadata?.branch;
   if (branch !== undefined) {
-    return { workspaceRoot: existingWorktree(governanceRoot, "分支", branch.workspace) };
+    return { workspaceRoot: existingWorktree(governanceRoot, "branch", branch.workspace) };
   }
   const worker = view.metadata?.worker;
   const parentSessionId = view.parentSessionId;
@@ -47,13 +47,13 @@ export function sessionRuntimeScope(
   const parent = loadStoreSession(dir, parentSessionId);
   if (parent === undefined) {
     throw new Error(
-      `worker 会话 ${sessionId} 的父会话记录不存在：${parentSessionId}（无法还原委派策略，拒绝恢复）`
+      `parent session ${parentSessionId} of worker session ${sessionId} not found; can't resume`
     );
   }
   const spawned = storeWorkerSpawned(parent.view, sessionId);
   if (spawned === undefined) {
     throw new Error(
-      `父会话 ${parentSessionId} 没有派出 ${sessionId} 的记录（无法还原委派策略，拒绝恢复）`
+      `parent session ${parentSessionId} has no spawn record for ${sessionId}; can't resume`
     );
   }
   return scopeOf(governanceRoot, worker.workspace, {
@@ -93,7 +93,7 @@ function existingWorktree(
   const located = mapLegacyWorktreePath(governanceRoot, workspace.path);
   if (!existsSync(located)) {
     throw new Error(
-      `${kind}工作树已不存在：${located}（分支 ${workspace.branch} 仍可用 git 查看）`
+      `${kind} worktree is gone: ${located} (branch ${workspace.branch} still exists)`
     );
   }
   return located;
@@ -111,9 +111,9 @@ function scopeOf(
   // 决策 377：只读的 explorer 回到它读的派出方工作区（主工作目录或派出方 worker 的工作树）
   if (workspace.kind === "shared") {
     if (!existsSync(workspace.path)) {
-      throw new Error(`explorer 读的工作区已不存在：${workspace.path}`);
+      throw new Error(`workspace read by explorer is gone: ${workspace.path}`);
     }
     return { workspaceRoot: workspace.path, ...delegated };
   }
-  return { workspaceRoot: existingWorktree(governanceRoot, "worker ", workspace), ...delegated };
+  return { workspaceRoot: existingWorktree(governanceRoot, "worker", workspace), ...delegated };
 }

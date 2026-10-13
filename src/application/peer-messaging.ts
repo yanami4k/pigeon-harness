@@ -194,15 +194,15 @@ function noticeText(from: PeerSender, kind: NoticeKind, at?: number): string {
 function noticeLine(from: PeerSender, kind: NoticeKind): string {
   switch (kind) {
     case "idle":
-      return `${from.name} 已空闲`;
+      return `${from.name} is idle`;
     case "exit":
-      return `${from.name} 已退出`;
+      return `${from.name} exited`;
     case "expired":
-      return `发给 ${from.name} 的消息等批准超时，没有送达`;
+      return `message to ${from.name} timed out waiting for approval; not delivered`;
     case "declined":
-      return `发给 ${from.name} 的消息没有被放行`;
+      return `message to ${from.name} was declined`;
     case "closed":
-      return `${from.name} 退出了，扣着的消息没有送达`;
+      return `${from.name} exited; held message not delivered`;
   }
 }
 
@@ -248,7 +248,7 @@ function sameHex(a: string, b: string): boolean {
 
 function inboxAddress(sessionId: string, homeDir?: string, prefix = "pigeon-peer"): string {
   if (!SAFE_PREFIX.test(prefix)) {
-    throw new Error(`收件口前缀只能用字母、数字、下划线与连字符：${prefix}`);
+    throw new Error(`invalid inbox prefix: ${prefix}`);
   }
   if (process.platform === "win32") {
     return `\\\\.\\pipe\\LOCAL\\${prefix}-${sessionId}-${randomHex(4)}`;
@@ -494,7 +494,7 @@ export class PeerMessaging {
       );
     } catch (error) {
       this.#options.ui?.(
-        `会话名录写不进：${error instanceof Error ? error.message : String(error)}（别的会话看不到本会话）`
+        `writing the session registry failed: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }
@@ -539,7 +539,9 @@ export class PeerMessaging {
     clearTimeout(held.timer);
     this.#held.delete(id);
     this.#options.deliver(held.notice === true ? held.text : wrapPeerMessage(held.from, held.text));
-    this.#options.ui?.(`已放行来自 ${held.from.name} 的${held.notice === true ? "回告" : "消息"}`);
+    this.#options.ui?.(
+      `allowed ${held.notice === true ? "notice" : "message"} from ${held.from.name}`
+    );
     return true;
   }
 
@@ -551,7 +553,7 @@ export class PeerMessaging {
     this.#held.delete(id);
     this.#options.onHeldGone?.(id);
     this.#options.ui?.(
-      `已丢弃来自 ${held.from.name} 的${held.notice === true ? "回告" : "消息"}（${why === "declined" ? "没有放行" : why === "expired" ? "等批准超时" : "扣住的太多"}）`
+      `dropped ${held.notice === true ? "notice" : "message"} from ${held.from.name} (${why === "declined" ? "declined" : why === "expired" ? "approval timed out" : "too many held"})`
     );
     if (held.notice !== true) {
       void this.#tell(held.from.sessionId, {
@@ -639,7 +641,7 @@ export class PeerMessaging {
       this.#options.deliver(
         `[Cross-session idle notice] The subscription to ${target.name} expired after 12 hours without a notice; it may still be busy or may have ended abruptly.`
       );
-      this.#options.ui?.(`等 ${target.name} 空闲的订阅过了 12 小时，已作罢`);
+      this.#options.ui?.(`idle subscription to ${target.name} expired after 12 hours`);
     }, SUBSCRIPTION_TTL_MS);
     timer.unref?.();
     this.#subscriptions.set(target.sessionId, timer);
@@ -756,7 +758,7 @@ export class PeerMessaging {
     this.#options.deliver(wrapPeerMessage(from, text));
     const first = text.split(/\r?\n/, 1)[0] ?? "";
     this.#options.ui?.(
-      `来自 ${from.name} 的消息：${first.length > 80 ? `${first.slice(0, 80)}…` : first}`
+      `message from ${from.name}: ${first.length > 80 ? `${first.slice(0, 80)}…` : first}`
     );
     return { ok: true, status: "delivered" };
   }
@@ -778,7 +780,7 @@ export class PeerMessaging {
     };
     this.#held.set(id, { ...held, timer });
     this.#options.ui?.(
-      `来自 ${from.name} 的${notice ? "回告" : "消息"}被扣住，等你放行（${Math.round(this.#options.holdMs / 60_000)} 分钟内）`
+      `${notice ? "notice" : "message"} from ${from.name} held for approval (${Math.round(this.#options.holdMs / 60_000)} min)`
     );
     this.#options.onHeld?.(held);
     return { ok: true, status: "held" };
@@ -788,7 +790,7 @@ export class PeerMessaging {
     if (this.#options.inbound === "refuse") return { ok: false, status: "refused" };
     if (this.#rateLimited(from.sessionId, this.#now()))
       return { ok: false, status: "rate-limited" };
-    this.#options.ui?.(`${from.name} 请求在本会话下次空闲时得到通知`);
+    this.#options.ui?.(`${from.name} asked to be notified when this session is idle`);
     if (!this.#busy) {
       // 已经空闲：马上回告
       void this.#tell(from.sessionId, {

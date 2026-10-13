@@ -538,7 +538,7 @@ export class ScriptRuns implements ScriptKindRegistry {
           post(
             `${SCRIPT_NOTICE_PREFIX}Script ${run.spec.name} (run ${run.runId}) failed: ${
               error instanceof Error ? error.message : String(error)
-            }。`
+            }.`
           )
       )
       .finally(() => {

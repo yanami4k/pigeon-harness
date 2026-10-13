@@ -9,6 +9,7 @@ import {
   continuationLine,
   evalVerdictLabel,
   failureBadge,
+  plural,
   pruneLine,
   repetitionLine,
   requestRetryLine,
@@ -48,34 +49,34 @@ import {
 // 钩子运行（323 / 324）的一行：事件、命令、退出码、用时、结论
 function hookLine(data: HookRunData): string {
   return (
-    `钩子 ${data.event}${data.matcher !== undefined ? `（匹配 ${data.matcher}）` : ""}：${data.conclusion} ｜ ` +
-    `退出码 ${data.exitCode ?? "无"}${data.timedOut ? "（超时）" : ""} ｜ ${data.durationMs} 毫秒 ｜ ` +
-    `命令 ${data.command}${data.output !== undefined ? ` ｜ 输出 ${data.output}` : ""}`
+    `hook ${data.event}${data.matcher !== undefined ? ` (matcher ${data.matcher})` : ""}: ${data.conclusion} | ` +
+    `exit ${data.exitCode ?? "none"}${data.timedOut ? " (timed out)" : ""} | ${data.durationMs} ms | ` +
+    `command ${data.command}${data.output !== undefined ? ` | output ${data.output}` : ""}`
   );
 }
 
 const MCP_SERVER_STATE_LABEL: Readonly<Record<McpServerStatus["state"], string>> = {
-  idle: "未启动",
-  connected: "已连接",
-  restarting: "重启中",
-  unavailable: "不可用",
-  closed: "已关闭",
+  idle: "not started",
+  connected: "connected",
+  restarting: "restarting",
+  unavailable: "unavailable",
+  closed: "closed",
 };
 
 // 冲突项：声明 destructive 却配 read 的按 write；其余冲突是声明只读却配 write / exec，按配置
 function describeMcpConflict(entry: McpToolsetEntry): string {
   const declared =
     entry.declaredHint?.destructiveHint === true && entry.configuredTier === "read"
-      ? "声明 destructive"
-      : "声明只读";
-  return `${entry.name}（${declared}，配置 ${entry.configuredTier}，按 ${entry.effectiveTier}）`;
+      ? "destructive"
+      : "read-only";
+  return `${entry.name} (declares ${declared}, set to ${entry.configuredTier}, using ${entry.effectiveTier})`;
 }
 
 type CheckpointItem = Extract<ViewItem, { kind: "checkpoint" }>;
 
 const ERROR_KIND_LABEL: Readonly<Record<NonNullable<ToolResultMark["errorKind"]>, string>> = {
-  domain: "域错误",
-  environment: "环境异常",
+  domain: "domain error",
+  environment: "environment error",
 };
 
 function renderToolCall(
@@ -85,13 +86,13 @@ function renderToolCall(
   unfinished: ReadonlyMap<string, CheckpointMarkData>,
   lines: string[]
 ): void {
-  lines.push(`    工具调用 ${call.toolCallId} [${call.toolName}]`);
-  lines.push(`      提议参数：${summarizeArgs(call.arguments)}`);
+  lines.push(`    tool call ${call.toolCallId} [${call.toolName}]`);
+  lines.push(`      args: ${summarizeArgs(call.arguments)}`);
   const result = call.result;
   lines.push(
     result === undefined
-      ? "      结果：无结果消息（进程中断可能）"
-      : `      结果：${result.isError === true ? "出错" : "成功"}`
+      ? "      result: none (process may have been interrupted)"
+      : `      result: ${result.isError === true ? "error" : "ok"}`
   );
   // 审批结果与出错归类：运行面挂在工具结果消息 details 上的标记，取法同工具级分类（toolResultMark）；
   // 没有标记的结果（标记之前写的文件、续跑补的"结果未知"）两行都不出
@@ -100,27 +101,27 @@ function renderToolCall(
   if (mark !== undefined) {
     lines.push(
       mark.gate !== undefined
-        ? `      审批：${approvalVerdict(mark.gate)}（${mark.gate.approvedBy}）`
-        : "      审批：未经审批闸（上游拦截）"
+        ? `      approval: ${approvalVerdict(mark.gate)} (${mark.gate.approvedBy})`
+        : "      approval: not gated (blocked upstream)"
     );
     if (mark.errorKind !== undefined) {
-      lines.push(`      出错归类：${ERROR_KIND_LABEL[mark.errorKind]}`);
+      lines.push(`      error kind: ${ERROR_KIND_LABEL[mark.errorKind]}`);
     }
   }
   // 工具级失败分类：storeToolOutcomes 现算（会话列表与检索同一口径）；以出错或中止收尾的助手消息里的调用上游不执行，不参与分类
   lines.push(
     outcome !== undefined
-      ? `      分类：${failureBadge(outcome.failure)}`
-      : "      分类：无（所在助手消息以出错或中止收尾，调用未执行）"
+      ? `      class: ${failureBadge(outcome.failure)}`
+      : "      class: none (call not executed)"
   );
   const checkpoint = checkpoints.get(call.toolCallId);
   if (checkpoint !== undefined) {
-    lines.push(`      代码快照：${checkpoint.data.commit.slice(0, 12)}（${checkpoint.data.ref}）`);
+    lines.push(`      checkpoint: ${checkpoint.data.commit.slice(0, 12)} (${checkpoint.data.ref})`);
   }
   // 决策 350：没拍成的快照（失败、拍摄中断）
   const unfinishedMark = unfinished.get(call.toolCallId);
   if (unfinishedMark !== undefined) {
-    lines.push(`      代码快照：${unfinishedCheckpointText(unfinishedMark)}`);
+    lines.push(`      checkpoint: ${unfinishedCheckpointText(unfinishedMark)}`);
   }
 }
 
@@ -131,21 +132,18 @@ export interface TraceRenderOptions {
 
 // 派出的 worker 一行：已收尾给状态与结果并给进入命令；未收尾如实标注（进程中断可能），给 resume 入口
 function renderChildLine({ spawned, settled }: ViewChild): string {
-  const base = `  ${spawned.name}（${spawned.role}）｜ 会话 ${shortId(spawned.childSessionId)}`;
+  const base = `  ${spawned.name} (${spawned.role}) | session ${shortId(spawned.childSessionId)}`;
   if (settled === undefined) {
-    return (
-      `${base} ｜ 未收尾：有派出无收尾（进程中断可能；` +
-      `用 resume ${spawned.childSessionId} 进入该 worker 会话）`
-    );
+    return `${base} | not settled (process may have been interrupted) | resume ${spawned.childSessionId}`;
   }
-  let line = `${base} ｜ ${settled.status} ｜ ${settled.turns} 轮`;
+  let line = `${base} | ${settled.status} | ${plural(settled.turns, "turn")}`;
   if (settled.result !== undefined) {
-    line += ` ｜ 改动 ${(settled.result.changedFiles ?? []).length} 个文件`;
+    line += ` | ${plural((settled.result.changedFiles ?? []).length, "file")} changed`;
   }
   if (settled.error !== undefined) {
-    line += ` ｜ 原因：${settled.error}`;
+    line += ` | reason: ${settled.error}`;
   }
-  return `${line} ｜ 进入：trace ${spawned.childSessionId}`;
+  return `${line} | trace ${spawned.childSessionId}`;
 }
 
 function runStopReason(run: ViewRun): string | undefined {
@@ -166,55 +164,55 @@ function renderRun(
       .map((outcome) => [outcome.toolCallId, outcome])
   );
   let header =
-    `Run ${shortId(run.runId)} ｜ 终态 stopReason=${runStopReason(run) ?? "无（无助手消息）"}` +
-    ` ｜ 分类：${failureBadge(run.failure)}`;
+    `Run ${shortId(run.runId)} | stopReason=${runStopReason(run) ?? "none (no assistant message)"}` +
+    ` | class: ${failureBadge(run.failure)}`;
   if (run.end === undefined) {
-    header += " ｜ Run 收尾缺失（崩溃残留可能）";
+    header += " | no run end (possible crash)";
   }
   lines.push(header);
   // M5 S5（决策 044）：Run 启动快照摘要——回答"这个 Run 用的哪版模型、策略、工具、Memory 与 Skill"
   const start = run.start;
-  const tools = start.advertisedTools.length > 0 ? start.advertisedTools.join("、") : "无";
+  const tools = start.advertisedTools.length > 0 ? start.advertisedTools.join(", ") : "none";
   const injected = start.memory.filter((entry) => entry.included).length;
   const systemPromptHash = createHash("sha256").update(start.systemPrompt).digest("hex");
   lines.push(
-    `  启动快照：模型 ${start.model.provider}/${start.model.id} ｜ 审批模式 ${start.policy.approvalMode} ｜ ` +
-      `工具 ${tools} ｜ Memory ${start.memory.length} 个（注入 ${injected}） ｜ Skill ${start.skills.length} 个 ｜ ` +
-      `system prompt ${systemPromptHash.slice(0, 12)} ｜ 模型请求 ${run.turns.length} 次`
+    `  start: model ${start.model.provider}/${start.model.id} | approval mode ${start.policy.approvalMode} | ` +
+      `tools ${tools} | memory ${start.memory.length} (${injected} injected) | skills ${start.skills.length} | ` +
+      `system prompt ${systemPromptHash.slice(0, 12)} | ${plural(run.turns.length, "model request")}`
   );
   // 决策 359：按环境没注册的工具与原因
   if (start.skippedTools !== undefined && start.skippedTools.length > 0) {
     const skipped = start.skippedTools.map(
-      (entry) => `${entry.tools.join("、")}（${entry.reason}）`
+      (entry) => `${entry.tools.join(", ")} (${entry.reason})`
     );
-    lines.push(`  没注册的工具：${skipped.join("；")}`);
+    lines.push(`  tools not registered: ${skipped.join("; ")}`);
   }
   // M5.7 S3（决策 052）：MCP 工具集里注解与配置冲突的工具、非连接状态的 server、清单变更通知
   const conflicts = (start.mcpTools ?? []).filter((entry) => entry.conflict === true);
   if (conflicts.length > 0) {
-    lines.push(`  MCP 工具集冲突：${conflicts.map(describeMcpConflict).join("、")}`);
+    lines.push(`  MCP toolset conflicts: ${conflicts.map(describeMcpConflict).join(", ")}`);
   }
   for (const server of start.mcpServers ?? []) {
     if (server.state !== "connected") {
       lines.push(
-        `  MCP server ${server.name} ${MCP_SERVER_STATE_LABEL[server.state]}（重启 ${server.restarts} 次` +
-          `${server.error !== undefined ? `：${server.error}` : ""}）`
+        `  MCP server ${server.name} ${MCP_SERVER_STATE_LABEL[server.state]} (${plural(server.restarts, "restart")}` +
+          `${server.error !== undefined ? `: ${server.error}` : ""})`
       );
     }
     for (const [list, label] of [
-      ["tools", "工具"],
-      ["prompts", "prompts "],
+      ["tools", "tools"],
+      ["prompts", "prompts"],
     ] as const) {
       const count = (server.listChanges ?? []).filter((change) => change.list === list).length;
       if (count > 0) {
         lines.push(
-          `  MCP server ${server.name} 发来${label}清单变更通知 ${count} 次（本会话不变，下个会话生效）`
+          `  MCP server ${server.name} sent ${plural(count, `${label} list change`)} (applies next session)`
         );
       }
     }
   }
   if (run.end !== undefined) {
-    lines.push(`  结束方式：${run.end.ending}（消息 ${run.end.messageCount} 条）`);
+    lines.push(`  ended: ${run.end.ending} (${plural(run.end.messageCount, "message")})`);
   }
   // 验证记录（071）：回答"这次跑的验证结论是什么、凭哪条命令"
   const checkpoints = new Map<string, CheckpointItem>();
@@ -226,13 +224,13 @@ function renderRun(
       // 工具故障的步（决策 170 ③）单列：检查工具自身崩溃、重跑一次仍崩溃，不计入这条验证的结论
       const faulted = (data.steps ?? []).filter((step) => step.toolFault === true);
       lines.push(
-        `  验证：${evalVerdictLabel(data.verdict)} ｜ 退出码 ${data.exitCode ?? "无"}${data.timedOut ? "（超时）" : ""} ｜ ` +
-          `命令 ${data.command.join(" ")} ｜ ${data.durationMs} 毫秒` +
+        `  verification: ${evalVerdictLabel(data.verdict)} | exit ${data.exitCode ?? "none"}${data.timedOut ? " (timed out)" : ""} | ` +
+          `command ${data.command.join(" ")} | ${data.durationMs} ms` +
           (faulted.length > 0
-            ? ` ｜ 工具故障（不计入结论）：${faulted.map((step) => step.name).join("、")}`
+            ? ` | tool fault (not counted): ${faulted.map((step) => step.name).join(", ")}`
             : "") +
           (data.target.runId !== run.runId || data.target.sessionId !== sessionId
-            ? ` ｜ 目标 会话 ${shortId(data.target.sessionId)} Run ${shortId(data.target.runId)}`
+            ? ` | target session ${shortId(data.target.sessionId)} run ${shortId(data.target.runId)}`
             : "")
       );
     } else if (item.kind === "hook") {
@@ -251,17 +249,17 @@ function renderRun(
   for (const turn of run.turns) {
     const assistant = turn.assistant;
     let turnHeader =
-      `  第 ${turn.index} 轮 ｜ ${new Date(assistant.timestamp).toISOString().slice(11, 19)}(UTC)` +
-      ` ｜ stopReason=${assistant.stopReason ?? "无"}`;
+      `  turn ${turn.index} | ${new Date(assistant.timestamp).toISOString().slice(11, 19)}(UTC)` +
+      ` | stopReason=${assistant.stopReason ?? "none"}`;
     if (isSyntheticFailure(assistant)) {
-      turnHeader += "（上游合成失败消息）";
+      turnHeader += " (synthetic upstream failure)";
     }
     // M5 S5（决策 044）：本轮 token 与成本
     const usage = assistant.usage;
     if (usage !== undefined) {
       turnHeader +=
-        ` ｜ tokens 输入 ${usage.input} / 输出 ${usage.output} / 缓存读 ${usage.cacheRead} / ` +
-        `缓存写 ${usage.cacheWrite} ｜ $${usage.cost.total.toFixed(4)}`;
+        ` | tokens in ${usage.input} / out ${usage.output} / cache read ${usage.cacheRead} / ` +
+        `cache write ${usage.cacheWrite} | $${usage.cost.total.toFixed(4)}`;
     }
     lines.push(turnHeader);
     for (const call of turn.toolCalls) {
@@ -271,9 +269,9 @@ function renderRun(
   if (options.withContent === true) {
     const content = run.messages.flatMap((message) => messageLines(message));
     if (content.length > 0) {
-      lines.push("  正文（按消息序）：");
+      lines.push("  content (in message order):");
       for (const line of content) {
-        lines.push(`    正文：${line.text}`);
+        lines.push(`    content: ${line.text}`);
       }
     }
   }
@@ -287,27 +285,29 @@ export function renderSessionTrace(
   const toolCallCount = runs.reduce((sum, run) => sum + run.toolCalls.length, 0);
   const unfinishedCount = runs.filter((run) => run.end === undefined).length;
   const lines: string[] = [
-    `会话 ${shortId(view.sessionId)} ｜ Run ${runs.length} 个 ｜ 工具调用 ${toolCallCount} 次` +
-      (unfinishedCount > 0 ? ` ｜ 崩溃残留 ${unfinishedCount} 个 Run` : ""),
+    `session ${shortId(view.sessionId)} | ${plural(runs.length, "run")} | ${plural(toolCallCount, "tool call")}` +
+      (unfinishedCount > 0
+        ? ` | ${plural(unfinishedCount, "unfinished run")} (possible crash)`
+        : ""),
   ];
   if (view.worker !== undefined && view.parentSessionId !== undefined) {
     const worker = view.worker;
     lines.push(
-      `worker 会话：${worker.name}（${worker.role}）｜ ` +
-        `${workerWorkspaceLabel(worker.workspace)} ｜ ` +
-        `父会话 ${view.parentSessionId}（查看：trace ${view.parentSessionId}）`
+      `worker session: ${worker.name} (${worker.role}) | ` +
+        `${workerWorkspaceLabel(worker.workspace)} | ` +
+        `parent ${view.parentSessionId} (trace ${view.parentSessionId})`
     );
   }
   if (view.branch !== undefined) {
     const branch = view.branch;
     lines.push(
-      `分支会话：来源会话 ${branch.sourceSessionId} Run ${shortId(branch.forkPoint.runId)} 第 ${branch.forkPoint.runSeq} 条 ｜ ` +
-        `分支 ${branch.workspace.branch} ｜ ${branch.trigger === "manual" ? "手动" : "失败自动重试"}`
+      `branch session: from session ${branch.sourceSessionId} run ${shortId(branch.forkPoint.runId)} entry ${branch.forkPoint.runSeq} | ` +
+        `branch ${branch.workspace.branch} | ${branch.trigger === "manual" ? "manual" : "auto retry after failure"}`
     );
   }
   lines.push("");
   if (view.children.length > 0) {
-    lines.push(`派出的 worker（${view.children.length}）：`);
+    lines.push(`spawned workers (${view.children.length}):`);
     for (const child of view.children) {
       lines.push(renderChildLine(child));
     }
@@ -325,7 +325,7 @@ export function renderSessionTrace(
   );
   if (sessionHooks.length > 0) {
     lines.push("");
-    lines.push("会话级条目：");
+    lines.push("session entries:");
     for (const item of sessionHooks) {
       lines.push(`  ${hookLine(item.data)}`);
     }
@@ -333,14 +333,14 @@ export function renderSessionTrace(
   // 会话级异常项：孤立的收尾、读取时跳过的行与条目如实报告，不猜测挂接
   if (view.orphanSettleds.length > 0 || view.warnings.length > 0) {
     lines.push("");
-    lines.push("异常项：");
+    lines.push("anomalies:");
     for (const settled of view.orphanSettleds) {
       lines.push(
-        `  孤立的 worker 收尾：${settled.name}（会话 ${shortId(settled.childSessionId)}）无对应派出`
+        `  orphan worker settle: ${settled.name} (session ${shortId(settled.childSessionId)}) with no spawn`
       );
     }
     for (const warning of view.warnings) {
-      lines.push(`  读取告警：${warning}`);
+      lines.push(`  read warning: ${warning}`);
     }
   }
   return `${lines.join("\n")}\n`;
@@ -349,14 +349,12 @@ export function renderSessionTrace(
 // 会话在会话存储里找不到时的报错：旧格式会话单独说明（不读它的内容），其余列出已有会话
 export function missingSessionError(sessionsDir: string, sessionId: string): Error {
   if (hasLegacySessionFile(sessionsDir, sessionId)) {
-    return new Error(
-      `会话 ${sessionId} 是旧格式会话（迁移之前创建），这里不读；${LEGACY_READER_HINT}`
-    );
+    return new Error(`session ${sessionId} is an old-format session; ${LEGACY_READER_HINT}`);
   }
   const available = listSessionRefs(sessionsDir).map((ref) => ref.sessionId);
   return new Error(
-    `会话不存在：${sessionId}` +
-      (available.length > 0 ? `。已有会话：${available.join("、")}` : "（尚无会话记录）")
+    `session not found: ${sessionId}` +
+      (available.length > 0 ? `; sessions: ${available.join(", ")}` : " (no sessions yet)")
   );
 }
 
@@ -383,7 +381,7 @@ export function runTraceCommand(options: TraceCommandOptions): string {
   const runs = view.runs.filter((run) => run.runId === options.runId);
   if (runs.length === 0) {
     throw new Error(
-      `该会话无 Run ${options.runId}。已有 Run：${view.runs.map((run) => run.runId).join("、")}`
+      `run not found in this session: ${options.runId}; runs: ${view.runs.map((run) => run.runId).join(", ")}`
     );
   }
   return renderSessionTrace(view, runs, renderOptions);

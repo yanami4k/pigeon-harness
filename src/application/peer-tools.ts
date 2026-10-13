@@ -141,7 +141,7 @@ export function peerToolRegistrations(): ToolRegistration[] {
   return [
     {
       name: LIST_PEERS_TOOL,
-      description: "列出本机可联系的 Pigeon 会话",
+      description: "list Pigeon sessions reachable on this machine",
       parameters: ListPeersParamsSchema,
       tier: "read",
       pathConfinement: { kind: "none" },
@@ -149,7 +149,7 @@ export function peerToolRegistrations(): ToolRegistration[] {
     },
     {
       name: SEND_MESSAGE_TOOL,
-      description: "给本机另一个 Pigeon 会话发一条消息",
+      description: "send a message to another Pigeon session on this machine",
       parameters: SendMessageParamsSchema,
       tier: "read",
       pathConfinement: { kind: "none" },

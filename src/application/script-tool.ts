@@ -145,7 +145,7 @@ export function createOrchestrateTool(
 export function orchestrateRegistration(): ToolRegistration {
   return {
     name: ORCHESTRATE_TOOL,
-    description: "提交编排脚本，在隔离容器里批量派 worker",
+    description: "submit an orchestration script that spawns workers from an isolated container",
     parameters: OrchestrateParamsSchema,
     tier: "read",
     pathConfinement: { kind: "none" },

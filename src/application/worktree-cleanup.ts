@@ -26,6 +26,7 @@ import { sessionFileHolder } from "../persistence/session-lock.ts";
 import { locateSessionFile, readSessionHeader } from "../persistence/session-reader.ts";
 import { worktreeInUse } from "../persistence/worktree-in-use.ts";
 import { namedWorktreesDirOf, sessionsDirOf, worktreesDirOf } from "../state/paths.ts";
+import { plural } from "./format.ts";
 import { namedWorktreeBase, namedWorktreeBranch } from "./named-worktree.ts";
 
 // 工作目录在 git 仓库里（/worktrees 只在这时提供）
@@ -181,7 +182,7 @@ function workerFacts(
 ): WorkerFacts {
   if (workerSessionId === undefined) return {};
   if (scope.liveWorkers?.().has(workerSessionId) === true) {
-    return { inUseReason: "本会话里还在用（在跑、等补批或脚本还没收回）" };
+    return { inUseReason: "in use in this session" };
   }
   const sessionsDir = sessionsDirOf(governanceRoot);
   const file = locateSessionFile(sessionsDir, workerSessionId);
@@ -190,7 +191,7 @@ function workerFacts(
     if (dir !== undefined) {
       try {
         const age = (scope.now?.() ?? Date.now()) - statSync(dir).mtimeMs;
-        if (age < FRESH_MS) return { inUseReason: "刚建，还没有 worker 会话记录" };
+        if (age < FRESH_MS) return { inUseReason: "just created, no worker session yet" };
       } catch {
         // 目录读不了：照常列
       }
@@ -201,14 +202,14 @@ function workerFacts(
   const owner = header?.parentSessionId;
   const facts: WorkerFacts = owner !== undefined ? { ownerSessionId: owner } : {};
   if (sessionFileHolder(file.path) !== undefined) {
-    return { ...facts, inUseReason: "worker 在跑" };
+    return { ...facts, inUseReason: "worker running" };
   }
   if (owner !== undefined) {
     const ownerFile = locateSessionFile(sessionsDir, owner);
     if (ownerFile !== undefined) {
       const holder = sessionFileHolder(ownerFile.path);
       if (holder !== undefined && holder !== process.pid) {
-        facts.inUseReason = "所属会话正开着";
+        facts.inUseReason = "owner session is open";
       }
       try {
         const view = loadSessionView(sessionsDir, owner);
@@ -232,7 +233,7 @@ function assertNotInWorkerWorktree(scope: WorktreeScope, governanceRoot: string)
   const stateDir = realOrResolved(worktreesDirOf(governanceRoot));
   if (isInside(stateDir, here) || samePath(stateDir, here)) {
     throw new WorktreeCleanupError(
-      "当前目录在 worker 的工作树里：列出与删除留下的工作树请在主检出里执行"
+      "not available inside a worker worktree; run from the main checkout"
     );
   }
 }
@@ -293,7 +294,7 @@ export function listLeftoverWorktrees(scope: WorktreeScope): LeftoverWorktree[] 
       branch,
       legacy: false,
       inUse: holder,
-      ...(holder ? { inUseReason: "有会话开在这个工作树里" } : {}),
+      ...(holder ? { inUseReason: "a session is open in it" } : {}),
       untaken:
         entry.branch === branch
           ? untakenFiles(path, namedWorktreeBase(repoRoot, name), mainRoot)
@@ -379,39 +380,39 @@ export function formatBytes(bytes: number): string {
 }
 
 function untakenText(item: LeftoverWorktree): string {
-  if (item.untaken === 0) return "没有未取走的改动";
-  if (item.untaken === "commits") return "分支上有新提交";
-  if (item.untaken === "unknown") return "有无未取走的改动不明（按有改动对待）";
-  return `未取走的改动 ${item.untaken} 个文件`;
+  if (item.untaken === 0) return "no untaken changes";
+  if (item.untaken === "commits") return "new commits on branch";
+  if (item.untaken === "unknown") return "untaken changes: unknown";
+  return `untaken changes: ${plural(item.untaken, "file")}`;
 }
 
 function itemLine(item: LeftoverWorktree, index: number): string {
   const parts = [
-    `${index + 1}. ${item.name}${item.legacy ? "（旧命名）" : ""}`,
+    `${index + 1}. ${item.name}${item.legacy ? " (old naming)" : ""}`,
     item.kind === "branch-only"
-      ? `分支 ${item.branch ?? "?"}（工作树已不在）`
+      ? `branch ${item.branch ?? "?"} (worktree gone)`
       : item.kind === "missing-dir"
-        ? `分支 ${item.branch ?? "（分离头指针）"}（工作树目录已不在，git 仍登记）`
+        ? `branch ${item.branch ?? "(detached)"} (directory gone, still registered)`
         : item.kind === "named"
-          ? `独立工作树，分支 ${item.branch ?? "（分离头指针）"}`
+          ? `worktree, branch ${item.branch ?? "(detached)"}`
           : item.kind === "orphan-dir"
-            ? "目录（git 已不认）"
-            : `分支 ${item.branch ?? "（分离头指针）"}`,
-    `所属会话 ${item.ownerSessionId ?? "不明"}`,
+            ? "directory (unknown to git)"
+            : `branch ${item.branch ?? "(detached)"}`,
+    `session ${item.ownerSessionId ?? "unknown"}`,
     untakenText(item),
     ...(item.kind === "branch-only" || item.kind === "missing-dir"
       ? []
-      : [`占用 ${formatBytes(item.bytes)}`]),
-    ...(item.inUse ? [`在用（${item.inUseReason ?? "worker 在跑"}），不能删`] : []),
+      : [formatBytes(item.bytes)]),
+    ...(item.inUse ? [`in use (${item.inUseReason ?? "worker running"})`] : []),
   ];
   return `  ${parts.join("  ")}`;
 }
 
 export function formatLeftoverList(items: readonly LeftoverWorktree[]): string {
   if (items.length === 0) {
-    return "没有留下的 worker 工作树与分支";
+    return "no leftover worktrees or branches";
   }
-  return [`留下的 worker 工作树与分支（${items.length} 项）：`, ...items.map(itemLine)].join("\n");
+  return [`leftover worktrees and branches (${items.length}):`, ...items.map(itemLine)].join("\n");
 }
 
 export interface CleanPlan {
@@ -441,15 +442,15 @@ export function planClean(items: readonly LeftoverWorktree[], args: readonly str
       const byBranch = items.filter((entry) => entry.branch === arg);
       const matches = byBranch.length > 0 ? byBranch : items.filter((entry) => entry.name === arg);
       if (matches.length > 1) {
-        refused.push(`${arg}：对应 ${matches.length} 项，请改用编号或完整分支名`);
+        refused.push(`${arg}: ambiguous (${matches.length} matches)`);
         continue;
       }
       item = matches[0];
     }
     if (item === undefined) {
-      refused.push(`${arg}：没有这一项`);
+      refused.push(`${arg}: not found`);
     } else if (item.inUse) {
-      refused.push(`${arg}：在用（${item.inUseReason ?? "worker 在跑"}），不删`);
+      refused.push(`${arg}: in use (${item.inUseReason ?? "worker running"})`);
     } else {
       picked.add(item);
     }
@@ -460,15 +461,15 @@ export function planClean(items: readonly LeftoverWorktree[], args: readonly str
 export function formatCleanPlan(plan: CleanPlan): string {
   const lines: string[] = [];
   if (plan.remove.length === 0) {
-    lines.push("没有要删的");
+    lines.push("nothing to remove");
   } else {
-    lines.push(`将删除 ${plan.remove.length} 项：`);
+    lines.push(`will remove ${plural(plan.remove.length, "item")}:`);
     for (const item of plan.remove) {
-      const loss = hasUntaken(item) ? `——${untakenText(item)}，删除后丢失` : "";
-      lines.push(`  ${item.name}${item.branch !== undefined ? `（${item.branch}）` : ""}${loss}`);
+      const loss = hasUntaken(item) ? `: ${untakenText(item)}, lost on removal` : "";
+      lines.push(`  ${item.name}${item.branch !== undefined ? ` (${item.branch})` : ""}${loss}`);
     }
   }
-  for (const line of plan.refused) lines.push(`不删 ${line}`);
+  for (const line of plan.refused) lines.push(`kept ${line}`);
   return lines.join("\n");
 }
 
@@ -488,13 +489,11 @@ export function revalidatePlan(scope: WorktreeScope, plan: CleanPlan): CleanPlan
   for (const item of plan.remove) {
     const now = current.find((entry) => sameItem(entry, item));
     if (now === undefined) {
-      refused.push(`${item.name}：已不在`);
+      refused.push(`${item.name}: gone`);
     } else if (now.inUse) {
-      refused.push(`${item.name}：确认期间变成在用（${now.inUseReason ?? "worker 在跑"}），不删`);
+      refused.push(`${item.name}: now in use (${now.inUseReason ?? "worker running"})`);
     } else if (now.untaken !== item.untaken) {
-      refused.push(
-        `${item.name}：确认期间改动有变化（${untakenText(now)}），不删；请重新列出后再定`
-      );
+      refused.push(`${item.name}: changed since listing (${untakenText(now)})`);
     } else {
       remove.push(now);
     }
@@ -514,7 +513,9 @@ export function executeClean(
       removeLeftover(scope, item);
       removed.push(item.name);
     } catch (error) {
-      failed.push(`${item.name}：${error instanceof Error ? error.message : String(error)}`);
+      failed.push(
+        `removing ${item.name} failed: ${error instanceof Error ? error.message : String(error)}`
+      );
     }
   }
   return { removed, failed, refused: plan.refused };
@@ -527,16 +528,16 @@ export function formatCleanResult(result: {
 }): string {
   const lines = [
     result.removed.length > 0
-      ? `已删除 ${result.removed.length} 项：${result.removed.join("、")}`
-      : "没有删除任何一项",
-    ...result.failed.map((line) => `删除失败 ${line}`),
-    ...(result.refused ?? []).map((line) => `不删 ${line}`),
+      ? `removed ${plural(result.removed.length, "item")}: ${result.removed.join(", ")}`
+      : "nothing removed",
+    ...result.failed,
+    ...(result.refused ?? []).map((line) => `kept ${line}`),
   ];
   return lines.join("\n");
 }
 
 export const WORKTREES_COMMAND_USAGE =
-  "用法：pigeon worktrees list | clean [编号、分支名或名字…] [--all] [--yes]（clean 不带编号只删没有未取走改动的；--all 连有改动的一起删；--yes 不再确认）";
+  "usage: pigeon worktrees list | clean [<number|branch|name>...] [--all] [--yes]";
 
 // pigeon worktrees list | clean：confirm 为终端里的确认（返回是否同意）；没有终端时须带 --yes。确认之后、删之前重新核一遍
 export async function runWorktreesCommand(
@@ -553,17 +554,17 @@ export async function runWorktreesCommand(
     const args = rest.filter((arg) => arg !== "--yes");
     const unknown = args.find((arg) => arg.startsWith("-") && arg !== "--all");
     if (unknown !== undefined)
-      throw new Error(`未知参数：${unknown}（${WORKTREES_COMMAND_USAGE}）`);
+      throw new Error(`unknown option: ${unknown} (${WORKTREES_COMMAND_USAGE})`);
     const items = listLeftoverWorktrees(scope);
     const plan = planClean(items, args);
     const planText = formatCleanPlan(plan);
     if (plan.remove.length === 0) return `${planText}\n`;
     if (!yes) {
       if (confirm === undefined) {
-        return `${planText}\n没有终端可确认：确认要删时加 --yes 再执行一次\n`;
+        return `${planText}\nno terminal to confirm; rerun with --yes\n`;
       }
-      if (!(await confirm(`${planText}\n确认删除？[y/N] `))) {
-        return "已取消，没有删除\n";
+      if (!(await confirm(`${planText}\nremove? [y/N] `))) {
+        return "cancelled\n";
       }
     }
     const checked = revalidatePlan(scope, { remove: plan.remove, refused: [] });
@@ -595,7 +596,7 @@ export function createTuiWorktreesFace(scope: WorktreeScope): TuiWorktreesFace {
         if (sub === "confirm") {
           const plan = pending;
           pending = undefined;
-          if (plan === undefined) return "没有待确认的删除：先用 /worktrees clean 选出要删的";
+          if (plan === undefined) return "nothing pending to confirm";
           return formatCleanResult(
             executeClean(scope, revalidatePlan(scope, { remove: plan.remove, refused: [] }))
           );
@@ -607,12 +608,12 @@ export function createTuiWorktreesFace(scope: WorktreeScope): TuiWorktreesFace {
         }
         if (sub === "clean") {
           const unknown = rest.find((arg) => arg.startsWith("-") && arg !== "--all");
-          if (unknown !== undefined) return `未知参数：${unknown}（${WORKTREES_TUI_USAGE}）`;
+          if (unknown !== undefined) return `unknown option: ${unknown} (${WORKTREES_TUI_USAGE})`;
           const plan = planClean(listLeftoverWorktrees(scope), rest);
           const text = formatCleanPlan(plan);
           if (plan.remove.length === 0) return text;
           pending = plan;
-          return `${text}\n确认删除请输入 /worktrees confirm；输入别的 /worktrees 命令即作罢`;
+          return `${text}\ntype /worktrees confirm to delete`;
         }
         return WORKTREES_TUI_USAGE;
       });
@@ -621,4 +622,4 @@ export function createTuiWorktreesFace(scope: WorktreeScope): TuiWorktreesFace {
 }
 
 export const WORKTREES_TUI_USAGE =
-  "用法：/worktrees [list] | /worktrees clean [编号、分支名或名字…] [--all] | /worktrees confirm";
+  "usage: /worktrees [list] | /worktrees clean [<number|branch|name>...] [--all] | /worktrees confirm";

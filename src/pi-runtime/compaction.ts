@@ -65,7 +65,7 @@ export type CompactionConfigInput = Partial<Omit<CompactionConfig, "contextWindo
 
 function positiveInteger(name: string, value: number): number {
   if (!Number.isInteger(value) || value < 1) {
-    throw new Error(`上下文压缩的${name}需要正整数：${value}`);
+    throw new Error(`compaction ${name} must be a positive integer: ${value}`);
   }
   return value;
 }
@@ -81,27 +81,27 @@ export function resolveCompactionConfig(
       : modelWindow !== undefined && modelWindow.source !== "unknown"
         ? [modelWindow.value, modelWindow.source]
         : [DEFAULT_CONTEXT_WINDOW, "default"];
-  const contextWindow = positiveInteger("模型窗口", window);
+  const contextWindow = positiveInteger("contextWindow", window);
   const reserveTokens = positiveInteger(
-    "预留量",
+    "reserveTokens",
     input.reserveTokens ?? DEFAULT_COMPACTION_SETTINGS.reserveTokens
   );
   const keepRecentTokens = positiveInteger(
-    "保留量",
+    "keepRecentTokens",
     input.keepRecentTokens ?? DEFAULT_COMPACTION_SETTINGS.keepRecentTokens
   );
   if (contextWindow <= reserveTokens) {
     throw new Error(
-      `上下文压缩的模型窗口（${contextWindow}，来源 ${contextWindowSource}）须大于预留量（${reserveTokens}）`
+      `compaction contextWindow (${contextWindow}, from ${contextWindowSource}) must be greater than reserveTokens (${reserveTokens})`
     );
   }
   const thresholdTokens = positiveInteger(
-    "触发点",
+    "thresholdTokens",
     input.thresholdTokens ?? contextWindow - reserveTokens
   );
   if (thresholdTokens >= contextWindow) {
     throw new Error(
-      `上下文压缩的触发点（${thresholdTokens}）须小于模型窗口（${contextWindow}，来源 ${contextWindowSource}）`
+      `compaction thresholdTokens (${thresholdTokens}) must be less than contextWindow (${contextWindow}, from ${contextWindowSource})`
     );
   }
   return { contextWindow, contextWindowSource, reserveTokens, keepRecentTokens, thresholdTokens };
@@ -197,7 +197,9 @@ export function summaryModels(streamFn: StreamFn): Models {
         return undefined;
       }
       return () => {
-        throw new Error(`摘要请求的模型适配只实现 completeSimple，不支持 ${property}`);
+        throw new Error(
+          `the summary request model adapter only implements completeSimple, not ${property}`
+        );
       };
     },
   });
@@ -579,7 +581,11 @@ export class ContextCompactor {
       }
       const after = await store.appendCompaction(result);
       if (after === undefined) {
-        return { kind: "failed", stage: "store", error: new Error("压缩条目没有写进会话文件") };
+        return {
+          kind: "failed",
+          stage: "store",
+          error: new Error("compaction entry not written to the session file"),
+        };
       }
       const messages = buildSessionContext([...after]).messages;
       return {

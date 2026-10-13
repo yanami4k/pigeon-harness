@@ -62,5 +62,5 @@ test("沙箱会话：/export 手动交回，结果落消息区；不在沙箱里
   assert.ok(rendered() > 0);
   const plain = stubHost(undefined);
   handleSlashCommand(plain.host, "/export");
-  assert.match(plain.lines[0] ?? "", /^未知命令：\/export/);
+  assert.match(plain.lines[0] ?? "", /^unknown command: \/export/);
 });

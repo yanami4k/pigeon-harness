@@ -271,7 +271,7 @@ export class MessageFlow {
       const checked = checkedImage(image);
       if (checked === undefined) {
         // 类型不在白名单或数据不是合法的 base64：只显示固定的占位，不把对方给的类型与数据写进终端
-        this.append("[image: 不能显示（类型或数据不认得）]");
+        this.append("[image: can't display]");
         continue;
       }
       this.list.addChild(

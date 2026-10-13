@@ -9,10 +9,10 @@ import type {
 import { dedupedWarner, failureDetail, type WarnSink } from "./warnings.ts";
 
 const TRIGGER_LABELS: Readonly<Record<CompactionTrigger, string>> = {
-  turn: "自动，轮间",
-  "run-start": "自动，Run 开始前",
-  overflow: "自动，上下文超长出错后",
-  manual: "手动",
+  turn: "auto, between turns",
+  "run-start": "auto, before run",
+  overflow: "auto, after context overflow",
+  manual: "manual",
 };
 
 // 没压成的原因
@@ -23,11 +23,11 @@ function reasonOf(outcome: Exclude<ManualCompactionOutcome, { kind: "compacted" 
     case "skipped":
       switch (outcome.reason) {
         case "nothing-to-summarize":
-          return "最近保留的消息之外没有更早的对话可摘要";
+          return "nothing older than the kept messages to summarize";
         case "store-unavailable":
-          return "会话文件没有打开";
+          return "session file not open";
         case "disabled":
-          return "本会话没有开启上下文压缩";
+          return "compaction is off in this session";
       }
   }
 }
@@ -36,14 +36,17 @@ function reasonOf(outcome: Exclude<ManualCompactionOutcome, { kind: "compacted" 
 export function compactionNoticeText(notice: CompactionNotice): string {
   switch (notice.kind) {
     case "compacted":
-      return `上下文已压缩（${TRIGGER_LABELS[notice.trigger]}）：约 ${notice.tokensBefore} → ${notice.tokensAfter} token`;
+      return `context compacted (${TRIGGER_LABELS[notice.trigger]}): ~${notice.tokensBefore} → ${notice.tokensAfter} tokens`;
     case "incomplete": {
       // 决策 422：超长出错后的压缩没压成即不重试
-      const after = notice.trigger === "overflow" ? "不再重试，按原错误收尾" : "本轮按原上下文继续";
-      return `上下文压缩未完成（${TRIGGER_LABELS[notice.trigger]}）：${reasonOf(notice.outcome)}；${after}`;
+      const after =
+        notice.trigger === "overflow"
+          ? "not retrying; ended with the original error"
+          : "continuing with the full context";
+      return `compaction incomplete (${TRIGGER_LABELS[notice.trigger]}): ${reasonOf(notice.outcome)}; ${after}`;
     }
     case "hook-failed":
-      return `压缩前回调失败：${failureDetail(notice.error)}；压缩照常进行`;
+      return `pre-compaction callback failed: ${failureDetail(notice.error)}; compacting anyway`;
   }
 }
 
@@ -53,11 +56,11 @@ export function manualCompactionText(outcome: ManualCompactionOutcome): string |
     return undefined;
   }
   if (outcome.kind === "failed") {
-    return `压缩失败：${reasonOf(outcome)}`;
+    return `compaction failed: ${reasonOf(outcome)}`;
   }
   return outcome.reason === "nothing-to-summarize"
-    ? `没有可压缩的内容：${reasonOf(outcome)}`
-    : `无法压缩：${reasonOf(outcome)}`;
+    ? `nothing to compact: ${reasonOf(outcome)}`
+    : `can't compact: ${reasonOf(outcome)}`;
 }
 
 // 无头运行的压缩告警：自动压缩没压成与压缩前回调失败写标准错误输出，两类各按原因去重、同一类只说一次（warnings.ts 口径）；

@@ -82,7 +82,7 @@ test("上级目录是目录联接（或符号链接）时不写，链接指向�
     actions: [{ path: "link/f.txt", target }],
   });
   assert.deepEqual(result.written, []);
-  assert.match(result.skipped[0]?.reason ?? "", /符号链接或目录联接/);
+  assert.match(result.skipped[0]?.reason ?? "", /symlink or junction/);
   assert.equal(readFileSync(join(outside, "f.txt"), "utf8"), "outside\n");
 });
 
@@ -96,7 +96,7 @@ test("带 .git 段的路径一律不写（不分大小写、段尾点与空格�
   assert.deepEqual(result.written, []);
   assert.deepEqual(
     result.skipped.map((item) => [item.path, item.reason]),
-    paths.map((path) => [path, "版本库元数据（.git）不碰"])
+    paths.map((path) => [path, "repository metadata (.git) is not touched"])
   );
   assert.equal(existsSync(join(root, ".git", "hooks", "pre-commit")), false);
   assert.equal(existsSync(join(root, "sub")), false);
@@ -250,7 +250,7 @@ test("没有原样字节时拿不准就不写：配了过滤器（含 .git/info/
   });
   assert.deepEqual(result.written, ["plain.txt"]);
   assert.deepEqual(
-    result.skipped.map((item) => [item.path, /无法保真还原/.test(item.reason)]),
+    result.skipped.map((item) => [item.path, /can't restore faithfully/.test(item.reason)]),
     [
       ["lfs.dat", true],
       ["enc.txt", true],
@@ -280,7 +280,7 @@ test("有别的硬链接的文件不写（写了会改到仓库外）", async ()
     ],
   });
   assert.deepEqual(result.written, []);
-  assert.match(result.skipped[0]?.reason ?? "", /硬链接/);
+  assert.match(result.skipped[0]?.reason ?? "", /hard links/);
   assert.equal(readFileSync(join(outside, "shared.txt"), "utf8"), "outside\n");
 });
 
@@ -301,7 +301,7 @@ test("存下的原样对象读不到（被回收）：只这一个文件列为�
     saved: [{ path: "a.txt", raw: "1".repeat(40), normalized: a.blob }],
   });
   assert.deepEqual(result.written, ["b.txt"]);
-  assert.match(result.skipped[0]?.reason ?? "", /已被回收/);
+  assert.match(result.skipped[0]?.reason ?? "", /garbage-collected/);
   assert.equal(result.failed, undefined);
 });
 

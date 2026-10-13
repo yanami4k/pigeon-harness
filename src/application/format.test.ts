@@ -102,11 +102,11 @@ test("C1 控制字符（0x80–0x9f，0x9b 在部分终端里等同 ESC [）换�
 test("审批来源行：会话面板派出的会话写明会话名（决策 443），worker 照旧，主会话没有", () => {
   assert.equal(
     approvalSourceLine({ sessionId: "sess_01ABCDEFGHJKMNPQRSTVWXYZ00", pooled: { name: "s2" } }),
-    "来源：会话 s2 ｜ 会话号 sess_01ABCDEF…"
+    "source: session s2 | session ID sess_01ABCDEF…"
   );
   assert.equal(
     approvalSourceLine({ worker: { name: "w", role: "explorer" } }),
-    "来源：worker w（explorer）"
+    "source: worker w (explorer)"
   );
   assert.equal(approvalSourceLine({}), undefined);
 });

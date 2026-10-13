@@ -41,11 +41,11 @@ function readTrustFile(file: string): Record<string, Record<string, string>> {
     raw = JSON.parse(readFileSync(file, "utf8"));
   } catch (error) {
     throw new ConfigTrustStoreError(
-      `配置确认记录不是合法 JSON：${file}：${error instanceof Error ? error.message : String(error)}`
+      `trust record ${file} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`
     );
   }
   if (!Value.Check(ConfigTrustFileSchema, raw)) {
-    throw new ConfigTrustStoreError(`配置确认记录格式不对：${file}`);
+    throw new ConfigTrustStoreError(`trust record ${file} is malformed`);
   }
   return (raw as { projects: Record<string, Record<string, string>> }).projects;
 }
@@ -63,7 +63,10 @@ export function recordTrustedEntries(
 ): void {
   const file = configTrustPathOf(homeDir);
   mkdirSync(userStateDir(homeDir), { recursive: true });
-  const release = acquireExclusiveLock(`${file}.lock`, "配置确认记录正被另一个窗口写入：稍后重试");
+  const release = acquireExclusiveLock(
+    `${file}.lock`,
+    "trust record is being written by another window"
+  );
   try {
     const projects = readTrustFile(file);
     const key = normalizeProjectPath(root);

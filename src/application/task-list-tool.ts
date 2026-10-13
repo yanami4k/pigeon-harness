@@ -208,13 +208,13 @@ export function taskListRegistrations(): ToolRegistration[] {
   return [
     {
       name: UPDATE_TASKS_TOOL,
-      description: "记下或更新任务清单",
+      description: "record or update the task list",
       parameters: UpdateTasksParamsSchema,
       ...base,
     },
     {
       name: LIST_TASKS_TOOL,
-      description: "查看任务清单",
+      description: "show the task list",
       parameters: ListTasksParamsSchema,
       ...base,
     },

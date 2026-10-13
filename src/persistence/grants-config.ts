@@ -51,7 +51,7 @@ export function grantsConfigLockPath(governanceRoot: string): string {
   return localSettingsLockPathOf(governanceRoot);
 }
 
-const CONTENDED = "放权配置正被另一个窗口写入：等它收尾后重试（两边同时写会丢掉先写的那一条）";
+const CONTENDED = "saved rules are being written by another window";
 
 // 读出个人设置文件的原样内容（校验通过才返回；缺失为空对象）
 function readLocalSettingsRaw(governanceRoot: string): Record<string, unknown> {
@@ -64,12 +64,12 @@ function readLocalSettingsRaw(governanceRoot: string): Record<string, unknown> {
     raw = parseJsonText(readFileSync(path, "utf8"));
   } catch (error) {
     throw new GrantsConfigError(
-      `设置文件 ${describeSource(LOCAL_SOURCE)}不是合法 JSON：${path}：${error instanceof Error ? error.message : String(error)}`
+      `settings file ${describeSource(LOCAL_SOURCE)} is not valid JSON: ${error instanceof Error ? error.message : String(error)} (${path})`
     );
   }
   const checked = validateSettingsLayer(raw, LOCAL_SOURCE);
   if ("problems" in checked) {
-    throw new GrantsConfigError(`${checked.problems.join("；")}（${path}）`);
+    throw new GrantsConfigError(`${checked.problems.join("; ")} (${path})`);
   }
   return raw as Record<string, unknown>;
 }
@@ -94,7 +94,7 @@ function withGrantsConfigLock<T>(
     const next = { ...raw, permissions: { ...permissions, grants } };
     const checked = validateSettingsLayer(next, LOCAL_SOURCE);
     if ("problems" in checked) {
-      throw new GrantsConfigError(checked.problems.join("；"));
+      throw new GrantsConfigError(checked.problems.join("; "));
     }
     writeFileAtomic(path, `${JSON.stringify(next, null, 2)}\n`, options.io);
     return result;
@@ -125,7 +125,7 @@ export function appendGrantConfigRule(
       const duplicate = findPromotedRuleIndex(existing, rule.promotedFrom.grantId);
       if (duplicate !== -1) {
         throw new GrantAlreadyPromotedError(
-          `grant ${rule.promotedFrom.grantId} 已升格为 config#${duplicate}，不重复固化（用 /grants 查看）`
+          `grant ${rule.promotedFrom.grantId} already saved as config#${duplicate}`
         );
       }
       return { grants: [...existing, rule], result: undefined };
@@ -146,12 +146,12 @@ export function removeGrantConfigRule(
     governanceRoot,
     (existing) => {
       if (index < 0 || index >= existing.length) {
-        throw new GrantsConfigError(`固化规则不存在：config#${index}（共 ${existing.length} 条）`);
+        throw new GrantsConfigError(`no saved rule config#${index} (${existing.length} saved)`);
       }
       const removed = existing[index];
       if (removed === undefined) {
         // noUncheckedIndexedAccess：上界已检，此处仅为收窄
-        throw new GrantsConfigError(`固化规则不存在：config#${index + 1}`);
+        throw new GrantsConfigError(`no saved rule config#${index + 1}`);
       }
       existing.splice(index, 1);
       return { grants: existing, result: removed };

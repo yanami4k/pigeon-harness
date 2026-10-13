@@ -206,7 +206,7 @@ test("推迟建文件：建文件失败报给发起那次写入的写者，不�
     writer.appendMessage(userMessage("你好"));
     await writer.flush();
     assert.equal(faults.length, 1);
-    assert.equal(faults[0]?.action, "打开");
+    assert.equal(faults[0]?.action, "opening the session file");
     assert.equal(await writer.filePath(), undefined);
     await writer.close();
   } finally {

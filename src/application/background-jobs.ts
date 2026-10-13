@@ -262,32 +262,26 @@ export function handbackJobsNotice(
   const running = jobs?.running() ?? [];
   if (running.length === 0) return undefined;
   const list = (items: readonly BackgroundJob[]) =>
-    items.map((job) => `${job.id}（${job.command}）`).join("、");
+    items.map((job) => `${job.id} (${job.command})`).join(", ");
   if (when === "export") {
-    return `交回时后台作业仍在跑：${list(running)}；交回的改动可能是作业做到一半的样子`;
+    return `background jobs still running during export: ${list(running)}`;
   }
   const stopped = running.filter((job) => !job.keep);
   const kept = running.filter((job) => job.keep);
   return [
-    ...(stopped.length > 0
-      ? [`交回沙箱前停掉在跑的后台作业：${list(stopped)}；交回的是它们停下时的工作区`]
-      : []),
-    ...(kept.length > 0
-      ? [
-          `标了会话结束后保留的后台作业交回时仍在跑：${list(kept)}；交回的改动可能是作业做到一半的样子，容器删除时随之结束`,
-        ]
-      : []),
+    ...(stopped.length > 0 ? [`stopped background jobs before export: ${list(stopped)}`] : []),
+    ...(kept.length > 0 ? [`kept background jobs still running during export: ${list(kept)}`] : []),
   ].join("\n");
 }
 
 const cleanedDirs = new Set<string>();
 
 const ORPHAN_RESULT_TEXT: Record<OrphanReport["result"], string> = {
-  killed: "已停掉",
-  gone: "进程已不在",
-  reused: "进程号已被别的程序复用，没有动它",
-  "container-unavailable": "容器已不可用，记录留到下次启动再试",
-  unknown: "查不到进程的情形，记录留到下次启动再试",
+  killed: "stopped",
+  gone: "process gone",
+  reused: "pid reused by another program; left alone",
+  "container-unavailable": "container unavailable; retry on next start",
+  unknown: "process state unknown; retry on next start",
 };
 
 // 崩溃后下次启动：清理上一进程留下的作业（每个进程每个治理目录一次，后台进行），给人报一行
@@ -306,7 +300,7 @@ export function cleanupOrphanedJobsOnce(
     (reports) => {
       for (const report of reports) {
         warn?.(
-          `上次异常退出时留下的后台作业 ${report.jobId}（${report.command}）：${ORPHAN_RESULT_TEXT[report.result]}`
+          `background job ${report.jobId} (${report.command}) from the last crash: ${ORPHAN_RESULT_TEXT[report.result]}`
         );
       }
       return reports;

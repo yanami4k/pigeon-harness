@@ -237,7 +237,7 @@ test("写者：一条写不进（非 JSON 数据）只报一次故障、不抛�
     writer.appendMessage(userMessage("后"));
     await writer.close();
     assert.equal(faults.length, 1);
-    assert.match(String((faults[0] as Error).message), /写入 pigeon\.run-end 条目失败/);
+    assert.match(String((faults[0] as Error).message), /writing a pigeon\.run-end entry failed/);
     const view = readSessionFile(locateSessionFile(sessions, "sess_D")?.path ?? "");
     assert.deepEqual(
       view?.entries.map((entry) => entry.type),
@@ -286,7 +286,10 @@ test("写者：会话文件被另一个存活进程持锁时不打开、不写�
       blocked.appendMessage(userMessage("二"));
       await blocked.close();
       assert.equal(faults.length, 1);
-      assert.match(String((faults[0] as Error).message), /打开失败.*另一个进程/);
+      assert.match(
+        String((faults[0] as Error).message),
+        /opening the session file failed: .*another process/
+      );
       assert.equal(readFileSync(path, "utf8"), before, "未取得锁即一个字节都不写");
     } finally {
       child.kill();

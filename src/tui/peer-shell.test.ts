@@ -63,7 +63,7 @@ test("/rename：交给装配方并显示返回的一行；没给即命令不可�
     term.input("/rename");
     term.input("\r");
     await settle();
-    assert.match(screenText(term), /用法：\/rename <名字>/);
+    assert.match(screenText(term), /usage: \/rename <name>/);
   } finally {
     cleanup();
   }

@@ -359,8 +359,7 @@ function sameFile(left: TreeFile | undefined, right: TreeFile | undefined): bool
   return left?.blob === right?.blob && left?.mode === right?.mode;
 }
 
-const NO_TURN_SNAPSHOT =
-  "这一点之后有消息没有发消息时的快照（拍摄失败、超时，或是在命令行里发的），分不清 agent 的改动与手改，只能退对话";
+const NO_TURN_SNAPSHOT = "a later message has no snapshot; conversation only";
 
 export function planRewind(input: {
   file: SessionFileView;
@@ -378,12 +377,11 @@ export function planRewind(input: {
   const herePath = here !== undefined ? dataOf(here).path : undefined;
   const therePath = there !== undefined ? dataOf(there).path : undefined;
   if (herePath !== therePath) {
-    plan.codeBlocked = "这一点与现在不在同一个工作区（中间移进过独立工作树），只能退对话";
+    plan.codeBlocked = "not in the same workspace as now; conversation only";
     if (here !== undefined) {
       plan.worktreeEntry = { customType: SessionEntryType.Worktree, data: here.data };
     } else {
-      plan.conversationBlocked =
-        "目标分支在独立工作树里、现在在主检出：退过去续接时会回到工作树，与现在的运行面不一致，不能切过去";
+      plan.conversationBlocked = "target is in a worktree, now in the main checkout; can't switch";
     }
   }
   if (trees === undefined || plan.codeBlocked !== undefined) return plan;
@@ -450,14 +448,14 @@ export function planRewind(input: {
     (lastHere !== undefined && attributePaths(trees.changed(atFork, lastHere))) ||
     attributePaths(trees.changed(atFork, targetCommit))
   ) {
-    plan.attributesChanged = "这段里 .gitattributes 变过";
+    plan.attributesChanged = ".gitattributes changed in this range";
   } else if (
     nowInfo === undefined ||
     (firstRun?.infoAttributes === undefined
       ? nowInfo !== "none"
       : firstRun.infoAttributes !== nowInfo)
   ) {
-    plan.attributesChanged = "这段里 .git/info/attributes 变过或无从核对";
+    plan.attributesChanged = ".git/info/attributes changed or can't be checked";
   }
   // 两条消息之间的手改：上一个 Run 收尾时与下一个 Run 发消息时之间变过的路径（Run 进行中的手改分不出，见 436）
   const manual = new Set<string>();
@@ -478,12 +476,14 @@ export function planRewind(input: {
     if (sameFile(left, goal)) continue;
     let uncertain: string | undefined;
     if (manual.has(path)) {
-      uncertain = "两条消息之间被手改过";
+      uncertain = "edited by hand between messages";
     } else if (goal === undefined) {
       // 只删在回退点确定不存在、且是 agent 在两点之间新建的文件
-      if (!created.has(path)) uncertain = "不是这段里 agent 新建的文件，删掉拿不准";
-      else if (ignoreRulesChanged) uncertain = "这段里忽略规则变过，删掉拿不准";
-      else if (trees.ignored(path)) uncertain = "按现在的规则被忽略，删掉拿不准";
+      if (!created.has(path))
+        uncertain = "not created by the agent in this range; unsure to delete";
+      else if (ignoreRulesChanged)
+        uncertain = "ignore rules changed in this range; unsure to delete";
+      else if (trees.ignored(path)) uncertain = "ignored by current rules; unsure to delete";
       else plan.createdAfter.set(path, created.get(path) ?? 0);
     }
     plan.files.push({
@@ -529,13 +529,13 @@ export function classifyPlan(
     };
     const reason =
       (counts.get(keyOf(file.path)) ?? 0) > 1
-        ? "与另一个文件只差大小写"
+        ? "differs from another file only in case"
         : !(file.observed !== undefined
               ? file.observed === "absent"
                 ? now === undefined
                 : now?.blob === file.observed
               : sameFile(now, file.expected))
-          ? "agent 改过之后又被手改过"
+          ? "edited by hand after the agent"
           : file.uncertain;
     if (reason === undefined) result.actions.push(action);
     else result.conflicts.push({ ...action, reason });
@@ -695,7 +695,7 @@ async function readFile(host: RewindHost): Promise<SessionFileView> {
   await host.sessionStore.flush();
   const path = await host.sessionStore.filePath();
   const loaded = path !== undefined ? loadStoreSessionFile(path) : undefined;
-  if (loaded === undefined) throw new RewindError("会话文件还没有内容，没有可回退的点");
+  if (loaded === undefined) throw new RewindError("session file is empty; nothing to rewind");
   return loaded.file;
 }
 
@@ -717,7 +717,7 @@ export async function loadRewindTree(host: RewindHost): Promise<RewindNode[]> {
 export async function prepareRewind(host: RewindHost, to: string | null): Promise<PreparedRewind> {
   const file = await readFile(host);
   const from = file.lanes.get("main") ?? null;
-  if (to !== null && !file.entriesById.has(to)) throw new RewindError("会话里没有这个点");
+  if (to !== null && !file.entriesById.has(to)) throw new RewindError("point not found in session");
   const trees = treesOf(host);
   return { file, trees, plan: planRewind({ file, trees, from, to }) };
 }
@@ -742,7 +742,7 @@ export async function prepareUndo(host: RewindHost): Promise<PreparedRewind | un
     undoOf: record.rewindId,
   };
   if (main.slice(record.index + 1).some((entry) => isCustom(entry, SessionEntryType.Worktree))) {
-    plan.codeBlocked = "上次退代码之后移进过独立工作树，不在同一个工作区，不能撤销";
+    plan.codeBlocked = "moved into a worktree since the last code rewind; can't undo";
     return { file, trees, plan };
   }
   // 退代码时记下的工作区：不同或已不在即不撤（工作树被清理后续接回到主检出等）
@@ -755,7 +755,7 @@ export async function prepareUndo(host: RewindHost): Promise<PreparedRewind | un
     }
   })();
   if (!sameWorkspace) {
-    plan.codeBlocked = `上次退代码时的工作区（${record.workspace ?? "没有记下"}）与现在不同或已不在，不能撤销`;
+    plan.codeBlocked = `workspace of the last code rewind (${record.workspace ?? "not recorded"}) differs or is gone; can't undo`;
     return { file, trees, plan };
   }
   const byPath = new Map<string, { failed: boolean; observed?: string }>();
@@ -777,7 +777,7 @@ export async function prepareUndo(host: RewindHost): Promise<PreparedRewind | un
       // 写到一半出错的：按出错之后的样子核对；不明即拿不准
       ...(step.failed && step.observed !== undefined ? { observed: step.observed } : {}),
       ...(step.failed && step.observed === undefined
-        ? { uncertain: "上次写到一半出错，现状不明" }
+        ? { uncertain: "last restore failed midway; state unknown" }
         : {}),
     });
   }
@@ -793,7 +793,7 @@ export interface CodeCheck {
 export async function checkCode(host: RewindHost, prepared: PreparedRewind): Promise<CodeCheck> {
   const checkpoints = host.checkpoints;
   if (checkpoints === undefined || prepared.trees === undefined) {
-    throw new RewindError("这个会话没有代码快照，只能退对话");
+    throw new RewindError("no code snapshots in this session; conversation only");
   }
   if (prepared.plan.codeBlocked !== undefined) throw new RewindError(prepared.plan.codeBlocked);
   await checkpoints.settle();
@@ -889,7 +889,7 @@ export async function applyRewind(
   // 主分支在规划之后动过（又有了写入）即不按旧规划做
   let leaf = await host.sessionStore.leafId();
   if (leaf === undefined || leaf !== plan.from) {
-    throw new RewindError("会话在选点之后又有了新内容，请重新打开回退");
+    throw new RewindError("session changed after the point was picked");
   }
   // 写一条记录并确认它紧接在我们上一次写的后面（期间有别的写入即记下"对话不退"）；返回落没落盘
   let foreign = false;
@@ -914,7 +914,7 @@ export async function applyRewind(
     const code = options.code;
     const trees = prepared.trees;
     if (code === undefined || trees === undefined) {
-      throw new RewindError("退代码之前要先拍现状快照");
+      throw new RewindError("rewinding code needs a snapshot of the current state");
     }
     const revert = options.revert ?? new Set<string>();
     const actions = [
@@ -943,8 +943,7 @@ export async function applyRewind(
         rewoundAt: now,
       })
     );
-    if (!intended)
-      throw new RewindError("写意图记录没有成功（会话存储告警已给出原因），没有动任何文件");
+    if (!intended) throw new RewindError("writing the intent record failed; no files changed");
     outcome.restore = await restoreFiles({
       trees,
       actions,
@@ -972,7 +971,7 @@ export async function applyRewind(
             ...(step.observed !== undefined ? { observed: step.observed } : {}),
           })
         );
-        if (!ok) outcome.problems.push(`${step.path} 的写回结果没有记进会话`);
+        if (!ok) outcome.problems.push(`result for ${step.path} not recorded in session`);
       },
     });
     if (outcome.restore.failed !== undefined) outcome.failed = outcome.restore.failed;
@@ -984,13 +983,13 @@ export async function applyRewind(
       );
     } catch (error) {
       outcome.problems.push(
-        `存下的原样字节没有挂上引用（可能被 git gc 回收）：${errorText(error)}`
+        `saved bytes not referenced (git gc may remove them): ${errorText(error)}`
       );
     }
     try {
       await host.checkpoints?.checkpointer.resync?.();
     } catch (error) {
-      outcome.problems.push(`快照器没有对齐到写回后的现状：${errorText(error)}`);
+      outcome.problems.push(`syncing the snapshotter after restore failed: ${errorText(error)}`);
     }
   }
   const restore = outcome.restore;
@@ -1034,18 +1033,19 @@ export async function applyRewind(
   });
   if (lane === "changed" || foreign) {
     if (lane === "changed" && !(await record(summary))) {
-      outcome.problems.push("收尾记录没有写成（逐个文件的结果已记下）");
+      outcome.problems.push("writing the final record failed (file results recorded)");
     }
     if (mode !== "code") {
-      outcome.conversationSkipped = "会话在写回期间又有了新内容，对话没有退（写回的文件已记下）";
+      outcome.conversationSkipped =
+        "session changed during restore; conversation not rewound (restored files recorded)";
     }
     return outcome;
   }
   if (lane === "failed") {
-    if (rewindId === undefined)
-      throw new RewindError("写回退记录没有成功（会话存储告警已给出原因）");
-    outcome.problems.push("收尾记录没有写成（逐个文件的结果已记下，可以撤销）");
-    if (mode !== "code") outcome.conversationSkipped = "对话没有退（回退记录没有写成）";
+    if (rewindId === undefined) throw new RewindError("writing the rewind record failed");
+    outcome.problems.push("writing the final record failed (file results recorded; undo works)");
+    if (mode !== "code")
+      outcome.conversationSkipped = "conversation not rewound (rewind record not written)";
     return outcome;
   }
   if (!moveConversation) return outcome;
@@ -1054,7 +1054,7 @@ export async function applyRewind(
   await host.sessionStore.flush();
   const path = await host.sessionStore.filePath();
   const loaded = path !== undefined ? loadStoreSessionFile(path) : undefined;
-  if (loaded === undefined) throw new RewindError("回退之后读不到会话文件");
+  if (loaded === undefined) throw new RewindError("reading the session file after rewind failed");
   const { messages, interrupted } = restoreSessionContext(loaded.main);
   for (const message of interrupted) host.sessionStore.appendMessage(message);
   await host.sessionStore.flush();

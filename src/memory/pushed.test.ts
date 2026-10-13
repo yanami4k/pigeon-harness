@@ -276,7 +276,7 @@ test("旧格式而这一次拿不到锁：推送内存里转换的新格式、�
     assert.equal(readFileSync(project.file, "utf8"), LEGACY_PROJECT, "文件不动");
     assert.equal(existsSync(join(project.backupDir, "state", "memory.md")), false, "没有备份");
     assert.deepEqual(reports, [
-      "[记忆] .pigeon/state/memory.md 是旧格式，这次没能改写成新格式（另一处正在写这一层）：本次在内存里按新格式读出，文件未动，下次读到时再试",
+      "[memory] couldn't convert .pigeon/state/memory.md to the new format (another process is writing this layer); read it in memory this time",
     ]);
     const done = load();
     assert.equal(done.section, held.section);

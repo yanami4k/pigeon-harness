@@ -136,14 +136,14 @@ test("/resume 换绑后渲染全部历史：正文、thinking、工具行与折�
       "~ 先确认锚点",
       "我来改",
       '$ edit_file {"path":"a.ts"} -> ok',
-      "[result] edit_file ok（7 字符，已折叠）",
+      "[result] edit_file ok (7 chars, collapsed)",
       "改好了",
       "done · ",
     ]) {
       assert.ok(screen.includes(expected), `历史应包含「${expected}」：\n${screen}`);
     }
     const folded = await render(2);
-    assert.ok(folded.includes("[更早 5 条未展开，/search 可查]"), folded);
+    assert.ok(folded.includes("[5 earlier lines not shown]"), folded);
     assert.ok(!folded.includes("> 把 beta 改成大写"));
   } finally {
     rmSync(root, { recursive: true, force: true });

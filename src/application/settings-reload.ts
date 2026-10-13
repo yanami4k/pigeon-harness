@@ -24,6 +24,10 @@ import { mergeMcpConfig } from "../state/mcp-config.ts";
 import { SETTINGS_SECTIONS, type SettingsSnapshot, withHooksDisabled } from "../state/settings.ts";
 import { localSettingsTracked, pendingTrustEntries } from "./session-settings.ts";
 
+// 重读设置的结果行：终端界面按这两句认出"已重读""没有变化"（不另写进消息区）
+export const SETTINGS_RELOADED_PREFIX = "settings reloaded";
+export const SETTINGS_UNCHANGED = "settings unchanged";
+
 export interface SettingsReloadPlan {
   current: SettingsSnapshot;
   next: SettingsSnapshot;
@@ -127,28 +131,27 @@ export function applySettingsReload(
   const sandboxChanged = changedSections.includes("sandbox");
   const lines: string[] = [];
   if (changedSections.length === 0) {
-    lines.push("设置没有变化");
+    lines.push(SETTINGS_UNCHANGED);
   } else {
-    lines.push(`已重读设置，自下一轮起生效：改了 ${changedSections.join("、")} 节`);
+    lines.push(`${SETTINGS_RELOADED_PREFIX}: ${changedSections.join(", ")} changed`);
     const mcpParts = [
-      ...(mcp.restarted.length > 0 ? [`重启 ${mcp.restarted.join("、")}`] : []),
-      ...(mcp.stopped.length > 0 ? [`停止 ${mcp.stopped.join("、")}`] : []),
-      ...(mcp.started.length > 0 ? [`启动 ${mcp.started.join("、")}`] : []),
+      ...(mcp.restarted.length > 0 ? [`restarted ${mcp.restarted.join(", ")}`] : []),
+      ...(mcp.stopped.length > 0 ? [`stopped ${mcp.stopped.join(", ")}`] : []),
+      ...(mcp.started.length > 0 ? [`started ${mcp.started.join(", ")}`] : []),
     ];
     if (mcpParts.length > 0) {
-      lines.push(`MCP 服务：${mcpParts.join("；")}`);
+      lines.push(`MCP servers: ${mcpParts.join("; ")}`);
     }
   }
   if (plan.pending.length > 0 && choice === "skip") {
     lines.push(
-      `未确认的条目沿用原内容（原来没有的不启用）：${plan.pending.map((entry) => trustKeyOf(entry)).join("、")}`
+      `unconfirmed, kept as before: ${plan.pending.map((entry) => trustKeyOf(entry)).join(", ")}`
     );
   }
   return { snapshot, changedSections, mcp, sandboxChanged, lines };
 }
 
-export const RELOAD_USAGE =
-  "用法：/reload（重读设置）｜/reload confirm（确认列出的条目并生效）｜/reload skip（不确认，沿用原内容）";
+export const RELOAD_USAGE = "usage: /reload | /reload confirm | /reload skip";
 
 export interface SettingsReloaderDeps {
   // 当前快照
@@ -179,7 +182,7 @@ export function createSettingsReloader(
     let plan: SettingsReloadPlan;
     let choice: "trust" | "skip" = "skip";
     if (sub === "confirm" || sub === "skip") {
-      if (pending === undefined) return ["没有待确认的重读；先输入 /reload"];
+      if (pending === undefined) return ["nothing pending to confirm"];
       plan = pending;
       choice = sub === "confirm" ? "trust" : "skip";
     } else if (sub !== undefined) {
@@ -189,9 +192,9 @@ export function createSettingsReloader(
       if (plan.pending.length > 0) {
         pending = plan;
         return [
-          "以下会执行命令或放权的配置有变化（含首次出现），请确认：",
+          "changed settings that run commands or grant permissions:",
           ...plan.pending.map((entry) => `  ${describeTrustEntry(entry)}`),
-          "/reload confirm 全部确认并记下、随新设置生效 ｜ /reload skip 不确认，这些条目沿用原内容（原来没有的不启用）",
+          "/reload confirm to apply | /reload skip to skip",
         ];
       }
     }
@@ -209,7 +212,7 @@ export function createSettingsReloader(
       ...result.lines,
       ...(result.sandboxChanged && sandboxSession !== undefined
         ? [
-            `沙箱配置已更新，退出后用 pigeon --sandbox --resume ${sandboxSession} 续跑才对本会话的容器生效`,
+            `sandbox settings changed; takes effect after: pigeon --sandbox --resume ${sandboxSession}`,
           ]
         : []),
     ];

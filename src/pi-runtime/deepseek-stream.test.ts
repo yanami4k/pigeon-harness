@@ -32,8 +32,11 @@ const context = { messages: [] } as never;
 const placeholder = { id: "custom", provider: "custom", api: "unknown", baseUrl: "" } as never;
 
 test("日常 DeepSeek 接入：缺 DEEPSEEK_API_KEY 即响亮报错；空值同样报错", () => {
-  assert.throws(() => createDeepSeekStreamFn({}), /缺少 DEEPSEEK_API_KEY 环境变量/);
-  assert.throws(() => createDeepSeekStreamFn({ DEEPSEEK_API_KEY: "" }), /缺少 DEEPSEEK_API_KEY/);
+  assert.throws(() => createDeepSeekStreamFn({}), /DEEPSEEK_API_KEY is not set/);
+  assert.throws(
+    () => createDeepSeekStreamFn({ DEEPSEEK_API_KEY: "" }),
+    /DEEPSEEK_API_KEY is not set/
+  );
 });
 
 test("日常 DeepSeek 接入：忽略 CLI 的占位模型，发出与网关同一份模型对象（deepseek-flash、anthropic-messages、reasoning 为真、收文字与图片、1M 窗口、输出上限 393,216）；key 取自环境变量", async () => {
@@ -100,7 +103,7 @@ test("日常 DeepSeek 接入入口：经 loadStreamFn 按文件路径加载得�
   } catch (error) {
     stderr = String((error as { stderr?: string }).stderr ?? "");
   }
-  assert.match(stderr, /缺少 DEEPSEEK_API_KEY 环境变量/);
+  assert.match(stderr, /DEEPSEEK_API_KEY is not set/);
   assert.doesNotMatch(stderr, /should-not-appear/);
 });
 
@@ -128,7 +131,7 @@ test("DEEPSEEK_BASE_URL：给了就用作模型基址；没给或为空用官方
       () => createDeepSeekStreamFn({ DEEPSEEK_API_KEY: "sk-secret-value", DEEPSEEK_BASE_URL: bad }),
       (error: Error) =>
         /DEEPSEEK_BASE_URL/.test(error.message) &&
-        /http 或 https/.test(error.message) &&
+        /http or https/.test(error.message) &&
         error.message.includes(bad) &&
         !error.message.includes("sk-secret-value"),
       bad

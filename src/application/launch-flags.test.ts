@@ -53,7 +53,7 @@ test("PIGEON_STREAM_FN 回退：环境变量提供缺省，--stream-fn 覆盖它
 
 test("未配置模型接入：响亮失败并指出两种配置方式", () => {
   const flags = parseLaunchFlags([], { usage: USAGE, env: {} });
-  assert.throws(() => resolveStreamFnSpec(flags, USAGE), /未配置模型接入/);
+  assert.throws(() => resolveStreamFnSpec(flags, USAGE), /no model configured/);
   assert.equal(
     resolveStreamFnSpec(
       parseLaunchFlags(["--stream-fn", "./a.mjs"], { usage: USAGE, env: {} }),
@@ -72,7 +72,7 @@ test("取值校验：推理档位、单轮输出上限非法即失败；未知�
     () => parseLaunchFlags(["--max-output-tokens", "0"], { usage: USAGE, env: {} }),
     /--max-output-tokens/
   );
-  assert.throws(() => parseLaunchFlags(["--nope"], { usage: USAGE, env: {} }), /未知参数/);
+  assert.throws(() => parseLaunchFlags(["--nope"], { usage: USAGE, env: {} }), /unknown option/);
 });
 
 test("决策 324：--no-hooks 是无取值开关（缺省关，各入口一律接受）", () => {
@@ -92,7 +92,7 @@ test("--history-limit 只属 TUI：允许时解析为正整数，未允许时按
   assert.equal(tuiFlags.historyLimit, 120);
   assert.throws(
     () => parseLaunchFlags(["--history-limit", "120"], { usage: USAGE, env: {} }),
-    /未知参数/
+    /unknown option/
   );
 });
 

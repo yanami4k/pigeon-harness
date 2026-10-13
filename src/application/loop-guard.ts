@@ -9,6 +9,7 @@ import { summarizeArgs } from "./format.ts";
 
 export const LOOP_REMINDER_PREFIX = "[Loop reminder] ";
 // 决策 428 之前的说法：回看旧会话时据此认出程序通知
+// 旧会话里的中文原文，只用来认出旧记录
 export const LEGACY_LOOP_REMINDER_PREFIX = "[打转提醒] ";
 
 // 结果摘要取前几行，每行至多多少字符
@@ -29,7 +30,7 @@ function clip(line: string): string {
     : `${chars.slice(0, RESULT_LINE_CHARS).join("")}…`;
 }
 
-// english：给模型看的提醒与 worker 失败原因用英文（决策 428）；给人看的叫停说明照旧中文
+// english：给模型看的提醒与 worker 失败原因用完整的参数说法（决策 428）；给人看的写短
 function callLine(call: ComparedRound["calls"][number], english: boolean): string {
   return `${call.toolName} ${summarizeArgs(call.args, english)}`;
 }
@@ -57,11 +58,11 @@ function patternDetail(stop: Pick<LoopStop, "pattern" | "alternating">): string 
   return stop.pattern.map(block).join("\n");
 }
 
-// 调用的一行摘要（叫停说明用）：多条以"；"相连（english 时以 "; "）
+// 调用的一行摘要（叫停说明用）：多条以 "; " 相连
 export function loopCallsSummary(stop: Pick<LoopStop, "pattern">, english = false): string {
   return stop.pattern
     .flatMap((round) => round.calls.map((call) => callLine(call, english)))
-    .join(english ? "; " : "；");
+    .join("; ");
 }
 
 function repeatLead(stop: Pick<LoopStop, "count" | "alternating">): string {

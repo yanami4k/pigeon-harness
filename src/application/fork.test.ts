@@ -317,7 +317,8 @@ test("冷会话被另一进程持有：来源分叉条目写不成，在建工�
               startMcp: noMcp,
             },
           }),
-        (error: unknown) => error instanceof ForkError && /分叉条目没有写成/.test(error.message)
+        (error: unknown) =>
+          error instanceof ForkError && /writing the fork entry .* failed/.test(error.message)
       );
     } finally {
       process.stderr.write = originalWrite;
@@ -327,7 +328,7 @@ test("冷会话被另一进程持有：来源分叉条目写不成，在建工�
     // 会话锁的失败经会话存储告警报出（指明另一个进程）
     assert.ok(
       captured.some(
-        (line) => line.startsWith("会话存储告警：") && line.includes(String(child.pid))
+        (line) => line.startsWith("session store warning: ") && line.includes(String(child.pid))
       ),
       captured.join(" | ")
     );

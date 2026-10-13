@@ -55,16 +55,16 @@ export function ensurePeersDir(homeDir?: string): string {
   if (process.platform === "win32") return dir;
   const stat = lstatSync(dir);
   if (stat.isSymbolicLink() || !stat.isDirectory()) {
-    throw new PeerRegistryError(`${dir} 不是普通目录（可能是符号链接）`);
+    throw new PeerRegistryError(`${dir} is not a regular directory`);
   }
   const uid = process.getuid?.();
   if (uid !== undefined && stat.uid !== uid) {
-    throw new PeerRegistryError(`${dir} 不归本人所有`);
+    throw new PeerRegistryError(`${dir} is not owned by the current user`);
   }
   if ((stat.mode & 0o077) !== 0) {
     chmodSync(dir, 0o700);
     if ((lstatSync(dir).mode & 0o077) !== 0) {
-      throw new PeerRegistryError(`${dir} 的权限收不紧到 0700`);
+      throw new PeerRegistryError(`can't restrict ${dir} permissions to 0700`);
     }
   }
   return dir;
@@ -72,7 +72,7 @@ export function ensurePeersDir(homeDir?: string): string {
 
 function recordPath(dir: string, sessionId: string): string {
   if (!PEER_SESSION_ID.test(sessionId)) {
-    throw new PeerRegistryError(`不是会话号：${JSON.stringify(sessionId)}`);
+    throw new PeerRegistryError(`not a session ID: ${JSON.stringify(sessionId)}`);
   }
   return join(dir, `${sessionId}.json`);
 }

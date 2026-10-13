@@ -22,22 +22,27 @@ const BUILD_PARAMS = [
     key: "baseImage",
     env: "PIGEON_SANDBOX_BASE_IMAGE",
     arg: "BASE_IMAGE",
-    what: "底镜像名（缺省 ubuntu:24.04）",
+    what: "base image (default ubuntu:24.04)",
   },
   {
     key: "aptMirror",
     env: "PIGEON_SANDBOX_APT_MIRROR",
     arg: "APT_MIRROR",
-    what: "apt 软件源根地址",
+    what: "apt mirror URL",
   },
   {
     key: "nodeMirror",
     env: "PIGEON_SANDBOX_NODE_MIRROR",
     arg: "NODE_MIRROR",
-    what: "Node 官方二进制包的下载根地址（缺省 https://nodejs.org/dist，可换 https://npmmirror.com/mirrors/node）",
+    what: "Node binary download URL (default https://nodejs.org/dist)",
   },
-  { key: "pipIndex", env: "PIGEON_SANDBOX_PIP_INDEX", arg: "PIP_INDEX_URL", what: "pip 索引地址" },
-  { key: "npmRegistry", env: "PIGEON_SANDBOX_NPM_REGISTRY", arg: "NPM_REGISTRY", what: "npm 源" },
+  { key: "pipIndex", env: "PIGEON_SANDBOX_PIP_INDEX", arg: "PIP_INDEX_URL", what: "pip index URL" },
+  {
+    key: "npmRegistry",
+    env: "PIGEON_SANDBOX_NPM_REGISTRY",
+    arg: "NPM_REGISTRY",
+    what: "npm registry",
+  },
 ] as const;
 
 // 解析出的镜像来源：现成的镜像名，或要按 Dockerfile 构建（带缓存标签）
@@ -68,7 +73,7 @@ export function resolveSandboxImage(
   if (config.dockerfile !== undefined) {
     const dockerfile = path.resolve(governanceRoot, config.dockerfile);
     if (!existsSync(dockerfile)) {
-      throw new Error(`沙箱配置指向的 Dockerfile 不存在：${config.dockerfile}`);
+      throw new Error(`sandbox Dockerfile not found: ${config.dockerfile}`);
     }
     const context =
       config.context !== undefined
@@ -103,11 +108,7 @@ export function resolveSandboxImage(
 
 // 构建失败时说明可设的参数
 export function buildParamsHelp(): string {
-  return (
-    "可设的构建参数（环境变量，或设置 sandbox 一节的 build 段，后者优先）：" +
-    BUILD_PARAMS.map((p) => `${p.env} / build.${p.key}：${p.what}`).join("；") +
-    "。也可在设置的 sandbox 一节里用 image 改用现成的镜像，或用 dockerfile 指向项目自己的 Dockerfile"
-  );
+  return `build parameters: ${BUILD_PARAMS.map((p) => `${p.env} / sandbox.build.${p.key} (${p.what})`).join("; ")}`;
 }
 
 // 给出可用的镜像名：要构建的先看本地有没有同标签的缓存，没有才构建
@@ -123,7 +124,7 @@ export async function ensureSandboxImage(
   if (cached.exitCode === 0) {
     return spec.image;
   }
-  options.log?.(`首次使用，正在构建沙箱镜像 ${spec.image}（可能要几分钟）`);
+  options.log?.(`building sandbox image ${spec.image} (first use, may take a few minutes)`);
   const built = await dockerOnce(
     docker,
     [
@@ -147,8 +148,8 @@ export async function ensureSandboxImage(
       .slice(-15)
       .join("\n");
     throw new Error(
-      `沙箱镜像构建失败（${spec.image}，退出码 ${built.exitCode}）：\n${tail}\n` +
-        (spec.generic ? buildParamsHelp() : `请检查项目的 Dockerfile：${spec.dockerfile}`)
+      `building sandbox image ${spec.image} failed (exit code ${built.exitCode}):\n${tail}\n` +
+        (spec.generic ? buildParamsHelp() : `Dockerfile: ${spec.dockerfile}`)
     );
   }
   return spec.image;

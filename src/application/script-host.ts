@@ -119,7 +119,7 @@ export function collectApprover(
       tier: "write",
       script: { runId, title },
       ...(protectedPaths.length > 0
-        ? { protectedPath: [...new Set(protectedPaths)].join("、") }
+        ? { protectedPath: [...new Set(protectedPaths)].join(", ") }
         : {}),
     });
     return decision.approved;

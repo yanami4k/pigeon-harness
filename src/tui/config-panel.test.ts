@@ -13,7 +13,7 @@ import { ConfigPanel } from "./config-panel.ts";
 import { orchestrationHarness } from "./orchestration-fixtures.ts";
 import { ScriptedRuntime } from "./runtime-fixtures.ts";
 import { PigeonTuiShell, type TuiShellOptions } from "./shell.ts";
-import { MockTerminal, screenFlat, screenText, settle } from "./testing.ts";
+import { MockTerminal, screenFlat, screenText, settle, squashSpaces } from "./testing.ts";
 
 interface Harness {
   user: Map<string, string>;
@@ -31,7 +31,7 @@ function makeShell(extra: Partial<TuiShellOptions> = {}, state: Partial<Harness>
   const writes: string[] = [];
   const reloads: string[][] = [];
   const view = (): ConfigItemView[] => {
-    if (harness.viewFails === true) throw new Error("项目设置文件不是合法 JSON");
+    if (harness.viewFails === true) throw new Error("project settings file is not valid JSON");
     return CONFIG_OPTIONS.map((option) => ({
       option,
       user: harness.user.get(option.id) ?? "default",
@@ -49,7 +49,7 @@ function makeShell(extra: Partial<TuiShellOptions> = {}, state: Partial<Harness>
       set: (id, value) => {
         const option = CONFIG_OPTIONS.find((item) => item.id === id);
         if (option === undefined || (!option.values.includes(value) && value !== "3")) {
-          throw new ConfigError(`${id} 只能是 ${option?.values.join("、") ?? "?"}`);
+          throw new ConfigError(`${id} must be one of ${option?.values.join(", ") ?? "?"}`);
         }
         if (harness.user.get(id) === value) return undefined;
         harness.user.set(id, value);
@@ -61,7 +61,7 @@ function makeShell(extra: Partial<TuiShellOptions> = {}, state: Partial<Harness>
     reload: async (args) => {
       reloads.push([...args]);
       await harness.reloadGate;
-      return ["已重读设置"];
+      return ["settings reloaded: web changed"];
     },
     ...extra,
   });
@@ -90,11 +90,11 @@ test("/config 打开面板：列出各项、生效值与覆盖说明，提示与
     term.input("\r");
     await settle();
     const screen = screenText(term);
-    assert.match(screen, /思考档位/);
-    assert.match(screen, /联网工具/);
+    assert.match(screen, /thinking level/);
+    assert.match(screen, /web tools/);
     assert.match(screen, /thinking\.level: /);
     assert.doesNotMatch(screen, /·|→/);
-    // 移到"联网工具"，Enter 轮换到下一个值（default → true）
+    // 移到"web tools"，Enter 轮换到下一个值（default → true）
     term.input(DOWN);
     term.input("\r");
     await settle();
@@ -102,12 +102,12 @@ test("/config 打开面板：列出各项、生效值与覆盖说明，提示与
     assert.deepEqual(reloads, [[]]);
     const after = screenText(term);
     // 验收修改：面板里改设置不往消息区写行，提示行也不写"已改"——那一项的值当场更新就是反馈
-    assert.doesNotMatch(after, /已改|已写进|已重读设置|written to/);
-    assert.match(after, /> 联网工具\s+true/);
+    assert.doesNotMatch(after, /written to|settings reloaded/);
+    assert.match(after, /> web tools\s+true/);
     // Esc 关面板：消息区里没有留下改设置的行
     term.input("\x1b");
     await settle();
-    assert.doesNotMatch(screenText(term), /联网工具|已写进|已重读设置|已改，/);
+    assert.doesNotMatch(screenText(term), /web tools|written to|settings reloaded/);
   } finally {
     cleanup();
   }
@@ -122,7 +122,7 @@ test("矮窗口里打开 /config：面板不被按比例压掉，提示行、选
     await settle();
     const screen = screenText(term);
     assert.match(screen, /settings \(user level/);
-    assert.match(screen, /> 思考档位/);
+    assert.match(screen, /> thinking level/);
     assert.match(screen, /thinking\.level: /);
     // 面板的末行（按键提示）也在——按比例压缩时最先被裁掉的就是它
     assert.match(screen, /Enter\/Space to change/);
@@ -209,22 +209,24 @@ test("验收修改：面板里改被别的层覆盖的一项——名字旁标�
     const retries = CONFIG_OPTIONS.findIndex((option) => option.id === "modelRequest.maxRetries");
     assert.ok(retries > 0);
     let screen = screenText(term);
-    assert.match(screen, /模型请求重试次数（被项目共享设置覆盖）/);
+    assert.match(screen, /model request retries \(overridden\)/);
     for (let i = 0; i < retries; i++) term.input(DOWN);
     term.input("\r");
     await settle();
     assert.equal(writes.length, 1);
     screen = screenText(term);
-    assert.match(screen, /模型请求重试次数（被项目共享设置覆盖）/);
+    assert.match(screen, /model request retries \(overridden\)/);
+    // 哪一层覆盖写在选中项的说明里
+    assert.ok(squashSpaces(screenFlat(term)).includes("overriddenbyprojectsettings"), screen);
     // 改不成（有 worker 在跑）：只在提示行说明
-    harness.busy = "有 worker 在跑";
+    harness.busy = "workers are running";
     term.input("\r");
     await settle();
     assert.equal(writes.length, 1);
-    assert.match(screenText(term), /没有改：有 worker 在跑/);
+    assert.match(screenText(term), /not changed: workers are running/);
     term.input("\x1b");
     await settle();
-    assert.doesNotMatch(screenText(term), /覆盖|没有改|已写进|已重读设置/);
+    assert.doesNotMatch(screenText(term), /overridden|not changed|written to|settings reloaded/);
   } finally {
     cleanup();
   }
@@ -243,7 +245,7 @@ test("/config 选项=值 直接改；被项目覆盖的另有提醒；值没变�
       screenFlat(term),
       /modelRequest\.maxRetries = 3 \(written to user settings, but project settings override it\)/
     );
-    assert.doesNotMatch(screenText(term), /已重读设置/);
+    assert.doesNotMatch(screenText(term), /settings reloaded/);
     assert.equal(reloads.length, 1);
     const before = screenText(term);
     term.input("/config modelRequest.maxRetries=3");
@@ -258,12 +260,12 @@ test("/config 选项=值 直接改；被项目覆盖的另有提醒；值没变�
     term.input("/config web.enabled=maybe");
     term.input("\r");
     await settle();
-    assert.match(screenText(term), /没有改：web\.enabled 只能是/);
+    assert.match(screenText(term), /not changed: web\.enabled must be one of/);
     assert.equal(reloads.length, 1);
     term.input("/config oops");
     term.input("\r");
     await settle();
-    assert.match(screenText(term), /用法：\/config/);
+    assert.match(screenText(term), /usage: \/config/);
   } finally {
     cleanup();
   }
@@ -306,14 +308,14 @@ test("重建还没完时连按 Enter：第二次不改、不并发重建；有 w
     await settle();
     assert.deepEqual(writes, ["web.enabled=true"], "第二次 Enter 在重建期间不改");
     assert.equal(reloads.length, 1);
-    assert.match(screenText(term), /正在运行或重建运行面，等它结束再改设置/);
+    assert.match(screenText(term), /running; change settings later/);
     release?.();
     await settle();
-    harness.busy = "有 worker 在跑，重建不了运行面";
+    harness.busy = "workers are running";
     term.input("\r");
     await settle();
     assert.deepEqual(writes, ["web.enabled=true"], "有 worker 在跑时不写");
-    assert.match(screenText(term), /没有改：有 worker 在跑/);
+    assert.match(screenText(term), /not changed: workers are running/);
   } finally {
     cleanup();
   }
@@ -327,7 +329,10 @@ test("读设置出错（项目设置文件坏了）：如实说明、不崩，�
     term.input("/config");
     term.input("\r");
     await settle();
-    assert.match(screenText(term), /读不了设置：项目设置文件不是合法 JSON/);
+    assert.match(
+      screenText(term),
+      /reading settings failed: project settings file is not valid JSON/
+    );
     term.input("你好");
     term.input("\r");
     await settle();

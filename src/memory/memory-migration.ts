@@ -22,7 +22,8 @@ import {
   writeMemoryFile,
 } from "./learned-store.ts";
 
-// 旧文件头（决策 332 至 431 之间写下的）：标题行与注释行
+// 旧文件头（决策 332 至 431 之间写下的）：标题行与注释行。
+// 旧记忆文件里的中文原文，只用来认出旧记录
 const LEGACY_HEADER_LINES: Readonly<Record<MemoryLayer, readonly [string, string]>> = {
   project: [
     "# 学到的记忆（本项目）",
@@ -46,13 +47,13 @@ const HEADER_LINE_MAP: ReadonlyMap<string, string> = new Map(
   })
 );
 
-// 旧来源名 → 英文短名；不在其中的照原文
+// 旧来源名 → 英文短名；不在其中的照原文。旧记忆文件里的中文原文，只用来认出旧记录
 export const LEGACY_SOURCE_NAMES: Readonly<Record<string, string>> = {
   终端界面: "tui",
   命令行对话: "cli",
 };
 
-// 以旧尾巴结尾的条目行：编号与内容、日期、来源、会话号
+// 以旧尾巴结尾的条目行：编号与内容、日期、来源、会话号。旧记忆文件里的中文原文，只用来认出旧记录
 const LEGACY_TAIL_LINE =
   /^(- \[[PU][1-9]\d*\] .*\S) 〔(\d{4}-\d{2}-\d{2}) · ([^·〔〕]+?) · 会话 ([^\s·〔〕]+)〕$/;
 
@@ -126,12 +127,12 @@ const stderrReport: MemoryMigrationReport = (line) => {
 };
 
 export function memoryMigrationPendingText(location: MemoryLocation, reason: string): string {
-  return `[记忆] ${location.display} 是旧格式，这次没能改写成新格式（${reason}）：本次在内存里按新格式读出，文件未动，下次读到时再试`;
+  return `[memory] couldn't convert ${location.display} to the new format (${reason}); read it in memory this time`;
 }
 
 function failureReason(error: unknown): string {
   if (error instanceof ExclusiveLockError) {
-    return "另一处正在写这一层";
+    return "another process is writing this layer";
   }
   return error instanceof Error ? error.message : String(error);
 }

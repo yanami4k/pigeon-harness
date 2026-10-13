@@ -1,7 +1,7 @@
 // 脚本编排的说明与返回文字（决策 309–314；按 271 定稿文字的风格拟稿、过目后定稿）：工具说明、参数说明、各情形的返回文字、
 // worker 附言与改正、开跑计划行、log 行、结束汇总、收回请示与审批新键的回显。数值与名字由调用方填入。
 // 决策 428：给模型看的（工具说明与参数说明、返回文字、worker 附言与改正、斜杠命令交给模型的话、结束汇总）为英文；
-// 只给人看的（开跑计划行、log 行、收回请示的来源行、审批新键与回显）照旧中文。
+// 只给人看的（开跑计划行、log 行、收回请示的来源行、审批新键与回显）同样是英文，写短。
 import { SCRIPT_COMMAND, SCRIPT_KEYWORD } from "./script-naming.ts";
 
 export const ORCHESTRATE_TOOL = "orchestrate";
@@ -9,6 +9,7 @@ export const ORCHESTRATE_TOOL = "orchestrate";
 // 结束汇总进主 agent 下一轮时的前缀（与 worker 通知同一样式显示成系统行）
 export const SCRIPT_NOTICE_PREFIX = "[Script notice] ";
 // 决策 428 之前的说法：回看旧会话时据此认出程序通知
+// 旧会话里的中文原文，只用来认出旧记录
 export const LEGACY_SCRIPT_NOTICE_PREFIX = "[脚本通知] ";
 
 // 工具说明；modelDecides 为项目配置打开"由模型判断何时用"时的第 2 句
@@ -81,7 +82,7 @@ export function commandInputText(task: string): string {
 }
 
 export function logLine(name: string, text: string): string {
-  return `[脚本 ${name}] ${text}`;
+  return `[script ${name}] ${text}`;
 }
 
 // 结束方式
@@ -192,8 +193,8 @@ export function summaryText(input: SummaryInput): string {
 
 // 收回请示的来源行
 export function collectSourceLine(name: string, runId: string): string {
-  return `来源：脚本 ${name}（运行号 ${runId}）收回`;
+  return `source: script ${name} (run ${runId}), collecting changes`;
 }
 
 // 审批新键
-export const SCRIPT_KIND_KEY_LABEL = "[s] 本次脚本内同类都允许";
+export const SCRIPT_KIND_KEY_LABEL = "[s] allow this kind for this script";

@@ -162,7 +162,7 @@ function scanRoot(
     const dir = join(root, dirName);
     const displayPath = `${displayPrefix}/${dirName}`;
     if (!hasSkillFile(dir)) {
-      problems.push(`${displayPath}：缺 SKILL.md，未登记`);
+      problems.push(`${displayPath}: missing SKILL.md; not registered`);
       continue;
     }
     entries.push(skillEntryOf(dir, displayPath, dirName, scope));
@@ -195,7 +195,7 @@ function skillEntryOf(
 // 显式根（M6.5）：自身有 SKILL.md 即一个 Skill，否则按子目录登记；根不存在如实记为问题
 function scanConfiguredRoot(root: SkillRoot): { entries: SkillEntry[]; problems: string[] } {
   if (!existsSync(root.path)) {
-    return { entries: [], problems: [`${root.label}：Skill 根不存在，未登记`] };
+    return { entries: [], problems: [`${root.label}: Skill root doesn't exist; not registered`] };
   }
   if (hasSkillFile(root.path)) {
     return {
@@ -299,7 +299,7 @@ export function loadSkillCatalog(options: SkillCatalogOptions): SkillCatalog {
   for (const entry of [...localEntries, ...mcpEntries]) {
     if (names.has(entry.name)) {
       problems.push(
-        `${entry.displayPath}：与已登记的同名 Skill「${entry.name}」冲突，未登记（${entry.scope === "mcp" ? "本地 Skill 优先" : "项目级优先"}）`
+        `${entry.displayPath}: same name as registered Skill "${entry.name}"; not registered (${entry.scope === "mcp" ? "local Skill wins" : "project Skill wins"})`
       );
       continue;
     }

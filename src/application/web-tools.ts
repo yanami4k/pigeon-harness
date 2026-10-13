@@ -85,7 +85,7 @@ export function resolveWebTools(options: ResolveWebToolsOptions): WebToolsConfig
             defaultMaxResults,
           }
         : {
-            unavailable: `搜索后端 deepseek 缺少 key：请设置环境变量 ${DEEPSEEK_KEY_ENV}`,
+            unavailable: `no key for search backend deepseek (set ${DEEPSEEK_KEY_ENV})`,
             defaultMaxResults,
           };
   } else if (backendId === "zai") {
@@ -101,7 +101,7 @@ export function resolveWebTools(options: ResolveWebToolsOptions): WebToolsConfig
             defaultMaxResults,
           }
         : {
-            unavailable: `搜索后端 zai 缺少 key：请设置环境变量 ${ZAI_KEY_ENV}`,
+            unavailable: `no key for search backend zai (set ${ZAI_KEY_ENV})`,
             defaultMaxResults,
           };
   } else {
@@ -117,7 +117,7 @@ export function resolveWebTools(options: ResolveWebToolsOptions): WebToolsConfig
             defaultMaxResults,
           }
         : {
-            unavailable: `搜索后端 tavily 缺少 key：请设置环境变量 ${TAVILY_KEY_ENV}`,
+            unavailable: `no key for search backend tavily (set ${TAVILY_KEY_ENV})`,
             defaultMaxResults,
           };
   }

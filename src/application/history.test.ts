@@ -44,7 +44,7 @@ test("时序交织：正文、thinking、工具行、折叠的 toolResult、Run 
       ["thinking", "~ 先确认锚点"],
       ["assistant", "我来改"],
       ["tool", '$ edit_file {"path":"a.ts"} -> ok'],
-      ["toolResult", "[result] edit_file ok（7 字符，已折叠）"],
+      ["toolResult", "[result] edit_file ok (7 chars, collapsed)"],
       ["assistant", "改好了"],
       ["end", "done · <t>"],
     ]);
@@ -58,7 +58,7 @@ test("安全上限：默认 500 行；超出时最早部分折叠为一行提示
     const full = loadSessionHistory(root, sessionId);
     const folded = loadSessionHistory(root, sessionId, { limit: 3 });
     assert.equal(folded.length, 4);
-    assert.deepEqual(folded[0], { kind: "notice", text: "[更早 4 条未展开，/search 可查]" });
+    assert.deepEqual(folded[0], { kind: "notice", text: "[4 earlier lines not shown]" });
     assert.deepEqual(folded.slice(1), full.slice(-3));
   }));
 
@@ -68,7 +68,7 @@ test("单条渲染上限：超长正文折叠并标注已截断显示", () =>
     session.startRun({ task: "x".repeat(50) });
     const { sessionId } = await session.close();
     assert.deepEqual(pairs(loadSessionHistory(root, sessionId, { entryChars: 10 })), [
-      ["user", `> ${"x".repeat(10)}…（已截断显示，共 50 字符）`],
+      ["user", `> ${"x".repeat(10)}… (50 chars)`],
     ]);
   }));
 
@@ -97,7 +97,7 @@ test("出错的工具调用与各种收尾：工具行标 error；收尾行说�
     assert.deepEqual(pairs(loadSessionHistory(root, sessionId)), [
       ["user", "> 改 a"],
       ["tool", '$ edit_file {"path":"a"} -> error'],
-      ["toolResult", "[result] edit_file error（5 字符，已折叠）"],
+      ["toolResult", "[result] edit_file error (5 chars, collapsed)"],
       ["end", "error · <t> · 503 provider 故障"],
       ["user", "> 再试"],
       ["end", "stopped: turn limit · <t>"],
@@ -124,10 +124,10 @@ test("分支会话只画自己的部分；未收尾的 Run 没有结束标记；
     const legacy = newSessionId();
     writeFileSync(join(sessionsDir, `${legacy}.jsonl`), "");
     assert.deepEqual(pairs(loadSessionHistory(root, legacy)), [
-      ["notice", `[旧格式会话（迁移之前创建），这里不显示历史；${LEGACY_READER_HINT}]`],
+      ["notice", `[old-format session; history not shown; ${LEGACY_READER_HINT}]`],
     ]);
     assert.deepEqual(pairs(loadSessionHistory(root, newSessionId())), [
-      ["notice", "[该会话在会话存储里没有记录，这里不显示历史]"],
+      ["notice", "[no record of this session in the session store; history not shown]"],
     ]);
   }));
 

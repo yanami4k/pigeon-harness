@@ -165,7 +165,7 @@ test("拖选出选区后 Ctrl+C 复制选区（写出 OSC 52），不清输入�
     term.input("\x03");
     await settle();
     assert.ok(term.writes.join("").includes("\x1b]52;c;"), "复制走 OSC 52");
-    assert.doesNotMatch(screenText(term), /\[cleared\]/);
+    assert.doesNotMatch(screenText(term), /press Ctrl\+C again to exit/);
     term.input("\x1b[<0;8;16m");
     await settle();
   } finally {

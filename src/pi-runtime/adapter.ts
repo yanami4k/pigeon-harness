@@ -162,7 +162,8 @@ export function httpStatusOf(errorMessage: string | undefined): number | undefin
 }
 
 // 空回复重试仍空时的错误文本（Run 结果与收尾条目共用）
-export const EMPTY_REPLY_ERROR = "模型返回空回复（既无文字也无工具调用），重试一次仍为空回复";
+export const EMPTY_REPLY_ERROR =
+  "empty model reply (no text or tool calls), still empty after one retry";
 
 // 撞上限续跑的对象（决策 367）：因输出上限截断（含被流式重复检测掐断）且没有工具调用的回复
 export function isTruncatedWithoutTools(message: AssistantMessage): boolean {
@@ -367,7 +368,7 @@ export class PiRuntimeAdapter {
     // 否则 spread 会让实际 Agent 模型与 InjectionSnapshot 脱钩
     if (options.model !== undefined && ("provider" in options.model || "id" in options.model)) {
       throw new Error(
-        "options.model 不允许携带 provider/id：模型身份由 InjectionSnapshot 唯一提供"
+        "options.model must not carry provider/id: the model identity comes only from InjectionSnapshot"
       );
     }
     // 运行期校验 + 防御性拷贝 + 深冻结：此后快照不可变
@@ -518,7 +519,7 @@ export class PiRuntimeAdapter {
   // 决策 297：空闲时被叫醒——只带待递的通知开一次 Run
   async runNotices(): Promise<RunResult> {
     if (this.#notices.length === 0) {
-      throw new Error("没有待递的通知");
+      throw new Error("no pending notices");
     }
     return this.#runWith((lead) => this.#agent.prompt([...lead, ...this.#takeNotices()]));
   }
@@ -547,10 +548,10 @@ export class PiRuntimeAdapter {
     this.#assertUsable();
     // 决策 2：run() 互斥——任何时刻最多一个待审批/执行中的 call
     if (this.#currentRunId !== null) {
-      throw new Error("已有进行中的 Run：run() 互斥（决策 2）");
+      throw new Error("a Run is already running");
     }
     if (this.#manualCompacting) {
-      throw new Error("手动压缩进行中，等它完成再启动 Run");
+      throw new Error("can't start a Run while compacting");
     }
     const runId = newRunId();
     this.#currentRunId = runId;
@@ -1019,7 +1020,7 @@ export class PiRuntimeAdapter {
   async compact(customInstructions?: string): Promise<ManualCompactionOutcome> {
     this.#assertUsable();
     if (this.#currentRunId !== null || this.#manualCompacting) {
-      throw new Error("Run 进行中，不能手动压缩");
+      throw new Error("can't compact while a Run is running");
     }
     const compactor = this.#compactor;
     if (compactor === undefined) {
@@ -1075,7 +1076,7 @@ export class PiRuntimeAdapter {
   restoreMessages(messages: readonly AgentMessage[]): void {
     this.#assertUsable();
     if (this.#currentRunId !== null || this.#agent.state.messages.length > 0) {
-      throw new Error("只能在运行面跑任何 Run 之前还原对话上下文");
+      throw new Error("the conversation can only be restored before the first Run");
     }
     this.#agent.state.messages = structuredClone([...messages]);
   }
@@ -1085,7 +1086,7 @@ export class PiRuntimeAdapter {
   replaceMessages(messages: readonly AgentMessage[]): void {
     this.#assertUsable();
     if (this.#currentRunId !== null || this.#manualCompacting) {
-      throw new Error("运行中不能换对话上下文");
+      throw new Error("can't replace the conversation while running");
     }
     this.#agent.state.messages = structuredClone([...messages]);
     this.#statusCompacted = false;
@@ -1905,7 +1906,7 @@ export class PiRuntimeAdapter {
       return {
         runId,
         status,
-        errorMessage: `钩子要求停止：${this.#hookStopReason}`,
+        errorMessage: `hook asked to stop: ${this.#hookStopReason}`,
         syntheticFailure: false,
         failure: null,
         advertisedTools,
@@ -1956,14 +1957,14 @@ export class PiRuntimeAdapter {
   #activeRunId(): RunId {
     const runId = this.#currentRunId;
     if (runId === null) {
-      throw new Error("审批闸需要活动 Run（hook/settled 联动只在 Run 窗口内发生）");
+      throw new Error("the approval gate needs an active Run");
     }
     return runId;
   }
 
   #assertUsable(): void {
     if (this.#disposed) {
-      throw new Error("PiRuntimeAdapter 已释放，不能再启动 Run");
+      throw new Error("PiRuntimeAdapter disposed; can't start a Run");
     }
   }
 }

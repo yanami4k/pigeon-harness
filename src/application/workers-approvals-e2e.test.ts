@@ -84,8 +84,8 @@ test("审批汇聚：两个 worker 并发审批一次一个，决定与放权各
         }
         // 留出时间让另一个 worker 的请求并发到达
         await new Promise((resolve) => setTimeout(resolve, 20));
-        const source = screen.slice(screen.lastIndexOf("来源：worker "));
-        return source.startsWith("来源：worker fix-a") ? "a" : "n";
+        const source = screen.slice(screen.lastIndexOf("source: worker "));
+        return source.startsWith("source: worker fix-a") ? "a" : "n";
       },
       (text) => {
         screen += text;
@@ -141,8 +141,8 @@ test("审批汇聚：两个 worker 并发审批一次一个，决定与放权各
     assert.equal(b.status, "completed", JSON.stringify(b));
     assert.equal(asked.length, 2);
     assert.equal(maxInFlight, 1, "审批一次一个");
-    assert.ok(screen.includes("来源：worker fix-a（tester）"), screen);
-    assert.ok(screen.includes("来源：worker fix-b（tester）"), screen);
+    assert.ok(screen.includes("source: worker fix-a (tester)"), screen);
+    assert.ok(screen.includes("source: worker fix-b (tester)"), screen);
 
     // fix-a：唯一的调用经人工批准、执行成功；[a] 放权只记在 fix-a 会话
     const workerA = loadSessionView(sessionsDir, idA);

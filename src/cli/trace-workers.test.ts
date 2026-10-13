@@ -34,21 +34,21 @@ test("trace：父会话列出 worker（已收尾给结果与进入命令、未�
     const { sessionId: parentId } = await parent.close();
 
     const parentTrace = runTraceCommand({ root, sessionId: parentId });
-    assert.ok(parentTrace.includes("派出的 worker（2）："), parentTrace);
+    assert.ok(parentTrace.includes("spawned workers (2):"), parentTrace);
     assert.ok(
       parentTrace.includes(
-        `  fix-a（implementer）｜ 会话 ${doneId.slice(0, 13)}… ｜ completed ｜ 2 轮 ｜ 改动 0 个文件 ｜ 进入：trace ${doneId}`
+        `  fix-a (implementer) | session ${doneId.slice(0, 13)}… | completed | 2 turns | 0 files changed | trace ${doneId}`
       ),
       parentTrace
     );
     assert.ok(
-      parentTrace.includes(
-        `未收尾：有派出无收尾（进程中断可能；用 resume ${hangingId} 进入该 worker 会话）`
-      ),
+      parentTrace.includes(`not settled (process may have been interrupted) | resume ${hangingId}`),
       parentTrace
     );
     assert.ok(
-      parentTrace.includes(`  孤立的 worker 收尾：ghost（会话 ${stray.slice(0, 13)}…）无对应派出`),
+      parentTrace.includes(
+        `  orphan worker settle: ghost (session ${stray.slice(0, 13)}…) with no spawn`
+      ),
       parentTrace
     );
     assert.ok(!parentTrace.includes("Receipt"), parentTrace);
@@ -56,11 +56,11 @@ test("trace：父会话列出 worker（已收尾给结果与进入命令、未�
     const workerTrace = runTraceCommand({ root, sessionId: doneId });
     assert.ok(
       workerTrace.includes(
-        `worker 会话：fix-a（implementer）｜ 分支 fix-a ｜ 父会话 ${parentId}（查看：trace ${parentId}）`
+        `worker session: fix-a (implementer) | branch fix-a | parent ${parentId} (trace ${parentId})`
       ),
       workerTrace
     );
-    assert.equal(workerTrace.includes("派出的 worker"), false);
+    assert.equal(workerTrace.includes("spawned workers"), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -116,7 +116,7 @@ function routed(scripts: Array<[marker: string, behavior: FakeStreamBehavior]>):
 function toolCallVerdicts(output: string): Array<{ tool: string; lines: string[] }> {
   const calls: Array<{ tool: string; lines: string[] }> = [];
   for (const line of output.split("\n")) {
-    const head = /^ {4}工具调用 \S+ \[(.+)\]$/.exec(line);
+    const head = /^ {4}tool call \S+ \[(.+)\]$/.exec(line);
     if (head !== null) {
       calls.push({ tool: head[1] ?? "", lines: [] });
       continue;
@@ -124,7 +124,7 @@ function toolCallVerdicts(output: string): Array<{ tool: string; lines: string[]
     const last = calls.at(-1);
     if (last === undefined || !line.startsWith("      ")) continue;
     const trimmed = line.trim();
-    if (/^(审批|出错归类|分类)：/.test(trimmed)) last.lines.push(trimmed);
+    if (/^(approval|error kind|class): /.test(trimmed)) last.lines.push(trimmed);
   }
   return calls;
 }
@@ -176,32 +176,44 @@ test("trace（真实运行）：主 agent 派 worker 的会话——spawn_worker
     });
     assert.equal(result.status, "completed");
     const parentTrace = runTraceCommand({ root, sessionId: result.sessionId });
-    assert.ok(parentTrace.includes("派出的 worker（1）："), parentTrace);
-    assert.match(parentTrace, /^ {2}reader（explorer）｜ 会话 \S+ ｜ completed ｜ /m);
+    assert.ok(parentTrace.includes("spawned workers (1):"), parentTrace);
+    assert.match(parentTrace, /^ {2}reader \(explorer\) \| session \S+ \| completed \| /m);
     assert.deepEqual(
       toolCallVerdicts(parentTrace),
       [
-        { tool: "spawn_worker", lines: ["审批：策略自动放行（policy:auto）", "分类：正常"] },
         {
           tool: "spawn_worker",
-          lines: ["审批：未经审批闸（上游拦截）", "出错归类：域错误", "分类：业务失败"],
+          lines: ["approval: auto-allowed by policy (policy:auto)", "class: ok"],
+        },
+        {
+          tool: "spawn_worker",
+          lines: [
+            "approval: not gated (blocked upstream)",
+            "error kind: domain error",
+            "class: business failure",
+          ],
         },
       ],
       parentTrace
     );
-    assert.ok(!parentTrace.includes("分类：未知"), parentTrace);
-    assert.ok(!parentTrace.includes("分类：无（"), parentTrace);
-    const workerId = /进入：trace (\S+)/.exec(parentTrace)?.[1];
+    assert.ok(!parentTrace.includes("class: unknown"), parentTrace);
+    assert.ok(!parentTrace.includes("class: none ("), parentTrace);
+    const workerId = / \| trace (\S+)$/m.exec(parentTrace)?.[1];
     assert.ok(workerId !== undefined, parentTrace);
     const workerTrace = runTraceCommand({ root, sessionId: workerId });
     // 决策 377：只读的 explorer 不建工作树
     assert.match(
       workerTrace,
-      /^worker 会话：reader（explorer）｜ 只读派出方工作区（不建工作树） ｜ 父会话 /m
+      /^worker session: reader \(explorer\) \| read-only parent workspace \| parent /m
     );
     assert.deepEqual(
       toolCallVerdicts(workerTrace),
-      [{ tool: "read_file", lines: ["审批：策略自动放行（policy:auto）", "分类：正常"] }],
+      [
+        {
+          tool: "read_file",
+          lines: ["approval: auto-allowed by policy (policy:auto)", "class: ok"],
+        },
+      ],
       workerTrace
     );
   } finally {

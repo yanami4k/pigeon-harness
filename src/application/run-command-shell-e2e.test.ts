@@ -122,9 +122,9 @@ test("shell 命令：prompt 下经确认以 shell 执行，面板含经 shell �
       await runtime.bundle.sessionStore.close();
     }
     assert.equal(runtime.asked(), 2);
-    assert.ok(runtime.screen().includes(`命令（经 shell）：${SHELL_1}`), runtime.screen());
-    assert.ok(runtime.prompts[0]?.includes("经 shell"), runtime.prompts[0]);
-    assert.ok(runtime.screen().includes(`命令（经 shell）：${SHELL_2}`), runtime.screen());
+    assert.ok(runtime.screen().includes(`command (shell): ${SHELL_1}`), runtime.screen());
+    assert.ok(runtime.prompts[0]?.includes("(shell)"), runtime.prompts[0]);
+    assert.ok(runtime.screen().includes(`command (shell): ${SHELL_2}`), runtime.screen());
     assert.deepEqual(
       executions.map((record) => record.decision?.approvedBy),
       ["human", "human:grant", "human"]

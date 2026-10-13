@@ -221,10 +221,7 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
   // 护栏（112 的延伸）：注入了执行端时 workspaceRoot 在宿主一侧、不是 agent 干活的工作区。分支会话
   // 要在它上面打 git 快照、到独立工作树里续跑——对容器里的工作区只会得到假结果，装配前一律拒绝
   if (options.workspaceHost !== undefined && options.branchHeader !== undefined) {
-    throw new Error(
-      "容器工作区暂不支持分支会话：分叉要在宿主的 git 工作区上打快照、到独立工作树里续跑，" +
-        "而容器工作区在执行端另一侧"
-    );
+    throw new Error("branch sessions are not supported in a container workspace");
   }
   const sessionId = options.sessionId ?? newSessionId();
   const startedAt = Date.now();
@@ -580,14 +577,14 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
       });
       const contexts = [...startReport.additionalContext];
       if (startReport.continueFalse !== undefined) {
-        preRunStopped = startReport.continueFalse.stopReason ?? "钩子要求整个会话停止";
+        preRunStopped = startReport.continueFalse.stopReason ?? "hook stopped the session";
       } else {
         const promptReport = await hooks.runEvent("UserPromptSubmit", "", { prompt: options.task });
         contexts.push(...promptReport.additionalContext);
         if (promptReport.blocked !== undefined) {
           preRunBlocked = promptReport.blocked.reason;
         } else if (promptReport.continueFalse !== undefined) {
-          preRunStopped = promptReport.continueFalse.stopReason ?? "钩子要求整个会话停止";
+          preRunStopped = promptReport.continueFalse.stopReason ?? "hook stopped the session";
         }
       }
       if (contexts.length > 0) {
@@ -599,7 +596,7 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
     if (externallyAborted || preRunBlocked !== undefined || preRunStopped !== undefined) {
       status = "aborted";
       if (preRunBlocked !== undefined) {
-        errorMessage = `输入被钩子拦下：${preRunBlocked}`;
+        errorMessage = `input blocked by hook: ${preRunBlocked}`;
       } else if (preRunStopped !== undefined) {
         errorMessage = preRunStopped;
       }

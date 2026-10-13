@@ -42,7 +42,7 @@ export function migrationBackupConflict(
   homeDir: string = homedir()
 ): string | undefined {
   const target = backupPathOf(root, name, homeDir);
-  return existsSync(target) ? `备份 ${target} 已存在，不覆盖；请先处理它` : undefined;
+  return existsSync(target) ? `backup ${target} already exists` : undefined;
 }
 
 // 把旧文件或目录（相对 .pigeon 的名字）挪进备份目录；返回备份位置。用户主目录与项目不在同一文件系统时改为复制后删除
@@ -54,7 +54,7 @@ export function moveToMigrationBackup(
 ): string {
   const target = backupPathOf(root, name, homeDir);
   if (existsSync(target)) {
-    throw new MigrationBackupError(`备份 ${target} 已存在，不覆盖`);
+    throw new MigrationBackupError(`backup ${target} already exists; not overwritten`);
   }
   mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   try {
@@ -77,7 +77,7 @@ export function writeRedactedMigrationBackup(
 ): string {
   const target = backupPathOf(root, name, homeDir);
   if (existsSync(target)) {
-    throw new MigrationBackupError(`备份 ${target} 已存在，不覆盖`);
+    throw new MigrationBackupError(`backup ${target} already exists; not overwritten`);
   }
   mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   writeFileSync(target, text, { flag: "wx", mode: 0o600 });

@@ -44,15 +44,15 @@ function outcome(overrides: Partial<WorkerOutcome> = {}): WorkerOutcome {
 test("起点一行：快照起点写带入的未提交文件数，HEAD 起点写明派出时没有未提交的文件（取用方式写在文档里）", () => {
   assert.equal(
     workerStartLine({ commit: COMMIT, snapshot: true, files: ["a", "b"] }),
-    "起点：快照 0123456789ab（含派出时 2 个未提交的文件）"
+    "base: snapshot 0123456789ab (2 uncommitted files)"
   );
   assert.equal(
     workerStartLine({ commit: COMMIT, snapshot: false, files: [] }),
-    "起点：提交 0123456789ab（派出时没有未提交的文件）"
+    "base: commit 0123456789ab (no uncommitted files)"
   );
 });
 
-// 决策 428：交给模型的起点一行为英文（人看的 /spawn 收尾摘要照旧用上面的中文一行）
+// 决策 428：交给模型的起点一行为英文（人看的 /spawn 收尾摘要用上面的短一行）
 test("spawn_worker 交回的起点一行（给模型）：快照起点写带入的未提交文件数，HEAD 起点写明派出时没有未提交的文件，取用方式写 take_worker 的调法", () => {
   assert.equal(
     SPAWN_WORKER_TEXTS.start({ commit: COMMIT, snapshot: true, files: ["a", "b"] }, "fix-a"),
@@ -126,7 +126,7 @@ test("explorer 的交回不提分支、改动与起点；没收进交回的大�
     },
   });
   assert.ok(workerOutcomeText(withSkipped).includes("dump.bin (30.0 MiB)"));
-  assert.ok(renderWorkerOutcome(withSkipped).includes("dump.bin（30.0 MiB）"));
+  assert.ok(renderWorkerOutcome(withSkipped).includes("dump.bin (30.0 MiB)"));
 });
 
 test("/spawn 的收尾摘要：同样加起点一行；没有起点不加", () => {
@@ -134,5 +134,5 @@ test("/spawn 的收尾摘要：同样加起点一行；没有起点不加", () =
   assert.ok(text.endsWith(`\n  ${workerStartLine(SNAPSHOT_START)}`), text);
   const plain = outcome();
   delete plain.start;
-  assert.ok(!renderWorkerOutcome(plain).includes("起点："));
+  assert.ok(!renderWorkerOutcome(plain).includes("base: "));
 });

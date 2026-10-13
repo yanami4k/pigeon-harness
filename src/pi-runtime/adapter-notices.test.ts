@@ -88,7 +88,7 @@ test("递出之前撤回：通知不进对话，也不多跑一轮", async () =>
 test("空闲时：runNotices 只带通知开一个 Run；下一次 run 连同输入带上待递的通知（通知在前）", async () => {
   const { streamFn, calls } = recording();
   const adapter = adapterWith(streamFn);
-  await assert.rejects(() => adapter.runNotices(), /没有待递的通知/);
+  await assert.rejects(() => adapter.runNotices(), /no pending notices/);
   await adapter.run("第一句");
   const key = adapter.notify("[worker 通知] a 已完成");
   assert.equal(adapter.pendingNotices(), 1);

@@ -271,19 +271,19 @@ export function readSessionFile(path: string): SessionFileView | undefined {
 
   for (let index = 1; index < lines.length; index++) {
     const lineNo = index + 1;
-    const skip = (reason: string) => warnings.push(`第 ${lineNo} 行${reason}，已跳过`);
+    const skip = (reason: string) => warnings.push(`line ${lineNo}: ${reason}; skipped`);
     let value: unknown;
     try {
       value = JSON.parse(lines[index] ?? "");
     } catch {
       // 不完整的末行：写者可能正在追加它，照 181 跳过、不告警
       if (index !== lines.length - 1) {
-        skip("不是合法 JSON");
+        skip("not valid JSON");
       }
       continue;
     }
     if (!isObject(value) || !Number.isSafeInteger(value.seq) || (value.seq as number) <= lastSeq) {
-      skip("缺少递增的 seq");
+      skip("missing increasing seq");
       continue;
     }
     const seq = value.seq as number;
@@ -292,7 +292,7 @@ export function readSessionFile(path: string): SessionFileView | undefined {
       const type = value.type;
       const id = value.id;
       if (typeof id !== "string" || typeof type !== "string") {
-        skip("的条目缺少 id 或类型");
+        skip("entry missing id or type");
         continue;
       }
       const parentId = resolve(typeof value.parentId === "string" ? value.parentId : null);
@@ -301,11 +301,11 @@ export function readSessionFile(path: string): SessionFileView | undefined {
         for (const [lane, leaf] of lanes) {
           if (leaf === id) lanes.set(lane, parentId);
         }
-        skip(`是不认识的条目类型 ${type}`);
+        skip(`unknown entry type ${type}`);
         continue;
       }
       if (usedIds.has(id)) {
-        skip(`的条目号 ${id} 重复`);
+        skip(`duplicate entry ID ${id}`);
         continue;
       }
       const { kind: _kind, lane, ...fields } = value;
@@ -318,7 +318,7 @@ export function readSessionFile(path: string): SessionFileView | undefined {
       }
     } else if (value.kind === "record") {
       if (typeof value.type !== "string" || !RECORD_TYPES.has(value.type)) {
-        skip(`是不认识的 record 类型 ${String(value.type)}`);
+        skip(`unknown record type ${String(value.type)}`);
         continue;
       }
       if (typeof value.id === "string") {
@@ -326,7 +326,7 @@ export function readSessionFile(path: string): SessionFileView | undefined {
       }
     } else if (value.kind === "lane") {
       if (typeof value.lane !== "string") {
-        skip("的通道变更缺少通道名");
+        skip("lane change missing lane name");
         continue;
       }
       lanes.set(value.lane, resolve(typeof value.leafId === "string" ? value.leafId : null));
@@ -340,10 +340,10 @@ export function readSessionFile(path: string): SessionFileView | undefined {
           labels.delete(value.targetId);
         }
       } else {
-        skip(`是不认识的事实种类 ${String(value.fact)}`);
+        skip(`unknown fact kind ${String(value.fact)}`);
       }
     } else {
-      skip(`是不认识的变更种类 ${String(value.kind)}`);
+      skip(`unknown change kind ${String(value.kind)}`);
     }
   }
   return {

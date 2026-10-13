@@ -165,7 +165,7 @@ test("afterTurn 返回 undefined 照常空闲；抛错时说明一行并照常�
     term.input("\r");
     await settle();
     assert.deepEqual(runtime.runs, ["一", "二", "三"]);
-    assert.match(screenText(term), /收尾时出错：换不过去/);
+    assert.match(screenText(term), /finishing the turn failed: 换不过去/);
   } finally {
     cleanup();
   }

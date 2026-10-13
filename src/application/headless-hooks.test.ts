@@ -140,7 +140,7 @@ test("UserPromptSubmit 退出码 2：一轮都不跑，status aborted，errorMes
   });
   assert.equal(result.status, "aborted");
   assert.equal(streamFn.calls.length, 0, "被 UserPromptSubmit 拦下时一轮都不跑");
-  assert.match(result.errorMessage ?? "", /输入被钩子拦下：UPS-这条输入不合规/);
+  assert.match(result.errorMessage ?? "", /input blocked by hook: UPS-这条输入不合规/);
 });
 
 test("Stop 拦截一次后放行：第一次退出码 2 的理由成为第二轮输入，随后 completed", async () => {
@@ -239,11 +239,11 @@ test("trace 列出钩子运行：PreToolUse / PostToolUse / Stop 挂在 Run 上�
   const trace = runTraceCommand({ root, sessionId: result.sessionId });
   // 位置即归属：三个都在 Run 一节内（整体审查修复：Stop 挂刚结束的 Run）；SessionStart 在任何 Run 之前，会话级
   const runAt = trace.indexOf("Run ");
-  const preAt = trace.indexOf("钩子 PreToolUse（匹配 read_file）");
-  const postAt = trace.indexOf("钩子 PostToolUse（匹配 read_file）");
-  const stopAt = trace.indexOf("钩子 Stop");
-  const sessionAt = trace.indexOf("会话级条目：");
-  const startAt = trace.indexOf("钩子 SessionStart");
+  const preAt = trace.indexOf("hook PreToolUse (matcher read_file)");
+  const postAt = trace.indexOf("hook PostToolUse (matcher read_file)");
+  const stopAt = trace.indexOf("hook Stop");
+  const sessionAt = trace.indexOf("session entries:");
+  const startAt = trace.indexOf("hook SessionStart");
   assert.ok(runAt >= 0 && preAt > runAt && postAt > runAt && stopAt > runAt, trace);
   assert.ok(sessionAt > stopAt && startAt > sessionAt, trace);
 });
@@ -348,7 +348,7 @@ test("PreToolUse 钩子 continue:false：调用被拦、这批工具后停下（
   assert.equal(streamFn.calls.length, 1, "continue:false 在这批工具后停下，不再问模型");
   // 整轮结束（不只是该调用）：终态中止、理由如实记、显示给人
   assert.equal(result.status, "aborted", JSON.stringify(result));
-  assert.match(result.errorMessage ?? "", /钩子要求停止：停手-CF/);
+  assert.match(result.errorMessage ?? "", /hook asked to stop: 停手-CF/);
   // 拦下的理由逐字落进会话里的工具结果（模型可见的载体）
   const sessionsDir = join(root, ".pigeon", "state", "sessions");
   const entries = readdirSync(sessionsDir, { recursive: true })
@@ -395,7 +395,7 @@ test("PostToolUse 钩子 continue:false：整轮结束（不再问模型），�
     ]),
   });
   assert.equal(result.status, "aborted");
-  assert.match(result.errorMessage ?? "", /钩子要求停止：后停-CF/);
+  assert.match(result.errorMessage ?? "", /hook asked to stop: 后停-CF/);
   assert.equal(streamFn.calls.length, 1, "整轮结束：不再问模型");
   assert.equal(existsSync(stopMarked), false, "被钩子停下的整轮不再触发 Stop");
 });
@@ -490,7 +490,7 @@ test("Stop 拦下后续跑的那一轮被钩子停下（aborted）：循环停�
     ),
   });
   assert.equal(result.status, "aborted", JSON.stringify(result));
-  assert.match(result.errorMessage ?? "", /钩子要求停止：续跑里停-CF/);
+  assert.match(result.errorMessage ?? "", /hook asked to stop: 续跑里停-CF/);
   assert.equal(readFileSync(join(root, "STOPCOUNT"), "utf8"), "1", "续跑那轮被停下后 Stop 不再跑");
   assert.equal(streamFn.calls.length, 2, "初始一轮 + 续跑一轮，不再多问");
 });

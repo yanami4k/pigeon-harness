@@ -19,13 +19,13 @@ export function readDotMcpJson(path: string): DotMcpJson | undefined {
     raw = parseJsonText(readFileSync(path, "utf8"));
   } catch (error) {
     throw new McpConfigError(
-      `.mcp.json 不是合法 JSON：${path}：${error instanceof Error ? error.message : String(error)}`
+      `${path} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`
     );
   }
   if (!Value.Check(DotMcpJsonSchema, raw)) {
     // 出错位置取 typebox 的 instancePath，与设置文件的校验报错同一写法
-    const problems = schemaProblems(DotMcpJsonSchema, raw, "").join("；");
-    throw new McpConfigError(`.mcp.json 校验失败：${path}：${problems}`);
+    const problems = schemaProblems(DotMcpJsonSchema, raw, "").join("; ");
+    throw new McpConfigError(`${path} is invalid: ${problems}`);
   }
   return raw as DotMcpJson;
 }

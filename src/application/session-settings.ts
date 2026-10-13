@@ -112,9 +112,9 @@ function dockerfileOption(content: string | undefined): { dockerfileContent?: st
 // 无人值守遇到未确认条目的报错文字
 export function unattendedTrustMessage(entries: readonly TrustEntry[]): string {
   return [
-    `以下会执行命令或放权的配置尚未确认（首次出现或内容有变），无人值守运行不用它们：`,
+    "unconfirmed settings that run commands or grant permissions:",
     ...entries.map((entry) => `  ${describeTrustEntry(entry)}`),
-    `确认无误后可在终端界面里确认并记下，或加 ${TRUST_CONFIG_FLAG} 只对本次运行放行（不记下）。`,
+    `${TRUST_CONFIG_FLAG} allows them for this run only`,
   ].join("\n");
 }
 
@@ -142,13 +142,15 @@ export async function confirmSessionConfig(
   }
   if (choice === "skip") {
     options.notice?.(
-      `本次不用以下未确认的配置：${pending.map((entry) => `${entry.kind}:${entry.id}`).join("、")}`
+      `not using unconfirmed settings: ${pending.map((entry) => `${entry.kind}:${entry.id}`).join(", ")}`
     );
     return withoutTrustEntries(snapshot, pending, {
       localLayerTracked: localSettingsTracked(snapshot.root),
     });
   }
-  throw new ConfigNotConfirmedError("未确认会执行命令或放权的配置，已退出");
+  throw new ConfigNotConfirmedError(
+    "settings that run commands or grant permissions not confirmed; exited"
+  );
 }
 
 // 会话开始：旧布局检查 → 读设置 → 确认会执行命令的条目。决策 444：不在这里建程序状态目录（第一次真要写程序状态时才建）
@@ -167,9 +169,9 @@ export async function openSessionSettings(
 // 交互确认的问答文字（终端界面接管终端之前）：列出条目，返回提示语
 export function trustPromptText(entries: readonly TrustEntry[]): string {
   return [
-    "以下会执行命令或放权的配置首次出现或内容有变，请确认：",
+    "new or changed settings that run commands or grant permissions:",
     ...entries.map((entry) => `  ${describeTrustEntry(entry)}`),
-    "a 全部确认并记下 ｜ s 本次不用这些条目 ｜ q 退出",
+    "a trust all | s skip this time | q quit",
   ].join("\n");
 }
 

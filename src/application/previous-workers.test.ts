@@ -252,15 +252,15 @@ test("续接：之前的运行收尾未取用的 worker 照常可取，中断的
     const halfId = statuses.find((worker) => worker.name === "half")?.sessionId as SessionId;
     await assert.rejects(
       second.orchestrator.cancel(halfId),
-      /was spawned by an earlier run and was interrupted when that process exited/
+      /can't cancel worker half: it is from a previous run and was interrupted/
     );
     assert.throws(
       () => second.orchestrator.send(w1 as SessionId, "x"),
-      /it cannot receive messages/
+      /can't message worker w1: it is from a previous run and already finished/
     );
     assert.throws(
       () => second.orchestrator.resume(w1 as SessionId),
-      /after resuming it cannot be approved and continued/
+      /can't resume worker w1: it is from a previous run and already finished/
     );
     // 补递的通知：带会话号，进下一次运行
     assert.equal(second.opened.bundle.adapter.pendingNotices(), 1);

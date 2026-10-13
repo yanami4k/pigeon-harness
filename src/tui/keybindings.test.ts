@@ -57,8 +57,8 @@ test("未知的动作名与 Pigeon 动作之间的冲突给出提示行；终端
     "pigeon.nope": "ctrl+k",
     "pigeon.tree": "ctrl+o",
   });
-  assert.ok(notices.some((line) => /pigeon\.nope 不是已知的动作/.test(line)));
-  assert.ok(notices.some((line) => /键位冲突：ctrl\+o/.test(line)));
+  assert.ok(notices.some((line) => /unknown action pigeon\.nope/.test(line)));
+  assert.ok(notices.some((line) => /keybinding conflict: ctrl\+o/.test(line)));
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-keys-"));
   const sessionId = newSessionId();
   const term = new MockTerminal(100, 30);
@@ -72,7 +72,7 @@ test("未知的动作名与 Pigeon 动作之间的冲突给出提示行；终端
   try {
     shell.start();
     await settle();
-    assert.match(screenText(term), /pigeon\.nope 不是已知的动作/);
+    assert.match(screenText(term), /unknown action pigeon\.nope/);
   } finally {
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });
@@ -87,7 +87,7 @@ test("设置文件：keybindings 的键须是动作名的样子（pigeon.* 或 t
   );
   assert.ok("file" in ok, JSON.stringify(ok));
   const bad = validateSettingsLayer({ keybindings: { toggle: "ctrl+g" } }, source);
-  assert.ok("problems" in bad && /不是动作名/.test(bad.problems.join("")));
+  assert.ok("problems" in bad && /is not an action name/.test(bad.problems.join("")));
   const badValue = validateSettingsLayer({ keybindings: { "pigeon.tree": 3 } }, source);
   assert.ok("problems" in badValue);
 });

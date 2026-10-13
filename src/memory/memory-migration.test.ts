@@ -239,7 +239,7 @@ test("拿不到锁：这一次在内存里转换后读出，不写文件、不�
     assert.equal(readFileSync(dirs.location.file, "utf8"), LEGACY, "文件未动");
     assert.equal(existsSync(dirs.backup), false, "没有备份");
     assert.deepEqual(dirs.reports, [
-      "[记忆] .pigeon/state/memory.md 是旧格式，这次没能改写成新格式（另一处正在写这一层）：本次在内存里按新格式读出，文件未动，下次读到时再试",
+      "[memory] couldn't convert .pigeon/state/memory.md to the new format (another process is writing this layer); read it in memory this time",
     ]);
     const done = dirs.read();
     assert.equal(done.text, CONVERTED);
@@ -260,7 +260,7 @@ test("备份出错：这一次在内存里转换后读出，文件未动，告�
     assert.equal(dirs.reports.length, 1);
     assert.match(
       dirs.reports[0] ?? "",
-      /^\[记忆\] \.pigeon\/state\/memory\.md 是旧格式，这次没能改写成新格式（.+）：本次在内存里按新格式读出，文件未动，下次读到时再试$/
+      /^\[memory\] couldn't convert \.pigeon\/state\/memory\.md to the new format \(.+\); read it in memory this time$/
     );
     assert.equal(existsSync(dirs.location.lock), false, "锁已放开");
     rmSync(dirs.location.backupDir);

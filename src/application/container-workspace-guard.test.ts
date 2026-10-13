@@ -57,7 +57,7 @@ test("容器工作区加审批通道（交互场景）：装配时明确报错�
             createApprovalHandler: () => async () => ({ approved: false, reason: "测试" }),
           })
         ),
-      /容器工作区暂不支持交互审批.*路径.*放权/
+      /interactive approval is not supported in a container workspace/
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -75,7 +75,7 @@ test("容器工作区加按路径限定的固化放权规则：装配时明确�
             configGrants: [rule({ tool: "edit_file", pathPrefix: "src/" })],
           })
         ),
-      /容器工作区暂不支持按路径限定的放权规则：edit_file（src\/）/
+      /path-scoped grant rules are not supported in a container workspace: edit_file \(src\/\)/
     );
     const bundle = buildRuntime(
       deps(root, {

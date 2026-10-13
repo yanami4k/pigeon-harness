@@ -51,7 +51,7 @@ export async function completeWithoutTools(
     throw new CompletionError(
       message.errorMessage !== undefined && message.errorMessage !== ""
         ? message.errorMessage
-        : `模型请求以 ${message.stopReason} 收尾`
+        : `model request ended with ${message.stopReason}`
     );
   }
   const text = message.content

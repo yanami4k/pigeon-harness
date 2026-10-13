@@ -22,5 +22,5 @@ test("带主机名的请求：[a] 与 [d] 都建按网站的放权；不提供�
   assert.deepEqual(grantScopeFor(request, "a"), { host: "docs.example" });
   assert.deepEqual(grantScopeFor(request, "d"), { host: "docs.example" });
   assert.equal(offersDirectoryGrant(request, undefined), false);
-  assert.equal(hostGrantKeyLabel(request), "[a] 以后都允许访问 docs.example");
+  assert.equal(hostGrantKeyLabel(request), "[a] allow docs.example for this session");
 });

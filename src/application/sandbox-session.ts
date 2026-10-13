@@ -12,9 +12,7 @@ import {
   type OpenSandboxOptions,
   openSandbox,
   residualNotice,
-  SANDBOX_CACHE_COMMAND,
   SANDBOX_CLEAN_COMMAND,
-  SANDBOX_CLEAR_CACHE_COMMAND,
   type Sandbox,
   type SandboxExport,
 } from "../execution/sandbox.ts";
@@ -29,6 +27,7 @@ import {
 } from "../state/settings.ts";
 import type { SessionJobs } from "../tools/background-jobs.ts";
 import { handbackJobsNotice } from "./background-jobs.ts";
+import { plural } from "./format.ts";
 import { type HeadlessRunOptions, type HeadlessRunResult, runHeadless } from "./headless-core.ts";
 import type { LaunchFlags } from "./launch-flags.ts";
 import { noMcpSession } from "./mcp.ts";
@@ -36,13 +35,11 @@ import type { StatusFacts } from "./status-sources.ts";
 
 export { exportNotice, SANDBOX_CLEAN_COMMAND, type Sandbox, type SandboxExport };
 
-export const SANDBOX_FORK_UNSUPPORTED =
-  "沙箱里暂不支持分叉（/fork）：分叉要在宿主的 git 工作区上打快照、到独立工作树里续跑，" +
-  "而沙箱的工作区在容器里";
+export const SANDBOX_FORK_UNSUPPORTED = "/fork not available in the sandbox";
 export const SANDBOX_WORKERS_UNSUPPORTED =
-  "沙箱里暂不支持派 worker（/spawn、/cancel、/workers、/take）：worker 在宿主的 git 工作树里干活，会越出沙箱";
+  "/spawn, /cancel, /workers and /take not available in the sandbox";
 export const SANDBOX_RESUME_UNSUPPORTED =
-  "沙箱会话里暂不支持 /resume 换绑：换绑要另开容器。请退出后用 pigeon --sandbox --resume <会话号> 续跑";
+  "/resume not available in the sandbox; use pigeon --sandbox --resume <session ID>";
 
 // 测试注入：docker 调用前缀、镜像来源、容器内工作区根与缓存卷
 export type SandboxOverrides = Pick<
@@ -96,10 +93,7 @@ export async function startSandbox(input: StartSandboxInput): Promise<Sandbox | 
 }
 
 export function mcpUnavailableNotice(servers: readonly string[]): string {
-  return (
-    `沙箱里不启动 MCP 服务：已配置的 ${servers.join("、")} 在本会话不可用` +
-    "（MCP 服务在宿主上运行，会越出容器）"
-  );
+  return `MCP servers don't run in the sandbox: ${servers.join(", ")} unavailable`;
 }
 
 // 决策 354：沙箱会话写进开工状态块环境一节的确知事实——沙箱档位；断网档时网络确知不可用（联网档不算确知能用）
@@ -142,7 +136,7 @@ export async function exportSandbox(
   try {
     return `${prefix}${exportNotice(await sandbox.exportChanges())}`;
   } catch (error) {
-    return `${prefix}交回失败：${error instanceof Error ? error.message : String(error)}`;
+    return `${prefix}export failed: ${error instanceof Error ? error.message : String(error)}`;
   }
 }
 
@@ -164,7 +158,7 @@ export async function runHeadlessInSandbox(
     ...(options.settings !== undefined ? { settings: options.settings } : {}),
   });
   if (sandbox === undefined) {
-    throw new Error("runHeadlessInSandbox 需要 --sandbox");
+    throw new Error("runHeadlessInSandbox needs --sandbox");
   }
   let result: HeadlessRunResult;
   try {
@@ -190,8 +184,7 @@ export async function runHeadlessInSandbox(
   };
 }
 
-export const SANDBOX_COMMAND_USAGE =
-  "用法：pigeon sandbox list | clean | cache | clear-cache（list/clean：残留的沙箱容器；cache/clear-cache：共用下载缓存的占用与清空）";
+export const SANDBOX_COMMAND_USAGE = "usage: pigeon sandbox list | clean | cache | clear-cache";
 
 // pigeon sandbox list | clean：列出或清理进程异常退出留下的沙箱容器（在用的不动）；
 // pigeon sandbox cache | clear-cache（决策 280）：查看共用下载缓存卷的占用、清空缓存
@@ -204,28 +197,30 @@ export async function runSandboxCommand(
   }
   if (argv[0] === "list") {
     const residual = await findResidualSandboxes(overrides.docker);
-    return residual.length === 0 ? "没有残留的沙箱容器\n" : `${residualNotice(residual)}\n`;
+    return residual.length === 0
+      ? "no leftover sandbox containers\n"
+      : `${residualNotice(residual)}\n`;
   }
   if (argv[0] === "clean") {
     const removed = await cleanResidualSandboxes(overrides.docker);
     return removed.length === 0
-      ? "没有残留的沙箱容器\n"
-      : `已删除 ${removed.length} 个残留的沙箱容器：${removed.join("、")}\n`;
+      ? "no leftover sandbox containers\n"
+      : `removed ${plural(removed.length, "leftover sandbox container")}: ${removed.join(", ")}\n`;
   }
   if (argv[0] === "cache") {
     const info = await inspectCacheVolume(overrides.docker, overrides.cacheVolume);
     if (!info.exists) {
-      return `沙箱下载缓存卷 ${info.volume} 尚未建立（开过沙箱后自动建立）\n`;
+      return `sandbox cache volume ${info.volume} does not exist\n`;
     }
     const inUse =
-      info.links !== undefined && info.links > 0 ? `，${info.links} 个沙箱容器正在使用` : "";
-    return `沙箱下载缓存卷 ${info.volume}：占用 ${info.size}${inUse}；清空：${SANDBOX_CLEAR_CACHE_COMMAND}\n`;
+      info.links !== undefined && info.links > 0
+        ? `, used by ${plural(info.links, "sandbox container")}`
+        : "";
+    return `sandbox cache volume ${info.volume}: ${info.size}${inUse}\n`;
   }
   if (argv[0] === "clear-cache") {
     const outcome = await clearCacheVolume(overrides.docker, overrides.cacheVolume);
-    return outcome === "removed"
-      ? "已清空沙箱下载缓存（卷已删除，下次开沙箱自动重建）\n"
-      : `沙箱下载缓存本就是空的（卷不存在）；占用可用 ${SANDBOX_CACHE_COMMAND} 查看\n`;
+    return outcome === "removed" ? "sandbox cache cleared\n" : "sandbox cache already empty\n";
   }
   throw new Error(SANDBOX_COMMAND_USAGE);
 }

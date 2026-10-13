@@ -307,7 +307,10 @@ test("进入 worker 会话：从面板（输入框为空时按 ↓）选中进�
     assert.ok(!screenFlat(term).includes("已把话递给"), "递到了不说");
     // worker 会话里不能用的命令说明原因，输入留在输入框
     await type(term, "/compact\r");
-    assert.ok(screenFlat(term).includes("在 worker 会话里不能用 /compact"), screenFlat(term));
+    assert.ok(
+      screenFlat(term).includes("not available in a worker session: /compact"),
+      screenFlat(term)
+    );
     term.input("\x03");
     await settle();
     // /stop
@@ -315,7 +318,7 @@ test("进入 worker 会话：从面板（输入框为空时按 ↓）选中进�
     await until(() => h.orchestrator.status()[1]?.state === "cancelled", "fix-b 取消");
     await settle();
     assert.ok(
-      screenFlat(term).includes("== worker fix-b（implementer）收尾：已取消"),
+      screenFlat(term).includes("== worker fix-b (implementer) finished: cancelled"),
       screenFlat(term)
     );
     // Esc 回主会话
@@ -438,9 +441,7 @@ test("补批续做：请示等满时限交回后，面板标 blocked 且不淡�
     // 停在等审批的：发话不续做，提示用 /approve
     await type(term, "直接接着做\r");
     assert.ok(
-      screenFlat(term).includes(
-        "这个 worker 已结束，只能查看；它停在等审批，可用 /approve 补批续做"
-      ),
+      screenFlat(term).includes("worker has ended; read-only; waiting for approval"),
       screenFlat(term)
     );
     assert.equal(h.runtimes("ship").length, 1);
@@ -468,10 +469,10 @@ test("补批续做：请示等满时限交回后，面板标 blocked 且不淡�
     await settle();
     const flat = screenFlat(term);
     assert.ok(!flat.includes("已补批 worker ship 的调用") && !flat.includes("== 已补批"), flat);
-    assert.ok(flat.includes("== worker ship（tester）收尾：完成"), flat);
+    assert.ok(flat.includes("== worker ship (tester) finished: completed"), flat);
     // 已收尾：/approve 说明不需要
     await type(term, "/approve\r");
-    assert.ok(screenFlat(term).includes("worker ship 没有停在等审批，不需要补批"));
+    assert.ok(screenFlat(term).includes("worker ship is not waiting for approval"));
     assert.equal(h.runtimes("ship").length, 2);
   } finally {
     shell.stop();
@@ -494,7 +495,7 @@ test("已收尾的 worker 会话只读：发话不产生新的一轮，提示只
     assert.equal(shell.currentView(), "worker");
     assert.ok(screenFlat(term).includes("worker: look-a done"));
     await type(term, "再看看 b.ts\r");
-    assert.ok(screenFlat(term).includes("这个 worker 已结束，只能查看"), screenFlat(term));
+    assert.ok(screenFlat(term).includes("worker has ended; read-only"), screenFlat(term));
     assert.ok(!screenFlat(term).includes("> 再看看 b.ts"), "不回显为发出的消息");
     assert.equal(h.runtimes("look-a").length, 1, "没有新的一轮");
     assert.deepEqual(h.runtime("look-a").inputs, ["一"]);
@@ -533,7 +534,7 @@ test("进入 worker 会话期间：主 agent 照常运行（结果留在主会�
     await settle();
     assert.equal(shell.currentView(), "worker");
     let flat = screenFlat(term);
-    assert.ok(flat.includes("—— 人工审批 ——来源：主会话工具：edit_file"), flat);
+    assert.ok(flat.includes("-- approval --source: main sessiontool: edit_file"), flat);
     await type(term, "y");
     assert.deepEqual(await answer, { key: "y" });
     await settle();
@@ -544,7 +545,7 @@ test("进入 worker 会话期间：主 agent 照常运行（结果留在主会�
     await type(term, ESC);
     flat = screenFlat(term);
     assert.ok(flat.includes("done · "), flat);
-    assert.ok(flat.includes("来源：主会话"), flat);
+    assert.ok(flat.includes("source: main session"), flat);
   } finally {
     shell.stop();
     await h.stopAll();
@@ -573,14 +574,14 @@ test("树形视图里审批就地弹出：显示在树下方并写明来源（wo
     await settle();
     assert.equal(shell.currentView(), "tree");
     let text = lines(term).join("\n");
-    assert.ok(text.includes("—— 人工审批 ——"), text);
-    assert.ok(text.includes("来源：worker ship（tester）"), text);
+    assert.ok(text.includes("-- approval --"), text);
+    assert.ok(text.includes("source: worker ship (tester)"), text);
     await type(term, "n");
     assert.equal((await answer).key, "n");
     await settle();
     assert.equal(shell.currentView(), "tree");
     text = lines(term).join("\n");
-    assert.ok(!text.includes("—— 人工审批 ——"), "答完审批框撤下");
+    assert.ok(!text.includes("-- approval --"), "答完审批框撤下");
     assert.ok(text.includes("== workers tree"), text);
   } finally {
     shell.stop();
@@ -674,14 +675,17 @@ test("命令表：/agents、/stop、/approve 运行中可用；worker 会话里�
   for (const ok of ["/stop", "/approve x", "/agents", "/workers", "/tasks", "/quit"]) {
     assert.equal(rejectInWorkerSession(ok), undefined, ok);
   }
-  assert.ok(rejectInWorkerSession("/spawn a b")?.startsWith("在 worker 会话里不能用 /spawn"));
+  assert.equal(rejectInWorkerSession("/spawn a b"), "not available in a worker session: /spawn");
   const h = orchestrationHarness();
   const { term, shell } = shellWith({ workers: h.face });
   try {
     shell.start();
     await settle();
     await type(term, "/stop\r");
-    assert.ok(screenFlat(term).includes("/stop 与 /approve 在 worker 会话里用"), screenFlat(term));
+    assert.ok(
+      screenFlat(term).includes("/stop and /approve only work in a worker session"),
+      screenFlat(term)
+    );
   } finally {
     shell.stop();
     await h.stopAll();

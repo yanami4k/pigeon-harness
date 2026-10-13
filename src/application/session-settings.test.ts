@@ -170,9 +170,9 @@ test("无人值守：未确认即报错并逐条列出、说明 --trust-config�
     }),
     (error: unknown) =>
       error instanceof ConfigNotConfirmedError &&
-      /命令短名 test：npm test/.test(error.message) &&
-      /MCP 服务 fx：node fx\.js/.test(error.message) &&
-      /沙箱配置 sandbox/.test(error.message) &&
+      /command test: npm test/.test(error.message) &&
+      /MCP server fx: node fx\.js/.test(error.message) &&
+      /sandbox sandbox/.test(error.message) &&
       /--trust-config/.test(error.message)
   );
   const allowed = await openSessionSettings(root, {
@@ -187,13 +187,13 @@ test("行内问答：列出每条（来自哪一层、类型、标识、完整�
   const { root, home } = setup();
   const entries = pendingTrustEntries(loadSettings(root, { homeDir: home }), home);
   const text = trustPromptText(entries);
-  assert.match(text, /\[项目共享\] 命令短名 test：npm test/);
-  assert.match(text, /\[\.mcp\.json\] MCP 服务 fx：node fx\.js/);
+  assert.match(text, /\[project settings\] command test: npm test/);
+  assert.match(text, /\[\.mcp\.json\] MCP server fx: node fx\.js/);
   assert.match(
     text,
-    /\[项目共享\] 沙箱配置 sandbox：.*Dockerfile ci\/Dockerfile 内容 sha256 [0-9a-f]{12}/
+    /\[project settings\] sandbox sandbox: .*Dockerfile ci\/Dockerfile content sha256 [0-9a-f]{12}/
   );
-  assert.match(text, /a 全部确认并记下 ｜ s 本次不用这些条目 ｜ q 退出/);
+  assert.match(text, /a trust all \| s skip this time \| q quit/);
   assert.equal(parseTrustAnswer(" A "), "trust");
   assert.equal(parseTrustAnswer("s"), "skip");
   assert.equal(parseTrustAnswer("q"), "quit");

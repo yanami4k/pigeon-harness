@@ -65,9 +65,9 @@ export function describeMcpStartup(session: Pick<McpSession, "problems" | "summa
     ...conflicts.map((tool) => {
       const declared =
         tool.declaredHint?.destructiveHint === true && tool.configuredTier === "read"
-          ? "声明 destructive"
-          : "声明只读";
-      return `MCP 注解与配置冲突：${tool.name} ${declared}，配置 ${tool.configuredTier}，按 ${tool.effectiveTier} 执行`;
+          ? "declares destructive"
+          : "declares read-only";
+      return `MCP annotation conflicts with settings: ${tool.name} ${declared}, set to ${tool.configuredTier}, using ${tool.effectiveTier}`;
     }),
   ];
 }
@@ -148,7 +148,7 @@ export async function startMcpSession(options: McpSessionOptions): Promise<McpSe
     }
     if (connection.state !== "connected") {
       problems.push(
-        `MCP server ${server.name} 启动失败：${connection.lastError ?? "未知原因"}（本会话不暴露其工具）`
+        `starting MCP server ${server.name} failed: ${connection.lastError ?? "unknown reason"}`
       );
       return;
     }
@@ -158,7 +158,7 @@ export async function startMcpSession(options: McpSessionOptions): Promise<McpSe
       // 不同 server 名归一后可能撞名（a-b 与 a_b）：先到先得，后到的如实记问题
       if (taken.has(tool.name)) {
         problems.push(
-          `MCP 工具名 ${tool.name} 与其他 server 的工具重名，已跳过（server ${server.name}）`
+          `MCP tool name ${tool.name} clashes with another server's tool; skipped (server ${server.name})`
         );
         continue;
       }
@@ -176,7 +176,7 @@ export async function startMcpSession(options: McpSessionOptions): Promise<McpSe
     for (const descriptor of connection.prompts()) {
       if (descriptor.arguments?.some((argument) => argument.required === true) === true) {
         problems.push(
-          `MCP server ${server.name} 的 prompt ${descriptor.name} 需要参数，未登记进 Skill 目录`
+          `MCP server ${server.name} prompt ${descriptor.name} needs arguments; not added as a skill`
         );
         continue;
       }
@@ -194,7 +194,7 @@ export async function startMcpSession(options: McpSessionOptions): Promise<McpSe
         });
       } catch (error) {
         problems.push(
-          `MCP server ${server.name} 的 prompt ${descriptor.name} 取不到正文，未登记：${error instanceof Error ? error.message : String(error)}`
+          `loading prompt ${descriptor.name} from MCP server ${server.name} failed: ${error instanceof Error ? error.message : String(error)}`
         );
       }
     }

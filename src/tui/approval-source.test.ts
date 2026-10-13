@@ -69,7 +69,7 @@ test("TUI 审批：worker 请求标明来源，排队一次只弹一个；[a] �
     });
     await settle();
     let text = screenText(term);
-    assert.ok(text.includes("来源：worker fix-a（implementer）"), text);
+    assert.ok(text.includes("source: worker fix-a (implementer)"), text);
     assert.equal(text.includes("src/second.ts"), false, `第二个请求在排队，未弹出\n${text}`);
 
     term.input("a");
@@ -79,7 +79,7 @@ test("TUI 审批：worker 请求标明来源，排队一次只弹一个；[a] �
     assert.equal(parentStore.list().length, 0);
     text = screenText(term);
     assert.ok(text.includes("(worker fix-a only)"), text);
-    assert.ok(text.includes("来源：worker fix-b（implementer）"), text);
+    assert.ok(text.includes("source: worker fix-b (implementer)"), text);
     assert.ok(text.includes("src/second.ts"), text);
 
     term.input("n");

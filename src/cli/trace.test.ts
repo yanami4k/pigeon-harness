@@ -136,41 +136,38 @@ test("trace 报告（真实运行）：会话头、启动快照、逐轮 stopRea
     const { sessionId, runId } = await scriptSession(root, EDIT_SCRIPT);
     const output = runTraceCommand({ root, sessionId });
     const lines = output.split("\n");
-    assert.equal(lines[0], `会话 ${sessionId.slice(0, 13)}… ｜ Run 1 个 ｜ 工具调用 3 次`);
+    assert.equal(lines[0], `session ${sessionId.slice(0, 13)}… | 1 run | 3 tool calls`);
     assert.ok(!output.includes(sessionId), "会话 id 必须短哈希");
     assert.ok(!output.includes(runId), "Run id 同样短哈希");
-    assert.ok(
-      lines.includes(`Run ${runId.slice(0, 12)}… ｜ 终态 stopReason=stop ｜ 分类：正常`),
-      output
-    );
+    assert.ok(lines.includes(`Run ${runId.slice(0, 12)}… | stopReason=stop | class: ok`), output);
     const hash = createHash("sha256").update(SYSTEM_PROMPT).digest("hex").slice(0, 12);
     assert.ok(
       output.includes(
-        `  启动快照：模型 fake-provider/fake-model-1 ｜ 审批模式 prompt ｜ 工具 read_file、edit_file ｜ Memory 0 个（注入 0） ｜ Skill 0 个 ｜ system prompt ${hash} ｜ 模型请求 4 次`
+        `  start: model fake-provider/fake-model-1 | approval mode prompt | tools read_file, edit_file | memory 0 (0 injected) | skills 0 | system prompt ${hash} | 4 model requests`
       ),
       output
     );
-    assert.ok(output.includes("  结束方式：completed（消息 8 条）"), output);
+    assert.ok(output.includes("  ended: completed (8 messages)"), output);
     for (const index of [1, 2, 3, 4]) {
-      assert.ok(output.includes(`  第 ${index} 轮 ｜ `), `第 ${index} 轮缺失\n${output}`);
+      assert.ok(output.includes(`  turn ${index} | `), `第 ${index} 轮缺失\n${output}`);
     }
-    assert.match(output, /第 1 轮 ｜ \d\d:\d\d:\d\d\(UTC\) ｜ stopReason=toolUse/);
-    assert.match(output, /第 4 轮 ｜ \d\d:\d\d:\d\d\(UTC\) ｜ stopReason=stop/);
-    assert.ok(output.includes('      提议参数：{"path":"a.ts"}'), output);
-    assert.equal(output.split("      结果：成功").length - 1, 2, output);
-    assert.equal(output.split("      结果：出错").length - 1, 1, output);
+    assert.match(output, /turn 1 \| \d\d:\d\d:\d\d\(UTC\) \| stopReason=toolUse/);
+    assert.match(output, /turn 4 \| \d\d:\d\d:\d\d\(UTC\) \| stopReason=stop/);
+    assert.ok(output.includes('      args: {"path":"a.ts"}'), output);
+    assert.equal(output.split("      result: ok").length - 1, 2, output);
+    assert.equal(output.split("      result: error").length - 1, 1, output);
     // 审批结果与工具级分类取自运行面挂在工具结果消息上的标记：读档自动放行、第一次改人工批准、第二次改人工拒绝
     assert.deepEqual(
-      output.split("\n").filter((line) => line.startsWith("      审批：")),
+      output.split("\n").filter((line) => line.startsWith("      approval: ")),
       [
-        "      审批：策略自动放行（policy:auto）",
-        "      审批：人工批准（human）",
-        "      审批：人工拒绝（human）",
+        "      approval: auto-allowed by policy (policy:auto)",
+        "      approval: approved by human (human)",
+        "      approval: rejected by human (human)",
       ],
       output
     );
-    assert.ok(!output.includes("出错归类："), output);
-    assert.equal(output.split("      分类：正常").length - 1, 3, output);
+    assert.ok(!output.includes("error kind:"), output);
+    assert.equal(output.split("      class: ok").length - 1, 3, output);
     for (const retired of ["拒绝理由", "Receipt", "待对账", "哈希证据", "落盘缺口", "确证"]) {
       assert.ok(!output.includes(retired), `不应再出现"${retired}"\n${output}`);
     }
@@ -185,8 +182,8 @@ test("trace 报告：大参数截断，超长内容不完整外泄", () =>
     ]);
     const output = runTraceCommand({ root, sessionId });
     assert.ok(!output.includes(longPath), "超长参数不得完整外泄");
-    assert.ok(output.includes("…（共"), "截断必须带长度标注");
-    assert.ok(output.includes("      结果：出错"), output);
+    assert.ok(output.includes(" chars)"), "截断必须带长度标注");
+    assert.ok(output.includes("      result: error"), output);
   }));
 
 test("trace 报告：有开始无收尾的 Run 徽章为未知，会话头计崩溃残留；未配对的工具调用标无结果", () =>
@@ -197,12 +194,12 @@ test("trace 报告：有开始无收尾的 Run 徽章为未知，会话头计崩
     session.assistant({ toolCalls: [{ name: "edit_file", args: { path: "a.ts" } }] });
     const { sessionId } = await session.close();
     const output = runTraceCommand({ root, sessionId });
-    assert.ok(output.includes("崩溃残留 1 个 Run"), output);
+    assert.ok(output.includes("1 unfinished run (possible crash)"), output);
     const runHeader = output.split("\n").find((line) => line.startsWith("Run "));
-    assert.ok(runHeader?.includes("终态 stopReason=toolUse ｜ 分类：未知"), runHeader);
-    assert.ok(runHeader?.endsWith("｜ Run 收尾缺失（崩溃残留可能）"), runHeader);
-    assert.ok(output.includes("      结果：无结果消息（进程中断可能）"), output);
-    assert.ok(!output.includes("结束方式"), output);
+    assert.ok(runHeader?.includes("stopReason=toolUse | class: unknown"), runHeader);
+    assert.ok(runHeader?.endsWith("| no run end (possible crash)"), runHeader);
+    assert.ok(output.includes("      result: none (process may have been interrupted)"), output);
+    assert.ok(!output.includes("  ended: "), output);
   }));
 
 test("trace 报告：撞上限、上游合成失败、代码快照与验证记录照实呈现", () =>
@@ -219,19 +216,19 @@ test("trace 报告：撞上限、上游合成失败、代码快照与验证记�
     session.endRun({ ending: "turn-limit" });
     const { sessionId } = await session.close();
     const output = runTraceCommand({ root, sessionId });
-    assert.ok(output.includes("分类：基础设施错误"), output);
-    assert.ok(output.includes("分类：取消"), output);
+    assert.ok(output.includes("class: infrastructure error"), output);
+    assert.ok(output.includes("class: cancelled"), output);
     assert.match(
       output,
-      /第 2 轮 ｜ \d\d:\d\d:\d\d\(UTC\) ｜ stopReason=error（上游合成失败消息）/
+      /turn 2 \| \d\d:\d\d:\d\d\(UTC\) \| stopReason=error \(synthetic upstream failure\)/
     );
     assert.ok(
-      output.includes(`      代码快照：${"a".repeat(12)}（refs/pigeon/checkpoints/`),
+      output.includes(`      checkpoint: ${"a".repeat(12)} (refs/pigeon/checkpoints/`),
       output
     );
-    assert.ok(output.includes("  结束方式：error（消息 4 条）"), output);
-    assert.ok(output.includes("  结束方式：turn-limit（消息 2 条）"), output);
-    assert.ok(output.includes("  验证：失败 ｜ 退出码 1 ｜ 命令 npm test ｜ 10 毫秒"), output);
+    assert.ok(output.includes("  ended: error (4 messages)"), output);
+    assert.ok(output.includes("  ended: turn-limit (2 messages)"), output);
+    assert.ok(output.includes("  verification: fail | exit 1 | command npm test | 10 ms"), output);
   }));
 
 test("trace 报告：空回复异常结束分类为业务失败；验证记录里工具故障的步单列（决策 170 ② ③）", () =>
@@ -253,9 +250,9 @@ test("trace 报告：空回复异常结束分类为业务失败；验证记录�
     const { sessionId } = await session.close();
     const output = runTraceCommand({ root, sessionId });
     const runHeader = output.split("\n").find((line) => line.startsWith("Run "));
-    assert.ok(runHeader?.includes("分类：业务失败"), runHeader);
-    assert.ok(output.includes("  结束方式：empty-reply（消息 3 条）"), output);
-    assert.ok(output.includes("｜ 工具故障（不计入结论）：mypy"), output);
+    assert.ok(runHeader?.includes("class: business failure"), runHeader);
+    assert.ok(output.includes("  ended: empty-reply (3 messages)"), output);
+    assert.ok(output.includes("| tool fault (not counted): mypy"), output);
   }));
 
 test("trace 命令只读：正被写入（末行撕裂）的会话照常出报告，全部会话文件字节与工作区不变", () =>
@@ -275,7 +272,7 @@ test("trace 命令只读：正被写入（末行撕裂）的会话照常出报�
 
     const first = runTraceCommand({ root, sessionId });
     assert.equal(runTraceCommand({ root, sessionId }), first, "连跑两次结果一致");
-    assert.ok(first.includes("工具调用 3 次"), first);
+    assert.ok(first.includes("3 tool calls"), first);
     assert.deepEqual(readdirSync(sessionsDir, { recursive: true }), listing, "不得新增/删除文件");
     assert.deepEqual(snapshot(), before, "会话文件字节不得变化（撕裂末行不被修掉）");
     assert.equal(readFileSync(join(root, "a.ts"), "utf8"), workspaceBefore, "工作区不得变化");
@@ -291,7 +288,7 @@ test("trace 命令：会话不存在时报错并列出已有会话；旧格式�
       () => runTraceCommand({ root, sessionId: missing }),
       (error: unknown) => {
         assert.ok(error instanceof Error);
-        assert.ok(error.message.includes(`会话不存在：${missing}`));
+        assert.ok(error.message.includes(`session not found: ${missing}`));
         assert.ok(error.message.includes(sessionId), "必须列出已有会话帮助定位");
         return true;
       }
@@ -301,8 +298,7 @@ test("trace 命令：会话不存在时报错并列出已有会话；旧格式�
       () => runTraceCommand({ root, sessionId: legacy }),
       (error: unknown) =>
         error instanceof Error &&
-        error.message ===
-          `会话 ${legacy} 是旧格式会话（迁移之前创建），这里不读；${LEGACY_READER_HINT}`
+        error.message === `session ${legacy} is an old-format session; ${LEGACY_READER_HINT}`
     );
 
     const filtered = runTraceCommand({ root, sessionId, runId });
@@ -313,7 +309,7 @@ test("trace 命令：会话不存在时报错并列出已有会话；旧格式�
     assert.equal(full.split("\n").filter((line) => line.startsWith("Run ")).length, 2);
     assert.throws(
       () => runTraceCommand({ root, sessionId, runId: "run_nope" }),
-      /该会话无 Run run_nope。已有 Run：/
+      /run not found in this session: run_nope; runs: /
     );
   }));
 
@@ -331,8 +327,8 @@ test("trace 报告：读取时跳过的行归异常项；分支会话标来源�
     const { sessionId: oddId, path } = await odd.close();
     appendRawLine(path, { kind: "entry", seq: 999, type: "mystery", id: "x1", parentId: null });
     const oddTrace = runTraceCommand({ root, sessionId: oddId });
-    assert.ok(oddTrace.includes("异常项："), oddTrace);
-    assert.match(oddTrace, / {2}读取告警：第 \d+ 行是不认识的条目类型 mystery，已跳过/);
+    assert.ok(oddTrace.includes("anomalies:"), oddTrace);
+    assert.match(oddTrace, / {2}read warning: line \d+: unknown entry type mystery; skipped/);
 
     const branch = await forkFixture({ sessionsDir, sourceSessionId: sourceId, runId, runSeq: 2 });
     branch.startRun({ task: "分支" });
@@ -341,15 +337,18 @@ test("trace 报告：读取时跳过的行归异常项；分支会话标来源�
     const branchTrace = runTraceCommand({ root, sessionId: branchId });
     assert.ok(
       branchTrace.includes(
-        `分支会话：来源会话 ${sourceId} Run ${runId.slice(0, 12)}… 第 2 条 ｜ 分支 fork-`
+        `branch session: from session ${sourceId} run ${runId.slice(0, 12)}… entry 2 | branch fork-`
       ),
       branchTrace
     );
-    assert.ok(branchTrace.includes("｜ Run 1 个 ｜"), branchTrace);
+    assert.ok(branchTrace.includes("| 1 run |"), branchTrace);
     const headers = branchTrace.split("\n").filter((line) => line.startsWith("Run "));
     assert.equal(headers.length, 1, branchTrace);
     // 复制来的来源 Run 不算分支会话的 Run
-    assert.throws(() => runTraceCommand({ root, sessionId: branchId, runId }), /该会话无 Run/);
+    assert.throws(
+      () => runTraceCommand({ root, sessionId: branchId, runId }),
+      /run not found in this session/
+    );
   }));
 
 test("旧会话含复盘与旧推送记忆字段（决策 331 之前的 Run 开始条目）：trace 照常渲染、不报错", () =>
@@ -384,5 +383,5 @@ test("旧会话含复盘与旧推送记忆字段（决策 331 之前的 Run 开�
       });
     writeFileSync(path, `${lines.join("\n")}\n`);
     const trace = runTraceCommand({ root, sessionId });
-    assert.ok(trace.includes("Run 1 个"), trace);
+    assert.ok(trace.includes("1 run"), trace);
   }));

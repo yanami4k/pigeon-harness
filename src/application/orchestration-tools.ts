@@ -494,25 +494,25 @@ export function orchestrationToolRegistrations(
   return [
     {
       name: WAIT_WORKERS_TOOL,
-      description: "等 worker 结束并交回结构化结果",
+      description: "wait for workers to finish and return structured results",
       parameters: waitWorkersParamsSchema(settings),
       ...base,
     },
     {
       name: WORKER_STATUS_TOOL,
-      description: "查看 worker 的状态",
+      description: "show worker status",
       parameters: WorkerStatusParamsSchema,
       ...base,
     },
     {
       name: MESSAGE_WORKER_TOOL,
-      description: "给在跑的 worker 递话",
+      description: "send a message to a running worker",
       parameters: MessageWorkerParamsSchema,
       ...base,
     },
     {
       name: STOP_WORKER_TOOL,
-      description: "停掉 worker",
+      description: "stop a worker",
       parameters: StopWorkerParamsSchema,
       ...base,
     },

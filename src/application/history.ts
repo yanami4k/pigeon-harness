@@ -16,7 +16,7 @@ import {
 } from "../state/runaway-config.ts";
 import type { ViewMessage } from "../state/session-view.ts";
 import { isStatusMessage, statusSummary } from "../state/status-text.ts";
-import { summarizeArgs, workEndLine } from "./format.ts";
+import { plural, summarizeArgs, workEndLine } from "./format.ts";
 import { LEGACY_LOOP_REMINDER_PREFIX, LOOP_REMINDER_PREFIX } from "./loop-guard.ts";
 import { LEGACY_SCRIPT_NOTICE_PREFIX, SCRIPT_NOTICE_PREFIX } from "./script-texts.ts";
 import { LEGACY_WORKER_NOTICE_PREFIX, WORKER_NOTICE_PREFIX } from "./worker-notices.ts";
@@ -46,9 +46,7 @@ export interface SessionHistoryOptions {
 }
 
 function clip(text: string, chars: number): string {
-  return text.length <= chars
-    ? text
-    : `${text.slice(0, chars)}…（已截断显示，共 ${text.length} 字符）`;
+  return text.length <= chars ? text : `${text.slice(0, chars)}… (${text.length} chars)`;
 }
 
 // 进模型上下文的程序通知（打转提醒、worker 通知、脚本通知）以用户消息存下；回看时同实时一样显示成系统行。
@@ -88,11 +86,11 @@ export function messageLines(
     );
     // 决策 414：带图的结果注明图片张数（图片本身不显示）
     const images = message.blocks.filter((block) => block.type === "image").length;
-    const imageNote = images > 0 ? `，${images} 张图片` : "";
+    const imageNote = images > 0 ? `, ${plural(images, "image")}` : "";
     return [
       {
         kind: "toolResult",
-        text: `[result] ${message.toolName ?? "?"} ${message.isError === true ? "error" : "ok"}（${chars} 字符${imageNote}，已折叠）`,
+        text: `[result] ${message.toolName ?? "?"} ${message.isError === true ? "error" : "ok"} (${plural(chars, "char")}${imageNote}, collapsed)`,
       },
     ];
   }
@@ -102,12 +100,15 @@ export function messageLines(
     message.role === "user" ? "> " : message.role === "assistant" ? "" : `[${message.role}] `;
   for (const block of message.blocks) {
     if (block.type === "omitted-thinking") {
-      lines.push({ kind: "thinking", text: `~ thinking（未持久化，${block.bytes} 字节）` });
+      lines.push({
+        kind: "thinking",
+        text: `~ thinking (not persisted, ${plural(block.bytes, "byte")})`,
+      });
     } else if (block.type === "thinking") {
       lines.push({
         kind: "thinking",
         text: block.redacted
-          ? "~ thinking（provider 已编辑）"
+          ? "~ thinking (redacted by provider)"
           : `~ ${clip(block.thinking, entryChars)}`,
       });
     } else if (block.type === "text") {
@@ -126,17 +127,17 @@ export function messageLines(
       }
       // 撞上限续跑（决策 367）时运行面追加的提示：同样不是人输入的话；旧会话记录里的旧版提示照样认出
       if (message.role === "user" && CONTINUATION_PROMPTS.has(block.text)) {
-        lines.push({ kind: "notice", text: `续跑提示：${block.text}` });
+        lines.push({ kind: "notice", text: `continuation prompt: ${block.text}` });
         continue;
       }
       lines.push({ kind: textKind, text: `${prefix}${clip(block.text, entryChars)}` });
     } else if (block.type === "image") {
       lines.push({
         kind: textKind,
-        text: `${prefix}[image ${block.mimeType} ${block.bytes} 字节]`,
+        text: `${prefix}[image ${block.mimeType} ${plural(block.bytes, "byte")}]`,
       });
     } else if (block.type === "unknown") {
-      lines.push({ kind: textKind, text: `${prefix}[未知块 ${block.originalType}]` });
+      lines.push({ kind: textKind, text: `${prefix}[unknown block ${block.originalType}]` });
     }
     // toolCall 块不单独成行：工具行由助手消息之后的工具行给出
   }
@@ -157,8 +158,8 @@ export function loadSessionHistory(
       {
         kind: "notice",
         text: hasLegacySessionFile(sessionsDir, sessionId)
-          ? `[旧格式会话（迁移之前创建），这里不显示历史；${LEGACY_READER_HINT}]`
-          : "[该会话在会话存储里没有记录，这里不显示历史]",
+          ? `[old-format session; history not shown; ${LEGACY_READER_HINT}]`
+          : "[no record of this session in the session store; history not shown]",
       },
     ];
   }
@@ -219,7 +220,7 @@ export function loadSessionHistory(
     return body;
   }
   return [
-    { kind: "notice", text: `[更早 ${body.length - limit} 条未展开，/search 可查]` },
+    { kind: "notice", text: `[${plural(body.length - limit, "earlier line")} not shown]` },
     ...body.slice(body.length - limit),
   ];
 }

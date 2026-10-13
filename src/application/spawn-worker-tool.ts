@@ -94,7 +94,7 @@ export function assertSpawnWorkerSettings(settings: SpawnWorkerSettings): void {
   };
   for (const [key, value] of Object.entries(checked)) {
     if (value !== undefined && (!Number.isInteger(value) || value < 1)) {
-      throw new Error(`派 worker 的上限需要正整数：${key}=${value}`);
+      throw new Error(`worker limit must be a positive integer: ${key}=${value}`);
     }
   }
 }
@@ -305,7 +305,7 @@ export const SPAWN_WORKER_TEXTS = {
   // 决策 448：收尾时没有改动，工作树与分支已自动删掉（代替起点那一行）
   removedUnchanged:
     "It changed no files, so its worktree and branch were removed; there is nothing to take.",
-  // 决策 279（271 修订）：另起一行写明起点快照与只取其自身改动的取用方式（人看的 /workers 用 workers-commands.ts 的中文一行）
+  // 决策 279（271 修订）：另起一行写明起点快照与只取其自身改动的取用方式（人看的 /workers 用 workers-commands.ts 的短一行）
   start: (start: WorkerStartPoint, name: string) => {
     const commit = start.commit.slice(0, 12);
     const origin = start.snapshot
@@ -662,6 +662,7 @@ export function workerNoticeMarker(sessionId: string): string {
 }
 
 // 决策 428 之前的说法：旧会话里递出的通知末行是中文的
+// 旧会话里的中文原文，只用来认出旧记录
 export function legacyWorkerNoticeMarker(sessionId: string): string {
   return `（worker 会话 ${sessionId}）`;
 }
@@ -877,7 +878,7 @@ async function spawnAttempts(
 export function spawnWorkerRegistration(): ToolRegistration {
   return {
     name: SPAWN_WORKER_TOOL,
-    description: "在后台派 worker 完成独立子任务，结束时通知",
+    description: "spawn a background worker for an independent subtask; notifies when done",
     parameters: SpawnWorkerParamsSchema,
     tier: "read",
     pathConfinement: { kind: "none" },

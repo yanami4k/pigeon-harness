@@ -17,8 +17,8 @@ const request: ApprovalRequest = {
 
 test("审批块：网站行 + 以后都允许访问该网站；不提供 [d]", () => {
   const text = approvalBlockText(request);
-  assert.match(text, /工具：web_fetch\n网站：docs\.example\n参数：/);
-  assert.match(text, /\[a\] 以后都允许访问 docs\.example$/);
+  assert.match(text, /tool: web_fetch\nsite: docs\.example\nargs:/);
+  assert.match(text, /\[a\] allow docs\.example for this session$/);
   assert.doesNotMatch(text, /\[d\]/);
 });
 

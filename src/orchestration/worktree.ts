@@ -117,7 +117,7 @@ export function addWorktree(input: AddWorktreeInput): WorktreeHandle {
   assertWorkerName(input.name);
   const baseRef = input.baseRef ?? "HEAD";
   if (baseRef.startsWith("-")) {
-    throw new WorktreeError(`起点提交不合法：${baseRef}`);
+    throw new WorktreeError(`invalid base commit: ${baseRef}`);
   }
   const path = worktreePathFor(input.governanceRoot ?? input.repoRoot, input.sessionId, input.name);
   let branch: string;
@@ -148,7 +148,7 @@ export function createWorktreeAt(input: {
 }): void {
   assertExplicitBranch(input.branch);
   if (input.baseRef.startsWith("-")) {
-    throw new WorktreeError(`起点提交不合法：${input.baseRef}`);
+    throw new WorktreeError(`invalid base commit: ${input.baseRef}`);
   }
   const includes = listWorktreeIncludes(input.includeSource);
   // 建工作树要检出文件：只关钩子（post-checkout 等）与 fsmonitor，不加 --attr-source——检出照常按 .gitattributes
@@ -172,7 +172,7 @@ export function createWorktreeAt(input: {
         // 回滚失败：工作树留着，由 /worktrees 列出
       }
       throw new WorktreeError(
-        `按 .worktreeinclude 复制文件失败：${error instanceof Error ? error.message : String(error)}`
+        `copying .worktreeinclude files failed: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }
@@ -290,7 +290,7 @@ function checkIgnored(cwd: string, paths: readonly string[]): string[] {
       return [];
     }
     throw new WorktreeError(
-      `git check-ignore 失败：${error instanceof Error ? error.message : String(error)}`
+      `git check-ignore failed: ${error instanceof Error ? error.message : String(error)}`
     );
   }
 }
@@ -380,11 +380,11 @@ export function removeWorktree(input: { repoRoot: string; path: string; force?: 
   const path = resolve(input.path);
   const admin = worktreeAdminDir(input.repoRoot, path);
   if (admin !== undefined && existsSync(join(admin, "locked"))) {
-    throw new WorktreeError(`工作树已被锁定（git worktree lock），不删：${path}`);
+    throw new WorktreeError(`worktree is locked (git worktree lock); not removed: ${path}`);
   }
   try {
     if (lstatSync(join(path, ".git")).isDirectory()) {
-      throw new WorktreeError(`${path} 不是 git 工作树（.git 是目录），不删`);
+      throw new WorktreeError(`${path} is not a git worktree (.git is a directory); not removed`);
     }
   } catch (error) {
     if (error instanceof WorktreeError) throw error;
@@ -444,7 +444,7 @@ export function mainRepoRoot(path: string): string {
 // 回放据此精确回到"任务开始处"。解析不出（空仓库、ref 不存在）返回 undefined，由调用方决定是否降级
 export function resolveCommit(repoRoot: string, ref: string): string | undefined {
   if (ref.startsWith("-")) {
-    throw new WorktreeError(`起点提交不合法：${ref}`);
+    throw new WorktreeError(`invalid base commit: ${ref}`);
   }
   try {
     const commit = runGit(repoRoot, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).trim();
@@ -533,7 +533,7 @@ export function branchCreationCommit(repoRoot: string, branch: string): string |
 // 决策 448：工作树相对 base 改过的文件（工作树相对路径，升序）：已跟踪文件的改动连同提交（git diff base），加未跟踪未忽略的文件
 export function filesChangedSince(worktreePath: string, base: string): string[] {
   if (base.startsWith("-")) {
-    throw new WorktreeError(`起点提交不合法：${base}`);
+    throw new WorktreeError(`invalid base commit: ${base}`);
   }
   const tracked = splitNul(runGit(worktreePath, ["diff", "--name-only", "-z", base, "--"]));
   const untracked = splitNul(
@@ -594,6 +594,6 @@ function runGit(
         : error instanceof Error
           ? error.message
           : String(error);
-    throw new WorktreeError(`git ${args.join(" ")} 失败：${detail}`);
+    throw new WorktreeError(`git ${args.join(" ")} failed: ${detail}`);
   }
 }

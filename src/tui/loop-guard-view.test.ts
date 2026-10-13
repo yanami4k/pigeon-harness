@@ -167,7 +167,7 @@ test("终端界面：打转检测关掉时不提醒、不叫停", async () => {
     await settle();
     assert.deepEqual(runtime.notes, []);
     assert.deepEqual(runtime.causes, []);
-    assert.ok(!screenFlat(term).includes("打转"), screenFlat(term));
+    assert.ok(!screenFlat(term).includes("[loop]"), screenFlat(term));
   } finally {
     detach();
     shell.stop();

@@ -193,7 +193,7 @@ test("双击 Esc（空闲、输入框为空）打开消息树；单击、输入�
     // 当前位置回车不动
     term.input("\r");
     await settle();
-    assert.match(screenText(term), /已经在这里/);
+    assert.match(screenText(term), /already here/);
     term.input(ESC);
     await settle();
     assert.doesNotMatch(screenText(term), /== messages/);
@@ -214,15 +214,15 @@ test("/rewind 打开；选一条消息三选一，只退对话后原消息放回
     await settle();
     assert.deepEqual(calls.prepared, ["e2"]);
     const screen = screenText(term);
-    assert.match(screen, /\[1\] 代码与对话都退/);
-    assert.match(screen, /\[2\] 只退对话/);
-    assert.match(screen, /\[3\] 只退代码/);
+    assert.match(screen, /\[1\] rewind code and conversation/);
+    assert.match(screen, /\[2\] rewind conversation only/);
+    assert.match(screen, /\[3\] rewind code only/);
     term.input("2");
     await settle();
     assert.deepEqual(calls.applied, [{ mode: "conversation", revert: [] }]);
     assert.equal(calls.checked, 0, "只退对话不拍现状");
     const after = screenText(term);
-    assert.match(after, /已退回（对话）到这条消息之前/);
+    assert.match(after, /rewound conversation to before this message/);
     assert.match(after, /second task/);
     term.input("\x15");
     // 运行中：/rewind 被拒，Esc 是中断
@@ -257,9 +257,9 @@ test("没有代码要退时只给退对话", async () => {
     term.input("\r");
     await settle();
     const screen = screenText(term);
-    assert.match(screen, /\[1\] 只退对话/);
-    assert.doesNotMatch(screen, /只退代码/);
-    assert.match(screen, /只退对话$/m);
+    assert.match(screen, /\[1\] rewind conversation only/);
+    assert.doesNotMatch(screen, /rewind code only/);
+    assert.match(screen, /rewind conversation only$/m);
     term.input("\r");
     await settle();
     assert.deepEqual(calls.applied, [{ mode: "conversation", revert: [] }]);
@@ -293,8 +293,7 @@ test("退代码：手改过的文件逐个选（缺省保留，空格切换为�
     await settle();
     assert.deepEqual(calls.applied, [{ mode: "both", revert: ["c.txt"] }]);
     const after = screenText(term);
-    assert.match(after, /写回：a\.txt/);
-    assert.doesNotMatch(after, /保留了拿不准的/);
+    assert.match(after, /restored: a\.txt/);
   } finally {
     cleanup();
   }
@@ -327,12 +326,12 @@ test("当前位置回车：有可撤销的上一次退代码即给撤销，撤�
     await settle();
     term.input("\r");
     await settle();
-    assert.match(screenText(term), /\[1\] 撤销上次退代码/);
+    assert.match(screenText(term), /\[1\] undo last code rewind/);
     term.input("\r");
     await settle();
     assert.equal(calls.checked, 1);
     assert.deepEqual(calls.applied, [{ mode: "code", revert: [] }]);
-    assert.match(screenText(term), /已撤销上次退代码/);
+    assert.match(screenText(term), /undid last code rewind/);
   } finally {
     cleanup();
   }
@@ -351,10 +350,9 @@ test("写回中途出错：如实列出写了哪些、哪个出错，对话没�
     term.input("1");
     await settle();
     const screen = screenText(term);
-    assert.match(screen, /写回中途出错，停在出错的那个文件：对话没有退/);
-    assert.match(screen, /写回：a\.txt/);
-    assert.match(screen, /出错：b\.txt：EPERM/);
-    assert.doesNotMatch(screen, /已写的可撤销/);
+    assert.match(screen, /restoring files failed partway; conversation not rewound/);
+    assert.match(screen, /restored: a\.txt/);
+    assert.match(screen, /failed: b\.txt: EPERM/);
     assert.doesNotMatch(screen, /second task/);
   } finally {
     cleanup();

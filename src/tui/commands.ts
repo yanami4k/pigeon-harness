@@ -2,7 +2,7 @@
 //（决策 030）、检索在 application/search.ts、恢复流程在
 // application/resume.ts——全部与 cli 同一份逻辑；语法/语义错误响亮呈现（同 REPL 口径），
 // 未知命令如实说明。worker 与 resume 的具体动作由壳转交给对应视图模块。
-// 决策 286：未知命令列出的可用命令从命令表（command-table.ts）按当前会话生成，以后加命令不再漏。
+// 决策 286：命令的用法与运行中能不能用在命令表（command-table.ts）；未知命令只报命令词。
 import { compactFocusOf } from "../application/compaction-text.ts";
 import { runGrantCommand } from "../application/grants.ts";
 import { MEMORY_COMMAND_USAGE, MEMORY_SAVE_WAITING_TEXT } from "../application/memory-command.ts";
@@ -19,11 +19,7 @@ import type { SessionGrantStore } from "../approvals/grant-store.ts";
 import type { ConfigGrantRule } from "../state/grants.ts";
 import type { SessionId } from "../state/ids.ts";
 import type { LayeredGrantRule } from "../state/settings.ts";
-import {
-  type CommandAvailability,
-  unknownCommandText,
-  WORKER_SESSION_ONLY,
-} from "./command-table.ts";
+import { unknownCommandText, WORKER_SESSION_ONLY } from "./command-table.ts";
 import { renderHooksView, type TuiHooksFace } from "./hooks-view.ts";
 import type { TuiWorkersFace } from "./workers-view.ts";
 
@@ -105,32 +101,6 @@ export interface CommandsHost {
   currentSessionName?(): string | undefined;
 }
 
-// 命令表判断可用性用的只读面
-export function commandAvailability(host: CommandsHost): CommandAvailability {
-  return {
-    searchRoot: () => host.searchRoot(),
-    resumeConfigured: () => host.resumeConfigured(),
-    hasGrants: () => host.grants() !== undefined,
-    inSandbox: () => host.sandbox?.() !== undefined,
-    tasks: () => host.tasks !== undefined,
-    reload: () => host.reloadCommand !== undefined,
-    hooks: () => host.hooksView?.() !== undefined,
-    scripts: () => host.scriptCommands?.() !== undefined,
-    memory: () => host.memory?.() !== undefined,
-    worktrees: () => host.worktrees?.() !== undefined,
-    rename: () => host.renameSession !== undefined,
-    config: () => host.configCommand !== undefined,
-    rewind: () => host.rewindCommand !== undefined,
-    panel: () => host.panelCommand !== undefined,
-    workers: () => {
-      const workers = host.workers();
-      return workers === undefined
-        ? undefined
-        : { fork: workers.fork !== undefined, take: workers.take !== undefined };
-    },
-  };
-}
-
 export function handleSlashCommand(host: CommandsHost, value: string): void {
   const tokens = value
     .slice(1)
@@ -153,7 +123,9 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
           host.render();
         },
         (error: unknown) => {
-          host.addAlert(`命令失败：${error instanceof Error ? error.message : String(error)}`);
+          host.addAlert(
+            `command failed: ${error instanceof Error ? error.message : String(error)}`
+          );
           host.render();
         }
       );
@@ -169,7 +141,9 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
             host.render();
           },
           (error: unknown) => {
-            host.addAlert(`交回失败：${error instanceof Error ? error.message : String(error)}`);
+            host.addAlert(
+              `export failed: ${error instanceof Error ? error.message : String(error)}`
+            );
             host.render();
           }
         );
@@ -201,7 +175,7 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
           host.render();
         },
         (error: unknown) => {
-          host.addAlert(`分叉失败：${error instanceof Error ? error.message : String(error)}`);
+          host.addAlert(`fork failed: ${error instanceof Error ? error.message : String(error)}`);
           host.render();
         }
       );
@@ -246,12 +220,12 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
         ((forced === "pooled" && !isPooled) || (forced === undefined && !isPooled && !isWorker)) &&
         host.currentSessionName?.() === name
       ) {
-        host.addSystem(`${name} 是当前会话：它的改动就在本工作区里，不用取回`);
+        host.addSystem(`${name} is the current session; nothing to take`);
         return;
       }
       if (forced === undefined && isPooled && isWorker) {
         host.addSystem(
-          `会话面板里的会话与 worker 都叫 ${name}：写 /take 会话:${name} 或 /take worker:${name}`
+          `a session and a worker are both named ${name}: /take session:${name} or /take worker:${name}`
         );
         return;
       }
@@ -264,7 +238,7 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
         return;
       }
       if (forced === "pooled") {
-        host.addSystem(`会话面板里没有叫 ${name} 的会话`);
+        host.addSystem(`no session named ${name} in the session panel`);
         return;
       }
       if (workers !== undefined) {
@@ -278,9 +252,7 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
     }
     // 决策 294 B1：/tasks 查看任务清单（完整的清单显示留给编排二段）
     if (tokens[0] === "tasks" && host.tasks !== undefined) {
-      host.addSystem(
-        host.tasks() ?? "任务清单没有开（设置 orchestration 一节的 taskList 为 false）。"
-      );
+      host.addSystem(host.tasks() ?? "task list is off");
       return;
     }
     // 决策 309、312、301：/orchestrate——发起即以人的输入提交（交给模型的文字带关键词，点名由程序判断）；续跑、停止、放弃由程序直接做
@@ -292,7 +264,7 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
         host.render();
       };
       const failed = (error: unknown) =>
-        done(`命令失败：${error instanceof Error ? error.message : String(error)}`);
+        done(`command failed: ${error instanceof Error ? error.message : String(error)}`);
       if (sub === "resume" || sub === "drop") {
         const runId = tokens[2];
         if (runId === undefined) {
@@ -347,7 +319,9 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
               host.render();
             },
             (error: unknown) => {
-              host.addAlert(`命令失败：${error instanceof Error ? error.message : String(error)}`);
+              host.addAlert(
+                `command failed: ${error instanceof Error ? error.message : String(error)}`
+              );
               host.render();
             }
           )
@@ -381,7 +355,7 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
     // 决策 450、456：/rename <名字> 改当前会话的名字：记进会话记录（续接后还在），本机会话名录跟着改（别的会话按它找到本会话）
     if (tokens[0] === "rename" && host.renameSession !== undefined) {
       const name = value.trim().slice("/rename".length).trim();
-      const reply = name === "" ? "用法：/rename <名字>" : host.renameSession(name);
+      const reply = name === "" ? "usage: /rename <name>" : host.renameSession(name);
       if (reply !== "") host.addSystem(reply);
       return;
     }
@@ -421,9 +395,9 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
         },
       });
     if (!handled) {
-      host.addSystem(unknownCommandText(value, commandAvailability(host)));
+      host.addSystem(unknownCommandText(value));
     }
   } catch (error) {
-    host.addAlert(`命令失败：${error instanceof Error ? error.message : String(error)}`);
+    host.addAlert(`command failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }

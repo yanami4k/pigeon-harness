@@ -93,7 +93,7 @@ test("启动参数：--continue、--resume <id>、--resume 不带 id；两者互
     mode: { kind: "resume" },
   });
   assert.deepEqual(takeContinueFlags(["--yolo"]), { argv: ["--yolo"], mode: { kind: "new" } });
-  assert.throws(() => takeContinueFlags(["--continue", "--resume"]), /只能给一个/);
+  assert.throws(() => takeContinueFlags(["--continue", "--resume"]), /can't be used with/);
 });
 
 test("会话列表只列主会话（worker、复盘不列），按最近活动从新到旧，带首条输入、轮数与沙箱标记", async () => {
@@ -151,7 +151,7 @@ test("--continue 接本项目最近的主会话（本机启动不接沙箱会话
     assert.deepEqual(target, {
       kind: "new",
       picker: false,
-      note: "本项目没有可续接的会话，开一个新会话",
+      note: "no session to continue; started a new session",
     });
   } finally {
     rmSync(empty, { recursive: true, force: true });
@@ -170,21 +170,24 @@ test("--resume <id> 照旧直接续接；沙箱与本机不混用；不存在的
     assert.throws(
       () =>
         resolveStartTarget(project.root, { kind: "resume", sessionId: project.sandboxed }, false),
-      /是沙箱会话，请用 pigeon --sandbox --resume/
+      /is a sandbox session; resume with: pigeon --sandbox --resume/
     );
     assert.throws(
       () => resolveStartTarget(project.root, { kind: "resume", sessionId: project.middle }, true),
-      /不是沙箱会话/
+      /is not a sandbox session/
     );
     assert.throws(
       () => resolveStartTarget(project.root, { kind: "resume", sessionId: newSessionId() }, false),
-      /会话不存在/
+      /session not found/
     );
     assert.deepEqual(resolveStartTarget(project.root, { kind: "resume" }, false), {
       kind: "new",
       picker: true,
     });
-    assert.throws(() => resolveStartTarget(project.root, { kind: "resume" }, true), /请给会话号/);
+    assert.throws(
+      () => resolveStartTarget(project.root, { kind: "resume" }, true),
+      /needs a session ID/
+    );
   } finally {
     project.cleanup();
   }
@@ -353,7 +356,7 @@ test("/resume 不带 ID 弹出会话列表：↑↓ 选、回车进（照 /resum
     await settle();
     assert.ok(
       squashSpaces(screenFlat(term)).includes(
-        squashSpaces(`请用 pigeon --sandbox --resume ${project.sandboxed}`)
+        squashSpaces(`resume with: pigeon --sandbox --resume ${project.sandboxed}`)
       ),
       screenText(term)
     );
@@ -377,7 +380,7 @@ test("启动时 --resume 不带 ID：壳一开就弹列表；没有可续接的�
     shell.start();
     shell.openSessionPicker();
     await settle();
-    assert.ok(screenFlat(term).includes("没有可续接的会话"));
+    assert.ok(screenFlat(term).includes("no sessions to resume"));
   } finally {
     cleanup();
     rmSync(empty, { recursive: true, force: true });

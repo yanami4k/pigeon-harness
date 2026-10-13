@@ -29,7 +29,7 @@ export interface GlobalIgnoreResult {
   error?: string;
 }
 
-const ALL_RULES = GLOBAL_IGNORE_ENTRIES.map((entry) => entry.rule).join("、");
+const ALL_RULES = GLOBAL_IGNORE_ENTRIES.map((entry) => entry.rule).join(", ");
 
 // git 只读调用：关掉 fsmonitor（core.fsmonitor 可配成任意命令）
 function git(cwd: string, args: string[], env: NodeJS.ProcessEnv, input?: string): string {
@@ -137,7 +137,7 @@ export function ensureGlobalIgnoreRules(
     const location = globalExcludesLocation(root, options);
     if (location.kind === "relative") {
       options.notice?.(
-        `git 的 core.excludesFile 设成了相对路径（${location.value}），全局排除文件的位置不明，Pigeon 没有写入；请自行把 ${missing.join("、")} 加入你的全局排除文件`
+        `git core.excludesFile is a relative path (${location.value}); ${missing.join(", ")} not added to the global excludes file`
       );
       return { added: [], error: "relative" };
     }
@@ -158,7 +158,7 @@ export function ensureGlobalIgnoreRules(
     const still = missingRules(root, env);
     if (still.length > 0) {
       options.notice?.(
-        `已把 Pigeon 程序状态的忽略规则写进 ${file}，但 git 仍没有忽略 ${still.join("、")}（全局排除文件可能另有设置）；请自行检查，把 ${ALL_RULES} 加入 git 实际读的全局排除文件`
+        `added ignore rules to ${file}, but git still doesn't ignore ${still.join(", ")}`
       );
       return { file, added, error: "ineffective" };
     }
@@ -166,7 +166,7 @@ export function ensureGlobalIgnoreRules(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     options.notice?.(
-      `没能把 Pigeon 程序状态的忽略规则写进 git 全局排除文件${file !== undefined ? ` ${file}` : ""}：${message}（程序状态可能出现在 git status 里，可自行加入 ${ALL_RULES}）`
+      `adding ${ALL_RULES} to the git global excludes file${file !== undefined ? ` ${file}` : ""} failed: ${message}`
     );
     return { ...(file !== undefined ? { file } : {}), added: [], error: message };
   }

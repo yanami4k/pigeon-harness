@@ -129,7 +129,7 @@ test("验收修改：主目录下项目级与用户级是同一个目录——�
     writeFile(join(home, ".pigeon", "skills", "review", "SKILL.md"), skillMd("review", "用户版"));
     const twice = loadSkillCatalog({ workspaceRoot: home, homeDir: home });
     assert.ok(
-      twice.problems.some((problem) => problem.includes("冲突")),
+      twice.problems.some((problem) => problem.includes("same name as")),
       "不标明时同一目录扫两遍"
     );
     const catalog = loadSkillCatalog({

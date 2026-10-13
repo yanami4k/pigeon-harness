@@ -20,7 +20,7 @@ const LEGACY_SESSION_FILE = /^(sess_[0-9A-HJKMNP-TV-Z]{26})\.jsonl$/;
 
 // 读旧格式会话用的只读旧版代码（决策 211）
 export const LEGACY_READER_COMMIT = "455d88d";
-export const LEGACY_READER_HINT = `旧格式会话请用只读的旧版代码 ${LEGACY_READER_COMMIT} 读取`;
+export const LEGACY_READER_HINT = `readable with legacy code ${LEGACY_READER_COMMIT}`;
 
 // 会话的创建时间：Pigeon 会话号取 ULID 时间分量（与旧会话列表同一口径），其余取文件名里的创建时间
 export function sessionRefTime(file: SessionFileRef): number {
@@ -109,6 +109,6 @@ export function hasLegacySessionFile(sessionsRoot: string, sessionId: string): b
 export function legacySessionsNote(sessionsRoot: string): string | undefined {
   const count = listLegacySessionIds(sessionsRoot).length;
   return count > 0
-    ? `另有 ${count} 个旧格式会话（迁移之前创建）未列出；${LEGACY_READER_HINT}`
+    ? `${count} old-format ${count === 1 ? "session" : "sessions"} not listed; ${LEGACY_READER_HINT}`
     : undefined;
 }

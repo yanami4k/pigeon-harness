@@ -152,10 +152,10 @@ test("/panel 打开面板；输入框里的话派新会话；按状态分组，�
     finishers[0]?.("登录修好了");
     await settle();
     const screen = screenText(term);
-    assert.match(screen, /在跑（1）/);
-    assert.match(screen, /空闲（1）/);
+    assert.match(screen, /running \(1\)/);
+    assert.match(screen, /idle \(1\)/);
     assert.match(screen, /s1 {2}修登录 {2}\| 登录修好了/);
-    assert.ok(screen.indexOf("在跑（1）") < screen.indexOf("空闲（1）"));
+    assert.ok(screen.indexOf("running (1)") < screen.indexOf("idle (1)"));
     assert.ok(!term.writes.join("").includes(`${ESC}[2J 日志`), "卡片里的控制序列不写进终端");
     assert.equal(pool.list().length, 2);
   } finally {
@@ -216,16 +216,16 @@ test("连按两次 Ctrl+X 停止选中的会话（第一次只提示）；面板
     await settle();
     term.input(CTRL_X);
     await settle();
-    assert.match(screenText(term), /再按一次 Ctrl\+X 停止 s1/);
+    assert.match(screenText(term), /press Ctrl\+X again to stop s1/);
     assert.deepEqual(stopped, []);
     term.input(CTRL_X);
     await settle();
     assert.deepEqual(stopped, ["s1"]);
-    assert.match(screenText(term), /已停（1）/);
+    assert.match(screenText(term), /stopped \(1\)/);
     term.input("/config");
     term.input("\r");
     await settle();
-    assert.match(screenText(term), /会话面板里不用斜杠命令/);
+    assert.match(screenText(term), /slash commands don't work in the session panel/);
     term.input("\x15");
     term.input(ESC);
     await settle();
@@ -261,7 +261,7 @@ test("面板里审批块照样显示并写明来源；审批挂着时按键归�
     await settle();
     const screen = screenText(term);
     assert.match(screen, /== sessions panel/);
-    assert.match(screen, /来源：会话 s9/);
+    assert.match(screen, /source: session s9/);
     term.input("y");
     await settle();
     assert.deepEqual(decided, { key: "y" });
@@ -347,7 +347,7 @@ test("/resume 不能换到面板里还开着的会话", async () => {
     term.input("/resume sess_pool1");
     term.input("\r");
     await settle();
-    assert.match(screenText(term), /会话 sess_pool1 在会话面板里开着/);
+    assert.match(screenText(term), /session sess_pool1 is open in the session panel/);
   } finally {
     cleanup();
   }
@@ -373,7 +373,7 @@ test("/take：面板会话与 worker 同名时要写明是哪一个", async () =
     term.input("/take s1");
     term.input("\r");
     await settle();
-    assert.match(screenText(term), /会话面板里的会话与 worker 都叫 s1/);
+    assert.match(screenText(term), /a session and a worker are both named s1/);
     assert.deepEqual(taken, [], "有歧义时什么都不取");
     term.input("/take 会话:s1");
     term.input("\r");
@@ -403,10 +403,10 @@ test("决策 458：当前会话是面板的第一张卡（标 current、状态�
     term.input("\r");
     await settle();
     let screen = screenText(term);
-    assert.match(screen, /当前会话/);
-    assert.match(screen, /> {3}demo-main current · 空闲 {2}先做一件 {2}\| 主会话的回复/);
-    assert.doesNotMatch(screen, /no sessions yet/);
-    assert.match(screen, /panel: 1 sessions/);
+    assert.match(screen, /^\s+current$/m);
+    assert.match(screen, /> {3}demo-main current · idle {2}先做一件 {2}\| 主会话的回复/);
+    assert.doesNotMatch(screen, /\(no sessions\)/);
+    assert.match(screen, /panel: 1 session(?!s)/);
     // 偷看：最近的对话
     term.input(" ");
     await settle();
@@ -419,7 +419,7 @@ test("决策 458：当前会话是面板的第一张卡（标 current、状态�
     term.input("\r");
     await settle();
     assert.deepEqual(runtime.runs, ["先做一件", "再做一件"]);
-    assert.match(screenText(term), /demo-main current · 在跑/);
+    assert.match(screenText(term), /demo-main current · running/);
     // 在跑时再发：排队，这一轮跑完后发出
     term.input("排队的一条");
     term.input("\r");
@@ -439,7 +439,7 @@ test("决策 458：当前会话是面板的第一张卡（标 current、状态�
     term.input("/take demo-main");
     term.input("\r");
     await settle();
-    assert.match(screenText(term), /demo-main 是当前会话：它的改动就在本工作区里，不用取回/);
+    assert.match(screenText(term), /demo-main is the current session; nothing to take/);
   } finally {
     cleanup();
   }
@@ -454,7 +454,7 @@ test("决策 458：在面板里对当前会话按两次 Ctrl+X 是中断它这�
     await settle();
     term.input(CTRL_X);
     await settle();
-    assert.match(screenText(term), /demo-main 没在跑，没有可停的/);
+    assert.match(screenText(term), /demo-main is not running/);
     // 跑起来再停：两次 Ctrl+X 中断这一轮
     term.input(ESC);
     await settle();
@@ -467,7 +467,7 @@ test("决策 458：在面板里对当前会话按两次 Ctrl+X 是中断它这�
     await settle();
     term.input(CTRL_X);
     await settle();
-    assert.match(screenText(term), /再按一次 Ctrl\+X 中断 demo-main 这一轮/);
+    assert.match(screenText(term), /press Ctrl\+X again to interrupt demo-main/);
     term.input(CTRL_X);
     await settle();
     assert.equal(runtime.interrupts, 1);
@@ -481,7 +481,10 @@ test("决策 458：在面板里对当前会话按两次 Ctrl+X 是中断它这�
       args: { command: "npm test" },
     });
     await settle();
-    assert.match(screenText(term), /demo-main current · 等待回应 {2}跑一件 {2}\| 等：run_command/);
+    assert.match(
+      screenText(term),
+      /demo-main current · waiting {2}跑一件 {2}\| waiting: run_command/
+    );
     term.input("y");
     await settle();
     // 空输入回车：回到主视图
@@ -578,7 +581,7 @@ test("决策 458 复查：对当前会话的两次 Ctrl+X 须落在同一次工�
     term.input(CTRL_X);
     await settle();
     assert.equal(runtime.interrupts, 0);
-    assert.match(screenText(term), /再按一次 Ctrl\+X 中断 demo-main 这一轮/);
+    assert.match(screenText(term), /press Ctrl\+X again to interrupt demo-main/);
     runtime.finishAll();
     await settle();
   } finally {

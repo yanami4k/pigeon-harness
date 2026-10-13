@@ -124,7 +124,7 @@ test("开沙箱缺省带入未提交的改动（含新建文件，不含被忽�
     assert.equal(git(repo, "rev-parse", "pigeon/sandbox-sess_T1^^"), head);
     assert.equal(
       exportNotice(result),
-      `沙箱改动已交回到分支 pigeon/sandbox-sess_T1（${result.commit.slice(0, 12)}）；查看：git diff main..pigeon/sandbox-sess_T1`
+      `exported sandbox changes to branch pigeon/sandbox-sess_T1 (${result.commit.slice(0, 12)}); diff: git diff main..pigeon/sandbox-sess_T1`
     );
     assert.deepEqual(
       {
@@ -161,7 +161,7 @@ test("fromHead：未提交的改动不带进沙箱、提示一行，不拍快照
       options(fake, repo, "sess_FH", { fromHead: true, log: (line) => lines.push(line) })
     );
     assert.ok(
-      lines.some((line) => line.includes("按参数不带进沙箱")),
+      lines.some((line) => line.includes("uncommitted changes left out of the sandbox")),
       `应提示未提交改动不带进沙箱：${lines.join("｜")}`
     );
     assert.equal(sandbox.startSnapshot, undefined);
@@ -268,7 +268,7 @@ test("快照引用的清理：开箱即删、开工中途失败也删；清理�
   const fake = fakeSandboxDocker();
   try {
     writeFileSync(join(repo, "a.txt"), "dirty\n");
-    await assert.rejects(openSandbox(options(noGit, repo, "sess_NG")), /没有可用的 git/);
+    await assert.rejects(openSandbox(options(noGit, repo, "sess_NG")), /has no usable git/);
     assert.equal(readSnapshotRef(repo, sandboxStartRef("sess_NG")), undefined, "开工失败即删引用");
     const sandbox = await openSandbox(options(fake, repo, "sess_DC"));
     assert.ok(sandbox.startSnapshot !== undefined);
@@ -362,7 +362,7 @@ test("镜像缺 git：开工即报错说明，容器被删除", async () => {
   const repo = makeRepo();
   const fake = fakeSandboxDocker({ noGit: ["sandbox-test:latest"] });
   try {
-    await assert.rejects(openSandbox(options(fake, repo, "sess_G1")), /没有可用的 git/);
+    await assert.rejects(openSandbox(options(fake, repo, "sess_G1")), /has no usable git/);
     assert.deepEqual(fake.state().containers, {});
     assert.ok(fake.state().removed.includes("pigeon-sandbox-sess_G1"));
   } finally {
@@ -396,7 +396,7 @@ test("续跑沙箱会话从它交回的分支起步；没有交回过的报错�
     assert.equal(git(repo, "rev-parse", "pigeon/sandbox-sess_C1"), again.commit);
     await assert.rejects(
       openSandbox(options(third, repo, "sess_C2", { resume: true })),
-      /没有交回过沙箱分支 pigeon\/sandbox-sess_C2/
+      /has no exported sandbox branch pigeon\/sandbox-sess_C2/
     );
     assert.deepEqual(third.state().containers, {});
   } finally {
@@ -443,7 +443,7 @@ test("残留容器被识别：起它的进程已不在或容器已停，开沙�
     const sandbox = await openSandbox(
       options(fake, repo, "sess_NEW", { log: (line) => lines.push(line) })
     );
-    const notice = lines.find((line) => line.includes("残留") || line.includes("异常退出"));
+    const notice = lines.find((line) => line.includes("leftover sandbox"));
     assert.ok(notice !== undefined, lines.join("｜"));
     assert.match(notice, /sess_DEAD/);
     assert.match(notice, /sess_STOP/);
@@ -468,10 +468,13 @@ test("项目不是 git 仓库、Docker 不可用：开沙箱报错说明原因",
   const plain = mkdtempSync(join(tmpdir(), "pigeon-sandbox-plain-"));
   const fake = fakeSandboxDocker();
   try {
-    await assert.rejects(openSandbox(options(fake, plain, "sess_P1")), /要求项目是 git 仓库/);
+    await assert.rejects(
+      openSandbox(options(fake, plain, "sess_P1")),
+      /sandbox needs a git repository/
+    );
     await assert.rejects(
       openSandbox({ ...options(fake, plain, "sess_P2"), docker: ["pigeon-no-such-docker-cli"] }),
-      /Docker 不可用/
+      /Docker unavailable/
     );
     assert.deepEqual(fake.state().containers, {});
   } finally {
@@ -491,7 +494,7 @@ test("宿主当前检出的就是沙箱分支时交回报错、不改动它，�
     await inContainer(sandbox, "printf x > f.txt");
     await assert.rejects(
       sandbox.close(),
-      /容器 pigeon-sandbox-sess_H1 保留未删[\s\S]*当前检出的就是/
+      /container pigeon-sandbox-sess_H1 kept[\s\S]*is checked out/
     );
     assert.equal(git(repo, "rev-parse", "HEAD"), tip);
     assert.ok(fake.state().containers["pigeon-sandbox-sess_H1"] !== undefined);

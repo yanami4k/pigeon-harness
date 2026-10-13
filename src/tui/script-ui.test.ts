@@ -183,7 +183,7 @@ test("开跑的计划行、log 行与结束汇总进消息区；树形视图接�
     await settle();
     const flat = screenFlat(term);
     assert.ok(!flat.includes("[脚本] t（运行号"), "开跑那一行不写");
-    assert.ok(flat.includes("[脚本 t] 开始了"), flat);
+    assert.ok(flat.includes("[script t] 开始了"), flat);
     assert.ok(flat.includes(`${runId}-1`), "面板照常列出脚本派出的 worker");
     await type(term, CTRL_X);
     const tree = screenFlat(term);
@@ -225,7 +225,7 @@ test("界面上停止整个脚本：树形视图里选中脚本下的 worker 按
     assert.equal(harness.sink.spawned.length, 2, "停止之后不再派");
     // 那一行写在主会话的消息区：关上树形视图再看
     await type(term, CTRL_X);
-    assert.ok(screenFlat(term).includes(`已停止脚本 ${runId}`));
+    assert.ok(screenFlat(term).includes(`stopped script ${runId}`));
     // /orchestrate stop 停在跑的全部
     const second = harness.nextNotice();
     const other = await harness.runs.start(script('await agent("四");'), undefined);
@@ -249,7 +249,7 @@ test("/orchestrate 发起：以人的输入提交，交给模型的文字带关�
     await type(term, "谢谢\r");
     assert.ok(!gate.allowed());
     await type(term, "/orchestrate\r");
-    assert.ok(screenFlat(term).includes("用法：/orchestrate <任务>"));
+    assert.ok(screenFlat(term).includes("usage: /orchestrate <task>"));
   } finally {
     await close();
   }
@@ -267,19 +267,19 @@ test("审批：本次脚本内同类都允许只对本脚本内同类生效；�
       undefined
     );
     await until(() => asked.length === 1, "第一次请示");
-    await untilScreen(term, "[s] 本次脚本内同类都允许");
+    await untilScreen(term, "[s] allow this kind for this script");
     await type(term, "s");
     // 按 s 之后第一个 worker 随即收尾（同步 git），回显要等重绘：等它出现，不靠固定的 settle
-    await untilScreen(term, "✓ allowed for this script: run_command (跑命令 npm test)");
+    await untilScreen(term, "✓ allowed for this script: run_command (run command npm test)");
     // 第二个 npm test 不再请示；rm 照常请示且不提供 [s]
     await until(() => asked.length === 2, "rm 的请示");
     assert.equal(asked[1]?.args && (asked[1].args as { command: string }).command, "rm -rf build");
     assert.equal(asked[1]?.script?.kind, undefined);
-    await untilScreen(term, "命令：rm -rf build");
-    const rmBlock = screenFlat(term).split("—— 人工审批 ——").at(-1) ?? "";
+    await untilScreen(term, "command: rm -rf build");
+    const rmBlock = screenFlat(term).split("-- approval --").at(-1) ?? "";
     assert.ok(!rmBlock.includes("[s]"), rmBlock);
     await type(term, "s");
-    assert.ok(screenFlat(term).includes("—— 人工审批 ——"), "按 s 不起作用，仍在等审批");
+    assert.ok(screenFlat(term).includes("-- approval --"), "按 s 不起作用，仍在等审批");
     await type(term, "y");
     await within(first, "第一个脚本的汇总");
     // 另一个脚本里照常请示
@@ -309,7 +309,7 @@ test("收回的请示：来源写明脚本与运行号，按 take_worker 的写�
       tier: "write",
       script: { runId: "s1", title: "t" },
     });
-    assert.match(text, /^—— 人工审批 ——\n来源：脚本 t（运行号 s1）收回\n工具：take_worker/);
+    assert.match(text, /^-- approval --\n[^\n]*\bs1\b[^\n]*\ntool: take_worker/);
     assert.doesNotMatch(text, /\[s\]/);
     const done = harness.nextNotice();
     await harness.runs.start(

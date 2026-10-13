@@ -69,7 +69,7 @@ test("清单是六项常用个人选项；没写即缺省，用户级的值与�
     (({ effective, user, overriddenBy }) => ({ effective, user, overriddenBy }))(
       viewOf(root, home, "web.enabled")
     ),
-    { effective: "true（缺省）", user: "default", overriddenBy: undefined }
+    { effective: "true (default)", user: "default", overriddenBy: undefined }
   );
   writeFileSync(
     join(home, ".pigeon", "settings.json"),
@@ -105,9 +105,9 @@ test("写用户级：保留其余内容；default 删键、节空了一并删；
   assert.equal(JSON.parse(readFileSync(file, "utf8")).web, undefined);
   assert.throws(() => setUserConfig(root, "web.enabled", "maybe", home), ConfigError);
   assert.throws(() => setUserConfig(root, "thinking.level", "ultra", home), ConfigError);
-  assert.throws(() => setUserConfig(root, "nope.key", "1", home), /没有这个选项/);
+  assert.throws(() => setUserConfig(root, "nope.key", "1", home), /unknown option/);
   writeFileSync(file, "{ not json");
-  assert.throws(() => setUserConfig(root, "web.enabled", "false", home), /不是合法 JSON/);
+  assert.throws(() => setUserConfig(root, "web.enabled", "false", home), /is not valid JSON/);
   assert.equal(readFileSync(file, "utf8"), "{ not json", "坏文件原样不动");
 });
 
@@ -137,7 +137,7 @@ test("思考档位含 max；值没变不重写、文件不存在又设成 defaul
   assert.equal(statSync(file).mtimeMs, before);
   chmodSync(file, 0o444);
   try {
-    assert.throws(() => setUserConfig(root, "web.enabled", "true", home), /只读/);
+    assert.throws(() => setUserConfig(root, "web.enabled", "true", home), /read-only/);
   } finally {
     chmodSync(file, 0o644);
   }
@@ -151,7 +151,7 @@ test.skipIf(process.platform === "win32")(
     const real = join(home, "real-settings.json");
     writeFileSync(real, "{}\n");
     symlinkSync(real, join(home, ".pigeon", "settings.json"));
-    assert.throws(() => setUserConfig(root, "web.enabled", "false", home), /符号链接/);
+    assert.throws(() => setUserConfig(root, "web.enabled", "false", home), /symlink/);
     assert.ok(lstatSync(join(home, ".pigeon", "settings.json")).isSymbolicLink());
   }
 );
@@ -183,5 +183,5 @@ test("带 BOM 的用户级设置照常读改；1000 与 True 这类值拒绝", (
   assert.throws(() => setUserConfig(root, "modelRequest.maxRetries", "1000", home), ConfigError);
   assert.throws(() => setUserConfig(root, "web.enabled", "True", home), ConfigError);
   assert.deepEqual(parseConfigAssignment("a=b"), { id: "a", value: "b" });
-  assert.throws(() => setUserConfig(root, "a", "b", home), /没有这个选项/);
+  assert.throws(() => setUserConfig(root, "a", "b", home), /unknown option/);
 });

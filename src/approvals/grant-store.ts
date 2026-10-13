@@ -71,7 +71,7 @@ export class SessionGrantStore {
   }): SessionGrantView {
     if (input.pathPrefix !== undefined && !this.#pathScoped) {
       throw new PathScopedGrantUnsupportedError(
-        "沙箱里不支持按目录放权：目录限定以宿主路径判定，对容器里的工作区会静默失配"
+        "directory grants are not supported in the sandbox"
       );
     }
     const grantId = newGrantId();
@@ -105,7 +105,7 @@ export class SessionGrantStore {
   // /revoke <id>：先交给落盘口再从运行态删除——撤销立即生效（免审停止）；未知 id 响亮报错
   revoke(grantId: GrantId, runId?: RunId): void {
     if (!this.#grants.has(grantId)) {
-      throw new GrantNotFoundError(`grant 不存在或已撤销：${grantId}`);
+      throw new GrantNotFoundError(`grant not found or revoked: ${grantId}`);
     }
     this.#sink?.appendGrantRevoked({
       grantId,

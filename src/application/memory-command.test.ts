@@ -68,15 +68,15 @@ test("查看：两层各列文件位置（展示写法与绝对路径）、条�
   withCtx((ctx, file) => {
     write(file("project"), MEMORY_FILE_HEADERS.project + PROJECT);
     assertInOrder(memoryViewText(ctx), [
-      `项目级（.pigeon/state/memory.md，${file("project")}）`,
-      `共 1 条，${[...PROJECT].length}/200 字符\n${PROJECT.trimEnd()}`,
-      `用户级（~/.pigeon/state/memory.md，${file("user")}）`,
-      "没有条目，上限 100 字符",
+      `project memory (.pigeon/state/memory.md, ${file("project")})`,
+      `1 entry, ${[...PROJECT].length}/200 chars\n${PROJECT.trimEnd()}`,
+      `user memory (~/.pigeon/state/memory.md, ${file("user")})`,
+      "no entries, limit 100 chars",
     ]);
     write(file("user"), "- [U1] 甲\n乱写的一行\n");
     assert.match(
       memoryViewText(ctx),
-      /用户级.*：共 1 条，.*\n- \[U1\] 甲\n乱写的一行\n（第 2 行起格式不对[^\n]*\/memory edit user[^\n]*）$/
+      /user memory.*: 1 entry, .*\n- \[U1\] 甲\n乱写的一行\nbad format from line 2; update_memory refuses this layer$/
     );
   }));
 
@@ -87,9 +87,9 @@ test("编辑：合格即保存（从下一条消息起生效）并删掉编辑�
     const saved = await editMemoryLayer(ctx, "project", { editor: "vi", run: editTo(edited) });
     const used = [...`${PROJECT}- [P2] 人手加的一条\n`].length;
     assertInOrder(saved, [
-      "已保存项目级记忆",
+      "saved project memory",
       ".pigeon/state/memory.md",
-      `共 2 条，${used}/200 字符`,
+      `2 entries, ${used}/200 chars`,
     ]);
     assert.equal(readFileSync(file("project"), "utf8"), edited);
     assert.equal(existsSync(memoryDraftPathOf(file("project"))), false);
@@ -101,7 +101,7 @@ test("编辑：合格即保存（从下一条消息起生效）并删掉编辑�
         return { ok: true };
       },
     });
-    assert.equal(same, "项目级记忆没有改动");
+    assert.equal(same, "project memory unchanged");
     // 文件不在：编辑稿从文件头开始
     const fresh = await editMemoryLayer(ctx, "user", {
       editor: "vi",
@@ -111,11 +111,10 @@ test("编辑：合格即保存（从下一条消息起生效）并删掉编辑�
         return { ok: true };
       },
     });
-    assert.match(fresh, /^已保存用户级记忆/);
+    assert.match(fresh, /^saved user memory/);
     assertInOrder(await editMemoryLayer(ctx, "user", {}), [
-      "没有设置编辑器",
-      `请直接编辑 ${file("user")}`,
-      "用户级",
+      "no editor set",
+      `edit ${file("user")} directly`,
     ]);
   }));
 
@@ -127,9 +126,8 @@ test("编辑：格式不对、超出上限、编辑器出错、编辑期间原�
     const headerLines = MEMORY_FILE_HEADERS.project.split("\n").length - 1;
     const broken = `${original}不是条目\n`;
     assertInOrder(await editMemoryLayer(ctx, "project", { editor: "vi", run: editTo(broken) }), [
-      "项目级记忆没有保存",
-      `第 ${headerLines + 2} 行起格式不对`,
-      "原内容未动",
+      "project memory not saved",
+      `bad format from line ${headerLines + 2}`,
       draft,
     ]);
     assert.equal(readFileSync(file("project"), "utf8"), original);
@@ -137,10 +135,9 @@ test("编辑：格式不对、超出上限、编辑器出错、编辑期间原�
     const long = `${original}- [P2] ${"长".repeat(200)}\n`;
     const used = [...`${PROJECT}- [P2] ${"长".repeat(200)}\n`].length;
     assertInOrder(await editMemoryLayer(ctx, "project", { editor: "vi", run: editTo(long) }), [
-      "项目级记忆没有保存",
-      `条目共 ${used} 字符`,
-      `超出上限 200 字符 ${used - 200} 字符`,
-      "原内容未动",
+      "project memory not saved",
+      `${used} chars`,
+      `${used - 200} over the 200 limit`,
       draft,
     ]);
     assert.equal(readFileSync(file("project"), "utf8"), original);
@@ -149,7 +146,7 @@ test("编辑：格式不对、超出上限、编辑器出错、编辑期间原�
         editor: "vi",
         run: () => ({ ok: false, error: "编辑器以退出码 1 结束" }),
       }),
-      `项目级记忆没有保存：编辑器以退出码 1 结束；原内容未动，改过的内容留在 ${draft}`
+      `project memory not saved: 编辑器以退出码 1 结束; edits kept in ${draft}`
     );
     const raced = await editMemoryLayer(ctx, "project", {
       editor: "vi",
@@ -162,7 +159,7 @@ test("编辑：格式不对、超出上限、编辑器出错、编辑期间原�
     });
     assert.equal(
       raced,
-      `项目级记忆没有保存：编辑期间这一层被另一处改过；原内容未动，改过的内容留在 ${draft}`
+      `project memory not saved: changed elsewhere while editing; edits kept in ${draft}`
     );
     assert.equal(readFileSync(file("project"), "utf8"), `${original}- [P2] 另一处写的\n`);
   }));
@@ -172,15 +169,15 @@ test("查看读到旧格式：一次性改写成新格式并备份，列出的�
     write(file("project"), LEGACY_PROJECT);
     const view = memoryViewText(ctx);
     assertInOrder(view, [
-      `共 1 条，${[...PROJECT].length}/200 字符\n${PROJECT.trimEnd()}`,
-      "用户级",
+      `1 entry, ${[...PROJECT].length}/200 chars\n${PROJECT.trimEnd()}`,
+      "user memory",
     ]);
     assert.doesNotMatch(view, /〔|已一次性改写/);
     assert.equal(readFileSync(file("project"), "utf8"), MEMORY_FILE_HEADERS.project + PROJECT);
     const backupDir = memoryLocation("project", ctx).backupDir;
     assert.equal(readFileSync(join(backupDir, "state", "memory.md"), "utf8"), LEGACY_PROJECT);
     const again = memoryViewText(ctx);
-    assert.doesNotMatch(again, /旧格式/);
+    assert.doesNotMatch(again, /old format|convert/);
   }));
 
 test("编辑打开旧格式而这一次拿不到锁：编辑稿是转换后的新格式、文件不动并告警；保存时在锁内补上迁移（先备份）再保存", () =>
@@ -200,8 +197,8 @@ test("编辑打开旧格式而这一次拿不到锁：编辑稿是转换后的�
       },
     });
     assertInOrder(saved, [
-      "已保存项目级记忆",
-      "[记忆] .pigeon/state/memory.md 是旧格式，这次没能改写成新格式（另一处正在写这一层）",
+      "saved project memory",
+      "[memory] couldn't convert .pigeon/state/memory.md to the new format (another process is writing this layer)",
     ]);
     assert.doesNotMatch(saved, /已一次性改写/);
     assert.equal(readFileSync(file("project"), "utf8"), edited);
@@ -249,7 +246,7 @@ test("保存时排队：别处正在写这一层就等、不设上限，超过�
     } finally {
       held.release();
     }
-    assert.match(await held.result, /已保存项目级记忆/);
+    assert.match(await held.result, /saved project memory/);
     assert.equal(held.waits(), 1);
     assert.equal(readFileSync(file("project"), "utf8"), edited);
     assert.equal(existsSync(memoryDraftPathOf(file("project"))), false);
@@ -281,8 +278,8 @@ test("验收修改：在主目录下启动——/memory 只列用户级一层并
       limits: { project: 200, user: 100 },
     };
     const view = memoryViewText(ctx);
-    assert.match(view, /用户级/);
-    assert.doesNotMatch(view, /^项目级（/m);
+    assert.match(view, /user memory/);
+    assert.doesNotMatch(view, /^project memory \(/m);
     assert.doesNotMatch(view, /项目级记忆就是用户级记忆/, "查看时不另写说明（文档写明）");
     let opened = false;
     const text = await editMemoryLayer(ctx, "project", {
@@ -292,7 +289,7 @@ test("验收修改：在主目录下启动——/memory 只列用户级一层并
         return { ok: true };
       },
     });
-    assert.match(text, /用 \/memory edit user/);
+    assert.match(text, /project memory is user memory/);
     assert.equal(opened, false);
   } finally {
     rmSync(home, { recursive: true, force: true });

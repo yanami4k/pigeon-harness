@@ -6,6 +6,7 @@
 // - 项目配置打开"由模型判断"后，工具常驻，不看点名。
 // - 额度：点名时可写"额度 ¥5"（人民币）、"额度 $2"（美元）或"额度 300k"（token，k 为千、m 为百万、万为一万）；
 //   项目配置可设缺省值；都不设即不限。
+// 人输入里认的点名关键词（用户的输入，不是给人看的文字）
 export const SCRIPT_KEYWORD = "脚本编排";
 export const SCRIPT_COMMAND = "orchestrate";
 
@@ -40,7 +41,7 @@ export function parseScriptBudget(text: string): ScriptBudget | undefined {
 export function parseBudgetSetting(text: string): ScriptBudget {
   const budget = parseScriptBudget(`额度 ${text}`);
   if (budget === undefined) {
-    throw new Error(`脚本编排的缺省额度写法不对：${text}（写成 ¥20、$5 或 2m）`);
+    throw new Error(`invalid default script budget: ${text}`);
   }
   return budget;
 }

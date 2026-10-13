@@ -295,7 +295,7 @@ export function createTakeWorkerTool(slot: SpawnWorkerSlot): PigeonAgentTool<
 export function takeWorkerRegistration(): ToolRegistration {
   return {
     name: TAKE_WORKER_TOOL,
-    description: "把一个已收尾的 worker 自己的改动叠进工作目录",
+    description: "apply a finished worker's own changes to the working directory",
     parameters: TakeWorkerParamsSchema,
     tier: "write",
     pathConfinement: { kind: "workspace" },

@@ -96,7 +96,7 @@ function failure(args: string[], error: unknown, stderr: unknown): CheckpointErr
       : error instanceof Error
         ? error.message
         : String(error);
-  return new CheckpointError(`git ${args.join(" ")} 失败：${detail}`);
+  return new CheckpointError(`git ${args.join(" ")} failed: ${detail}`);
 }
 
 // 本文件的 git（同步与异步两条）一律加固（tools/git-hardening.ts：不跑 fsmonitor、钩子与 .gitattributes 指派的过滤）。
@@ -125,7 +125,7 @@ function git(
   return new Promise((resolve, reject) => {
     const { signal } = options;
     if (signal?.aborted === true) {
-      reject(failure(args, new Error("已中止"), undefined));
+      reject(failure(args, new Error("aborted"), undefined));
       return;
     }
     const child = spawn("git", [...hardenedGitArgs(cwd), ...args], {
@@ -145,16 +145,13 @@ function git(
         killProcessTree(child, "SIGKILL");
       }
     };
-    const timer = setTimeout(
-      () => kill(`超过 ${GIT_TIMEOUT_MS} 毫秒未结束，已终止`),
-      GIT_TIMEOUT_MS
-    );
-    const onAbort = () => kill("已中止");
+    const timer = setTimeout(() => kill(`killed after ${GIT_TIMEOUT_MS} ms`), GIT_TIMEOUT_MS);
+    const onAbort = () => kill("aborted");
     signal?.addEventListener("abort", onAbort, { once: true });
     child.stdout.on("data", (chunk: Buffer) => {
       bytes += chunk.length;
       if (bytes > GIT_MAX_BUFFER) {
-        kill("输出超过上限，已终止");
+        kill("killed: output over the limit");
         return;
       }
       stdout.push(chunk);
@@ -174,7 +171,7 @@ function git(
       if (killedFor !== undefined) {
         reject(failure(args, new Error(killedFor), undefined));
       } else if (code !== 0) {
-        reject(failure(args, new Error(`退出码 ${code}`), errorText));
+        reject(failure(args, new Error(`exit code ${code}`), errorText));
       } else {
         resolve(Buffer.concat(stdout).toString("utf8"));
       }
@@ -245,7 +242,7 @@ export function createCheckpointer(input: {
   const { workspaceRoot, sessionId } = input;
   const limits = input.limits ?? DEFAULT_UNTRACKED_LIMITS;
   if (!isGitWorkspace(workspaceRoot)) {
-    throw new NotGitWorkspaceError(`工作区不是 git 工作区，不能生成快照：${workspaceRoot}`);
+    throw new NotGitWorkspaceError(`can't snapshot ${workspaceRoot}: not a git workspace`);
   }
   const prefix = checkpointRefPrefix(sessionId);
   const run = (args: string[], env?: NodeJS.ProcessEnv, signal?: AbortSignal) =>
@@ -455,8 +452,8 @@ export function createCheckpointer(input: {
       const detail = error instanceof Error ? error.message : String(error);
       throw new CheckpointError(
         expected === null
-          ? `快照 ref ${ref} 已存在，拒绝覆盖（同一会话存在并发的快照器实例）：${detail}`
-          : `快照 ref ${ref} 的旧值已变，拒绝覆盖（同一会话存在并发的快照器实例）：${detail}`
+          ? `snapshot ref ${ref} already exists; not overwritten: ${detail}`
+          : `snapshot ref ${ref} changed; not overwritten: ${detail}`
       );
     }
   };

@@ -38,6 +38,9 @@ export interface PendingApproval {
 // 决策 450：扣住的消息面板出现、或工具审批顶替它之后，这么久之内的按键不作答
 export const PANEL_GUARD_MS = 600;
 
+// 单击 Ctrl+C 布防之后状态行的临时提示（布防窗口内显示，过了窗口或有别的输入即恢复）
+export const EXIT_HINT = "press Ctrl+C again to exit";
+
 // 壳侧窄接口：模态状态的读写与壳动作（状态本体在壳里）
 export interface ModalHost {
   isStarted(): boolean;
@@ -50,6 +53,8 @@ export interface ModalHost {
   reasonMode(): boolean;
   setReasonMode(on: boolean): void;
   exitWindowMs(): number;
+  // 退出布防时状态行的提示（EXIT_HINT）：开与关；布防窗口过了由壳自己关；缺省不提示
+  setExitHint?(on: boolean): void;
   addSystem(line: string): void;
   clearInput(): void;
   render(): void;
@@ -180,25 +185,41 @@ export function handleShellKey(host: ModalHost, data: string): { consume: true }
   return undefined;
 }
 
-// Ctrl+C（S5+，裁决 033）：单击布防——非模态清输入缓冲并留 [cleared] 提示（措辞与
-// [cancel] 同款 ASCII 括号；无历史召回语义，清空即丢弃）；模态期间不清缓冲
-// 不留提示（029/031 吞键语义），但仍计布防第一次。窗口内第二次（任意模式含模态）
-// 优雅退出；窗口过期则本次退化为单击并重新布防
+// Ctrl+C（S5+，裁决 033）：单击布防——非模态清输入缓冲，状态行临时显示 EXIT_HINT（不写进消息区；
+// 无历史召回语义，清空即丢弃）；模态期间不清缓冲不提示（029/031 吞键语义），但仍计布防第一次。
+// 窗口内第二次（任意模式含模态）优雅退出；窗口过期则本次退化为单击并重新布防
 export function handleCtrlC(host: ModalHost): void {
   if (host.copySelection?.() === true) return;
   const now = Date.now();
   const last = host.lastCtrlCAt();
   if (last !== null && now - last <= host.exitWindowMs()) {
     host.setLastCtrlCAt(null);
+    host.setExitHint?.(false);
     host.requestExit();
     return;
   }
   host.setLastCtrlCAt(now);
   if (host.pendingApproval() === null) {
     host.clearInput();
-    host.addSystem("[cleared] 输入已清空（再按一次 Ctrl+C 退出）");
+    host.setExitHint?.(true);
     host.render();
   }
+}
+
+// 退出布防之后有别的输入（不是退出键；松键、鼠标与焦点上报不算）：撤销布防，状态行的提示随之恢复
+export function disarmExitOnInput(host: ModalHost, data: string): void {
+  if (host.lastCtrlCAt() === null || isKey(data, "pigeon.exit")) return;
+  if (
+    data.startsWith("\x1b[<") ||
+    data.startsWith("\x1b[M") ||
+    data === "\x1b[I" ||
+    data === "\x1b[O"
+  ) {
+    return;
+  }
+  host.setLastCtrlCAt(null);
+  host.setExitHint?.(false);
+  host.render();
 }
 
 // 模态键控：审批面板（S3）挂起期间接管终端输入——决议键 resolve，其余一律吞掉（决策 029 简单语义：
@@ -260,7 +281,7 @@ export function handleModalKey(host: ModalHost, data: string): { consume: true }
     // [r] 拒绝并说明（决策 066）：打开理由行，不在此决议
     if (key === "r") {
       host.setReasonMode(true);
-      approvalLine(host, "拒绝理由（回车提交，Esc 返回面板）：");
+      approvalLine(host, "reason:");
       host.updateStatus();
       host.render();
       return { consume: true };

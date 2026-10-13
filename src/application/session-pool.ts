@@ -8,6 +8,7 @@ import { existsSync } from "node:fs";
 import { SNAPSHOT_REF_ROOT, snapshotWorkdir } from "../execution/workdir-snapshot.ts";
 import { type OverlayResult, overlayWorkerChanges } from "../execution/worker-overlay.ts";
 import { isStatusMessage } from "../state/status-text.ts";
+import { plural } from "./format.ts";
 import { isHumanInput } from "./rewind.ts";
 
 export type PooledSessionState =
@@ -134,7 +135,7 @@ function failureOf(result: unknown): string | undefined {
   if (typeof result !== "object" || result === null) return undefined;
   const { status, errorMessage } = result as { status?: unknown; errorMessage?: unknown };
   if (status !== "failed") return undefined;
-  return typeof errorMessage === "string" && errorMessage !== "" ? errorMessage : "这一轮失败了";
+  return typeof errorMessage === "string" && errorMessage !== "" ? errorMessage : "turn failed";
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | "timeout"> {
@@ -205,9 +206,9 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
 
   // 派出：卡片先以"准备中"出现，建工作树与开运行面在后台进行；返回准备中的卡片
   async spawn(task: string): Promise<PooledSessionCard> {
-    if (this.#closed) throw new Error("会话面板已关闭");
+    if (this.#closed) throw new Error("session panel closed");
     const text = task.trim();
-    if (text === "") throw new Error("要派的事是空的");
+    if (text === "") throw new Error("task is empty");
     this.#seq += 1;
     const name = `s${this.#seq}`;
     const now = this.#now();
@@ -312,13 +313,13 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
 
   async send(id: string, text: string): Promise<string | undefined> {
     const entry = this.#entries.get(id);
-    if (entry === undefined) return "没有这个会话";
-    if (entry.runtime === undefined) return `会话 ${entry.card.name} 还在准备，等它开好再发`;
-    if (text.trim() === "") return "要发的话是空的";
+    if (entry === undefined) return "no such session";
+    if (entry.runtime === undefined) return `session ${entry.card.name} is still starting`;
+    if (text.trim() === "") return "message is empty";
     const state = entry.card.state;
-    if (state === "stopped") return `会话 ${entry.card.name} 已停，不能再发`;
+    if (state === "stopped") return `session ${entry.card.name} is stopped`;
     if (state === "running" || state === "waiting" || entry.runtime.isRunning()) {
-      return `会话 ${entry.card.name} 正在跑，等它停下再发`;
+      return `can't send while ${entry.card.name} is running`;
     }
     const runtime = entry.runtime;
     const message = text.trim();
@@ -345,9 +346,9 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
     const entry = this.#entries.get(id);
     if (entry === undefined) return [];
     const card = entry.card;
-    const lines: string[] = [`${card.name}：${card.task}`];
-    if (card.waiting !== undefined) lines.push(`等待回应：${card.waiting}`);
-    if (card.error !== undefined) lines.push(`失败：${card.error}`);
+    const lines: string[] = [`${card.name}: ${card.task}`];
+    if (card.waiting !== undefined) lines.push(`waiting: ${card.waiting}`);
+    if (card.error !== undefined) lines.push(`failed: ${card.error}`);
     const transcript = entry.runtime?.transcript() ?? [];
     const recent = transcript
       // 只列人说的话与回复：开工状态块、程序送进对话的通知、续跑提示都不是人说的
@@ -369,12 +370,12 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
 
   async take(id: string): Promise<string> {
     const entry = this.#entries.get(id);
-    if (entry === undefined) return "没有这个会话";
-    if (entry.runtime === undefined) return `会话 ${entry.card.name} 还在准备，没有可取回的`;
+    if (entry === undefined) return "no such session";
+    if (entry.runtime === undefined) return `session ${entry.card.name} is still starting`;
     if (entry.card.state === "running" || entry.card.state === "waiting") {
-      return `会话 ${entry.card.name} 正在跑，等它停下再取回`;
+      return `can't take while ${entry.card.name} is running`;
     }
-    return entry.runtime.take?.(entry.card.state) ?? "这个会话没有工作树可取回";
+    return entry.runtime.take?.(entry.card.state) ?? "session has no worktree";
   }
 
   // 按名字找（/take 用）
@@ -400,11 +401,11 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
     if (done === "timeout") {
       for (const entry of entries) {
         if (entry.opening !== undefined || entry.runtime?.isRunning() === true) {
-          problems.push(`会话 ${entry.card.name} 没有在 ${Math.round(ms / 1000)} 秒内停下`);
+          problems.push(`session ${entry.card.name} didn't stop within ${Math.round(ms / 1000)}s`);
         }
       }
       if (problems.length === 0) {
-        problems.push(`会话面板没有在 ${Math.round(ms / 1000)} 秒内全部停下`);
+        problems.push(`session panel didn't stop within ${Math.round(ms / 1000)}s`);
       }
     }
     return problems;
@@ -421,12 +422,12 @@ export function takePooledChanges(input: {
 }): { text: string; complete: boolean } {
   if (!existsSync(input.worktreePath)) {
     return {
-      text: `会话 ${input.name} 的工作树已不在（${input.worktreePath}），没有可取回的`,
+      text: `worktree of session ${input.name} is gone (${input.worktreePath})`,
       complete: false,
     };
   }
   if (input.base === undefined) {
-    return { text: `会话 ${input.name} 的工作树没有起点记录，取不回`, complete: false };
+    return { text: `worktree of session ${input.name} has no base recorded`, complete: false };
   }
   let result: OverlayResult;
   try {
@@ -437,31 +438,33 @@ export function takePooledChanges(input: {
     });
   } catch (error) {
     return {
-      text: `取回会话 ${input.name} 的改动失败：${error instanceof Error ? error.message : String(error)}`,
+      text: `taking changes from session ${input.name} failed: ${error instanceof Error ? error.message : String(error)}`,
       complete: false,
     };
   }
   const lines: string[] = [];
   if (result.applied.length > 0) {
-    lines.push(`已取回 ${result.applied.length} 个文件：${result.applied.join("、")}`);
+    lines.push(`took ${plural(result.applied.length, "file")}: ${result.applied.join(", ")}`);
   }
   if (result.conflicts.length > 0) {
     lines.push(
-      `叠不上、没写的：${result.conflicts.join("、")}（还在工作树 ${input.worktreePath} 里）`
+      `conflicts, not written: ${result.conflicts.join(", ")} (still in worktree ${input.worktreePath})`
     );
   }
   if (result.deletedByWorker.length > 0) {
-    lines.push(`会话删掉的文件没有删：${result.deletedByWorker.join("、")}`);
+    lines.push(`deleted in session, kept here: ${result.deletedByWorker.join(", ")}`);
   }
   if ((result.skipped?.length ?? 0) > 0) {
-    lines.push(`过大没取回：${(result.skipped ?? []).map((item) => item.path).join("、")}`);
+    lines.push(
+      `too large, not taken: ${(result.skipped ?? []).map((item) => item.path).join(", ")}`
+    );
   }
   const complete =
     result.conflicts.length === 0 &&
     result.deletedByWorker.length === 0 &&
     (result.skipped?.length ?? 0) === 0;
   return {
-    text: lines.length > 0 ? lines.join("\n") : `会话 ${input.name} 没有要取回的改动`,
+    text: lines.length > 0 ? lines.join("\n") : `no changes to take from session ${input.name}`,
     complete,
   };
 }

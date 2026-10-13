@@ -58,7 +58,7 @@ test.skipIf(!hasImage("busybox:latest") ? "没有 Docker 或 busybox 镜像" : f
           image: { kind: "image", image: "busybox:latest" },
           cacheVolume: volume,
         }),
-        /镜像 busybox:latest 里没有可用的 git/
+        /image busybox:latest has no usable git/
       );
       assert.notEqual(docker("inspect", `pigeon-sandbox-${id}`).status, 0, "容器已删除");
     } finally {

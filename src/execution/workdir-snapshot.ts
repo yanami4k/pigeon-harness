@@ -68,7 +68,7 @@ function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): string {
         : error instanceof Error
           ? error.message
           : String(error);
-    throw new WorkdirSnapshotError(`git ${args.join(" ")} 失败：${detail}`);
+    throw new WorkdirSnapshotError(`git ${args.join(" ")} failed: ${detail}`);
   }
 }
 
@@ -154,7 +154,7 @@ export function snapshotWorkdir(input: {
   limits?: UntrackedLimits;
 }): WorkdirSnapshot {
   if (!input.ref.startsWith(SNAPSHOT_REF_ROOT) || input.ref.length <= SNAPSHOT_REF_ROOT.length) {
-    throw new WorkdirSnapshotError(`快照引用须在 ${SNAPSHOT_REF_ROOT} 下：${input.ref}`);
+    throw new WorkdirSnapshotError(`snapshot ref must be under ${SNAPSHOT_REF_ROOT}: ${input.ref}`);
   }
   const top = repoToplevel(input.repoRoot);
   let head: string;
@@ -191,7 +191,9 @@ export function snapshotWorkdir(input: {
 // 删除快照引用；引用本就不存在也算删掉
 export function deleteSnapshotRef(repoRoot: string, ref: string): void {
   if (!ref.startsWith(SNAPSHOT_REF_ROOT)) {
-    throw new WorkdirSnapshotError(`只删 ${SNAPSHOT_REF_ROOT} 下的快照引用：${ref}`);
+    throw new WorkdirSnapshotError(
+      `only snapshot refs under ${SNAPSHOT_REF_ROOT} can be deleted: ${ref}`
+    );
   }
   git(repoRoot, ["update-ref", "-d", ref]);
 }

@@ -51,7 +51,7 @@ function commandKind(command: string, needsShell: boolean): ScriptApprovalKind |
   if (SCRIPT_KIND_DENY_COMMANDS.some((deny) => head === deny || head.startsWith(`${deny} `))) {
     return undefined;
   }
-  return { key: `command\n${head}`, text: `跑命令 ${head}` };
+  return { key: `command\n${head}`, text: `run command ${head}` };
 }
 
 // 一个请求的同类；高危或说不清的给 undefined（面板不提供 [s]）。写受保护路径（决策 326 ①）的请示没有同类：逐次批准
@@ -62,16 +62,16 @@ export function scriptApprovalKind(request: ApprovalRequest): ScriptApprovalKind
     return commandKind(request.command ?? String(args?.command ?? ""), request.needsShell === true);
   }
   if (request.host !== undefined) {
-    return { key: `host\n${request.host}`, text: `访问网站 ${request.host}` };
+    return { key: `host\n${request.host}`, text: `access site ${request.host}` };
   }
   if (typeof args?.path === "string" && args.path !== "") {
     const dir = path.posix.dirname(args.path.replace(/\\/g, "/"));
     return {
       key: `tool\n${request.toolName}\n${dir}`,
-      text: `用 ${request.toolName} 处理 ${dir === "." ? "工作区根目录" : `${dir}/`} 下的文件`,
+      text: `use ${request.toolName} on files under ${dir === "." ? "the workspace root" : `${dir}/`}`,
     };
   }
-  return { key: `tool\n${request.toolName}`, text: `调用 ${request.toolName}` };
+  return { key: `tool\n${request.toolName}`, text: `call ${request.toolName}` };
 }
 
 // 脚本运行的一面：查运行是否在场、脚本名，记下与判定放行的同类

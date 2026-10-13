@@ -86,7 +86,7 @@ export function createSessionPool(context: SessionPoolContext): {
         let baseMode = worktreeBaseModeOf(worktreeSectionOf(settings));
         // 取远端在后台进行（不卡界面）；取不到即从 HEAD 起
         if (baseMode === "fresh" && !(await prefetchWorktreeBase(context.governanceRoot))) {
-          say("取远端默认分支失败，工作树从当前 HEAD 起");
+          say("fetching the remote default branch failed; worktree starts from HEAD");
           baseMode = "head";
         }
         worktree = openNamedWorktree({
@@ -141,7 +141,7 @@ export function createSessionPool(context: SessionPoolContext): {
       const sessionHooks = bundle.hooks;
       // 打转检测（同主会话的设置）：叫停即中断这一轮
       const detachLoopGuard = attachLoopGuard(adapter, loopGuardSettingsOf(settings), () => {
-        say("打转检测叫停了这一轮");
+        say("loop detected; turn stopped");
         void adapter.interrupt("looping").catch(() => {});
       });
       // 后台作业结束：通知写明来源，空闲时叫醒它
@@ -157,7 +157,7 @@ export function createSessionPool(context: SessionPoolContext): {
           startContexts = [...report.additionalContext];
         } catch (error) {
           say(
-            `钩子出错（SessionStart）：${error instanceof Error ? error.message : String(error)}`
+            `SessionStart hook failed: ${error instanceof Error ? error.message : String(error)}`
           );
         }
       }
@@ -178,17 +178,17 @@ export function createSessionPool(context: SessionPoolContext): {
               const blocked =
                 report.blocked?.reason ??
                 (report.continueFalse !== undefined
-                  ? (report.continueFalse.stopReason ?? "钩子要求整个会话停止")
+                  ? (report.continueFalse.stopReason ?? "hook stopped the session")
                   : undefined);
               if (blocked !== undefined) {
-                return { status: "failed", errorMessage: `输入被钩子拦下：${blocked}` };
+                return { status: "failed", errorMessage: `input blocked by hook: ${blocked}` };
               }
               const contexts = [...startContexts, ...report.additionalContext];
               startContexts = [];
               if (contexts.length > 0) input = `${contexts.join("\n\n")}\n\n${text}`;
             } catch (error) {
               say(
-                `钩子出错（UserPromptSubmit）：${error instanceof Error ? error.message : String(error)}`
+                `UserPromptSubmit hook failed: ${error instanceof Error ? error.message : String(error)}`
               );
             }
           }
@@ -218,11 +218,11 @@ export function createSessionPool(context: SessionPoolContext): {
         },
         take: (state) => {
           // 决策 459：共用目录的会话没有工作树，改动已直接在目录里
-          if (worktree === undefined) return `${name} 没有工作树（共用目录）`;
-          if (removed) return `会话 ${name} 的工作树已删除，没有可取回的`;
+          if (worktree === undefined) return `${name} has no worktree; nothing to take`;
+          if (removed) return `${name}'s worktree was deleted; nothing to take`;
           // 取回的落点就是这个工作树（主会话 /resume 过去、进了它的工作树）：自己叠自己，拒绝
           if (sameDir(context.mainWorkspace(), worktree.path)) {
-            return `主会话现在就在会话 ${name} 的工作树里，没有可取回的（落点与来源是同一处）`;
+            return `the main session is in ${name}'s worktree; nothing to take`;
           }
           const result = takePooledChanges({
             name,
@@ -239,22 +239,22 @@ export function createSessionPool(context: SessionPoolContext): {
                 context.homeDir !== undefined ? { homeDir: context.homeDir } : {}
               )
             ) {
-              return `${result.text}\n工作树 ${worktree.name} 另有会话开着，保留不删`;
+              return `${result.text}\nworktree ${worktree.name} is open in another session; kept`;
             }
             // 已停的会话完整取回：同 448，删工作树与分支
             try {
               removeNamedWorktree(worktree);
               removed = true;
-              return `${result.text}\n已删除工作树 ${worktree.name} 与分支 ${worktree.branch}`;
+              return `${result.text}\ndeleted worktree ${worktree.name} and branch ${worktree.branch}`;
             } catch (error) {
-              return `${result.text}\n删除工作树失败：${error instanceof Error ? error.message : String(error)}`;
+              return `${result.text}\ndeleting worktree failed: ${error instanceof Error ? error.message : String(error)}`;
             }
           }
           // 还开着：起点前移到取回时的样子，下次只取之后的改动
           try {
             base = advanceTakeBase(worktree.path, worktree.name);
           } catch (error) {
-            return `${result.text}\n起点没有前移（下次取回会与这次重复）：${error instanceof Error ? error.message : String(error)}`;
+            return `${result.text}\nadvancing the base failed: ${error instanceof Error ? error.message : String(error)}`;
           }
           return result.text;
         },

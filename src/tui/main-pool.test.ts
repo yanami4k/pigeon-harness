@@ -88,20 +88,20 @@ test("派出的会话进自己的工作树改文件、持有在用锁；审批�
   assert.equal(readFileSync(join(worktree, "made.txt"), "utf8"), "made\n");
   assert.equal(existsSync(join(root, "made.txt")), false, "主工作目录不动");
   assert.ok(face.live?.(id) !== undefined);
-  assert.match(await pool.take(id), /已取回 1 个文件：made\.txt/);
+  assert.match(await pool.take(id), /took 1 file: made\.txt/);
   // 取回沿用 worker 的叠回（行尾按检出规则）
   assert.equal(readFileSync(join(root, "made.txt"), "utf8").replace(/\r\n/g, "\n"), "made\n");
   // 起点已前移：主工作目录里那份之后又被手改，再取不重复、不冲突
   writeFileSync(join(root, "made.txt"), "edited by hand\n");
-  assert.match(await pool.take(id), /没有要取回的改动/);
+  assert.match(await pool.take(id), /no changes to take/);
   assert.equal(readFileSync(join(root, "made.txt"), "utf8"), "edited by hand\n");
   await pool.stop(id);
   assert.equal(pool.list()[0]?.state, "stopped");
   assert.equal(lockCount(home), 0, "停下即释放在用锁");
   assert.ok(existsSync(worktree), "有改动的工作树保留");
-  assert.match(await pool.take(id), /已删除工作树/);
+  assert.match(await pool.take(id), /deleted worktree/);
   assert.equal(existsSync(worktree), false);
-  assert.match(await pool.take(id), /工作树已删除/);
+  assert.match(await pool.take(id), /worktree was deleted; nothing to take/);
 });
 
 test("起点按 worktree.baseRef：fresh 时在后台取远端（取不到从 HEAD 起并说明），head 时不取", async () => {
@@ -134,8 +134,10 @@ test("起点按 worktree.baseRef：fresh 时在后台取远端（取不到从 HE
     return notices;
   };
   // head 先跑（取远端失败也会留下 FETCH_HEAD，让之后 24 小时内不再取）
-  assert.ok(!(await run("head")).some((line) => line.includes("取远端")));
-  assert.ok((await run("fresh")).some((line) => line.includes("取远端默认分支失败")));
+  assert.ok(!(await run("head")).some((line) => line.includes("remote default branch")));
+  assert.ok(
+    (await run("fresh")).some((line) => line.includes("fetching the remote default branch failed"))
+  );
 });
 
 test("钩子：SessionStart 与 SessionEnd 跑；UserPromptSubmit 拦下即这一轮失败并写明原因", async () => {
@@ -180,7 +182,7 @@ test("钩子：SessionStart 与 SessionEnd 跑；UserPromptSubmit 拦下即这�
   });
   await pool.spawn("随便做点");
   await until(() => pool.list()[0]?.state === "failed", "这一轮被拦下");
-  assert.match(pool.list()[0]?.error ?? "", /输入被钩子拦下：不许这句/);
+  assert.match(pool.list()[0]?.error ?? "", /input blocked by hook: 不许这句/);
   assert.ok(existsSync(join(scripts, "started")), "SessionStart 跑了");
   await pool.closeAll();
   assert.ok(existsSync(join(scripts, "ended")), "SessionEnd 跑了");
@@ -221,7 +223,10 @@ test("/take：落点就是这个工作树时拒绝；已停但另有会话开着
   const worktree = card?.worktree?.path ?? "";
   // 主会话 /resume 过去、进了这个工作树：落点与来源是同一处
   mainWorkspace = worktree;
-  assert.match(await pool.take(card?.id ?? ""), /落点与来源是同一处/);
+  assert.match(
+    await pool.take(card?.id ?? ""),
+    /the main session is in .+'s worktree; nothing to take/
+  );
   mainWorkspace = root;
   await pool.stop(card?.id ?? "");
   // 另一个进程开着这个工作树（父进程号代替）
@@ -236,8 +241,8 @@ test("/take：落点就是这个工作树时拒绝；已停但另有会话开着
     `${JSON.stringify({ pid: process.ppid, path: resolve(worktree) })}\n`
   );
   const taken = await pool.take(card?.id ?? "");
-  assert.match(taken, /已取回 1 个文件/);
-  assert.match(taken, /另有会话开着，保留不删/);
+  assert.match(taken, /took 1 file/);
+  assert.match(taken, /is open in another session; kept/);
   assert.ok(existsSync(worktree));
 });
 
@@ -278,7 +283,7 @@ test("决策 459：不是 git 仓库时，派出的会话在当前目录里干�
   assert.equal(lockCount(home), 0, "不持有工作树的在用锁");
   assert.equal(existsSync(join(root, ".pigeon", "wt")), false, "没有建独立工作树目录");
   const id = opened?.id ?? "";
-  assert.match(await pool.take(id), /s1 没有工作树（共用目录）/);
+  assert.match(await pool.take(id), /s1 has no worktree; nothing to take/);
   await pool.stop(id);
   assert.equal(pool.list()[0]?.state, "stopped");
   assert.equal(readFileSync(join(root, "made.txt"), "utf8"), "made\n", "停下不动目录里的改动");

@@ -108,7 +108,7 @@ test("派出先准备中、开好即在跑；跑完空闲、摘要取最后一�
   assert.equal(opened?.state, "running");
   assert.equal(opened?.id, "sess_1");
   assert.deepEqual(opened?.worktree, { path: "/wt/s1", branch: "pigeon-wt/s1" });
-  assert.match((await pool.send("sess_1", "再看看")) ?? "", /正在跑/);
+  assert.match((await pool.send("sess_1", "再看看")) ?? "", /is running/);
   fakes[0]?.finish("登录修好了，\n测试都过了");
   await settle();
   assert.equal(pool.list()[0]?.state, "idle");
@@ -145,8 +145,8 @@ test("审批挂着时在等待回应、排在最前；落定后回到在跑；�
     ]
   );
   const peek = await pool.peek("sess_2");
-  assert.equal(peek[0], "s2：二");
-  assert.match(peek[1] ?? "", /^等待回应：run_command/);
+  assert.equal(peek[0], "s2: 二");
+  assert.match(peek[1] ?? "", /^waiting: run_command/);
   assert.ok(peek.includes("> 二"));
   fakes[1]?.hooks.waiting(undefined);
   assert.equal(pool.list().find((card) => card.name === "s2")?.state, "running");
@@ -194,7 +194,7 @@ test("停下先中断再释放，之后只读；取回交给运行面；运行�
   assert.equal(fakes[0]?.interrupted, 1);
   assert.equal(fakes[0]?.closed, true);
   assert.equal(pool.list()[0]?.state, "stopped");
-  assert.match((await pool.send("sess_1", "再来")) ?? "", /已停/);
+  assert.match((await pool.send("sess_1", "再来")) ?? "", /is stopped/);
   assert.equal(await pool.take("sess_1"), "取回 s1（stopped）");
   await pool.spawn("二");
   await settle();
@@ -223,7 +223,7 @@ test("开运行面失败记为失败；关掉时等还在开的开完再停，�
   assert.deepEqual(await closing, []);
   assert.equal(fakes[0]?.closed, true, "还在开的开完即释放");
   assert.ok(pool.list().every((item) => item.state === "stopped"));
-  await assert.rejects(() => pool.spawn("三"), /已关闭/);
+  await assert.rejects(() => pool.spawn("三"), /closed/);
 
   // 先被停（没等它开完）的会话：关掉时照样等它开完、释放
   let releaseLater: (() => void) | undefined;
@@ -248,7 +248,7 @@ test("开运行面失败记为失败；关掉时等还在开的开完再停，�
   const stuck = harness({ openGate: new Promise(() => {}), closeTimeoutMs: 50 });
   await stuck.pool.spawn("一");
   const problems = await stuck.pool.closeAll();
-  assert.match(problems[0] ?? "", /没有在 0 秒内停下/);
+  assert.match(problems[0] ?? "", /didn't stop within 0s/);
 });
 
 test("摘要：最后一条有文字的助手回复，压成一行，过长截断", () => {
@@ -281,5 +281,5 @@ test("偷看不列开工状态块（不是人说的话）", async () => {
   });
   await pool.spawn("做事");
   await settle();
-  assert.deepEqual(await pool.peek("sess_status"), ["s1：做事", "> 做事", "  做完了"]);
+  assert.deepEqual(await pool.peek("sess_status"), ["s1: 做事", "> 做事", "  做完了"]);
 });

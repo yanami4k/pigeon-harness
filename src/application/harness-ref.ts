@@ -25,7 +25,7 @@ export interface HarnessRef {
 
 // 输出里的写法：提交号与是否有未提交改动
 export function describeHarness(ref: HarnessRef | undefined): string {
-  return `提交 ${ref?.commit ?? "unknown"}（${ref?.dirty === true ? "有" : "无"}未提交改动）`;
+  return `commit ${ref?.commit ?? "unknown"}${ref?.dirty === true ? ", uncommitted changes" : ""}`;
 }
 
 // 打包产物（决策 351）的构建戳：构建时的提交号与有无未提交改动（源码运行时没有这个名字）

@@ -51,7 +51,6 @@ import {
   type NamedWorktree,
   namedWorktreeRepoRoot,
   openNamedWorktree,
-  reenterCommand,
   reopenNamedWorktree,
 } from "../application/named-worktree.ts";
 import { type PeerMessaging, validPeerName } from "../application/peer-messaging.ts";
@@ -148,8 +147,8 @@ const WORKER_SHUTDOWN_GRACE_MS = 5000;
 // 参数解析与装配都在 application 层（决策 067）：启动参数在 launch-flags.ts（与 cli、headless 同一份、
 // 同一批缺省），会话运行面在 session-runtime.ts（作用域、grant 种子、MCP 启动、装配失败关 server）
 const USAGE =
-  "用法：pigeon [--yolo] [--no-persist-thinking] [--no-pushed-memory] [--no-hooks] [--no-web] [--no-spawn-workers] [--worker-concurrency <n>] [--worker-limit <n>] [--history-limit <n>] [--root <dir>] --stream-fn <模块路径> " +
-  "[--provider <名>] [--model <id>] [--thinking <档位>] [--max-output-tokens <n>] [--context-window <n>] [--compact-threshold <n>] [--compact-keep <n>] " +
+  "usage: pigeon [--yolo] [--no-persist-thinking] [--no-pushed-memory] [--no-hooks] [--no-web] [--no-spawn-workers] [--worker-concurrency <n>] [--worker-limit <n>] [--history-limit <n>] [--root <dir>] --stream-fn <module> " +
+  "[--provider <name>] [--model <id>] [--thinking <level>] [--max-output-tokens <n>] [--context-window <n>] [--compact-threshold <n>] [--compact-keep <n>] " +
   "[--sandbox [--sandbox-network on|off] [--sandbox-approval yolo|prompt] [--sandbox-from-head]] [--continue | --resume [sessionId]]";
 
 // 决策 445：壳退出之后在标准错误输出上问一句（EOF 为 null）
@@ -197,9 +196,9 @@ export async function main(argv: string[]): Promise<void> {
   // 它同时是治理根（.pigeon/ 恒在主仓库根，决策 040）。决策 445：--worktree 时治理根为主仓库根，工作区为独立工作树
   const launchRoot = prepareWorkspace(flags.root);
   if (worktreeFlag.name !== undefined) {
-    if (flags.sandbox !== undefined) throw new Error("--worktree 不与 --sandbox 同用");
+    if (flags.sandbox !== undefined) throw new Error("--worktree can't be used with --sandbox");
     if (continued.mode.kind !== "new") {
-      throw new Error("--worktree 不与 --continue、--resume 同用：续接会话时它会回到原来的工作树");
+      throw new Error("--worktree can't be used with --continue or --resume");
     }
   }
   const governanceRoot =
@@ -222,8 +221,13 @@ export async function main(argv: string[]): Promise<void> {
           notice: (line) => early.push({ line, alert: true }),
         })
       : undefined;
-  if (namedWorktree?.created === true && namedWorktree.baseLabel.startsWith("HEAD（取远端")) {
-    early.push({ line: `工作树起点：${namedWorktree.baseLabel}`, alert: true });
+  // 起点的说法只有 "HEAD" 一词之外还带说明的，是取远端失败退回 HEAD（说法本身由 named-worktree.ts 给）
+  if (
+    namedWorktree?.created === true &&
+    namedWorktree.baseLabel.startsWith("HEAD") &&
+    namedWorktree.baseLabel !== "HEAD"
+  ) {
+    early.push({ line: `worktree base: ${namedWorktree.baseLabel}`, alert: true });
   }
   // 决策 446：会话移进工作树后换成工作树（worker 编排、取用、脚本等闭包按它取）
   let workspaceRoot = namedWorktree?.path ?? governanceRoot;
@@ -428,9 +432,9 @@ export async function main(argv: string[]): Promise<void> {
     settings,
     sessionId,
     ...(resumed ? { resume: true } : {}),
-    log: (line) => console.error(`[沙箱] ${line}`),
+    log: (line) => console.error(`[sandbox] ${line}`),
     // 决策 333：运行中的提示（命令超出内存上限）经告警出口：壳接管终端期间落消息区
-    notice: (line) => warn(`[沙箱] ${line}`),
+    notice: (line) => warn(`[sandbox] ${line}`),
   });
   // 决策 340：/reload 重建主会话运行面时跨快照不变的部分（重建本身在 main-reload.ts）
   const reloadContext: MainReloadContext = {
@@ -574,7 +578,7 @@ export async function main(argv: string[]): Promise<void> {
         slot.workers
           ?.status()
           .some((worker) => worker.state === "running" || worker.state === "queued") === true
-          ? "有 worker 在跑，重建不了运行面：等它们收尾或 /cancel 之后再改"
+          ? "workers are running; wait for them to finish or /cancel them"
           : undefined,
     },
     // 决策 439：输入框补全，路径与 @ 引用以工作区为根
@@ -633,7 +637,7 @@ export async function main(argv: string[]): Promise<void> {
         slot.workers
           ?.status()
           .some((worker) => worker.state === "running" || worker.state === "queued") === true
-          ? "有 worker 仍在运行：先 /cancel 或等其收尾，再 /reload"
+          ? "workers are running; wait for them to finish or /cancel them"
           : undefined,
       sandboxSessionId: () => (sandbox !== undefined ? slot.sessionId : undefined),
       apply: (snapshot) => rebuildMain(snapshot),
@@ -671,7 +675,7 @@ export async function main(argv: string[]): Promise<void> {
     // 不依赖收件口（没开、沙箱里照样能改）
     renameSession: (name: string) => {
       if (!validPeerName(name)) {
-        return "名字只能用字母、数字、下划线、连字符与点，最长 40 个字符";
+        return "invalid name: use letters, digits, _, - and . (max 40)";
       }
       slot.bundle.sessionStore.setName(name);
       sessionName = name;
@@ -888,10 +892,10 @@ export async function main(argv: string[]): Promise<void> {
     if (activeWorktree !== undefined && next?.path !== activeWorktree.path) {
       releaseWorktreeUse?.();
       releaseWorktreeUse = undefined;
-      // 换到别的会话、离开了工作树：工作树留着，说明怎么回去
+      // 换到别的会话、离开了工作树：工作树留着，写一行
       if (next === undefined) {
         shellHolder.current?.addSystem(
-          `离开工作树 ${activeWorktree.path}（保留，改动在那里；回去：${reenterCommand(activeWorktree.name)}）`
+          `left worktree ${activeWorktree.path} (kept; changes are there)`
         );
       }
     }
@@ -973,9 +977,7 @@ export async function main(argv: string[]): Promise<void> {
   }
   // 决策 439：项目共享层（或被 git 跟踪的 settings.local.json）写的键位不采用——仓库不能改审批键
   if (settings.merged.keybindingsIgnored !== undefined) {
-    shell.addSystem(
-      "项目设置里的 keybindings 没有采用（键位只认用户级与未被 git 跟踪的 settings.local.json）"
-    );
+    shell.addSystem("keybindings in project settings are ignored");
   }
   // 决策 330：人写的说明超出上限被截断时在消息区提示一行
   if (mainBundle.instructionsNotice !== undefined) shell.addSystem(mainBundle.instructionsNotice);
@@ -1014,7 +1016,7 @@ export async function main(argv: string[]): Promise<void> {
         workerGraceMs: WORKER_SHUTDOWN_GRACE_MS,
         // 决策 245：会话结束时自动交回一次、删除容器；壳已停，分支名与查看命令打到标准输出
         ...(sandbox !== undefined ? { closeSandbox: () => closeSandbox(sandbox) } : {}),
-        log: (line) => console.log(`[沙箱] ${line}`),
+        log: (line) => console.log(`[sandbox] ${line}`),
       });
       // 决策 445：独立工作树——没有改动即删；有改动在终端行内问保留还是删除（壳已停）
       if (activeWorktree !== undefined) {

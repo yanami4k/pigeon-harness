@@ -13,8 +13,14 @@ test("loadStreamFn：加载默认导出函数的模块；坏路径与缺默认�
     writeFileSync(join(dir, "no-default.mjs"), "export const x = 1;\n");
     const fn = await loadStreamFn(join(dir, "ok.mjs"));
     assert.equal(typeof fn, "function");
-    await assert.rejects(() => loadStreamFn(join(dir, "不存在.mjs")), /无法加载 streamFn 模块/);
-    await assert.rejects(() => loadStreamFn(join(dir, "no-default.mjs")), /没有默认导出函数/);
+    await assert.rejects(
+      () => loadStreamFn(join(dir, "不存在.mjs")),
+      /loading streamFn module .* failed/
+    );
+    await assert.rejects(
+      () => loadStreamFn(join(dir, "no-default.mjs")),
+      /has no default export function/
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

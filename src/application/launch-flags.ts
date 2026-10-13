@@ -153,13 +153,13 @@ export function parseLaunchFlags(argv: string[], options: ParseLaunchFlagsOption
     } else if (flag === "--sandbox-network" && options.sandbox === true) {
       const value = argv[++i];
       if (value === undefined || !(SANDBOX_NETWORKS as readonly string[]).includes(value)) {
-        throw new Error(`--sandbox-network 只接受 ${SANDBOX_NETWORKS.join("/")}（${usage}）`);
+        throw new Error(`--sandbox-network takes ${SANDBOX_NETWORKS.join("/")} (${usage})`);
       }
       sandboxNetwork = value as SandboxNetwork;
     } else if (flag === "--sandbox-approval" && options.sandbox === true) {
       const value = argv[++i];
       if (value === undefined || !(SANDBOX_APPROVALS as readonly string[]).includes(value)) {
-        throw new Error(`--sandbox-approval 只接受 ${SANDBOX_APPROVALS.join("/")}（${usage}）`);
+        throw new Error(`--sandbox-approval takes ${SANDBOX_APPROVALS.join("/")} (${usage})`);
       }
       sandboxApproval = value as SandboxApproval;
     } else if (flag === "--no-persist-thinking") {
@@ -172,7 +172,7 @@ export function parseLaunchFlags(argv: string[], options: ParseLaunchFlagsOption
     ) {
       const value = Number(argv[++i]);
       if (!Number.isInteger(value) || value < 1) {
-        throw new Error(`${flag} 需要正整数（${usage}）`);
+        throw new Error(`${flag} needs a positive integer (${usage})`);
       }
       if (flag === "--worker-concurrency") {
         flags.workerConcurrency = value;
@@ -186,25 +186,25 @@ export function parseLaunchFlags(argv: string[], options: ParseLaunchFlagsOption
     } else if (flag === "--thinking") {
       const value = argv[++i];
       if (value === undefined || !isThinkingLevel(value)) {
-        throw new Error(`--thinking 需要推理档位（${THINKING_LEVELS.join("/")}）（${usage}）`);
+        throw new Error(`--thinking takes ${THINKING_LEVELS.join("/")} (${usage})`);
       }
       flags.thinkingLevel = value;
     } else if (flag === "--max-output-tokens") {
       const value = Number(argv[++i]);
       if (!Number.isInteger(value) || value < 1) {
-        throw new Error(`--max-output-tokens 需要正整数（${usage}）`);
+        throw new Error(`--max-output-tokens needs a positive integer (${usage})`);
       }
       flags.maxOutputTokens = value;
     } else if (flag === "--history-limit" && options.historyLimit === true) {
       const value = Number(argv[++i]);
       if (!Number.isInteger(value) || value < 1) {
-        throw new Error(`--history-limit 需要正整数（${usage}）`);
+        throw new Error(`--history-limit needs a positive integer (${usage})`);
       }
       flags.historyLimit = value;
     } else if (flag !== undefined && COMPACTION_FLAGS[flag] !== undefined) {
       const value = Number(argv[++i]);
       if (!Number.isInteger(value) || value < 1) {
-        throw new Error(`${flag} 需要正整数（token 数）（${usage}）`);
+        throw new Error(`${flag} needs a positive token count (${usage})`);
       }
       flags.compaction = { ...flags.compaction, [COMPACTION_FLAGS[flag]]: value };
     } else if (flag === "--root") {
@@ -212,7 +212,7 @@ export function parseLaunchFlags(argv: string[], options: ParseLaunchFlagsOption
     } else if (flag === "--stream-fn") {
       const value = argv[++i];
       if (value === undefined) {
-        throw new Error(`--stream-fn 缺少取值（模块路径）（${usage}）`);
+        throw new Error(`--stream-fn needs a module path (${usage})`);
       }
       flags.streamFnSpec = value;
     } else if (flag === "--provider") {
@@ -220,7 +220,7 @@ export function parseLaunchFlags(argv: string[], options: ParseLaunchFlagsOption
     } else if (flag === "--model") {
       flags.modelId = argv[++i] ?? flags.modelId;
     } else {
-      throw new Error(`未知参数：${flag}（${usage}）`);
+      throw new Error(`unknown option: ${flag} (${usage})`);
     }
   }
   if (sandbox) {
@@ -233,7 +233,7 @@ export function parseLaunchFlags(argv: string[], options: ParseLaunchFlagsOption
     flags.yolo = flags.yolo || flags.sandbox.approval === "yolo";
   } else if (sandboxNetwork !== undefined || sandboxApproval !== undefined || sandboxFromHead) {
     throw new Error(
-      `--sandbox-network、--sandbox-approval 与 --sandbox-from-head 只配合 --sandbox 用（${usage}）`
+      `--sandbox-network, --sandbox-approval and --sandbox-from-head need --sandbox (${usage})`
     );
   }
   return flags;
@@ -280,10 +280,7 @@ export function orchestrationSettingsOf(
 // 模型接入必须显式配置：缺失时响亮失败（措辞与两个入口此前一致）
 export function resolveStreamFnSpec(flags: LaunchFlags, usage: string): string {
   if (flags.streamFnSpec === undefined || flags.streamFnSpec === "") {
-    throw new Error(
-      "未配置模型接入：请用 --stream-fn <模块路径> 或环境变量 PIGEON_STREAM_FN 指定一个默认导出 " +
-        `StreamFn 的模块（provider 密钥由该模块自行从环境变量读取）（${usage}）`
-    );
+    throw new Error(`no model configured: use --stream-fn <module> or PIGEON_STREAM_FN (${usage})`);
   }
   return flags.streamFnSpec;
 }

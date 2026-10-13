@@ -352,11 +352,11 @@ function toCustomItem(
   const type = customType as keyof typeof CUSTOM_KINDS;
   const data = entry.data;
   if (!isObject(data) || data.version !== SESSION_ENTRY_VERSION) {
-    warnings.push(`条目 ${entry.id}（${type}）的数据版本不认识，已跳过`);
+    warnings.push(`entry ${entry.id} (${type}) has an unknown data version; skipped`);
     return undefined;
   }
   if (!Value.Check(SESSION_ENTRY_SCHEMAS[type], data)) {
-    warnings.push(`条目 ${entry.id}（${type}）的数据不合 schema，已跳过`);
+    warnings.push(`entry ${entry.id} (${type}) does not match the schema; skipped`);
     return undefined;
   }
   return {
@@ -649,6 +649,6 @@ export function unfinishedCheckpointMarks(
 // 没拍成的快照的一行说明
 export function unfinishedCheckpointText(mark: CheckpointMarkData): string {
   return mark.state === "failed"
-    ? `快照没有拍成（${mark.reason ?? "原因未记"}），从这里分叉会明确报错`
-    : "快照拍摄中断（进程在拍完之前退出），从这里分叉会明确报错";
+    ? `snapshot failed (${mark.reason ?? "no reason recorded"}); can't fork from here`
+    : "snapshot interrupted; can't fork from here";
 }

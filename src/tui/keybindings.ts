@@ -93,7 +93,7 @@ export function installKeybindings(section?: Record<string, string | string[]>):
   const manager = new KeybindingsManager(DEFINITIONS, config);
   setKeybindings(manager);
   return [
-    ...unknown.map((id) => `键位设置里的 ${id} 不是已知的动作，忽略`),
+    ...unknown.map((id) => `keybindings: unknown action ${id}; ignored`),
     ...pigeonConflicts(manager),
   ];
 }
@@ -114,7 +114,8 @@ function pigeonConflicts(manager: KeybindingsManager): string[] {
       }
     }
     for (const [key, claimants] of claims) {
-      if (claimants.length > 1) lines.push(`键位冲突：${key} 同时绑给了 ${claimants.join("、")}`);
+      if (claimants.length > 1)
+        lines.push(`keybinding conflict: ${key} is bound to ${claimants.join(", ")}`);
     }
   }
   return lines;

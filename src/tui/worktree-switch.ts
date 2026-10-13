@@ -43,18 +43,18 @@ export function createWorktreeSwitch(deps: WorktreeSwitchDeps): WorktreeSwitch {
   ): Promise<void> {
     const { worktree } = target;
     const stay = (why: string, forModel: string): void => {
-      deps.system(`没有移进工作树 ${worktree.path}：${why}；会话留在原处`);
+      deps.system(`didn't move into worktree ${worktree.path}: ${why}; session stays here`);
       deps.noteForNextInput(
         `[Pigeon] The session did not move into the worktree ${worktree.path}: ${forModel}. It stays in ${deps.workspace()}; the worktree is kept. Call enter_worktree again if the move is still wanted.`
       );
     };
     if (info.cancelled) {
-      stay("本轮被中止", "the turn was interrupted");
+      stay("turn interrupted", "the turn was interrupted");
       return;
     }
     const busy = deps.workersBusy();
     if (busy !== undefined) {
-      stay("有 worker 在跑或等补批，先等它们收尾", `${busy}; wait for them to finish first`);
+      stay("workers are running or waiting for approval", `${busy}; wait for them to finish first`);
       return;
     }
     const previous = deps.workspace();
@@ -64,15 +64,17 @@ export function createWorktreeSwitch(deps: WorktreeSwitchDeps): WorktreeSwitch {
     } catch (error) {
       deps.setWorkspace(previous);
       stay(
-        `重建运行面失败（${error instanceof Error ? error.message : String(error)}）`,
+        `rebuilding the runtime failed: ${error instanceof Error ? error.message : String(error)}`,
         "rebuilding the runtime failed"
       );
       return;
     }
     deps.adopt(worktree);
     deps.system(
-      `已移进工作树 ${worktree.path}（分支 ${worktree.branch}）${
-        target.uncommitted > 0 ? `；${target.uncommitted} 个未提交的改动留在主检出` : ""
+      `moved into worktree ${worktree.path} (branch ${worktree.branch})${
+        target.uncommitted > 0
+          ? `; ${target.uncommitted} uncommitted ${target.uncommitted === 1 ? "change" : "changes"} left in the main checkout`
+          : ""
       }`
     );
     deps.notify(deps.continueNotice(worktree, target.uncommitted));

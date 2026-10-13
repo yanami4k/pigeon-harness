@@ -113,7 +113,7 @@ test("互发：送达对方的通知队列，包一层标明来源与不算授�
     text,
     /<<<BEGIN PEER-MESSAGE [0-9a-f]{16}>>>\n\(reported working directory: "[^\n]*alpha"\)\n迁移跑完了\n第二行\n<<<END PEER-MESSAGE [0-9a-f]{16}>>>/
   );
-  assert.match(b.ui.at(-1) ?? "", /^来自 alpha 的消息：迁移跑完了$/);
+  assert.match(b.ui.at(-1) ?? "", /^message from alpha: 迁移跑完了$/);
   // 回复：b 发回 a
   assert.equal((await b.messaging.send("alpha", "收到", false)).status, "delivered");
   assert.match(a.delivered[0] ?? "", /from beta/);
@@ -152,7 +152,7 @@ test("扣住：放权的接收方扣住会审批方发来的；放行即送达�
     /^\[Cross-session delivery notice\] The user of receiver/
   );
   assert.equal(receiver.messaging.heldMessages().length, 0);
-  assert.ok(receiver.ui.some((line) => /等批准超时/.test(line)));
+  assert.ok(receiver.ui.some((line) => /approval timed out/.test(line)));
 });
 
 test("设置：全拒的会话拒收；全扣的会话连会审批方的也扣", async () => {
@@ -221,7 +221,7 @@ test("空闲通知：对方在忙时记下，空闲下来回告一次；对方�
   const worker = await openBox(dir, "worker");
   worker.messaging.setBusy(true);
   assert.equal((await watcher.messaging.send("worker", undefined, true)).status, "subscribed");
-  assert.ok(worker.ui.some((line) => /请求在本会话下次空闲时得到通知/.test(line)));
+  assert.ok(worker.ui.some((line) => /asked to be notified when this session is idle/.test(line)));
   assert.equal(watcher.delivered.length, 0);
   worker.messaging.setBusy(false);
   await until(() => watcher.delivered.some((text) => /worker is now idle/.test(text)));
@@ -315,5 +315,5 @@ test("退出时还扣着的消息：回告发送方没有送达（本会话退�
   await holder.messaging.close();
   await until(() => sender.delivered.length === 1);
   assert.match(sender.delivered[0] ?? "", /holder exited while holding your message/);
-  assert.ok(sender.ui.some((line) => /holder 退出了，扣着的消息没有送达/.test(line)));
+  assert.ok(sender.ui.some((line) => /holder exited; held message not delivered/.test(line)));
 });

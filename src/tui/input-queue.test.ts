@@ -128,14 +128,11 @@ test("运行中只读命令照常执行，改状态的命令被拒并说明原�
     term.input("/search");
     term.input("\r");
     await settle();
-    assert.ok(screenFlat(term).includes("用法：/search"), "只读命令运行中照常执行");
+    assert.ok(screenFlat(term).includes("usage: /search"), "只读命令运行中照常执行");
     term.input("/compact");
     term.input("\r");
     await settle();
-    assert.ok(
-      screenFlat(term).includes("运行中不能用 /compact：它会改动主会话状态（压缩对话上下文）"),
-      screenText(term)
-    );
+    assert.ok(screenFlat(term).includes("can't use /compact while running"), screenText(term));
     assert.equal(editorText(term), "/compact", "被拒的命令留在输入框");
     assert.deepEqual(runtime.runs, ["长任务"], "命令不排队");
   } finally {
@@ -186,7 +183,7 @@ test("命令放行表：只读类与 /cancel、/quit 运行中可用，其余逐
   ]);
   for (const name of rejected) {
     const line = rejectWhileRunning(`/${name} x`);
-    assert.ok(line?.startsWith(`运行中不能用 /${name}：`), line);
+    assert.equal(line, `can't use /${name} while running`);
   }
   assert.equal(rejectWhileRunning("/grants"), undefined);
   assert.equal(rejectWhileRunning("/没有这个命令"), undefined, "未知命令交给分发如实说明");

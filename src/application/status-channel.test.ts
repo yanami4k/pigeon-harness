@@ -346,10 +346,7 @@ test("读会话的地方按标记跳过状态块：会话列表的第一句、�
     const store = loadStoreSession(sessionsDirOf(r.root), sessionId)?.view;
     assert.ok(store !== undefined);
     assert.equal(resolveForkPoint(store, {}).runSeq, 2, "缺省分叉点落在人输入的那条上");
-    assert.match(
-      messageLines(status as never)[0]?.text ?? "",
-      /^\[开工状态] Project instructions、/
-    );
+    assert.match(messageLines(status as never)[0]?.text ?? "", /^\[status] Project instructions, /);
     assert.equal(messageLines(input as never)[0]?.text, `> ${human}`);
     // 交给模型的请求里没有标记
     assert.ok(!JSON.stringify(streamFn.calls[0]?.context.messages).includes("pigeonStatus"));

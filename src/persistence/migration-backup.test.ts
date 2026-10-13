@@ -64,7 +64,7 @@ test("旧文件挪进用户级本项目的备份目录：原文不变，仓库�
   assert.ok(!existsSync(source));
   assert.ok(!existsSync(join(root, ".pigeon", "state")), "仓库里不建备份目录");
   writeFileSync(source, "{}");
-  assert.match(migrationBackupConflict(root, "web.json", home) ?? "", /已存在，不覆盖/);
+  assert.match(migrationBackupConflict(root, "web.json", home) ?? "", /already exists/);
   assert.throws(() => moveToMigrationBackup(root, source, "web.json", home), MigrationBackupError);
   assert.equal(readFileSync(target, "utf8"), '{"key":"k-1"}', "已有备份原样");
 });

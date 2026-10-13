@@ -119,16 +119,19 @@ test("permissions：放权规则三层并集生效（项目个人在前），各
 
 test("未知键：顶层与节内都报错，指出文件、键与所在层；$schema 不算未知", () => {
   const top = problemsOf("project", { orchestrations: {} });
-  assert.match(top.join("\n"), /\.pigeon\/settings\.json（项目共享）：未知键 orchestrations/);
+  assert.match(
+    top.join("\n"),
+    /\.pigeon\/settings\.json \(project settings\): unknown key orchestrations/
+  );
   const inner = problemsOf("user", { loopGuard: { stopAtt: 3 } });
   assert.match(
     inner.join("\n"),
-    /~\/\.pigeon\/settings\.json（用户级）：loopGuard 一节里的未知键 stopAtt/
+    /~\/\.pigeon\/settings\.json \(user settings\): unknown key stopAtt in loopGuard/
   );
   const version = problemsOf("local", { commands: { version: 1, commands: {} } });
   assert.match(
     version.join("\n"),
-    /settings\.local\.json（项目个人）：commands 一节里的未知键 version/
+    /settings\.local\.json \(project local settings\): unknown key version in commands/
   );
   // 更深一层（schema 关闭了多余属性）同样报错
   assert.ok(problemsOf("project", { web: { fetch: { timeout: 1 } } }).length > 0);
@@ -148,16 +151,19 @@ test("trustedDirectories 只能写在用户级：项目共享与项目个人写�
   for (const layer of ["project", "local"] as const) {
     assert.match(
       problemsOf(layer, { trustedDirectories: ["/work"] }).join("\n"),
-      /trustedDirectories 只能写在用户级设置里/
+      /trustedDirectories is only allowed in user settings/
     );
   }
   // 只接受绝对路径或 ~ 开头；相对路径报错
   valid("user", { trustedDirectories: ["~", "~/code"] });
   assert.match(
     problemsOf("user", { trustedDirectories: ["work"] }).join("\n"),
-    /work 不是绝对路径/
+    /entry work must be an absolute path/
   );
-  assert.match(problemsOf("user", { trustedDirectories: ["./a"] }).join("\n"), /不是绝对路径/);
+  assert.match(
+    problemsOf("user", { trustedDirectories: ["./a"] }).join("\n"),
+    /must be an absolute path/
+  );
   const { merged } = snapshotOf({ user: { trustedDirectories: ["/work"] } });
   assert.deepEqual(merged.trustedDirectories, ["/work"]);
 });
@@ -172,10 +178,10 @@ test("合并后的组合判据：角色引用了各层都没有的短名、轮�
     },
   });
   const problems = mergedSettingsProblems(merged).join("\n");
-  assert.match(problems, /角色 tester 引用了未登记的短名：test/);
-  assert.match(problems, /轮数须递增/);
-  assert.match(problems, /image 与 dockerfile 只能给一个/);
-  assert.match(problems, /ghost 没有启动定义/);
+  assert.match(problems, /role tester references unknown short name: test/);
+  assert.match(problems, /turn counts must increase/);
+  assert.match(problems, /image and dockerfile can't both be set/);
+  assert.match(problems, /ghost has no launch definition/);
   // 短名在用户级登记、角色在项目级引用：合并后成立
   const ok = snapshotOf({
     user: { commands: { commands: { test: "npm test" } } },
@@ -278,7 +284,7 @@ test("钩子校验：非法 matcher 报问题、未知事件名被拒；未知�
   const badMatcher = problemsOf("project", {
     hooks: { PreToolUse: [{ matcher: "([", hooks: [{ type: "command", command: "node x.mjs" }] }] },
   });
-  assert.match(badMatcher.join("\n"), /hooks\.PreToolUse：matcher 不是合法正则：\(\[/);
+  assert.match(badMatcher.join("\n"), /hooks\.PreToolUse: matcher is not a valid regex: \(\[/);
   // 缺省、空串与 "*" 都匹配全部，不算非法
   valid("local", {
     hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: "node x.mjs" }] }] },
@@ -287,10 +293,10 @@ test("钩子校验：非法 matcher 报问题、未知事件名被拒；未知�
   const badEvent = problemsOf("user", {
     hooks: { PreToolCall: [{ hooks: [{ type: "command", command: "node x.mjs" }] }] },
   });
-  assert.match(badEvent.join("\n"), /hooks 一节里的未知键 PreToolCall/);
+  assert.match(badEvent.join("\n"), /unknown key PreToolCall in hooks/);
   // 未知顶层键的报错文案列出全部可用键（含两个钩子顶层开关）
   const unknownKey = problemsOf("project", { hookz: {} }).join("\n");
-  assert.match(unknownKey, /未知键 hookz/);
+  assert.match(unknownKey, /unknown key hookz/);
   assert.match(unknownKey, /disableAllHooks/);
   assert.match(unknownKey, /stopHookBlockCap/);
   // 开关类型与取值范围由 schema 兜底
@@ -342,7 +348,7 @@ test("memory 一节（决策 332）：两层上限各自可设，未知键与非
   assert.deepEqual(memoryLimitsOf(emptySettingsSnapshot("/p")), { project: 4000, user: 4000 });
   assert.match(
     problemsOf("project", { memory: { limitChars: 10 } }).join("\n"),
-    /\.pigeon\/settings\.json（项目共享）：memory 一节里的未知键 limitChars/
+    /\.pigeon\/settings\.json \(project settings\): unknown key limitChars in memory/
   );
   assert.ok(problemsOf("user", { memory: { userLimitChars: 0 } }).length > 0);
   assert.ok(problemsOf("user", { memory: { projectLimitChars: 1.5 } }).length > 0);
@@ -364,6 +370,6 @@ test("sessionSearch 一节（决策 382）：enabled 缺省开，三层按标量
   );
   assert.match(
     problemsOf("project", { sessionSearch: { off: true } }).join("\n"),
-    /\.pigeon\/settings\.json（项目共享）：sessionSearch 一节里的未知键 off/
+    /\.pigeon\/settings\.json \(project settings\): unknown key off in sessionSearch/
   );
 });

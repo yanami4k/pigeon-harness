@@ -75,12 +75,12 @@ export function readSettingsLayer(location: SettingsLocation): SettingsFile | un
     raw = parseJsonText(readFileSync(location.path, "utf8"));
   } catch (error) {
     throw new SettingsError(
-      `设置文件 ${describeSource(location)}不是合法 JSON：${location.path}：${error instanceof Error ? error.message : String(error)}`
+      `settings file ${describeSource(location)} is not valid JSON: ${error instanceof Error ? error.message : String(error)} (${location.path})`
     );
   }
   const checked = validateSettingsLayer(raw, location);
   if ("problems" in checked) {
-    throw new SettingsError(`${checked.problems.join("；")}（${location.path}）`);
+    throw new SettingsError(`${checked.problems.join("; ")} (${location.path})`);
   }
   return checked.file;
 }
@@ -116,7 +116,7 @@ export function loadSettings(root: string, options: LoadSettingsOptions = {}): S
   );
   const problems = mergedSettingsProblems(result.merged, dotMcp);
   if (problems.length > 0) {
-    throw new SettingsError(`设置合并后校验失败：${problems.join("；")}`);
+    throw new SettingsError(`merged settings invalid: ${problems.join("; ")}`);
   }
   const dockerfile = result.merged.sandbox?.dockerfile;
   let dockerfileContent: string | undefined;

@@ -14,8 +14,11 @@ test("审批块：exec 调用原样显示命令串；需 shell 时标明经 shel
     command: COMMAND,
     needsShell: true,
   });
-  assert.ok(shellBlock.includes(`命令（经 shell）：${COMMAND}`), shellBlock);
-  assert.ok(shellBlock.includes("[a] 本会话允许这条命令（精确匹配，经 shell）"), shellBlock);
+  assert.ok(shellBlock.includes(`command (shell): ${COMMAND}`), shellBlock);
+  assert.ok(
+    shellBlock.includes("[a] allow this exact command for this session (shell)"),
+    shellBlock
+  );
 
   const directBlock = approvalBlockText({
     toolName: "run_command",
@@ -25,6 +28,6 @@ test("审批块：exec 调用原样显示命令串；需 shell 时标明经 shel
     command: "node --test",
     needsShell: false,
   });
-  assert.ok(directBlock.includes("命令：node --test"), directBlock);
-  assert.equal(directBlock.includes("经 shell"), false, directBlock);
+  assert.ok(directBlock.includes("command: node --test"), directBlock);
+  assert.equal(directBlock.includes("(shell)"), false, directBlock);
 });

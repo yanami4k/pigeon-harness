@@ -205,7 +205,10 @@ test("端到端（会话生命周期）：[a] 建 grant → human:grant 免审 �
     assert.equal(run1.status, "completed");
     assert.deepEqual(approvals(run1), [["approved", "human"]]);
     assert.equal(r.prompts.length, 1);
-    assert.ok(r.prompts[0]?.includes("[a] 本会话允许"), `四键提示在场\n${r.prompts[0]}`);
+    assert.ok(
+      r.prompts[0]?.includes("[a] allow for this session"),
+      `四键提示在场\n${r.prompts[0]}`
+    );
     assert.ok(
       r.screen().includes("✓ allowed for this session: edit_file"),
       `[a] 建会话放权\n${r.screen()}`
@@ -231,12 +234,12 @@ test("端到端（会话生命周期）：[a] 建 grant → human:grant 免审 �
     assert.equal(runGrantCommand(["grants"], commands), true);
     const listing = commandOutput.join("");
     assert.ok(listing.includes(grant.grantId), `/grants 列出 grant id\n${listing}`);
-    assert.ok(listing.includes("命中 1 次"), listing);
+    assert.ok(listing.includes("1 hit"), listing);
 
     // /revoke：立即停免审——同一会话的下一任务重新弹人工
     commandOutput.length = 0;
     assert.equal(runGrantCommand(["revoke", grant.grantId], commands), true);
-    assert.equal(commandOutput.join(""), `已撤销 ${grant.grantId}\n`);
+    assert.equal(commandOutput.join(""), `revoked ${grant.grantId}\n`);
     assert.equal(store.list().length, 0);
 
     const run3 = await r.adapter.run("任务三");
@@ -250,7 +253,7 @@ test("端到端（会话生命周期）：[a] 建 grant → human:grant 免审 �
     assert.equal(run3.toolExecutions[0]?.decision?.reason, "先别动这个文件");
     assert.equal(run3.toolExecutions[0]?.decision?.reasonSource, "human");
     assert.equal(r.prompts.length, 3, "撤销后重新问人（按键 + 拒绝理由）");
-    assert.ok(r.prompts[1]?.includes("[a] 本会话允许"), r.prompts[1]);
+    assert.ok(r.prompts[1]?.includes("[a] allow for this session"), r.prompts[1]);
     assert.ok(r.prompts[2]?.startsWith("拒绝理由"), r.prompts[2]);
     assert.ok(
       r.screen().includes("✗ rejected edit_file: a.ts (先别动这个文件)"),
@@ -338,7 +341,7 @@ test("端到端（升格 + 冷恢复）：/grants save 写配置 → 新进程�
       write: (t) => outputs2.push(t),
     };
     assert.equal(runGrantCommand(["grants", "save", grant.grantId], commands), true);
-    assert.equal(outputs2.join(""), `已升格 ${grant.grantId} → .pigeon/settings.local.json\n`);
+    assert.equal(outputs2.join(""), `saved ${grant.grantId} → .pigeon/settings.local.json\n`);
     assert.ok(existsSync(join(root, ".pigeon", "settings.local.json")));
     const configRules = loadGrantConfig(root);
     assert.equal(configRules.length, 1);
@@ -403,7 +406,7 @@ test("端到端（升格 + 冷恢复）：/grants save 写配置 → 新进程�
       }),
       true
     );
-    assert.equal(outputs4.join(""), `已撤销 ${grant.grantId}\n`);
+    assert.equal(outputs4.join(""), `revoked ${grant.grantId}\n`);
     assert.equal(freshStore.list().length, 0);
     const run4 = await r3.adapter.run("任务四");
     await r3.adapter.dispose();

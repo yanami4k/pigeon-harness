@@ -13,12 +13,12 @@ import { secondary } from "./style.ts";
 export const SESSION_PANEL_HEADER = "== sessions panel ==";
 
 const GROUP_LABEL: Record<PooledSessionState, string> = {
-  waiting: "等待回应",
-  running: "在跑",
-  preparing: "准备中",
-  idle: "空闲",
-  failed: "失败",
-  stopped: "已停",
+  waiting: "waiting",
+  running: "running",
+  preparing: "preparing",
+  idle: "idle",
+  failed: "failed",
+  stopped: "stopped",
 };
 
 const GROUPS: PooledSessionState[] = [
@@ -37,12 +37,12 @@ function oneLine(text: string): string {
 export function sessionCardText(card: PooledSessionCard): string {
   const detail =
     card.state === "waiting" && card.waiting !== undefined
-      ? `等：${oneLine(card.waiting)}`
+      ? `waiting: ${oneLine(card.waiting)}`
       : card.state === "failed" && card.error !== undefined
-        ? `失败：${oneLine(card.error)}`
+        ? `failed: ${oneLine(card.error)}`
         : oneLine(card.summary);
   // 决策 459：共用目录的会话（不是 git 仓库）在名字后标明（状态信息，弱化样式）
-  const name = card.sharedDir === true ? `${card.name} ${secondary("共用目录")}` : card.name;
+  const name = card.sharedDir === true ? `${card.name} ${secondary("shared dir")}` : card.name;
   return `${name}  ${oneLine(card.task)}${detail !== "" ? `  | ${detail}` : ""}`;
 }
 
@@ -145,13 +145,13 @@ export class SessionPanel implements Component {
     const cards = this.ordered();
     const selected = this.selected();
     if (cards.length === 0) {
-      lines.push("  (no sessions yet: type a task below and press enter to start one)");
+      lines.push("  (no sessions)");
     }
     const body: string[] = [];
     let cursorLine = 0;
     const main = this.source.main?.();
     if (main !== undefined) {
-      body.push(clipToWidth("  当前会话", width));
+      body.push(clipToWidth("  current", width));
       if (main.id === selected?.id) cursorLine = body.length;
       body.push(
         clipToWidth(
@@ -164,7 +164,7 @@ export class SessionPanel implements Component {
     for (const state of GROUPS) {
       const group = others.filter((card) => card.state === state);
       if (group.length === 0) continue;
-      body.push(clipToWidth(`  ${GROUP_LABEL[state]}（${group.length}）`, width));
+      body.push(clipToWidth(`  ${GROUP_LABEL[state]} (${group.length})`, width));
       for (const card of group) {
         if (card.id === selected?.id) cursorLine = body.length;
         body.push(

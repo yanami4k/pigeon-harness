@@ -46,15 +46,15 @@ export type SandboxConfig = Static<typeof SandboxSectionSchema>;
 export function sandboxConfigProblems(config: SandboxConfig): string[] {
   const problems: string[] = [];
   if (config.image !== undefined && config.dockerfile !== undefined) {
-    problems.push("image 与 dockerfile 只能给一个");
+    problems.push("image and dockerfile can't both be set");
   }
   if (config.context !== undefined && config.dockerfile === undefined) {
-    problems.push("context 只配合 dockerfile 用");
+    problems.push("context requires dockerfile");
   }
   if (config.memory !== undefined) {
     const bytes = parseMemorySize(config.memory);
     if (bytes > 0 && bytes < MIN_MEMORY_BYTES) {
-      problems.push(`memory 至少 6m（Docker 的下限），现为 ${config.memory}`);
+      problems.push(`memory must be at least 6m, got ${config.memory}`);
     }
   }
   return problems;

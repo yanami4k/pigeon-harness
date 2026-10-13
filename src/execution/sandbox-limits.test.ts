@@ -141,7 +141,7 @@ test("开沙箱：docker info 读不到内存总量时不设内存上限，开�
     assert.equal(args.includes("--memory"), false, args.join(" "));
     assert.equal(valueAfter(args, "--pids-limit"), "4096");
     assert.ok(
-      logs.some((line) => line.includes("本次沙箱不设内存上限")),
+      logs.some((line) => line.includes("without a memory limit")),
       logs.join("\n")
     );
   } finally {

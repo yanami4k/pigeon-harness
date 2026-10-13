@@ -8,14 +8,14 @@ import { parseScriptBudget, SCRIPT_COMMAND } from "./script-naming.ts";
 import { ScriptBudgetError, type ScriptRuns } from "./script-runner.ts";
 import { ORCHESTRATE_TEXTS } from "./script-texts.ts";
 
-export const SCRIPT_COMMAND_USAGE = `/${SCRIPT_COMMAND} <任务> [额度 ¥5|$2|300k]`;
+// "额度"是人输入里认的关键词（script-naming.ts），照原样写进用法
+export const SCRIPT_COMMAND_USAGE = `/${SCRIPT_COMMAND} <task> [额度 ¥5|$2|300k]`;
 
 export const SCRIPT_COMMAND_TEXTS = {
-  usage: `用法：${SCRIPT_COMMAND_USAGE}；/${SCRIPT_COMMAND} resume <运行号> [额度 …]；/${SCRIPT_COMMAND} stop [运行号]；/${SCRIPT_COMMAND} drop <运行号>`,
-  stopped: (runIds: readonly string[]) =>
-    `已停止脚本 ${runIds.join("、")}：在跑的 worker 停下，结果照常交回。`,
-  noneRunning: "没有在跑的脚本。",
-  dropped: (runId: string) => `已放弃脚本 ${runId}，删掉了它的快照引用；之后不能再续跑。`,
+  usage: `usage: ${SCRIPT_COMMAND_USAGE} | /${SCRIPT_COMMAND} resume <run ID> [额度 …] | /${SCRIPT_COMMAND} stop [run ID] | /${SCRIPT_COMMAND} drop <run ID>`,
+  stopped: (runIds: readonly string[]) => `stopped script ${runIds.join(", ")}`,
+  noneRunning: "no scripts running",
+  dropped: (runId: string) => `dropped script ${runId}`,
 } as const;
 
 export interface ScriptCommands {

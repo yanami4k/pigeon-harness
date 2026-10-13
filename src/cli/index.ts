@@ -6,7 +6,7 @@
 import { spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { failureBadge } from "../application/format.ts";
+import { failureBadge, plural } from "../application/format.ts";
 import { currentHarnessRef, describeHarness, pigeonVersion } from "../application/harness-ref.ts";
 import { HEADLESS_EXIT_CODES, runHeadless } from "../application/headless-core.ts";
 import {
@@ -49,7 +49,7 @@ function traceMain(argv: string[]): void {
   let root = process.cwd();
   // M5 S2（决策 045）：--with-content 带正文（默认关）
   let withContent = false;
-  const usage = "用法：pigeon trace <sessionId> [--run <runId>] [--with-content] [--root <dir>]";
+  const usage = "usage: pigeon trace <sessionId> [--run <runId>] [--with-content] [--root <dir>]";
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     if (flag === "--run") {
@@ -61,7 +61,7 @@ function traceMain(argv: string[]): void {
     } else if (sessionId === undefined && flag !== undefined && !flag.startsWith("--")) {
       sessionId = flag;
     } else {
-      throw new Error(`未知参数：${flag}（${usage}）`);
+      throw new Error(`unknown option: ${flag} (${usage})`);
     }
   }
   if (sessionId === undefined || runId === "") {
@@ -87,7 +87,7 @@ function replayMain(argv: string[]): void {
   // M5 S2（决策 045）：--with-content 带正文（默认关）
   let withContent = false;
   const usage =
-    "用法：pigeon replay <runId> [--session <sessionId>] [--with-content] [--root <dir>]";
+    "usage: pigeon replay <runId> [--session <sessionId>] [--with-content] [--root <dir>]";
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     if (flag === "--session") {
@@ -99,7 +99,7 @@ function replayMain(argv: string[]): void {
     } else if (runId === undefined && flag !== undefined && !flag.startsWith("--")) {
       runId = flag;
     } else {
-      throw new Error(`未知参数：${flag}（${usage}）`);
+      throw new Error(`unknown option: ${flag} (${usage})`);
     }
   }
   if (runId === undefined || sessionId === "") {
@@ -123,14 +123,14 @@ const FAILURE_CLASSES = ["cancelled", "business", "infrastructure", "unknown"] a
 // 时间边界解析：全数字 = epoch 毫秒；否则按 ISO 日期 Date.parse，解析不出响亮报错
 function parseTimeBound(flag: string, value: string | undefined): number {
   if (value === undefined) {
-    throw new Error(`${flag} 缺少取值（ISO 日期或 epoch 毫秒）`);
+    throw new Error(`${flag} needs a value (ISO date or epoch ms)`);
   }
   if (/^\d+$/.test(value)) {
     return Number(value);
   }
   const parsed = Date.parse(value);
   if (Number.isNaN(parsed)) {
-    throw new Error(`${flag} 需要 ISO 日期或 epoch 毫秒：${value}`);
+    throw new Error(`${flag} needs an ISO date or epoch ms: ${value}`);
   }
   return parsed;
 }
@@ -139,21 +139,21 @@ function sessionListMain(argv: string[]): void {
   const filters: SessionListFilters = {};
   let root = process.cwd();
   const usage =
-    "用法：pigeon session list [--tool <name>] [--class <cancelled|business|infrastructure|unknown>] " +
-    "[--since <ISO 日期或 epoch 毫秒>] [--until <ISO 日期或 epoch 毫秒>] [--root <dir>]";
+    "usage: pigeon session list [--tool <name>] [--class <cancelled|business|infrastructure|unknown>] " +
+    "[--since <ISO date|epoch ms>] [--until <ISO date|epoch ms>] [--root <dir>]";
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     if (flag === "--tool") {
       const value = argv[++i];
       if (value === undefined) {
-        throw new Error("--tool 缺少取值（工具名）");
+        throw new Error("--tool needs a tool name");
       }
       filters.tool = value;
     } else if (flag === "--class") {
       const value = argv[++i];
       if (value === undefined || !(FAILURE_CLASSES as readonly string[]).includes(value)) {
         throw new Error(
-          `未知失败分类：${value ?? "（缺取值）"}（可选：${FAILURE_CLASSES.join("/")}）`
+          `unknown failure class: ${value ?? "(missing)"} (one of ${FAILURE_CLASSES.join("/")})`
         );
       }
       // 成员校验已在上面完成，此处收窄到联合类型
@@ -165,7 +165,7 @@ function sessionListMain(argv: string[]): void {
     } else if (flag === "--root") {
       root = argv[++i] ?? root;
     } else {
-      throw new Error(`未知参数：${flag}（${usage}）`);
+      throw new Error(`unknown option: ${flag} (${usage})`);
     }
   }
   writeOut(runSessionListCommand({ root: realpathSync(root), filters }));
@@ -182,11 +182,9 @@ async function resumeMain(argv: string[]): Promise<void> {
 // --json 退出时打印一行结构化结果；退出码按终态映射（HEADLESS_EXIT_CODES，1 为参数与装配错误）
 async function runMain(argv: string[]): Promise<void> {
   const usage =
-    "用法：pigeon run [任务描述] [--root <dir>] [--governance-root <dir>] --stream-fn <模块路径> [--yolo] [--thinking <档位>] " +
-    "[--max-turns <N>] [--wall-clock <毫秒>] [--no-hooks] [--no-web] [--no-pushed-memory] [--no-spawn-workers] [--worker-concurrency <n>] [--worker-limit <n>] [--max-output-tokens <n>] [--context-window <n>] [--compact-threshold <n>] [--compact-keep <n>] " +
-    "[--sandbox [--sandbox-network on|off] [--sandbox-approval yolo|prompt] [--sandbox-from-head]] [--trust-config] [--json]" +
-    "（任务描述缺省从 stdin 读；--trust-config 只对本次放行未确认的会执行命令或放权的配置；" +
-    "--governance-root 把设置与程序状态锚到另一个目录，缺省与 --root 相同）";
+    "usage: pigeon run [task] [--root <dir>] [--governance-root <dir>] --stream-fn <module> [--yolo] [--thinking <level>] " +
+    "[--max-turns <N>] [--wall-clock <ms>] [--no-hooks] [--no-web] [--no-pushed-memory] [--no-spawn-workers] [--worker-concurrency <n>] [--worker-limit <n>] [--max-output-tokens <n>] [--context-window <n>] [--compact-threshold <n>] [--compact-keep <n>] " +
+    "[--sandbox [--sandbox-network on|off] [--sandbox-approval yolo|prompt] [--sandbox-from-head]] [--trust-config] [--json]";
   let task: string | undefined;
   let json = false;
   let maxTurns: number | undefined;
@@ -212,7 +210,7 @@ async function runMain(argv: string[]): Promise<void> {
     } else if (arg === "--max-turns" || arg === "--wall-clock") {
       const value = Number(argv[++i]);
       if (!Number.isInteger(value) || value < 1) {
-        throw new Error(`${arg} 需要正整数（${usage}）`);
+        throw new Error(`${arg} needs a positive integer (${usage})`);
       }
       if (arg === "--max-turns") {
         maxTurns = value;
@@ -222,7 +220,7 @@ async function runMain(argv: string[]): Promise<void> {
     } else if (arg === "--governance-root") {
       const value = argv[++i];
       if (value === undefined || value.startsWith("--")) {
-        throw new Error(`--governance-root 需要目录（${usage}）`);
+        throw new Error(`--governance-root needs a directory (${usage})`);
       }
       governanceRootArg = value;
     } else if (!arg.startsWith("--") && task === undefined) {
@@ -252,13 +250,13 @@ async function runMain(argv: string[]): Promise<void> {
   }
   task = task.trim();
   if (task === "") {
-    throw new Error(`任务描述为空（${usage}）`);
+    throw new Error(`task is empty (${usage})`);
   }
   const streamFn = await loadStreamFn(resolveStreamFnSpec(flags, usage));
   const workspaceRoot = prepareWorkspace(flags.root);
   // 治理根缺省与工作区根相同；沙箱在一次性容器里重建工作区，分开的治理根进不去，同给即拒绝
   if (governanceRootArg !== undefined && flags.sandbox !== undefined) {
-    throw new Error(`--governance-root 不与 --sandbox 同用（${usage}）`);
+    throw new Error("--governance-root can't be used with --sandbox");
   }
   const governanceRoot =
     governanceRootArg !== undefined ? prepareWorkspace(governanceRootArg) : workspaceRoot;
@@ -311,7 +309,7 @@ async function runMain(argv: string[]): Promise<void> {
     flags.sandbox !== undefined
       ? await runHeadlessInSandbox(
           { ...runOptions, sessionId: newSessionId() },
-          { flags, log: (line) => process.stderr.write(`[沙箱] ${line}\n`) }
+          { flags, log: (line) => process.stderr.write(`[sandbox] ${line}\n`) }
         )
       : await runHeadless(runOptions);
   if (json) {
@@ -319,10 +317,11 @@ async function runMain(argv: string[]): Promise<void> {
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } else {
     writeOut(
-      `会话 ${result.sessionId} ｜ 终态 ${result.status} ｜ 分类：${failureBadge(result.failure)} ｜ ` +
-        `${result.turns} 轮 ｜ 工具调用 ${result.toolCalls} 次 ｜ 需审批 ${result.approvalsNeeded} 次 ｜ ` +
-        `token ${result.usage.totalTokens} ｜ 标签 ${result.label}` +
-        `${result.errorMessage !== undefined ? ` ｜ ${result.errorMessage}` : ""}\n`
+      `session ${result.sessionId} | status ${result.status} | class: ${failureBadge(result.failure)} | ` +
+        `${plural(result.turns, "turn")} | ${plural(result.toolCalls, "tool call")} | ` +
+        `${plural(result.approvalsNeeded, "approval")} needed | ` +
+        `${plural(result.usage.totalTokens, "token")} | label ${result.label}` +
+        `${result.errorMessage !== undefined ? ` | ${result.errorMessage}` : ""}\n`
     );
   }
   // 决策 307：打转叫停的收尾说明（终态一行之后；--json 时已在结果里）
@@ -330,14 +329,14 @@ async function runMain(argv: string[]): Promise<void> {
     writeOut(`${LOOP_GUARD_TEXTS.runStopped(result.looping)}\n`);
   }
   if ("sandboxNotice" in result && result.sandboxNotice !== undefined) {
-    process.stderr.write(`[沙箱] ${result.sandboxNotice}\n`);
+    process.stderr.write(`[sandbox] ${result.sandboxNotice}\n`);
   }
   process.exitCode = HEADLESS_EXIT_CODES[result.status];
 }
 
 function parseEditMode(value: string | undefined, usage: string): EditMode {
   if (value === undefined || !isEditMode(value)) {
-    throw new Error(`--edit-mode 只接受 ${EDIT_MODES.join("/")}（${usage}）`);
+    throw new Error(`--edit-mode takes ${EDIT_MODES.join("/")} (${usage})`);
   }
   return value;
 }
@@ -349,7 +348,7 @@ export async function main(argv: string[]): Promise<void> {
     return;
   }
   if (route.kind === "version") {
-    writeOut(`pigeon ${pigeonVersion()}（${describeHarness(currentHarnessRef())}）\n`);
+    writeOut(`pigeon ${pigeonVersion()} (${describeHarness(currentHarnessRef())})\n`);
     return;
   }
   if (route.kind === "tui") {
@@ -390,7 +389,7 @@ export async function main(argv: string[]): Promise<void> {
     migrateConfigMain(argv.slice(1));
     return;
   }
-  throw new Error(`未知子命令：${argv[0]}（${TOP_LEVEL_HELP}）`);
+  throw new Error(`unknown subcommand: ${argv[0]} (see pigeon --help)`);
 }
 
 // 顶层子命令：不带子命令即终端界面
@@ -431,7 +430,7 @@ function migrateConfigMain(argv: string[]): void {
     if (flag === "--root" && argv[i + 1] !== undefined) {
       root = argv[++i] ?? root;
     } else {
-      throw new Error(`未知参数：${flag}（${MIGRATE_CONFIG_USAGE}）`);
+      throw new Error(`unknown option: ${flag} (${MIGRATE_CONFIG_USAGE})`);
     }
   }
   const result = runMigrateConfig(realpathSync(root));
@@ -503,19 +502,19 @@ async function launchTui(argv: readonly string[]): Promise<void> {
 
 // 顶层帮助（pigeon --help）与未知子命令提示
 export const TOP_LEVEL_HELP = [
-  "用法：",
-  "  pigeon [参数]                 启动终端界面（--no-spawn-workers 关掉主 agent 派 worker；--worker-concurrency、--worker-limit 调两个上限）",
-  "  pigeon --continue [参数]      在终端界面里续接本项目最近的会话",
-  "  pigeon --resume [sessionId]   在终端界面里续接指定会话（不带会话号时弹出会话列表）",
-  "  pigeon run [任务描述] [参数]  无人值守运行一个任务",
+  "usage:",
+  "  pigeon [options]              start the terminal UI",
+  "  pigeon --continue [options]   resume the most recent session in this project",
+  "  pigeon --resume [sessionId]   resume a session in the terminal UI",
+  "  pigeon run [task] [options]   run a task unattended",
   "  pigeon resume [sessionId]     same as pigeon --resume [sessionId]",
-  "  pigeon trace <sessionId>      查看一个会话的关联视图",
-  "  pigeon replay <runId>         回放一次运行",
-  "  pigeon session list           列出本项目的会话",
-  "  pigeon sandbox list|clean     查看或清理残留的沙箱容器",
-  "  pigeon worktrees list|clean   查看或删除留下的 worker 工作树与分支（clean 缺省只删没有未取走改动的，--all 全删，--yes 不再确认）",
-  `  pigeon migrate-config         把旧配置并入三层 settings.json、旧位置的程序状态移入 ${pigeonRel("state")}/`,
-  "  pigeon sandbox cache|clear-cache  查看或清空沙箱共用的下载缓存（npm、pnpm、yarn、pip、uv、cargo、go）",
+  "  pigeon trace <sessionId>      show a session's trace",
+  "  pigeon replay <runId>         replay a run",
+  "  pigeon session list           list this project's sessions",
+  "  pigeon sandbox list|clean     list or clean leftover sandbox containers",
+  "  pigeon worktrees list|clean   list or delete leftover worker worktrees and branches",
+  `  pigeon migrate-config         merge old config into settings.json; move old state into ${pigeonRel("state")}/`,
+  "  pigeon sandbox cache|clear-cache  show or clear the shared sandbox download cache",
 ].join("\n");
 
 // 仅作为入口直接运行时执行；被 import 时不启动。打包产物里由产物入口（src/bundle-entry.ts）分派，这里不判断

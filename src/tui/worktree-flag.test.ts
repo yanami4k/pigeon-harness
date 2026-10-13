@@ -12,5 +12,8 @@ test("--worktree <名字> 与 --worktree=<名字>；其余参数原样；缺名�
   assert.deepEqual(takeWorktreeFlag(["--yolo"]), { argv: ["--yolo"] });
   assert.throws(() => takeWorktreeFlag(["--worktree"]), { message: WORKTREE_FLAG_USAGE });
   assert.throws(() => takeWorktreeFlag(["--worktree", "--yolo"]), { message: WORKTREE_FLAG_USAGE });
-  assert.throws(() => takeWorktreeFlag(["--worktree=a", "--worktree", "b"]), /只能给一个/);
+  assert.throws(
+    () => takeWorktreeFlag(["--worktree=a", "--worktree", "b"]),
+    /given more than once/
+  );
 });

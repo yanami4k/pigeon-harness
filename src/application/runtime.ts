@@ -543,13 +543,13 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     maxOutputTokens !== undefined &&
     (!Number.isInteger(maxOutputTokens) || maxOutputTokens < 1)
   ) {
-    throw new Error(`单轮输出上限需要正整数：${maxOutputTokens}`);
+    throw new Error(`max output tokens must be a positive integer: ${maxOutputTokens}`);
   }
   if (
     deps.temperature !== undefined &&
     !(Number.isFinite(deps.temperature) && deps.temperature >= 0 && deps.temperature <= 2)
   ) {
-    throw new Error(`采样温度需要 0 到 2 之间的数：${deps.temperature}`);
+    throw new Error(`temperature must be between 0 and 2: ${deps.temperature}`);
   }
   const learned = deps.learnedMemory;
   const governanceRoot = deps.governanceRoot ?? deps.workspaceRoot;
@@ -561,10 +561,7 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     deps.createApprovalHandler !== undefined &&
     deps.pathScopedGrants !== false
   ) {
-    throw new Error(
-      "容器工作区暂不支持交互审批：按路径限定的放权以宿主路径判定，在容器工作区下会静默失配；" +
-        "目前只支持无审批通道的无人值守运行"
-    );
+    throw new Error("interactive approval is not supported in a container workspace");
   }
   const sessionsDir = sessionsDirOf(governanceRoot);
   // 决策 325：设置快照（会话开始时已读好、校验过）；放权规则取三层并集
@@ -642,8 +639,7 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     const scoped = configGrants.filter((rule) => rule.pathPrefix !== undefined);
     if (scoped.length > 0) {
       throw new Error(
-        `容器工作区暂不支持按路径限定的放权规则：${scoped.map((rule) => `${rule.tool}（${rule.pathPrefix}）`).join("、")}——` +
-          "它们以宿主路径判定，在容器工作区下只会静默失配；请移除这些规则或改用本地工作区"
+        `path-scoped grant rules are not supported in a container workspace: ${scoped.map((rule) => `${rule.tool} (${rule.pathPrefix})`).join(", ")}`
       );
     }
   }
@@ -716,7 +712,7 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
   const registry = new ToolRegistry();
   registry.register({
     name: "read_file",
-    description: "读取工作区内文件内容",
+    description: "read a file in the workspace",
     parameters: ReadFileParamsSchema,
     tier: "read",
     pathConfinement: { kind: "workspace" },
@@ -724,7 +720,7 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
   });
   registry.register({
     name: "edit_file",
-    description: replaceMode ? "原文替换编辑" : "hashline 锚定稀疏编辑",
+    description: replaceMode ? "exact-text replace edit" : "hashline-anchored sparse edit",
     parameters: replaceMode ? ReplaceEditParamsSchema : EditFileParamsSchema,
     tier: "write",
     pathConfinement: { kind: "workspace" },
@@ -733,7 +729,7 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
   // 决策 358：新建或整体覆盖文件，与 edit_file 同为写档、工作区围栏（受保护路径与写档审批随之生效）
   registry.register({
     name: WRITE_FILE_TOOL,
-    description: "新建或整体覆盖文件",
+    description: "create or overwrite a file",
     parameters: WriteFileParamsSchema,
     tier: "write",
     pathConfinement: { kind: "workspace" },
@@ -804,13 +800,14 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     deps.sessionSearch === false
       ? deps.sessionSearchOffReason
       : sessionSearchEnabledOf(settings) === false
-        ? "设置 sessionSearch.enabled 为 false（使用者关掉了会话检索）"
+        ? "sessionSearch.enabled is false"
         : undefined;
   const sessionSearch =
     sessionSearchOffReason !== undefined
       ? skip(sessionSearchTools, sessionSearchOffReason)
       : deps.sessionSearch !== false &&
-        (environment.check("sessionHistory") || skip(sessionSearchTools, "本项目没有历史会话"));
+        (environment.check("sessionHistory") ||
+          skip(sessionSearchTools, "no past sessions in this project"));
   // 可搜文本缓存在 .pigeon/state/search-cache/
   const sessionToolOptions = {
     sessionsDir,
@@ -865,7 +862,7 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
           STOP_WORKER_TOOL,
           ...(nestedSlot === undefined ? [TAKE_WORKER_TOOL] : []),
         ],
-        "工作区不是 git 仓库"
+        "workspace is not a git repository"
       ))
       ? spawnCandidate
       : undefined;
@@ -886,7 +883,8 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     deps.enterWorktree !== undefined &&
     deps.workspaceHost === undefined &&
     deps.toolPolicy === undefined &&
-    (environment.check("gitWorkspace") || skip([ENTER_WORKTREE_TOOL], "工作区不是 git 仓库"))
+    (environment.check("gitWorkspace") ||
+      skip([ENTER_WORKTREE_TOOL], "workspace is not a git repository"))
       ? deps.enterWorktree
       : undefined;
   if (enterWorktreeSlot !== undefined) {
@@ -908,9 +906,9 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
       : undefined;
   const scriptSlot =
     scriptCandidate !== undefined &&
-    (environment.check("gitWorkspace") || skip([ORCHESTRATE_TOOL], "工作区不是 git 仓库")) &&
-    (environment.check("dockerOnPath") ||
-      skip([ORCHESTRATE_TOOL], "PATH 里找不到 docker 可执行文件"))
+    (environment.check("gitWorkspace") ||
+      skip([ORCHESTRATE_TOOL], "workspace is not a git repository")) &&
+    (environment.check("dockerOnPath") || skip([ORCHESTRATE_TOOL], "docker not found on PATH"))
       ? scriptCandidate
       : undefined;
   if (scriptSlot !== undefined) {
@@ -927,7 +925,7 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
   // 决策 287–291：联网工具——web_search 读档免审批，web_fetch 网络档按网站审批
   const webTools = deps.webTools;
   // 决策 359：没有可用的搜索后端（缺 key）不注册 web_search，web_fetch 照常；/reload 沿用开局的决定
-  const searchReason = webTools?.search.unavailable ?? "没有可用的搜索后端";
+  const searchReason = webTools?.search.unavailable ?? "no search backend available";
   const webSearch =
     webTools !== undefined &&
     (environment.check("webSearch") || skip([WEB_SEARCH_TOOL], searchReason));
@@ -938,9 +936,9 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
       : deps.frozenPrompt === undefined
         ? webSearch
           ? undefined
-          : `web_search 没有注册：${searchReason}（改好后重启 Pigeon 生效）`
+          : `web_search not registered: ${searchReason}`
         : webSearch !== (webTools.search.backend !== undefined)
-          ? "搜索后端的改动在重启 Pigeon 后生效，本会话的工具清单不变"
+          ? "search backend change takes effect after restart"
           : undefined;
   if (webTools !== undefined) {
     if (webSearch) {
@@ -1697,22 +1695,22 @@ export async function loadStreamFn(
     module = (await import(url)) as Record<string, unknown>;
   } catch (error) {
     throw new Error(
-      `无法加载 streamFn 模块 ${specifier}：${error instanceof Error ? error.message : String(error)}`
+      `loading streamFn module ${specifier} failed: ${error instanceof Error ? error.message : String(error)}`
     );
   }
   if (typeof module.default !== "function") {
-    throw new Error(`streamFn 模块 ${specifier} 没有默认导出函数`);
+    throw new Error(`streamFn module ${specifier} has no default export function`);
   }
   const streamFn = module.default as StreamFn;
   // 决策 362：可选的具名导出 modelInfo（不合规即报错，不认识的顶层键告警）；声明没给全价格、窗口与输出上限时另加载
   // pi-ai 自带目录备查（加载失败告警，按未知处理）
   let declared: ModelInfoDeclaration | undefined;
   if (module.modelInfo !== undefined) {
-    const parsed = parseModelInfoDeclaration(module.modelInfo, `streamFn 模块 ${specifier}`);
+    const parsed = parseModelInfoDeclaration(module.modelInfo, `streamFn module ${specifier}`);
     declared = parsed.declared;
     if (parsed.unknownKeys.length > 0) {
       warn(
-        `streamFn 模块 ${specifier} 导出的 modelInfo 有不认识的字段 ${parsed.unknownKeys.join("、")}（不是 pi-ai 模型字段，也不是 modelInfo 的字段），已忽略`
+        `modelInfo of streamFn module ${specifier} has unknown fields ${parsed.unknownKeys.join(", ")}; ignored`
       );
     }
   }

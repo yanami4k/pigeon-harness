@@ -566,23 +566,20 @@ test("之前运行的 worker：查询与等结果照常；取消、发消息、�
     assert.ok(error instanceof WorkerSpawnError);
     assert.match(
       error.message,
-      /^Worker half was spawned by an earlier run and was interrupted when that process exited/
+      /^can't cancel worker half: it is from a previous run and was interrupted$/
     );
-    assert.ok(error.message.endsWith("so there is nothing to cancel."), error.message);
     return true;
   });
   assert.throws(
     () => orchestrator.send(prev.settledId, "接着"),
     (error: unknown) =>
       error instanceof Error &&
-      error.message.includes(
-        "Worker implementer-1 was spawned by an earlier run and already finished in that run"
-      ) &&
-      error.message.endsWith("so it cannot receive messages.")
+      error.message ===
+        "can't message worker implementer-1: it is from a previous run and already finished"
   );
   assert.throws(
     () => orchestrator.resume(prev.settledId, { approve: true }),
-    /after resuming it cannot be approved and continued, so spawn another worker to carry on\./
+    /can't resume worker implementer-1: it is from a previous run and already finished$/
   );
 });
 

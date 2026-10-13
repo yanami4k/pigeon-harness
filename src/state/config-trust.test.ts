@@ -50,22 +50,22 @@ test("trustEntriesOf：每条钩子一条 kind:hook——id 含事件名与指�
       [
         "hook",
         `SessionStart:${hookFingerprintOf(START).slice(0, 12)}`,
-        "用户级",
+        "user settings",
         hookFingerprintOf(START),
       ],
       [
         "hook",
         `PreToolUse:${hookFingerprintOf(GUARD).slice(0, 12)}`,
-        "项目个人",
+        "project local settings",
         hookFingerprintOf(GUARD),
       ],
     ]
   );
-  assert.equal(entries[0]?.summary, "事件 SessionStart：node start.mjs");
-  assert.equal(entries[1]?.summary, "事件 PreToolUse、匹配 edit_file：node guard.mjs");
+  assert.equal(entries[0]?.summary, "event SessionStart: node start.mjs");
+  assert.equal(entries[1]?.summary, "event PreToolUse, matcher edit_file: node guard.mjs");
   // host:true 的钩子在摘要里标明执行位置
   const hosted = hookEntries(snapshotWithHooks([hook({ command: "node host.mjs", host: true })]));
-  assert.equal(hosted[0]?.summary, "事件 PreToolUse：node host.mjs（在宿主执行）");
+  assert.equal(hosted[0]?.summary, "event PreToolUse: node host.mjs (runs on host)");
   // 指纹是内容指纹：命令一变即是另一条
   assert.notEqual(
     hookFingerprintOf(START),
@@ -84,7 +84,7 @@ test("trustEntriesOf：同一内容（事件/matcher/命令/超时/执行位置�
   assert.equal(hookFingerprintOf(userHook), hookFingerprintOf(projectHook));
   const entries = hookEntries(snapshotWithHooks([userHook, projectHook]));
   assert.equal(entries.length, 1);
-  assert.equal(entries[0]?.origin, "用户级");
+  assert.equal(entries[0]?.origin, "user settings");
   // 时间、执行位置、matcher 任一不同即另一条
   const variants = hookEntries(
     snapshotWithHooks([

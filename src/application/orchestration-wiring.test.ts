@@ -172,7 +172,7 @@ test("任务清单开关：给了才注册、只给主会话；编排配置缺�
     join(root, ".pigeon", "settings.json"),
     JSON.stringify({ orchestration: { maxConcurrent: 0 } })
   );
-  assert.throws(() => loadOrchestration(), /settings\.json（项目共享）/);
+  assert.throws(() => loadOrchestration(), /settings\.json \(project settings\)/);
   rmSync(home, { recursive: true, force: true });
 });
 

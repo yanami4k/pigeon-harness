@@ -73,17 +73,20 @@ test("出错响亮失败并指出文件与层：不是合法 JSON、未知键、
       () => loadSettings(root, { homeDir: home }),
       (error: unknown) =>
         error instanceof SettingsError &&
-        /\.pigeon\/settings\.json（项目共享）不是合法 JSON/.test(error.message)
+        /\.pigeon\/settings\.json \(project settings\) is not valid JSON/.test(error.message)
     );
     write(projectSettingsPath(root), {});
     write(userSettingsPath(home), { grants: [] });
     assert.throws(
       () => loadSettings(root, { homeDir: home }),
-      /~\/\.pigeon\/settings\.json（用户级）：未知键 grants/
+      /~\/\.pigeon\/settings\.json \(user settings\): unknown key grants/
     );
     write(userSettingsPath(home), {});
     write(projectLocalSettingsPath(root), { commands: { roles: { tester: ["nope"] } } });
-    assert.throws(() => loadSettings(root, { homeDir: home }), /引用了未登记的短名：nope/);
+    assert.throws(
+      () => loadSettings(root, { homeDir: home }),
+      /references unknown short name: nope/
+    );
   } finally {
     cleanup();
   }

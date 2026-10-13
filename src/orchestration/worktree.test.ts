@@ -344,10 +344,10 @@ test("删除：目录已被手删而 git 仍登记的，只删这一个登记与
     git(repo, ["worktree", "lock", other.path]);
     assert.throws(
       () => removeWorktreeAndBranch({ repoRoot: repo, path: other.path, branch: other.branch }),
-      /锁定/
+      /is locked/
     );
     assert.ok(existsSync(other.path));
-    assert.throws(() => removeWorktree({ repoRoot: repo, path: repo }), /不是 git 工作树/);
+    assert.throws(() => removeWorktree({ repoRoot: repo, path: repo }), /is not a git worktree/);
     assert.ok(existsSync(join(repo, "a.txt")));
   } finally {
     cleanup();

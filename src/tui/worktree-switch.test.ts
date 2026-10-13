@@ -62,7 +62,8 @@ test("成功：先换工作区再重建（重建按工作树），之后记条�
   assert.ok(
     tail.some(
       (line) =>
-        line.startsWith("system 已移进工作树") && line.includes("2 个未提交的改动留在主检出")
+        line.startsWith("system moved into worktree") &&
+        line.includes("2 uncommitted changes left in the main checkout")
     ),
     tail.join("\n")
   );
@@ -85,7 +86,9 @@ test("本轮被中止（Esc）：不移、不重建、不记条目，告诉人�
   await h.sw.afterTurn({ cancelled: true });
   assert.equal(h.workspace(), "/repo");
   assert.ok(!h.log.some((line) => line.startsWith("rebuild") || line.startsWith("adopt")));
-  assert.ok(h.log.some((line) => /^system 没有移进工作树 .*本轮被中止/.test(line)));
+  assert.ok(
+    h.log.some((line) => /^system didn't move into worktree .*turn interrupted/.test(line))
+  );
   assert.ok(h.log.some((line) => /^note .*the turn was interrupted.*stays in \/repo/.test(line)));
   assert.equal(h.sw.pending(), false);
 });
@@ -106,7 +109,11 @@ test("重建失败：工作区换回原处、不记条目，告诉人与模型",
   await h.sw.afterTurn({ cancelled: false });
   assert.equal(h.workspace(), "/repo");
   assert.ok(!h.log.some((line) => line.startsWith("adopt")));
-  assert.ok(h.log.some((line) => /^system 没有移进工作树 .*重建运行面失败（boom）/.test(line)));
+  assert.ok(
+    h.log.some((line) =>
+      /^system didn't move into worktree .*rebuilding the runtime failed: boom/.test(line)
+    )
+  );
   assert.ok(h.log.some((line) => /^note .*rebuilding the runtime failed/.test(line)));
   assert.ok(!h.log.some((line) => line.startsWith("notify")), "不移时不叫醒 agent");
 });
