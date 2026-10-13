@@ -45,19 +45,28 @@ export class SessionPicker {
     return this.list !== undefined;
   }
 
-  // 打开；选中或退出时回调一次（退出为 undefined）
-  open(items: RecentSession[], onPick: (session: RecentSession | undefined) => void): void {
+  // 打开；选中或退出时回调一次（退出为 undefined）。maxRows：列表最多显示几行（矮窗口里由壳按窗口高度给，超出的随选中项滚动）
+  open(
+    items: RecentSession[],
+    onPick: (session: RecentSession | undefined) => void,
+    maxRows: number = PICKER_VISIBLE_ROWS
+  ): void {
     this.onPick = onPick;
     const selectItems: SelectItem[] = items.map((session, index) => ({
       value: String(index),
       label: sanitizeTerminalText(recentSessionLine(session)),
     }));
-    const list = new SelectList(selectItems, PICKER_VISIBLE_ROWS, THEME);
+    const list = new SelectList(
+      selectItems,
+      Math.max(1, Math.min(PICKER_VISIBLE_ROWS, maxRows)),
+      THEME
+    );
     list.onSelect = (item) => this.finish(items[Number(item.value)]);
     list.onCancel = () => this.finish(undefined);
     this.list = list;
     this.view.clear();
-    this.view.addChild(new Text(HEADER));
+    // 提示行不带上下空行（全屏里每一行都要省给列表）
+    this.view.addChild(new Text(HEADER, 1, 0));
     this.view.addChild(list);
   }
 

@@ -297,6 +297,17 @@ function fill(component: Component): StackChild {
   return { component, basis: 0, grow: 1, minSize: 1 };
 }
 
+// 要作答或要看全的块（会话选择器、设置面板、审批框、输入框）：窗口装不下时不跟着按比例压缩——VStack 缺省按高度
+// 加权压缩，最高的一块被压得最多，选择器会只剩提示行、列表被裁掉；先压消息区、标题与状态行
+function keep(component: Component): StackChild {
+  return { component, shrink: 0 };
+}
+
+// 矮窗口里列表最多显示几行：窗口高度减去输入框（含上下边框）、消息区至少一行、提示行、滚动标记与状态行、状态栏
+const LIST_CHROME_ROWS = 8;
+// 设置面板另有选中项说明（空行、说明、空行、提示行）
+const CONFIG_CHROME_ROWS = LIST_CHROME_ROWS + 5;
+
 // 决策 301：界面所处的视图——主会话、整屏的树形视图、进入的 worker 会话
 export type ShellView = "main" | "tree" | "worker" | "history" | "panel" | "pooled";
 
@@ -559,7 +570,7 @@ export class PigeonTuiShell
                   ? this.messageTree
                   : this.tree
             ),
-            this.approvalBox,
+            keep(this.approvalBox),
             this.statusBar,
           ]
         : this.view === "panel"
@@ -567,8 +578,8 @@ export class PigeonTuiShell
               this.title,
               fill(this.sessionPanel),
               this.statusLine,
-              this.approvalBox,
-              this.input,
+              keep(this.approvalBox),
+              keep(this.input),
               this.statusBar,
             ]
           : this.view === "pooled" && this.pooledSession !== undefined
@@ -576,8 +587,8 @@ export class PigeonTuiShell
                 this.title,
                 fill(this.pooledSession.flow.view),
                 this.statusLine,
-                this.approvalBox,
-                this.input,
+                keep(this.approvalBox),
+                keep(this.input),
                 this.statusBar,
               ]
             : this.view === "history" && this.historySession !== undefined
@@ -585,7 +596,7 @@ export class PigeonTuiShell
                   this.title,
                   fill(this.historySession.flow.view),
                   this.statusLine,
-                  this.approvalBox,
+                  keep(this.approvalBox),
                   this.statusBar,
                 ]
               : this.view === "worker" && this.workerSession !== undefined
@@ -593,7 +604,7 @@ export class PigeonTuiShell
                     this.title,
                     fill(this.workerSession.flow.view),
                     this.statusLine,
-                    this.input,
+                    keep(this.input),
                     this.statusBar,
                     this.panel,
                   ]
@@ -603,9 +614,9 @@ export class PigeonTuiShell
                     ...(this.loader !== undefined ? [this.loader] : []),
                     this.statusLine,
                     this.queue.view,
-                    this.picker.view,
-                    this.configPanel.view,
-                    this.input,
+                    keep(this.picker.view),
+                    keep(this.configPanel.view),
+                    keep(this.input),
                     this.statusBar,
                     this.panel,
                   ];
@@ -1014,7 +1025,8 @@ export class PigeonTuiShell
           () => {
             this.drainQueue();
             this.tui.requestRender();
-          }
+          },
+          Math.max(1, this.options.terminal.rows - CONFIG_CHROME_ROWS)
         );
         this.tui.requestRender();
         return;
@@ -1823,18 +1835,22 @@ export class PigeonTuiShell
       this.tui.requestRender();
       return;
     }
-    this.picker.open(sessions, (picked) => {
-      if (picked === undefined) {
-        this.flow.addSystem("已取消选择会话");
-      } else if (picked.sandbox) {
-        this.flow.addSystem(sandboxResumeHint(picked.sessionId));
-      } else {
-        this.flow.addUserEcho(`/resume ${picked.sessionId}`);
-        dispatchResumeCommand(this, picked.sessionId);
-      }
-      this.tui.requestRender();
-      this.drainQueue();
-    });
+    this.picker.open(
+      sessions,
+      (picked) => {
+        if (picked === undefined) {
+          this.flow.addSystem("已取消选择会话");
+        } else if (picked.sandbox) {
+          this.flow.addSystem(sandboxResumeHint(picked.sessionId));
+        } else {
+          this.flow.addUserEcho(`/resume ${picked.sessionId}`);
+          dispatchResumeCommand(this, picked.sessionId);
+        }
+        this.tui.requestRender();
+        this.drainQueue();
+      },
+      Math.max(1, this.options.terminal.rows - LIST_CHROME_ROWS)
+    );
     this.tui.requestRender();
   }
 

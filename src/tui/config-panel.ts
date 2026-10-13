@@ -44,21 +44,25 @@ export class ConfigPanel {
   private list: SettingsList | undefined;
   private onChange: ((id: string, value: string) => void) | undefined;
   private onClose: (() => void) | undefined;
+  private maxRows = Number.MAX_SAFE_INTEGER;
 
   isOpen(): boolean {
     return this.list !== undefined;
   }
 
+  // maxRows：列表最多显示几项（矮窗口里由壳按窗口高度给，超出的随选中项滚动）
   open(
     items: readonly ConfigItemView[],
     onChange: (id: string, value: string) => void,
-    onClose: () => void
+    onClose: () => void,
+    maxRows: number = Number.MAX_SAFE_INTEGER
   ): void {
     this.onChange = onChange;
     this.onClose = onClose;
+    this.maxRows = maxRows;
     const list = new SettingsList(
       items.map(settingItemOf),
-      items.length,
+      Math.max(1, Math.min(items.length, maxRows)),
       THEME,
       (id, value) => this.onChange?.(id, value),
       () => {
@@ -69,7 +73,8 @@ export class ConfigPanel {
     );
     this.list = list;
     this.view.clear();
-    this.view.addChild(new Text(HEADER));
+    // 提示行不带上下空行（全屏里每一行都要省给列表）
+    this.view.addChild(new Text(HEADER, 1, 0));
     this.view.addChild(list);
   }
 
@@ -77,7 +82,7 @@ export class ConfigPanel {
   refresh(items: readonly ConfigItemView[], selectedId: string): void {
     if (this.list === undefined || this.onChange === undefined || this.onClose === undefined)
       return;
-    this.open(items, this.onChange, this.onClose);
+    this.open(items, this.onChange, this.onClose, this.maxRows);
     this.list?.selectItem(selectedId);
   }
 

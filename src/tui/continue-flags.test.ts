@@ -189,7 +189,10 @@ test("--resume <id> 照旧直接续接；沙箱与本机不混用；不存在的
   }
 });
 
-function makeResumeShell(root: string): {
+function makeResumeShell(
+  root: string,
+  rows = 80
+): {
   shell: PigeonTuiShell;
   term: MockTerminal;
   rebinds: SessionId[];
@@ -197,7 +200,7 @@ function makeResumeShell(root: string): {
 } {
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-picker-log-"));
   const sessionId = newSessionId();
-  const term = new MockTerminal(120, 80);
+  const term = new MockTerminal(120, rows);
   const rebinds: SessionId[] = [];
   const shell = new PigeonTuiShell({
     terminal: term,
@@ -223,6 +226,48 @@ function makeResumeShell(root: string): {
     },
   };
 }
+
+test("矮窗口里 /resume 的列表不被布局按比例压掉：提示行与各会话都在，行数不够时随选中项滚动", async () => {
+  const project = await makeProject();
+  // 16 行：标题、状态行、输入框与状态栏之外只够放提示行和几行列表（此前选择器被压到只剩提示行）
+  const { shell, term, rebinds, cleanup } = makeResumeShell(project.root, 16);
+  try {
+    shell.start();
+    await settle();
+    term.input("/resume");
+    term.input("\r");
+    await settle();
+    const listed = screenText(term);
+    assert.ok(listed.includes("resume a session: up/down to move"), listed);
+    assert.ok(listed.includes("> "), listed);
+    assert.ok(listed.includes("1 turns  最新的任务"), listed);
+    assert.ok(listed.includes("3 turns  中间的任务"), listed);
+    // 12 行：列表只剩几行，往下选时跟着滚，选中的那项照样看得见、回车照样进
+    cleanup();
+    const short = makeResumeShell(project.root, 12);
+    try {
+      short.shell.start();
+      await settle();
+      short.term.input("/resume");
+      short.term.input("\r");
+      await settle();
+      assert.ok(screenText(short.term).includes("> "), screenText(short.term));
+      short.term.input("\x1b[B");
+      short.term.input("\x1b[B");
+      short.term.input("\x1b[B");
+      await settle();
+      assert.ok(screenText(short.term).includes("最早的任务"), screenText(short.term));
+      short.term.input("\r");
+      await settle();
+      assert.deepEqual(short.rebinds, [project.older]);
+    } finally {
+      short.cleanup();
+    }
+    assert.deepEqual(rebinds, []);
+  } finally {
+    project.cleanup();
+  }
+});
 
 test("/resume 不带 ID 弹出会话列表：↑↓ 选、回车进（照 /resume <id> 换绑）、Esc 退；沙箱会话标记且不在本机续接", async () => {
   const project = await makeProject();

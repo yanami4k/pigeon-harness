@@ -21,10 +21,14 @@ interface Harness {
   reloadGate?: Promise<void>;
 }
 
-function makeShell(extra: Partial<TuiShellOptions> = {}, state: Partial<Harness> = {}) {
+function makeShell(
+  extra: Partial<TuiShellOptions> = {},
+  state: Partial<Harness> = {},
+  rows = 50
+) {
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-config-"));
   const sessionId = newSessionId();
-  const term = new MockTerminal(110, 50);
+  const term = new MockTerminal(110, rows);
   const runtime = new ScriptedRuntime(sessionId);
   const harness: Harness = { user: new Map<string, string>(), ...state };
   const writes: string[] = [];
@@ -107,6 +111,31 @@ test("/config 打开面板：列出各项、生效值与覆盖说明，提示与
     term.input("\x1b");
     await settle();
     assert.doesNotMatch(screenText(term).split("已重读设置").at(-1) ?? "", /联网工具/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("矮窗口里打开 /config：面板不被按比例压掉，提示行、选中项与它的说明都在，项多的随选中项滚动", async () => {
+  const { term, cleanup } = makeShell({}, {}, 16);
+  try {
+    await settle();
+    term.input("/config");
+    term.input("\r");
+    await settle();
+    const screen = screenText(term);
+    assert.match(screen, /settings \(user level/);
+    assert.match(screen, /> 思考档位/);
+    assert.match(screen, /thinking\.level：/);
+    // 面板的末行（按键提示）也在——按比例压缩时最先被裁掉的就是它
+    assert.match(screen, /Enter\/Space to change/);
+    // 往下翻到最后一项：列表跟着滚，选中项与说明照样在
+    for (let i = 1; i < CONFIG_OPTIONS.length; i++) term.input(DOWN);
+    await settle();
+    const last = CONFIG_OPTIONS.at(-1);
+    assert.ok(last !== undefined);
+    assert.ok(screenText(term).includes(`> ${last.label}`), screenText(term));
+    assert.ok(screenText(term).includes(`${last.id}：`), screenText(term));
   } finally {
     cleanup();
   }
