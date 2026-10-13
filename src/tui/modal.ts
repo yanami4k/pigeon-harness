@@ -2,6 +2,7 @@
 // 状态（待审批、退出布防时刻）一律由壳本体持有，本模块只经窄接口读写，不各自存一份。
 // 决策 286：恢复菜单（S4 决策 031 的 1/2/3 单键决议）自决策 183 起已无调用方，连同状态行提示删除。
 import { matchesKey } from "@earendil-works/pi-tui";
+import { summarizeArgs } from "../application/format.ts";
 import type { ApprovalRequest } from "../approvals/handler.ts";
 import {
   APPROVAL_CANCEL_BUSY,
@@ -29,6 +30,8 @@ export interface PendingApproval {
   // 决策 450：扣住的消息面板是二选一的列表——当前选中的一项（缺省丢弃）与是否用方向键选过
   peerChoice?: "drop" | "deliver";
   peerChosen?: boolean;
+  // 决策 458：主会话自己的审批（不是 worker、面板会话或扣住的消息）在等什么——会话面板里当前会话那张卡用
+  mainWaiting?: string;
 }
 
 // 决策 450：扣住的消息面板出现、或工具审批顶替它之后，这么久之内的按键不作答
@@ -111,6 +114,11 @@ export function askApprovalPanel(
       : {}),
     ...(request.peerMessage !== undefined || displacedPeer
       ? { guardUntil: Date.now() + PANEL_GUARD_MS }
+      : {}),
+    ...(request.worker === undefined &&
+    request.pooled === undefined &&
+    request.peerMessage === undefined
+      ? { mainWaiting: `${request.toolName} ${summarizeArgs(request.args)}` }
       : {}),
   };
   host.setPendingApproval(pending);

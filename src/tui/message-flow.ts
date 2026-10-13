@@ -34,6 +34,9 @@ import { diffOfDetails, type ToolResultView, toolResultBody } from "./tool-outpu
 // 内容在进 Text 前已经 036 净化，模型文本里的控制序列此时已惰性化，这里的 SGR 不来自模型。
 // 决策 454：与其他次要信息同一个样式函数（style.ts 的 secondary）
 
+// 决策 458：偷看当前会话时显示的最近几条对话
+const RECENT_LINES = 6;
+
 export class MessageFlow {
   // Container 承载任意多 Text child；ScrollView 恰好包一个 child（决策 028：main-screen 下
   // 裁剪/follow 由终端 scrollback 实现，ScrollView 声明意图并兼容 alt-screen 布局引擎）
@@ -52,6 +55,11 @@ export class MessageFlow {
   private toolsExpanded = false;
   // 决策 451：对话流最上方的欢迎头（随消息滚动；清空消息区时留着）
   private header: Component | undefined;
+  // 决策 458：会话面板里当前会话那张卡用的摘要——首条输入（斜杠命令不算）、最近一条回复的全文、最近几条对话（偷看用；
+  // 流式回复原位更新最后一条）
+  private firstInput: string | undefined;
+  private lastReply = "";
+  private recent: string[] = [];
 
   constructor() {
     this.view = new ScrollView(this.list, { follow: "end", primary: true });
@@ -97,10 +105,30 @@ export class MessageFlow {
     this.appendDim(line);
   }
 
+  private remember(line: string, replaceLast = false): void {
+    if (replaceLast && this.recent.length > 0) this.recent[this.recent.length - 1] = line;
+    else this.recent.push(line);
+    if (this.recent.length > RECENT_LINES) this.recent.splice(0, this.recent.length - RECENT_LINES);
+  }
+
+  private rememberInput(text: string): void {
+    if (text.startsWith("/")) return;
+    this.firstInput ??= text;
+    this.remember(`> ${text}`);
+  }
+
+  // 决策 458：当前会话的摘要（会话面板里那张卡与偷看）
+  digest(): { firstInput: string; lastReply: string; recent: readonly string[] } {
+    return { firstInput: this.firstInput ?? "", lastReply: this.lastReply, recent: this.recent };
+  }
+
   // 决策 434：会话回退或切换分支后清空消息区（随后按新的主分支重绘历史）；欢迎头留着
   clear(): void {
     this.list.clear();
     if (this.header !== undefined) this.list.addChild(this.header);
+    this.firstInput = undefined;
+    this.lastReply = "";
+    this.recent = [];
     this.streamTail = null;
     this.streamText = "";
     this.thinkingTail = null;
@@ -115,8 +143,13 @@ export class MessageFlow {
         this.appendDim(line.text);
       } else if (line.kind === "assistant") {
         this.appendMarkdown(line.text);
+        this.lastReply = line.text;
+        this.remember(line.text);
       } else {
         this.append(line.text);
+        if (line.kind === "user") {
+          this.rememberInput(line.text.startsWith("> ") ? line.text.slice(2) : line.text);
+        }
       }
     }
   }
@@ -124,6 +157,7 @@ export class MessageFlow {
   // user 消息提交回显
   addUserEcho(text: string): void {
     this.append(`> ${text}`);
+    this.rememberInput(text);
   }
 
   // 系统行：busy 提示、run 终态摘要等（chrome 之外的壳自体消息）
@@ -160,8 +194,11 @@ export class MessageFlow {
     // thinking 段收尾：正文另起一段
     this.thinkingTail = null;
     this.thinkingText = "";
+    const opened = this.streamTail === null;
     if (this.streamTail === null) this.streamTail = this.appendMarkdown("");
     this.streamText += delta;
+    this.lastReply = this.streamText;
+    this.remember(this.streamText, !opened);
     // 累积文本整体重净化（幂等为前提）：跨 delta 劈开的序列在补齐帧被惰性化，
     // 中间帧的裸 ESC 显示为 ␛ 是正常形态
     this.streamTail.setText(sanitizeTerminalText(this.streamText));

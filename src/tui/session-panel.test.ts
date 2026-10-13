@@ -154,7 +154,7 @@ test("/panel 打开面板；输入框里的话派新会话；按状态分组，�
     assert.match(screen, /在跑（1）/);
     assert.match(screen, /空闲（1）/);
     assert.match(screen, /s1 {2}修登录 {2}\| 登录修好了/);
-    assert.ok(screen.indexOf("在跑") < screen.indexOf("空闲"));
+    assert.ok(screen.indexOf("在跑（1）") < screen.indexOf("空闲（1）"));
     assert.ok(!term.writes.join("").includes(`${ESC}[2J 日志`), "卡片里的控制序列不写进终端");
     assert.equal(pool.list().length, 2);
   } finally {
@@ -383,6 +383,113 @@ test("/take：面板会话与 worker 同名时要写明是哪一个", async () =
     assert.deepEqual(taken, ["s1"]);
   } finally {
     await h.stopAll();
+    cleanup();
+  }
+});
+
+test("决策 458：当前会话是面板的第一张卡（标 current、状态写在卡里），空状态那句不出现；偷看看它最近的对话，偷看时输入发给它；/take 它的名字说明不用取回", async () => {
+  const { term, runtime, cleanup } = makeShell({ sessionName: () => "demo-main" });
+  try {
+    await settle();
+    runtime.autoResolve = false;
+    term.input("先做一件");
+    term.input("\r");
+    await settle();
+    runtime.emit(RuntimeEventKind.TurnStarted, {});
+    runtime.emitDelta("text", "主会话的回复");
+    runtime.finishAll();
+    await settle();
+    term.input("/panel");
+    term.input("\r");
+    await settle();
+    let screen = screenText(term);
+    assert.match(screen, /当前会话/);
+    assert.match(screen, /> {3}demo-main current · 空闲 {2}先做一件 {2}\| 主会话的回复/);
+    assert.doesNotMatch(screen, /no sessions yet/);
+    assert.match(screen, /panel: 1 sessions/);
+    // 偷看：最近的对话
+    term.input(" ");
+    await settle();
+    screen = screenText(term);
+    assert.match(screen, /-- peek --/);
+    assert.match(screen, /> 先做一件/);
+    // 偷看时输入框里的话发给主会话（空闲即发）
+    runtime.autoResolve = false;
+    term.input("再做一件");
+    term.input("\r");
+    await settle();
+    assert.deepEqual(runtime.runs, ["先做一件", "再做一件"]);
+    assert.match(screenText(term), /已发给 demo-main/);
+    assert.match(screenText(term), /demo-main current · 在跑/);
+    // 在跑时再发：排队，这一轮跑完后发出
+    term.input("排队的一条");
+    term.input("\r");
+    await settle();
+    assert.deepEqual(runtime.runs, ["先做一件", "再做一件"]);
+    assert.match(screenText(term), /demo-main 正在跑：已排队/);
+    runtime.finishAll();
+    await settle();
+    assert.deepEqual(runtime.runs, ["先做一件", "再做一件", "排队的一条"]);
+    runtime.finishAll();
+    await settle();
+    // /take 当前会话的名字：说明不用取回
+    term.input(ESC);
+    await settle();
+    term.input(ESC);
+    await settle();
+    term.input("/take demo-main");
+    term.input("\r");
+    await settle();
+    assert.match(screenText(term), /demo-main 是当前会话：它的改动就在本工作区里，不用取回/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("决策 458：在面板里对当前会话按两次 Ctrl+X 是中断它这一轮（不退出），没在跑时说明；空输入回车回到主视图；它自己的审批挂着时卡片写等待回应", async () => {
+  const { shell, term, runtime, cleanup } = makeShell({ sessionName: () => "demo-main" });
+  try {
+    await settle();
+    term.input("/panel");
+    term.input("\r");
+    await settle();
+    term.input(CTRL_X);
+    await settle();
+    assert.match(screenText(term), /demo-main 没在跑，没有可停的/);
+    // 跑起来再停：两次 Ctrl+X 中断这一轮
+    term.input(ESC);
+    await settle();
+    runtime.autoResolve = false;
+    term.input("跑一件");
+    term.input("\r");
+    await settle();
+    term.input("/panel");
+    term.input("\r");
+    await settle();
+    term.input(CTRL_X);
+    await settle();
+    assert.match(screenText(term), /再按一次 Ctrl\+X 中断 demo-main 这一轮/);
+    term.input(CTRL_X);
+    await settle();
+    assert.equal(runtime.interrupts, 1);
+    assert.equal(shell.currentView(), "panel", "没有退出程序，也没离开面板");
+    runtime.finishAll();
+    await settle();
+    // 主会话自己的审批挂着：卡片写等待回应与在等什么
+    void shell.askApproval({
+      toolName: "run_command",
+      toolCallId: "m1",
+      args: { command: "npm test" },
+    });
+    await settle();
+    assert.match(screenText(term), /demo-main current · 等待回应 {2}跑一件 {2}\| 等：run_command/);
+    term.input("y");
+    await settle();
+    // 空输入回车：回到主视图
+    term.input("\r");
+    await settle();
+    assert.equal(shell.currentView(), "main");
+  } finally {
     cleanup();
   }
 });

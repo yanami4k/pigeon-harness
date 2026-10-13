@@ -101,6 +101,8 @@ export interface CommandsHost {
   takePooled?(name: string): Promise<string> | undefined;
   // 决策 443：会话面板里有没有这个名字的会话（只查不取）
   hasPooled?(name: string): boolean;
+  // 决策 458：当前会话的名字（/take 用到它时说明不用取回）
+  currentSessionName?(): string | undefined;
 }
 
 // 命令表判断可用性用的只读面
@@ -249,6 +251,14 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
       const isWorker = workers?.status().some((status) => status.name === name) === true;
       // 先判歧义：同名时什么都不做，要求写明
       const isPooled = host.hasPooled?.(name) === true;
+      // 决策 458：当前会话也在会话面板里列着，但它的改动就在本工作区里，没有可取回的
+      if (
+        (forced === "pooled" || (forced === undefined && !isPooled && !isWorker)) &&
+        host.currentSessionName?.() === name
+      ) {
+        host.addSystem(`${name} 是当前会话：它的改动就在本工作区里，不用取回`);
+        return;
+      }
       if (forced === undefined && isPooled && isWorker) {
         host.addSystem(
           `会话面板里的会话与 worker 都叫 ${name}：写 /take 会话:${name} 或 /take worker:${name}`

@@ -78,7 +78,11 @@ import {
   mergeCostTally,
 } from "../application/session-cost.ts";
 import { type FamilyNode, loadSessionFamily } from "../application/session-family.ts";
-import type { PooledSessionCard, SessionPanelSource } from "../application/session-pool.ts";
+import type {
+  PooledSessionCard,
+  PooledSessionState,
+  SessionPanelSource,
+} from "../application/session-pool.ts";
 import type { TaskItem } from "../application/task-list-tool.ts";
 import {
   previousRunWorkerText,
@@ -561,7 +565,10 @@ export class PigeonTuiShell
       // 标题、审批框、输入框（上下边框）与状态栏
       height: () => Math.max(3, this.options.terminal.rows - 6),
       cards: () => this.options.pool?.source.list() ?? [],
-      peek: (id) => this.peekCache.get(id) ?? [],
+      peek: (id) =>
+        id === this.current.sessionId ? this.mainPeekLines() : (this.peekCache.get(id) ?? []),
+      // 决策 458：当前窗口的主会话作为第一张卡
+      main: () => this.mainCard(),
     });
     this.messageTree = new MessageTree({
       height: () => Math.max(3, this.options.terminal.rows - 2),
@@ -801,7 +808,8 @@ export class PigeonTuiShell
     // 决策 301：worker 会话里状态行说明这个 worker 的状态与可用的动作
     // 决策 443：面板上的状态行（审批挂着时照常说明审批）
     if (this.view === "panel" && this.pendingApprovalState === null) {
-      const cards = this.options.pool?.source.list() ?? [];
+      // 决策 458：当前会话也算一个
+      const cards = [this.mainCard(), ...(this.options.pool?.source.list() ?? [])];
       const waiting = cards.filter((card) => card.state === "waiting").length;
       this.statusLine.setText(
         `panel: ${cards.length} sessions${waiting > 0 ? `, ${waiting} waiting` : ""} | [enter] spawn or enter, [space] peek, ctrl+x x2 stop, [esc] close`
@@ -1168,11 +1176,42 @@ export class PigeonTuiShell
     );
   }
 
-  // 偷看开着时取一次选中会话的内容
+  // 决策 458：会话面板里当前会话那张卡——名字、状态（主会话自己的审批挂着为等待回应，在跑、空闲）、首条输入与最近回复
+  private mainCard(): PooledSessionCard {
+    const id = this.current.sessionId;
+    const digest = this.flow.digest();
+    const waiting = this.pendingApprovalState?.mainWaiting;
+    const state: PooledSessionState =
+      waiting !== undefined ? "waiting" : this.isBusy() ? "running" : "idle";
+    return {
+      id,
+      name: this.options.sessionName?.(id) ?? id,
+      state,
+      task: digest.firstInput,
+      summary: digest.lastReply,
+      ...(waiting !== undefined ? { waiting } : {}),
+      startedAt: 0,
+      updatedAt: 0,
+    };
+  }
+
+  // 决策 458：偷看当前会话——在等什么，加最近几条对话
+  private mainPeekLines(): string[] {
+    const waiting = this.pendingApprovalState?.mainWaiting;
+    return [...(waiting !== undefined ? [`等：${waiting}`] : []), ...this.flow.digest().recent];
+  }
+
+  // 决策 458：/take 用到当前会话的名字时说明（CommandsHost）
+  currentSessionName(): string | undefined {
+    return this.options.sessionName?.(this.current.sessionId);
+  }
+
+  // 偷看开着时取一次选中会话的内容（当前会话的内容每次画时现取）
   private refreshPeek(): void {
     const source = this.options.pool?.source;
     const card = this.sessionPanel.selected();
     if (source === undefined || card === undefined || !this.sessionPanel.isPeeking()) return;
+    if (this.sessionPanel.isMain(card)) return;
     void source.peek(card.id).then((lines) => {
       this.peekCache.set(card.id, lines);
       this.tui.requestRender();
@@ -1215,7 +1254,14 @@ export class PigeonTuiShell
       this.refreshPeek();
     } else if (empty && matchesKey(data, "enter")) {
       const card = panel.selected();
-      if (card !== undefined) this.openPooledSession(card);
+      if (panel.isMain(card)) {
+        // 决策 458：进入当前会话即关面板回到主视图
+        this.returnTo = { view: "main" };
+        this.showView("main");
+        this.drainQueue();
+      } else if (card !== undefined) {
+        this.openPooledSession(card);
+      }
     } else if (isKey(data, "pigeon.tree")) {
       this.stopFromPanel();
     } else {
@@ -1230,6 +1276,12 @@ export class PigeonTuiShell
     const pool = this.options.pool;
     const card = this.sessionPanel.selected();
     if (pool === undefined || card === undefined) return;
+    // 决策 458：当前会话的"停止"是中断它这一轮，不是退出程序
+    const main = this.sessionPanel.isMain(card);
+    if (main && !this.running) {
+      this.sessionPanel.setNote(`${card.name} 没在跑，没有可停的`);
+      return;
+    }
     if (card.state === "stopped") {
       this.sessionPanel.setNote(`${card.name} 已经停了`);
       return;
@@ -1238,6 +1290,11 @@ export class PigeonTuiShell
     const last = this.lastPanelStop;
     if (last !== undefined && last.id === card.id && now - last.at <= PANEL_STOP_CONFIRM_MS) {
       this.lastPanelStop = undefined;
+      if (main) {
+        this.requestInterrupt();
+        this.sessionPanel.setNote(`已请求中断 ${card.name} 这一轮`);
+        return;
+      }
       this.sessionPanel.setNote(`正在停 ${card.name}...`);
       pool.source.stop(card.id).then(
         () => {
@@ -1254,7 +1311,9 @@ export class PigeonTuiShell
       return;
     }
     this.lastPanelStop = { id: card.id, at: now };
-    this.sessionPanel.setNote(`再按一次 Ctrl+X 停止 ${card.name}`);
+    this.sessionPanel.setNote(
+      main ? `再按一次 Ctrl+X 中断 ${card.name} 这一轮` : `再按一次 Ctrl+X 停止 ${card.name}`
+    );
   }
 
   // 会话面板里的输入：偷看时发给选中的会话（回复），否则派新会话；进入的会话里发给它
@@ -1282,6 +1341,21 @@ export class PigeonTuiShell
       return;
     }
     const selected = this.sessionPanel.selected();
+    // 决策 458：偷看当前会话时输入框里的话就是发给主会话的消息（在跑时排队，与主视图里一样）
+    if (
+      this.sessionPanel.isPeeking() &&
+      this.sessionPanel.isMain(selected) &&
+      selected !== undefined
+    ) {
+      if (this.isBusy()) {
+        this.queue.enqueue(value);
+        this.sessionPanel.setNote(`${selected.name} 正在跑：已排队，这一轮跑完后发出`);
+      } else {
+        this.submitNow(value);
+        this.sessionPanel.setNote(`已发给 ${selected.name}`);
+      }
+      return;
+    }
     if (this.sessionPanel.isPeeking() && selected !== undefined) {
       void pool.source.send(selected.id, value).then((refusal) => {
         this.sessionPanel.setNote(refusal ?? `已发给 ${selected.name}`);
