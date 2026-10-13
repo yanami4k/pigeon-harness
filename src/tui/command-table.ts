@@ -224,7 +224,7 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     whileRunning: { allow: true },
     available: (host) => host.panel?.() === true,
   },
-  // 决策 450：改本会话在本机会话名录里的名字，只动名录，运行中可用
+  // 决策 450、456：改当前会话的名字（记进会话记录，名录跟着改），运行中可用
   {
     name: "rename",
     usage: "/rename <名字>",

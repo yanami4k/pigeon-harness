@@ -130,6 +130,9 @@ export interface SessionStoreWriter extends SessionStoreSink {
   fileDeferred?(): boolean;
   // flush 后关闭；同进程最后一个写者关闭时释放锁
   close(): Promise<void>;
+  // 决策 456：记会话名（上游会话的 name 事实：不属于任何分支，会话回退不影响；按最新一条取）。推迟建文件还没建时
+  // 先留在内存里，随第一条要落盘的内容一起写，不为改名而建文件
+  setName(name: string): void;
   // 决策 434：主分支的叶子（排在此前的写入之后）；会话没打开时为 undefined，空会话为 null
   leafId(): Promise<string | null | undefined>;
   // 决策 434、437：会话回退的一次落盘，排在此前的写入之后、在同一个写入请求里做完：先核对主分支的叶子仍是 expectLeaf
@@ -275,7 +278,7 @@ export function openSessionStoreWriter(options: SessionStoreWriterOptions): Sess
   }
   const shared = core;
   let closed = false;
-  // held：推迟建文件还没建时可先留在内存里（钩子运行记录）；其余写入先建文件
+  // held：推迟建文件还没建时可先留在内存里（钩子运行记录、会话名）；其余写入先建文件
   const enqueue = (
     action: string,
     write: (session: Session) => Promise<unknown>,
@@ -344,6 +347,9 @@ export function openSessionStoreWriter(options: SessionStoreWriterOptions): Sess
         (session) => session.appendCustomEntry(entry.customType, data),
         entry.customType === SessionEntryType.Hook
       );
+    },
+    setName: (name) => {
+      enqueue("记会话名", (session) => session.setName(name), true);
     },
     // 推迟建文件还没建：主分支上还没有条目（留在内存里的钩子运行记录不算），不为读而建文件
     branch: () =>

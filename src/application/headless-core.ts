@@ -548,6 +548,8 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
       peerMessaging = await openPeerInbox({
         sessionId,
         cwd: options.workspaceRoot,
+        // 决策 456：续跑的会话用它记过的名字
+        governanceRoot: options.governanceRoot,
         yolo: options.yolo,
         settings: options.settings,
         deliver: (text) => liveBundle?.adapter.notify(text),

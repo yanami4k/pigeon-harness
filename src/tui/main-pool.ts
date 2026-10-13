@@ -14,6 +14,7 @@ import {
   prefetchWorktreeBase,
   removeNamedWorktree,
 } from "../application/named-worktree.ts";
+import { validPeerName } from "../application/peer-messaging.ts";
 import { disposeRuntime, type MemoryWriteConfig } from "../application/runtime.ts";
 import {
   advanceTakeBase,
@@ -122,6 +123,8 @@ export function createSessionPool(context: SessionPoolContext): {
         throw error;
       }
       const bundle = opened.bundle;
+      // 决策 456：面板会话的名字记进它自己的会话记录（续接、/resume 列表与标题栏照用）
+      if (validPeerName(name)) bundle.sessionStore.setName(name);
       const adapter = bundle.adapter;
       const sessionHooks = bundle.hooks;
       // 打转检测（同主会话的设置）：叫停即中断这一轮

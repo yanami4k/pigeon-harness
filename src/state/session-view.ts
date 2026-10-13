@@ -190,6 +190,9 @@ export interface SessionView {
   toolOutcomes: StoreToolOutcome[];
   // 数据不合 schema、版本不认识而被跳过的自定义条目说明
   warnings: string[];
+  // 决策 456：会话文件里记的会话名（最新一条；没改过名为缺省）与文件头记的工作目录（读文件时补上）
+  name?: string;
+  cwd?: string;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

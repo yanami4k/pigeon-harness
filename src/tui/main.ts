@@ -88,6 +88,7 @@ import { type ScriptCommands, scriptCommands } from "../application/script-comma
 import { createSessionScripts, modelPricing } from "../application/script-host.ts";
 import type { ScriptGate } from "../application/script-naming.ts";
 import type { ScriptRuns } from "../application/script-runner.ts";
+import { sessionNameOf } from "../application/session-name.ts";
 import {
   type OpenedSessionRuntime,
   openSessionRuntime,
@@ -508,6 +509,8 @@ export async function main(argv: string[]): Promise<void> {
       ? { workers: workersFor(mainOpened, mainOpened.scope.parentSessionId) }
       : {}),
   };
+  // 决策 456：当前会话的名字（会话记录里记的，没改过名为缺省名）；/rename 改它并记进会话记录，换会话时换成目标会话自己的
+  let sessionName = sessionNameOf(governanceRoot, slot.sessionId, workspaceRoot);
   // 决策 433–438：会话回退的运行面（每次按当前的 slot 现取）
   // 决策 443：会话面板（进程内版）：派出的会话进各自的工作树；沙箱会话不开。退出时全部停止
   let poolExiting = false;
@@ -662,18 +665,23 @@ export async function main(argv: string[]): Promise<void> {
     afterTurn: (info) => worktreeSwitch.afterTurn(info),
     // 决策 450：忙闲进会话名录，空闲时回告订了空闲通知的会话
     onBusyChange: (busy) => peerMessaging?.setBusy(busy),
-    ...(sandbox === undefined
-      ? {
-          renamePeer: (name: string) => {
-            if (peerMessaging === undefined) return "会话间通信的收件口没开，改不了名";
-            if (!validPeerName(name)) {
-              return "名字只能用字母、数字、下划线、连字符与点，最长 40 个字符";
-            }
-            peerMessaging.rename(name);
-            return `本会话在本机会话名录里改名为 ${name}`;
-          },
-        }
-      : {}),
+    // 决策 456：/rename 改当前会话的名字——记进会话记录（续接后还在），收件口开着且登记的是本会话时名录跟着改；
+    // 不依赖收件口（没开、沙箱里照样能改）
+    renameSession: (name: string) => {
+      if (!validPeerName(name)) {
+        return "名字只能用字母、数字、下划线、连字符与点，最长 40 个字符";
+      }
+      slot.bundle.sessionStore.setName(name);
+      sessionName = name;
+      if (peerMessaging !== undefined && peerMessaging.sessionId === slot.sessionId) {
+        peerMessaging.rename(name);
+      }
+      shellHolder.current?.refreshTitle();
+      return `本会话改名为 ${name}`;
+    },
+    // 决策 456：标题栏与历史视图显示的会话名
+    sessionName: (id: string) =>
+      id === slot.sessionId ? sessionName : sessionNameOf(governanceRoot, id, workspaceRoot),
     // 决策 448：/worktrees 列出与删除留下的 worker 工作树（git 仓库、不在沙箱里才有）
     ...(sandbox === undefined && isGitWorkspace(governanceRoot)
       ? {
@@ -786,9 +794,14 @@ export async function main(argv: string[]): Promise<void> {
         const bundle = opened.bundle;
         // 决策 445、446：换到的会话开在独立工作树里时，工作区与退出清理跟着它
         adoptWorkspace(opened.scope.workspaceRoot);
-        // 决策 450：收件口跟着换到的主会话（名字不变）；查看 worker 会话期间名录里仍是原主会话
+        // 决策 450、456：收件口跟着换到的主会话，名字用它自己的；查看 worker 会话期间名录里仍是原主会话
+        const targetName = sessionNameOf(governanceRoot, targetId, opened.scope.workspaceRoot);
         if (opened.scope.parentSessionId === undefined) {
-          peerMessaging?.moveTo({ sessionId: targetId, cwd: opened.scope.workspaceRoot });
+          peerMessaging?.moveTo({
+            sessionId: targetId,
+            cwd: opened.scope.workspaceRoot,
+            name: targetName,
+          });
         }
         if (bundle.instructionsNotice !== undefined) {
           shellHolder.current?.addSystem(bundle.instructionsNotice);
@@ -805,6 +818,7 @@ export async function main(argv: string[]): Promise<void> {
           workers,
           ...(opened.checkpoints !== undefined ? { checkpoints: opened.checkpoints } : {}),
         };
+        sessionName = targetName;
         // 决策 450：回到主会话时把查看 worker 期间攒下的消息递过去（换绑完成后再叫醒）
         slotIsMain = opened.scope.parentSessionId === undefined;
         peerRoute?.flush();
@@ -926,6 +940,8 @@ export async function main(argv: string[]): Promise<void> {
     peerMessaging = await openPeerInbox({
       sessionId: slot.sessionId,
       cwd: workspaceRoot,
+      // 决策 456：名录里的名字取会话自己的
+      name: sessionName,
       yolo: flags.yolo,
       settings,
       deliver: (text) => route.deliver(text),

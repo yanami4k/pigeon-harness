@@ -50,7 +50,7 @@ test("进全屏：标题在顶、状态栏在底；对话超过一屏时最新�
     assert.deepEqual(runtime.runs.length, 12);
     const screen = rows(term);
     // 标题在最上面（Text 自带上下各一行留白）
-    assert.match(screen[1] ?? "", /== pigeon tui \| session/);
+    assert.match(screen[1] ?? "", /== sess_\w+ ==/);
     assert.ok(
       screen.some((line) => line.includes("> 第 11 条")),
       screen.join("\n")
@@ -77,7 +77,7 @@ test("退出：离开全屏，把对话完整打印到普通屏幕（含滚出�
     shell.stop();
     assert.equal(term.screen.alternate, false);
     const printed = term.screen.contentLines().join("\n");
-    assert.match(printed, /== pigeon tui \| session/);
+    assert.match(printed, /== sess_\w+ ==/);
     assert.match(printed, /> 消息 0/);
     assert.match(printed, /> 消息 7/);
     assert.doesNotMatch(printed, /state: idle/);
@@ -100,7 +100,7 @@ test("暂离全屏（外部编辑器）：回到普通屏幕时不打印对话�
       main: term.screen.contentLines().join("\n"),
     }));
     assert.equal(seen.alternate, false);
-    assert.doesNotMatch(seen.main, /== pigeon tui|state: idle|先说一句/, "普通屏幕上什么都没打印");
+    assert.doesNotMatch(seen.main, /== sess_|state: idle|先说一句/, "普通屏幕上什么都没打印");
     await settle();
     assert.equal(term.screen.alternate, true);
   } finally {

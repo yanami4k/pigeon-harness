@@ -269,8 +269,10 @@ export interface TuiShellOptions {
   afterTurn?: (info: { cancelled: boolean }) => Promise<void> | undefined;
   // 决策 450：忙闲变化（一轮开始、真正空闲）
   onBusyChange?: (busy: boolean) => void;
-  // 决策 450：/rename 改本会话在本机会话名录里的名字；返回给人看的一行。缺省 = 命令不可用
-  renamePeer?: (name: string) => string;
+  // 决策 450、456：/rename 改当前会话的名字（记进会话记录，名录跟着改）；返回给人看的一行。缺省 = 命令不可用
+  renameSession?: (name: string) => string;
+  // 决策 456：会话的显示名（会话记录里记的，没改过名为缺省名）；标题栏与历史视图用。缺省 = 只显示会话号
+  sessionName?: (sessionId: string) => string;
   // 决策 439：点链接时打开网址（缺省用系统缺省方式，见 alt-screen.ts）；测试注入
   openUrl?: (url: string) => void;
   // 决策 441：读系统剪贴板（Windows 上右键粘贴用）；缺省 = 右键不粘贴
@@ -520,7 +522,8 @@ export class PigeonTuiShell
       cost: emptyCostTally(),
     });
     // chrome 纯 ASCII（spike 纪律：歧义宽字符不进边框/标题/状态栏）；sessionId 全 ASCII ULID
-    this.title = new Text(`== pigeon tui | session ${options.sessionId} ==`);
+    this.title = new Text("");
+    this.title.setText(this.titleText());
     this.tracker = new WorkerActivityTracker(
       options.provider !== undefined ? { provider: options.provider } : {}
     );
@@ -1650,9 +1653,36 @@ export class PigeonTuiShell
     return this.input.getText().trim() === "";
   }
 
-  // 决策 450：/rename（CommandsHost）
-  get renamePeer(): ((name: string) => string) | undefined {
-    return this.options.renamePeer;
+  // 决策 450、456：/rename（CommandsHost）
+  get renameSession(): ((name: string) => string) | undefined {
+    return this.options.renameSession;
+  }
+
+  // 决策 456：改名之后重画标题栏
+  refreshTitle(): void {
+    this.title.setText(this.titleText());
+    this.tui.requestRender();
+  }
+
+  // 决策 456：标题栏写会话名，会话号放在后面、用次要信息的弱化样式（只有会话号时不重复）
+  private titleText(): string {
+    const named = (sessionId: string, head: (name: string) => string): string => {
+      const name = this.options.sessionName?.(sessionId);
+      return name === undefined ? head(sessionId) : `${head(name)} ${secondary(sessionId)}`;
+    };
+    const back = this.returnTo.view === "tree" ? "tree" : "main";
+    const session = this.workerSession;
+    if (this.view === "worker" && session !== undefined) {
+      const worker = this.workerStatuses().find((status) => status.sessionId === session.sessionId);
+      return `== worker ${worker?.name ?? session.sessionId} | [esc] back to ${back} == ${secondary(session.sessionId)}`;
+    }
+    if (this.view === "history" && this.historySession !== undefined) {
+      return named(
+        this.historySession.sessionId,
+        (name) => `== history | ${name} | read only | [esc] back to ${back} ==`
+      );
+    }
+    return named(this.current.sessionId, (name) => `== ${name} ==`);
   }
 
   // 接管 Esc（CommandsHost）：/memory edit 排队保存期间按 Esc 取消；后接管的优先，交还时只撤自己那一份
@@ -2294,7 +2324,7 @@ export class PigeonTuiShell
     this.activeRunId = null;
     // S5：落盘失败警告计数随运行面一起换绑——新面的 listenerErrors 从零起算
     this.reportedListenerErrors = 0;
-    this.title.setText(`== pigeon tui | session ${sessionId} ==`);
+    this.title.setText(this.titleText());
     this.bindRuntime(binding.runtime);
     this.resetCosts(sessionId, true);
     refreshWorkersView(this);
@@ -2316,19 +2346,7 @@ export class PigeonTuiShell
     if (view !== "worker") this.leaveWorkerSession();
     if (view !== "history") this.historySession = undefined;
     this.view = view;
-    const session = this.workerSession;
-    const worker =
-      session !== undefined
-        ? this.workerStatuses().find((status) => status.sessionId === session.sessionId)
-        : undefined;
-    const back = this.returnTo.view === "tree" ? "tree" : "main";
-    this.title.setText(
-      view === "worker" && session !== undefined
-        ? `== pigeon tui | worker ${worker?.name ?? session.sessionId} | session ${session.sessionId} | [esc] back to ${back} ==`
-        : view === "history" && this.historySession !== undefined
-          ? `== pigeon tui | history | session ${this.historySession.sessionId} | read only | [esc] back to ${back} ==`
-          : `== pigeon tui | session ${this.current.sessionId} ==`
-    );
+    this.title.setText(this.titleText());
     this.layout();
     this.tui.setFocus(this.input);
     this.updateStatus();

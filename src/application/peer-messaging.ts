@@ -498,14 +498,19 @@ export class PeerMessaging {
     }
   }
 
-  // 终端界面换到别的主会话（/resume）或移进工作树：收件口不变，名录条目改到新的会话号与目录（名字不变）
-  moveTo(target: { sessionId: string; cwd: string }): void {
-    if (target.sessionId === this.#sessionId && target.cwd === this.#cwd) return;
+  // 终端界面换到别的主会话（/resume）或移进工作树：收件口不变，名录条目改到新的会话号与目录。决策 456：名字是会话的属性，
+  // 换会话时用目标会话自己的名字（调用方从会话记录取；不给即不变）
+  moveTo(target: { sessionId: string; cwd: string; name?: string }): void {
+    const name = target.name ?? this.#name;
+    if (target.sessionId === this.#sessionId && target.cwd === this.#cwd && name === this.#name) {
+      return;
+    }
     if (target.sessionId !== this.#sessionId) {
       removePeerRecord(this.#sessionId, this.#options.homeDir);
     }
     this.#sessionId = target.sessionId;
     this.#cwd = target.cwd;
+    this.#name = name;
     this.#writeRecord();
   }
 

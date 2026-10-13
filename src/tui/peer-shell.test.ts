@@ -1,4 +1,4 @@
-// 决策 450：壳这边的两处——忙闲变化告诉装配方（一轮开始为忙、真正空闲为闲，各一次）；/rename 交给装配方改名并显示
+// 决策 450：壳这边的两处——忙闲变化告诉装配方（一轮开始为忙、真正空闲为闲，各一次）；/rename 交给装配方改名并显示（决策 456：改的是会话名）
 // 返回的一行，没给即命令不可用。
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -48,9 +48,9 @@ test("忙闲：一轮开始为忙、跑完空闲为闲，各告诉一次", async
 test("/rename：交给装配方并显示返回的一行；没给即命令不可用", async () => {
   const names: string[] = [];
   const { term, cleanup } = makeShell({
-    renamePeer: (name) => {
+    renameSession: (name) => {
       names.push(name);
-      return `本会话在本机会话名录里改名为 ${name}`;
+      return `本会话改名为 ${name}`;
     },
   });
   try {
@@ -76,5 +76,47 @@ test("/rename：交给装配方并显示返回的一行；没给即命令不可�
     assert.doesNotMatch(screenText(plain.term), /改名为/);
   } finally {
     plain.cleanup();
+  }
+});
+
+test("决策 456：标题栏写会话名，会话号在后面用弱化样式；改名之后标题栏跟着变；没给名字时只写会话号", async () => {
+  const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-peer-shell-"));
+  const sessionId = newSessionId();
+  const term = new MockTerminal(90, 30);
+  const writes: string[] = [];
+  const write = term.write.bind(term);
+  term.write = (data: string) => {
+    writes.push(data);
+    write(data);
+  };
+  let name = "demo-abcd";
+  const holder: { shell?: PigeonTuiShell } = {};
+  const shell = new PigeonTuiShell({
+    terminal: term,
+    runtime: new ScriptedRuntime(sessionId),
+    sessionId,
+    logDir,
+    sessionName: () => name,
+    renameSession: (next) => {
+      name = next;
+      holder.shell?.refreshTitle();
+      return `本会话改名为 ${next}`;
+    },
+  });
+  holder.shell = shell;
+  try {
+    shell.start();
+    await settle();
+    const title = term.screen.contentLines().find((line) => line.trim() !== "") ?? "";
+    assert.equal(title.trim(), `== demo-abcd == ${sessionId}`);
+    assert.ok(writes.join("").includes(`\u001b[2m${sessionId}\u001b[22m`), "会话号用弱化样式");
+    term.input("/rename api-fix");
+    term.input("\r");
+    await settle();
+    const renamed = term.screen.contentLines().find((line) => line.trim() !== "") ?? "";
+    assert.equal(renamed.trim(), `== api-fix == ${sessionId}`);
+  } finally {
+    shell.stop();
+    rmSync(logDir, { recursive: true, force: true });
   }
 });

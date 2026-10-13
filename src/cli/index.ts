@@ -767,6 +767,8 @@ async function lineMain(argv: string[]): Promise<void> {
       ? await openPeerInbox({
           sessionId,
           cwd: workspaceRoot,
+          // 决策 456：续跑的会话用它记过的名字
+          governanceRoot: workspaceRoot,
           yolo: flags.yolo,
           settings: bundle.settings,
           deliver: (text) => {

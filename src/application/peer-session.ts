@@ -1,15 +1,20 @@
 // 入口打开会话间通信收件口的共用一段（决策 450）：终端界面、命令行对话与 pigeon run 都开（worker 不开，它们有父子通道）。
-// 审批模式类别：--yolo 为放权，其余为会审批。设置的 messaging 一节定放行规则与扣住时限。会话名缺省取工作目录名加会话号末 4 位。
+// 审批模式类别：--yolo 为放权，其余为会审批。设置的 messaging 一节定放行规则与扣住时限。决策 456：名录里的名字取会话自己的
+// 名字（会话记录里记的，没改过名为工作目录名加会话号末 4 位），不由收件口持有。
 // 打不开（命名管道或 socket 建不起来）只提示一行，会话照常运行，只是收不到也发不出。
 
 import { messagingSettings } from "../state/messaging-config.ts";
 import type { SettingsSnapshot } from "../state/settings.ts";
 import { messagingSectionOf } from "../state/settings.ts";
 import { defaultPeerName, type HeldMessage, PeerMessaging } from "./peer-messaging.ts";
+import { sessionNameOf } from "./session-name.ts";
 
 export interface OpenPeerInboxInput {
   sessionId: string;
   cwd: string;
+  // 决策 456：会话名——调用方已知的（终端界面的当前名字）直接给；否则给治理根，从会话记录取
+  name?: string;
+  governanceRoot?: string;
   yolo: boolean;
   settings: SettingsSnapshot;
   deliver(text: string): void;
@@ -27,7 +32,11 @@ export async function openPeerInbox(input: OpenPeerInboxInput): Promise<PeerMess
   try {
     return await PeerMessaging.open({
       sessionId: input.sessionId,
-      name: defaultPeerName(input.cwd, input.sessionId),
+      name:
+        input.name ??
+        (input.governanceRoot !== undefined
+          ? sessionNameOf(input.governanceRoot, input.sessionId, input.cwd)
+          : defaultPeerName(input.cwd, input.sessionId)),
       cwd: input.cwd,
       mode: input.yolo ? "permissive" : "approving",
       inbound,

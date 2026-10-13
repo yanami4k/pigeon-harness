@@ -294,6 +294,16 @@ test("收件口名字带给定前缀；换到别的主会话或目录（moveTo�
   // 换过之后照样收得到
   assert.equal((await b.messaging.send("alpha", "still here", false)).status, "delivered");
   await until(() => a.delivered.length === 1);
+  // 决策 456：换到的会话有自己的名字时，名录用它的名字
+  const third = newSessionId();
+  a.messaging.moveTo({ sessionId: third, cwd: join(dir, "elsewhere"), name: "gamma" });
+  assert.equal(a.messaging.name, "gamma");
+  const renamed = listPeerRecords({ homeDir: dir });
+  assert.equal(renamed.find((record) => record.sessionId === third)?.name, "gamma");
+  assert.equal(
+    renamed.some((record) => record.sessionId === newId),
+    false
+  );
 });
 
 test("退出时还扣着的消息：回告发送方没有送达（本会话退出了）", async () => {

@@ -47,6 +47,9 @@ export function readSessionView(ref: Pick<SessionFileRef, "path">): SessionView 
     entries: branchEntries(file, file.lanes.get("main") ?? null),
   });
   view.warnings.unshift(...file.warnings);
+  // 决策 456：会话名与工作目录（会话名不属于任何分支，按整个文件的最新一条）
+  if (file.name !== undefined) view.name = file.name;
+  if (file.header.cwd !== "") view.cwd = file.header.cwd;
   return view;
 }
 

@@ -1,6 +1,7 @@
 // 可续接的主会话（决策 286 第 5 项）：pigeon --continue 取本项目最近的一个，/resume 与 pigeon --resume 不带会话号时
 // 列出来选。主会话 = 文件头没有父会话的会话：worker 会话、/fork 分支与复盘会话都有父会话，不列。
-// 每行给最近活动时间、首条输入摘要、轮数（一条输入一轮）与沙箱标记；按最近活动从新到旧。只读，不写任何记录。
+// 每行给最近活动时间、会话名（决策 456：会话记录里记的，没改过名为缺省名）、首条输入摘要、轮数（一条输入一轮）与沙箱标记；
+// 按最近活动从新到旧。只读，不写任何记录。
 import { execFileSync } from "node:child_process";
 import { SANDBOX_START_REF_PREFIX, sandboxBranch } from "../execution/sandbox.ts";
 import { listSessionRefs, readSessionView } from "../persistence/session-catalog.ts";
@@ -9,10 +10,13 @@ import type { SessionView } from "../state/session-view.ts";
 import { isStatusMessage } from "../state/status-text.ts";
 import { hardenedGitArgs } from "../tools/git-hardening.ts";
 import { isReviewSession } from "./session-cost.ts";
+import { sessionDisplayName } from "./session-name.ts";
 import { sessionsDirOf } from "./workspace.ts";
 
 export interface RecentSession {
   sessionId: SessionId;
+  // 决策 456：会话名
+  name: string;
   // 最近活动（最后一条消息的写入时刻；没有消息取创建时间），Unix 毫秒
   lastActiveAt: number;
   // 首条输入的前一段（换行压成空格）；一条输入都没有时为空串
@@ -79,6 +83,7 @@ export function listRecentMainSessions(governanceRoot: string): RecentSession[] 
     const last = view.messages.at(-1);
     sessions.push({
       sessionId: view.sessionId,
+      name: sessionDisplayName(view.name, view.cwd ?? governanceRoot, view.sessionId),
       lastActiveAt: last?.timestamp ?? view.createdAt,
       firstInput: firstInputOf(view),
       turns: view.runs.length,
@@ -110,5 +115,5 @@ export function recentSessionLine(session: RecentSession): string {
   const time = `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
   const mark = session.sandbox ? " [sandbox]" : "";
   const input = session.firstInput !== "" ? session.firstInput : "(no input)";
-  return `${time}  ${session.turns} turns${mark}  ${input}`;
+  return `${time}  ${session.name}  ${session.turns} turns${mark}  ${input}`;
 }

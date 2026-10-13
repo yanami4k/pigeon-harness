@@ -256,7 +256,7 @@ test("/resume 全流程：报告将还原的上下文与悬空的工具调用 �
       assert.deepEqual(tracker.rebinds, [crashed]);
       assert.equal(tracker.runtimes.length, 1);
       assert.equal(oldRuntime.listenerCount(), 0, "换绑后旧运行面必须退订");
-      assert.ok(done.includes(`session ${crashed}`), "chrome 应切到恢复会话");
+      assert.ok(done.includes(`== ${crashed} ==`), "chrome 应切到恢复会话");
       term.input("继续任务");
       term.input("\r");
       await settle();

@@ -89,8 +89,8 @@ export interface CommandsHost {
   captureEscape?(onEscape: () => void): () => void;
   // 决策 448：/worktrees 的命令面（缺省 = /worktrees 不可用）
   worktrees?(): TuiWorktreesFace | undefined;
-  // 决策 450：/rename 改本会话在本机会话名录里的名字（缺省 = /rename 不可用）
-  readonly renamePeer?: ((name: string) => string) | undefined;
+  // 决策 450、456：/rename 改当前会话的名字（缺省 = /rename 不可用）
+  readonly renameSession?: ((name: string) => string) | undefined;
   // 决策 442：/config（缺省 = 不可用）；参数为空即打开面板，"选项=值" 即直接改
   readonly configCommand?: ((args: string) => void) | undefined;
   // 决策 435：/rewind 打开消息树（缺省 = 不可用）
@@ -117,7 +117,7 @@ export function commandAvailability(host: CommandsHost): CommandAvailability {
     scripts: () => host.scriptCommands?.() !== undefined,
     memory: () => host.memory?.() !== undefined,
     worktrees: () => host.worktrees?.() !== undefined,
-    rename: () => host.renamePeer !== undefined,
+    rename: () => host.renameSession !== undefined,
     config: () => host.configCommand !== undefined,
     rewind: () => host.rewindCommand !== undefined,
     panel: () => host.panelCommand !== undefined,
@@ -378,10 +378,10 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
       host.configCommand(value.trim().slice("/config".length).trim());
       return;
     }
-    // 决策 450：/rename <名字> 改本会话在本机会话名录里的名字（别的会话按它找到本会话）
-    if (tokens[0] === "rename" && host.renamePeer !== undefined) {
+    // 决策 450、456：/rename <名字> 改当前会话的名字：记进会话记录（续接后还在），本机会话名录跟着改（别的会话按它找到本会话）
+    if (tokens[0] === "rename" && host.renameSession !== undefined) {
       const name = value.trim().slice("/rename".length).trim();
-      host.addSystem(name === "" ? "用法：/rename <名字>" : host.renamePeer(name));
+      host.addSystem(name === "" ? "用法：/rename <名字>" : host.renameSession(name));
       return;
     }
     // 决策 189：/compact [重点] 手动压缩（重点作为摘要的附加说明）
