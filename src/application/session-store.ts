@@ -22,6 +22,7 @@ import type { RunId } from "../state/ids.ts";
 import {
   type CheckpointMarkState,
   type RewindData,
+  type RewindStepData,
   SESSION_ENTRY_VERSION,
   type SessionCustomEntry,
   type SessionEntrySink,
@@ -162,6 +163,14 @@ export function turnSnapshotEntry(
 export function rewindEntry(payload: Omit<RewindData, "version">): SessionCustomEntry {
   return {
     customType: SessionEntryType.Rewind,
+    data: { version: SESSION_ENTRY_VERSION, ...payload },
+  };
+}
+
+// 退代码的一个文件的结果
+export function rewindStepEntry(payload: Omit<RewindStepData, "version">): SessionCustomEntry {
+  return {
+    customType: SessionEntryType.RewindStep,
     data: { version: SESSION_ENTRY_VERSION, ...payload },
   };
 }

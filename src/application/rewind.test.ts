@@ -491,11 +491,14 @@ test("写回中途出错（只读文件）：停在出错处，已写的照实�
   } finally {
     chmodSync(join(root, "b.txt"), 0o644);
   }
+  // 模拟出错的文件已被截断（写到一半）：撤销照样把它恢复
+  writeFileSync(join(root, "b.txt"), "");
   const undo = await prepareUndo(host);
   assert.ok(undo !== undefined);
+  // 写到一半出错的那个也在撤销范围里
   assert.deepEqual(
     undo.plan.files.map((file) => file.path),
-    ["a.txt"]
+    ["a.txt", "b.txt"]
   );
   const undone = await applyRewind(host, undo, {
     mode: "code",
@@ -503,6 +506,7 @@ test("写回中途出错（只读文件）：停在出错处，已写的照实�
   });
   assert.equal(undone.undo, true);
   assert.equal(readFileSync(join(root, "a.txt"), "utf8"), "agent a\n");
+  assert.equal(readFileSync(join(root, "b.txt"), "utf8"), "agent b\n", "被截断的也恢复");
   assert.equal(await prepareUndo(host), undefined, "撤销之后不再有可撤销的");
 });
 
@@ -728,4 +732,117 @@ test("写者：主分支的叶子不是预期的即什么都不写", async () =>
   assert.equal(result, "changed");
   assert.equal(await bundle.sessionStore.leafId(), leaf);
   assert.equal(mainEntries(root, bundle.adapter.sessionId).length, before);
+});
+
+// ---- 第二轮复查 ----
+
+test("两次 agent 改动中间夹的手改：退到最早一条之前时列为冲突，缺省保留", async () => {
+  const root = repo(false);
+  const { bundle, host } = await openSession(root, [
+    write("x.txt", "agent 1\n"),
+    { text: "建了" },
+    overwrite("x.txt", "agent 2\n"),
+    { text: "又改了" },
+  ]);
+  await bundle.adapter.run("first");
+  await host.checkpoints?.settle();
+  writeFileSync(join(root, "x.txt"), "agent 1\nhand line\n");
+  await bundle.adapter.run("second");
+  await host.checkpoints?.settle();
+  const prepared = await prepareRewind(
+    host,
+    messageNode(await loadRewindTree(host), "first").target
+  );
+  const code = await checkCode(host, prepared);
+  assert.deepEqual(
+    code.classified.conflicts.map((action) => [action.path, action.reason]),
+    [["x.txt", "两条消息之间被手改过"]]
+  );
+  await applyRewind(host, prepared, { mode: "code", code });
+  assert.equal(readFileSync(join(root, "x.txt"), "utf8"), "agent 2\n", "缺省保留");
+});
+
+test("退代码先写意图记录、逐个文件写结果，存下的原样字节挂在引用上；撤销中途出错可以再撤", async () => {
+  const root = repo(false);
+  const { bundle, host } = await openSession(root, [
+    overwrite("a.txt", "agent\n"),
+    { text: "改完" },
+  ]);
+  await bundle.adapter.run("first");
+  await host.checkpoints?.settle();
+  const prepared = await prepareRewind(
+    host,
+    messageNode(await loadRewindTree(host), "first").target
+  );
+  await applyRewind(host, prepared, { mode: "code", code: await checkCode(host, prepared) });
+  const entries = mainEntries(root, bundle.adapter.sessionId);
+  const kinds = entries
+    .filter(
+      (entry) =>
+        entry.customType === SessionEntryType.Rewind ||
+        entry.customType === SessionEntryType.RewindStep
+    )
+    .map((entry) => {
+      const data = entry.data as { phase?: string; done?: string; rewindId: string };
+      return entry.customType === SessionEntryType.RewindStep
+        ? `step:${data.done}`
+        : (data.phase ?? "done");
+    });
+  assert.deepEqual(kinds, ["intent", "step:written", "done"]);
+  const rewindId = (entries.at(-1)?.data as { rewindId?: string } | undefined)?.rewindId ?? "";
+  const ref = git(root, [
+    "for-each-ref",
+    "--format=%(refname)",
+    `refs/pigeon/rewind/${bundle.adapter.sessionId}/${rewindId}`,
+  ]);
+  assert.equal(ref, `refs/pigeon/rewind/${bundle.adapter.sessionId}/${rewindId}`);
+  // 撤销时 a.txt 只读：撤销没做完，之后仍可再撤
+  chmodSync(join(root, "a.txt"), 0o444);
+  try {
+    const undo = await prepareUndo(host);
+    assert.ok(undo !== undefined);
+    const failed = await applyRewind(host, undo, {
+      mode: "code",
+      code: await checkCode(host, undo),
+    });
+    assert.equal(failed.failed?.path, "a.txt");
+  } finally {
+    chmodSync(join(root, "a.txt"), 0o644);
+  }
+  const retry = await prepareUndo(host);
+  assert.ok(retry !== undefined, "撤销中途出错之后可以再撤");
+  await applyRewind(host, retry, { mode: "code", code: await checkCode(host, retry) });
+  assert.equal(readFileSync(join(root, "a.txt"), "utf8"), "agent\n");
+  assert.equal(await prepareUndo(host), undefined);
+});
+
+test("退代码之后移进过独立工作树：不能撤销（不在同一个工作区）", async () => {
+  const root = repo(false);
+  const { bundle, host } = await openSession(root, [
+    overwrite("a.txt", "agent\n"),
+    { text: "改完" },
+  ]);
+  await bundle.adapter.run("first");
+  await host.checkpoints?.settle();
+  const prepared = await prepareRewind(
+    host,
+    messageNode(await loadRewindTree(host), "first").target
+  );
+  await applyRewind(host, prepared, { mode: "code", code: await checkCode(host, prepared) });
+  bundle.sessionStore.append({
+    customType: SessionEntryType.Worktree,
+    data: {
+      version: 1,
+      name: "w",
+      path: join(root, ".pigeon", "wt", "w"),
+      branch: "pigeon-wt/w",
+      baseLabel: "HEAD",
+      created: true,
+      enteredAt: 0,
+    },
+  });
+  await bundle.sessionStore.flush();
+  const undo = await prepareUndo(host);
+  assert.match(undo?.plan.codeBlocked ?? "", /不能撤销/);
+  await assert.rejects(async () => checkCode(host, undo as never), /不能撤销/);
 });

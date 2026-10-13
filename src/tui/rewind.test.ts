@@ -116,6 +116,7 @@ function face(
         grantsAdded: 0,
         grantsRevoked: 0,
         untouchable: [],
+        problems: [],
         ...(options.undo === true ? { undo: true } : {}),
         ...(options.failed === true ? { failed: { path: "b.txt", reason: "EPERM" } } : {}),
         ...(applied.mode !== "conversation"

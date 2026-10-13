@@ -1543,6 +1543,7 @@ export class PigeonTuiShell
       }
     }
     if (outcome.conversationSkipped !== undefined) this.flow.addSystem(outcome.conversationSkipped);
+    for (const problem of outcome.problems) this.flow.addSystem(`没做成：${problem}`);
     for (const path of outcome.untouchable) {
       this.flow.addSystem(`没动：${path}（过大没进快照）`);
     }

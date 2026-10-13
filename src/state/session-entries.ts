@@ -57,6 +57,7 @@ export const SessionEntryType = {
   Worktree: "pigeon.worktree",
   TurnSnapshot: "pigeon.turn-snapshot",
   Rewind: "pigeon.rewind",
+  RewindStep: "pigeon.rewind-step",
 } as const;
 export type SessionEntryTypeName = (typeof SessionEntryType)[keyof typeof SessionEntryType];
 
@@ -610,11 +611,27 @@ export const RewindDataSchema = Type.Object({
   removedDirs: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
   // 写回中途出错：出错的文件与原因（之后的没有动，对话没有退）
   failed: Type.Optional(Type.Object({ path: Type.String(), reason: Type.String() })),
-  // 撤销上一次退代码（写回那次之前的现状快照）
+  // 撤销上一次退代码（写回那次之前的现状快照）；undoOf 为被撤销的那次的编号
   undo: Type.Optional(Type.Literal(true)),
+  undoOf: Type.Optional(Type.String({ minLength: 1 })),
+  // 退代码的编号：动手之前先写一条 phase 为 intent 的（计划写的路径），逐个文件写 pigeon.rewind-step，做完再写没有 phase 的
+  rewindId: Type.Optional(Type.String({ minLength: 1 })),
+  phase: Type.Optional(Type.Literal("intent")),
+  planned: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
   rewoundAt: Type.Integer({ minimum: 0 }),
 });
 export type RewindData = Static<typeof RewindDataSchema>;
+
+// 退代码的一个文件的结果（写一个记一条，中途退出也有据可查、可撤销）：写了、删了、出错（可能已被截断）；动手前存下的原样字节
+export const RewindStepDataSchema = Type.Object({
+  version: VERSION,
+  rewindId: Type.String({ minLength: 1 }),
+  path: Type.String({ minLength: 1 }),
+  done: Type.Union([Type.Literal("written"), Type.Literal("removed"), Type.Literal("failed")]),
+  saved: Type.Optional(Type.Object({ raw: GitObjectIdSchema, normalized: GitObjectIdSchema })),
+  reason: Type.Optional(Type.String()),
+});
+export type RewindStepData = Static<typeof RewindStepDataSchema>;
 
 // 一条待写的自定义条目：customType 与数据成对
 export type SessionCustomEntry =
@@ -636,7 +653,8 @@ export type SessionCustomEntry =
   | { customType: typeof SessionEntryType.RequestRetry; data: RequestRetryData }
   | { customType: typeof SessionEntryType.Worktree; data: WorktreeData }
   | { customType: typeof SessionEntryType.TurnSnapshot; data: TurnSnapshotData }
-  | { customType: typeof SessionEntryType.Rewind; data: RewindData };
+  | { customType: typeof SessionEntryType.Rewind; data: RewindData }
+  | { customType: typeof SessionEntryType.RewindStep; data: RewindStepData };
 
 // 各 customType 的数据 schema（读者校验用）
 export const SESSION_ENTRY_SCHEMAS = {
@@ -659,6 +677,7 @@ export const SESSION_ENTRY_SCHEMAS = {
   [SessionEntryType.Worktree]: WorktreeDataSchema,
   [SessionEntryType.TurnSnapshot]: TurnSnapshotDataSchema,
   [SessionEntryType.Rewind]: RewindDataSchema,
+  [SessionEntryType.RewindStep]: RewindStepDataSchema,
 } as const;
 
 // 自定义条目的写入面：写者自身从不抛，写失败按内部故障处理（向标准错误输出去重告警），不中断运行。

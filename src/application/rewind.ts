@@ -7,6 +7,7 @@
 // - 退代码（436）：以发消息时的快照为界，只还原 agent 在两点之间改过的文件，agent 新建的删掉；agent 改后又被手改过的
 //   （现状与 agent 最后一次改它之后的快照不同）列出来逐个选，缺省保留。还原前先拍现状快照（433）。写回的护栏见
 //   orchestration/rewind-restore.ts。没有快照的会话只退对话。
+import { randomBytes } from "node:crypto";
 import type { Checkpointer, CheckpointResult } from "../orchestration/checkpoint.ts";
 import {
   hasProgramSegment,
@@ -37,7 +38,12 @@ import { storeActiveGrants, storeSessionView } from "../state/session-judge.ts";
 import { isStatusMessage } from "../state/status-text.ts";
 import { JOB_NOTICE_PREFIX } from "./background-jobs.ts";
 import { isProgramNotice } from "./history.ts";
-import { grantCreatedEntry, grantRevokedEntry, rewindEntry } from "./session-store.ts";
+import {
+  grantCreatedEntry,
+  grantRevokedEntry,
+  rewindEntry,
+  rewindStepEntry,
+} from "./session-store.ts";
 import { type StatusHashes, statusFromEntries } from "./status-block.ts";
 
 // 不是人输入的用户消息（程序送进对话的通知、续跑提示等）
@@ -313,6 +319,8 @@ export interface PlannedFile {
   target?: TreeFile;
   // 拿不准（删掉的不确定是 agent 在两点之间新建的等）：列为手改冲突，缺省保留
   uncertain?: string;
+  // 撤销时上次写到一半出错的文件：现状是什么都照退（它本就在撤销范围里）
+  anyCurrent?: boolean;
 }
 
 export interface RewindPlan {
@@ -332,8 +340,9 @@ export interface RewindPlan {
   worktreeEntry?: { customType: string; data: unknown };
   // 不能退对话的原因（目标分支在独立工作树里、当前不在）
   conversationBlocked?: string;
-  // 撤销上一次退代码
+  // 撤销上一次退代码（undoOf 为被撤销的那次的编号）
   undo?: boolean;
+  undoOf?: string;
 }
 
 function sameFile(left: TreeFile | undefined, right: TreeFile | undefined): boolean {
@@ -421,6 +430,15 @@ export function planRewind(input: {
   const ignoreRulesChanged =
     lastHere !== undefined &&
     trees.changed(atFork, lastHere).some((path) => /(^|\/)\.gitignore$/i.test(path));
+  // 两条消息之间的手改：上一个 Run 收尾时与下一个 Run 发消息时之间变过的路径（Run 进行中的手改分不出，见 436）
+  const manual = new Set<string>();
+  for (let index = 1; index < currentRuns.length; index += 1) {
+    const previous = currentRuns[index - 1];
+    const next = currentRuns[index];
+    const end = previous?.last ?? previous?.start;
+    if (end === undefined || next?.start === undefined) continue;
+    for (const path of trees.changed(end, next.start)) manual.add(path);
+  }
   for (const [path, left] of [...expected].sort(([a], [b]) => a.localeCompare(b))) {
     if (hasProgramSegment(path)) continue;
     if (skipped.has(path)) {
@@ -430,7 +448,9 @@ export function planRewind(input: {
     const goal = trees.file(targetCommit, path);
     if (sameFile(left, goal)) continue;
     let uncertain: string | undefined;
-    if (goal === undefined) {
+    if (manual.has(path)) {
+      uncertain = "两条消息之间被手改过";
+    } else if (goal === undefined) {
       // 只删在回退点确定不存在、且是 agent 在两点之间新建的文件
       if (!created.has(path)) uncertain = "不是这段里 agent 新建的文件，删掉拿不准";
       else if (ignoreRulesChanged) uncertain = "这段里忽略规则变过，删掉拿不准";
@@ -481,7 +501,7 @@ export function classifyPlan(
     const reason =
       (counts.get(keyOf(file.path)) ?? 0) > 1
         ? "与另一个文件只差大小写"
-        : !sameFile(now, file.expected)
+        : file.anyCurrent !== true && !sameFile(now, file.expected)
           ? "agent 改过之后又被手改过"
           : file.uncertain;
     if (reason === undefined) result.actions.push(action);
@@ -490,42 +510,91 @@ export function classifyPlan(
   return result;
 }
 
-// 会话文件里各次回退存下的原样字节（先后按写入）
+// 会话文件里各次回退存下的原样字节（先后按写入；回退记录与逐个文件的结果里都有）
 export function savedBlobsOf(file: SessionFileView): SavedBlob[] {
   const saved: SavedBlob[] = [];
+  const push = (path: unknown, item: { raw?: unknown; normalized?: unknown } | undefined) => {
+    if (
+      typeof path === "string" &&
+      typeof item?.raw === "string" &&
+      typeof item.normalized === "string"
+    ) {
+      saved.push({ path, raw: item.raw, normalized: item.normalized });
+    }
+  };
   for (const entry of file.entries) {
+    if (isCustom(entry, SessionEntryType.RewindStep)) {
+      const data = dataOf(entry);
+      push(data.path, data.saved as { raw?: unknown; normalized?: unknown } | undefined);
+      continue;
+    }
     if (!isCustom(entry, SessionEntryType.Rewind)) continue;
     const list = dataOf(entry).saved;
     if (!Array.isArray(list)) continue;
-    for (const item of list) {
-      if (
-        typeof item?.path === "string" &&
-        typeof item.raw === "string" &&
-        typeof item.normalized === "string"
-      ) {
-        saved.push({ path: item.path, raw: item.raw, normalized: item.normalized });
-      }
-    }
+    for (const item of list) push(item?.path, item);
   }
   return saved;
 }
 
-// 当前主分支上最后一次退代码（写了或删了文件、带还原前的现状快照、本身不是撤销、之后没有被撤销过）
-function lastCodeRewind(file: SessionFileView): Record<string, unknown> | undefined {
+interface CodeRewindRecord {
+  rewindId: string;
+  before: string;
+  target: string;
+  // 写过、删过、写到一半出错的路径（出错的可能已被截断）
+  touched: Array<{ path: string; failed: boolean }>;
+  // 回退记录在主分支上的位置（之后移进过工作树即不能撤销）
+  index: number;
+}
+
+// 当前主分支上最后一次退代码（写了、删了或写到一半出错过文件，本身不是撤销）。之后已有一次做完的撤销即没有可撤销的；
+// 撤销中途出错或中途退出的，可以再撤一次
+function lastCodeRewind(
+  file: SessionFileView
+): { record: CodeRewindRecord; main: StoredEntry[] } | undefined {
   const main = branchEntries(file, file.lanes.get("main") ?? null);
+  const steps = new Map<string, Array<{ path: string; failed: boolean }>>();
+  for (const entry of file.entries) {
+    if (!isCustom(entry, SessionEntryType.RewindStep)) continue;
+    const data = dataOf(entry);
+    if (typeof data.rewindId !== "string" || typeof data.path !== "string") continue;
+    const list = steps.get(data.rewindId) ?? [];
+    list.push({ path: data.path, failed: data.done === "failed" });
+    steps.set(data.rewindId, list);
+  }
+  const undone = new Set<string>();
   for (let index = main.length - 1; index >= 0; index -= 1) {
     const entry = main[index];
     if (entry === undefined || !isCustom(entry, SessionEntryType.Rewind)) continue;
     const data = dataOf(entry);
-    if (data.undo === true) return undefined;
-    const touched =
-      (Array.isArray(data.written) ? data.written.length : 0) +
-      (Array.isArray(data.removed) ? data.removed.length : 0);
-    const before = data.before as { commit?: unknown } | undefined;
-    if (touched > 0 && typeof before?.commit === "string" && typeof data.target === "string") {
-      return data;
+    if (data.undo === true) {
+      // 做完（不是意图记录、没有出错）的撤销才算撤销过
+      if (data.phase !== "intent" && data.failed === undefined && typeof data.undoOf === "string") {
+        undone.add(data.undoOf);
+      }
+      continue;
     }
-    return undefined;
+    const rewindId = typeof data.rewindId === "string" ? data.rewindId : undefined;
+    const before = (data.before as { commit?: unknown } | undefined)?.commit;
+    if (rewindId === undefined || typeof before !== "string" || typeof data.target !== "string") {
+      if (data.mode === "conversation") continue;
+      return undefined;
+    }
+    if (undone.has(rewindId)) return undefined;
+    const touched = steps.get(rewindId) ?? [];
+    if (touched.length === 0) return undefined;
+    // 同一次的意图记录与收尾记录都在主分支上时，取先出现的那条的位置
+    let first = index;
+    for (let earlier = index - 1; earlier >= 0; earlier -= 1) {
+      const item = main[earlier];
+      if (
+        item !== undefined &&
+        isCustom(item, SessionEntryType.Rewind) &&
+        dataOf(item).rewindId === rewindId
+      ) {
+        first = earlier;
+      }
+    }
+    return { record: { rewindId, before, target: data.target, touched, index: first }, main };
   }
   return undefined;
 }
@@ -595,36 +664,41 @@ export async function prepareRewind(host: RewindHost, to: string | null): Promis
   return { file, trees, plan: planRewind({ file, trees, from, to }) };
 }
 
-// 当前位置上：有没有可撤销的上一次退代码；有即给出撤销的规划（写回那次之前的现状快照里的样子）
+// 当前位置上：有没有可撤销的上一次退代码；有即给出撤销的规划（写回那次之前的现状快照里的样子）。之后移进过别的工作区即
+// 不能撤（与回退同一口径），写明原因
 export async function prepareUndo(host: RewindHost): Promise<PreparedRewind | undefined> {
   const file = await readFile(host);
-  const last = lastCodeRewind(file);
+  const found = lastCodeRewind(file);
   const trees = treesOf(host);
-  if (last === undefined || trees === undefined) return undefined;
+  if (found === undefined || trees === undefined) return undefined;
+  const { record, main } = found;
   const from = file.lanes.get("main") ?? null;
-  const before = String((last.before as { commit: string }).commit);
-  const wrote = String(last.target);
-  const paths = [
-    ...(Array.isArray(last.written) ? last.written : []),
-    ...(Array.isArray(last.removed) ? last.removed : []),
-  ].filter((path): path is string => typeof path === "string");
   const plan: RewindPlan = {
     from,
     to: from,
     files: [],
     untouchable: [],
-    targetCommit: before,
+    targetCommit: record.before,
     createdAfter: new Map(),
     undo: true,
+    undoOf: record.rewindId,
   };
-  for (const path of [...new Set(paths)].sort()) {
-    const expected = trees.file(wrote, path);
-    const target = trees.file(before, path);
-    if (sameFile(expected, target)) continue;
+  if (main.slice(record.index + 1).some((entry) => isCustom(entry, SessionEntryType.Worktree))) {
+    plan.codeBlocked = "上次退代码之后移进过独立工作树，不在同一个工作区，不能撤销";
+    return { file, trees, plan };
+  }
+  const byPath = new Map<string, boolean>();
+  for (const step of record.touched)
+    byPath.set(step.path, (byPath.get(step.path) ?? false) || step.failed);
+  for (const [path, failed] of [...byPath].sort(([a], [b]) => a.localeCompare(b))) {
+    const expected = trees.file(record.target, path);
+    const target = trees.file(record.before, path);
+    if (!failed && sameFile(expected, target)) continue;
     plan.files.push({
       path,
       ...(expected !== undefined ? { expected } : {}),
       ...(target !== undefined ? { target } : {}),
+      ...(failed ? { anyCurrent: true } : {}),
     });
   }
   return { file, trees, plan };
@@ -659,6 +733,8 @@ export interface RewindOutcome {
   failed?: { path: string; reason: string };
   // 写完文件之后会话又有了新内容：写回照实记下，对话没有退
   conversationSkipped?: string;
+  // 其余没做成的事（快照器对齐、挂原样字节的引用、收尾记录）：如实列出
+  problems: string[];
   undo?: boolean;
 }
 
@@ -706,6 +782,10 @@ function grantEntries(
   return result;
 }
 
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export async function applyRewind(
   host: RewindHost,
   prepared: PreparedRewind,
@@ -720,17 +800,40 @@ export async function applyRewind(
     untouchable: plan.untouchable,
     grantsAdded: 0,
     grantsRevoked: 0,
+    problems: [],
     ...(plan.undo === true ? { undo: true } : {}),
   };
   if (mode !== "code" && plan.conversationBlocked !== undefined) {
     throw new RewindError(plan.conversationBlocked);
   }
   // 主分支在规划之后动过（又有了写入）即不按旧规划做
-  const leaf = await host.sessionStore.leafId();
-  if (leaf !== plan.from) throw new RewindError("会话在选点之后又有了新内容，请重新打开回退");
+  let leaf = await host.sessionStore.leafId();
+  if (leaf === undefined || leaf !== plan.from) {
+    throw new RewindError("会话在选点之后又有了新内容，请重新打开回退");
+  }
+  // 写一条记录并确认它紧接在我们上一次写的后面（期间有别的写入即记下"对话不退"）；返回落没落盘
+  let foreign = false;
+  const record = async (entry: SessionCustomEntry): Promise<boolean> => {
+    let result = await host.sessionStore.rewindLane({ expectLeaf: leaf ?? null, entries: [entry] });
+    if (result === "changed") {
+      foreign = true;
+      result = await host.sessionStore.rewindLane({
+        expectLeaf: (await host.sessionStore.leafId()) ?? null,
+        entries: [entry],
+      });
+    }
+    leaf = (await host.sessionStore.leafId()) ?? null;
+    return result === "ok";
+  };
+  const undoFields = {
+    ...(plan.undo === true ? { undo: true as const } : {}),
+    ...(plan.undoOf !== undefined ? { undoOf: plan.undoOf } : {}),
+  };
+  let rewindId: string | undefined;
   if (mode !== "conversation") {
     const code = options.code;
-    if (code === undefined || prepared.trees === undefined) {
+    const trees = prepared.trees;
+    if (code === undefined || trees === undefined) {
       throw new RewindError("退代码之前要先拍现状快照");
     }
     const revert = options.revert ?? new Set<string>();
@@ -741,9 +844,27 @@ export async function applyRewind(
     outcome.kept = code.classified.conflicts
       .filter((action) => !revert.has(action.path))
       .map((action) => action.path);
-    const trees = prepared.trees;
     const targetCommit = plan.targetCommit;
-    outcome.restore = restoreFiles({
+    rewindId = randomBytes(8).toString("hex");
+    const id = rewindId;
+    // 动手之前先写意图记录（计划写的路径、还原前的现状快照与目标快照）：中途退出也能据此撤销
+    const intended = await record(
+      rewindEntry({
+        from: plan.from,
+        to: plan.to,
+        mode,
+        rewindId: id,
+        phase: "intent",
+        before: { ref: code.before.ref, commit: code.before.commit },
+        ...(targetCommit !== undefined ? { target: targetCommit } : {}),
+        planned: actions.map((action) => action.path),
+        ...undoFields,
+        rewoundAt: now,
+      })
+    );
+    if (!intended)
+      throw new RewindError("写意图记录没有成功（会话存储告警已给出原因），没有动任何文件");
+    outcome.restore = await restoreFiles({
       trees,
       actions,
       saved: savedBlobsOf(file),
@@ -755,19 +876,50 @@ export async function applyRewind(
           .map(([, at]) => at);
         return bornAt > 0 && createdAt.length > 0 && bornAt >= Math.min(...createdAt);
       },
+      // 写一个记一个
+      onStep: async (step) => {
+        const ok = await record(
+          rewindStepEntry({
+            rewindId: id,
+            path: step.path,
+            done: step.done,
+            ...(step.saved !== undefined
+              ? { saved: { raw: step.saved.raw, normalized: step.saved.normalized } }
+              : {}),
+            ...(step.reason !== undefined ? { reason: step.reason } : {}),
+          })
+        );
+        if (!ok) outcome.problems.push(`${step.path} 的写回结果没有记进会话`);
+      },
     });
     if (outcome.restore.failed !== undefined) outcome.failed = outcome.restore.failed;
-    await host.checkpoints?.checkpointer.resync?.();
+    // 存下的原样字节挂到引用上（防 git gc 回收）
+    try {
+      trees.pin(
+        `refs/pigeon/rewind/${file.header.id}/${id}`,
+        outcome.restore.saved.map((item) => item.raw)
+      );
+    } catch (error) {
+      outcome.problems.push(
+        `存下的原样字节没有挂上引用（可能被 git gc 回收）：${errorText(error)}`
+      );
+    }
+    try {
+      await host.checkpoints?.checkpointer.resync?.();
+    } catch (error) {
+      outcome.problems.push(`快照器没有对齐到写回后的现状：${errorText(error)}`);
+    }
   }
   const restore = outcome.restore;
-  const moveConversation = mode !== "code" && outcome.failed === undefined;
+  const moveConversation = mode !== "code" && outcome.failed === undefined && !foreign;
   const grants = moveConversation
     ? grantEntries(host, file, plan.to, now)
     : { entries: [], added: 0, revoked: 0 };
-  const record = rewindEntry({
+  const summary = rewindEntry({
     from: plan.from,
     to: plan.to,
     mode,
+    ...(rewindId !== undefined ? { rewindId } : {}),
     ...(options.code !== undefined
       ? { before: { ref: options.code.before.ref, commit: options.code.before.commit } }
       : {}),
@@ -781,33 +933,38 @@ export async function applyRewind(
       : {}),
     ...(outcome.kept.length > 0 ? { kept: outcome.kept } : {}),
     ...(restore !== undefined && restore.skipped.length > 0 ? { skipped: restore.skipped } : {}),
-    ...(restore !== undefined && restore.saved.length > 0 ? { saved: restore.saved } : {}),
     ...(outcome.failed !== undefined ? { failed: outcome.failed } : {}),
-    ...(plan.undo === true ? { undo: true as const } : {}),
+    ...undoFields,
     rewoundAt: now,
   });
-  // 437：挪主分支、回退记录与授权补记在同一个写入请求里落盘（中途退出也不会让撤过的授权复活）
+  // 437：挪主分支、收尾记录与授权补记在同一个写入请求里落盘
   const lane = await host.sessionStore.rewindLane({
-    expectLeaf: plan.from,
+    expectLeaf: leaf ?? null,
     ...(moveConversation ? { to: plan.to } : {}),
     entries: [
-      record,
+      summary,
       ...(moveConversation && plan.worktreeEntry !== undefined
         ? [plan.worktreeEntry as SessionCustomEntry]
         : []),
       ...grants.entries,
     ],
   });
-  if (lane === "changed") {
-    // 文件已写：照实记在当前位置上，对话不退
-    await host.sessionStore.rewindLane({
-      expectLeaf: (await host.sessionStore.leafId()) ?? null,
-      entries: [record],
-    });
-    outcome.conversationSkipped = "会话在写回期间又有了新内容，对话没有退（写回的文件已记下）";
+  if (lane === "changed" || foreign) {
+    if (lane === "changed" && !(await record(summary))) {
+      outcome.problems.push("收尾记录没有写成（逐个文件的结果已记下）");
+    }
+    if (mode !== "code") {
+      outcome.conversationSkipped = "会话在写回期间又有了新内容，对话没有退（写回的文件已记下）";
+    }
     return outcome;
   }
-  if (lane === "failed") throw new RewindError("写回退记录没有成功（会话存储告警已给出原因）");
+  if (lane === "failed") {
+    if (rewindId === undefined)
+      throw new RewindError("写回退记录没有成功（会话存储告警已给出原因）");
+    outcome.problems.push("收尾记录没有写成（逐个文件的结果已记下，可以撤销）");
+    if (mode !== "code") outcome.conversationSkipped = "对话没有退（回退记录没有写成）";
+    return outcome;
+  }
   if (!moveConversation) return outcome;
   outcome.grantsAdded = grants.added;
   outcome.grantsRevoked = grants.revoked;

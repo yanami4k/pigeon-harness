@@ -1,21 +1,23 @@
 // 会话回退的代码写回（决策 433、436）：按快照把工作区里的指定文件写回目标内容或删掉。只动调用方列出的文件（agent 改过的）。
-// 先把要写的内容全部从 git 取到内存，再逐文件"核对 → 立即写"，出错即停（已写的照实返回，调用方记进会话）。护栏：
-// - 路径带 .pigeon 段的（不分大小写）、目标是符号链接或子模块的、磁盘上是符号链接或目录的不碰；
+// 总原则：拿不准就不写，列出来交给人。先把要写的内容全部从 git 取到内存，再逐文件"核对 → 立即写"，每个文件的结果交给
+// 调用方当场落盘（中途退出也有据可查、可撤销），出错即停。护栏：
+// - 路径带 .pigeon 段的（不分大小写）、目标是符号链接或子模块的、磁盘上是符号链接、目录或有别的硬链接的不碰；
 // - 路径上任何一级目录是符号链接或目录联接（Windows）、或实际位置落到仓库之外的不碰（不跟随链接写到工作区外）；
 // - 磁盘上有、现状快照里没有的（被忽略、过大的未跟踪文件）不碰；内容与规划时的现状不同的不碰；
 // - 写之前再 lstat 一次、再读一次比对原样字节，期间被换成链接或被改过的不碰；POSIX 上以 O_NOFOLLOW 打开；
 // - 文件系统不分大小写时，只差大小写的几条动作一律不写。
-// 行尾：覆盖或删掉之前把原样字节（不经行尾转换）存进对象库，切回时规范化内容相同即写回原样字节；没有存下的，取快照里的
-// 原样对象（快照写树时以空树为属性来源，不跑过滤器），按工作区当前的 .gitattributes（只读 eol 与 text，不执行过滤驱动）
-// 与 core.autocrlf 自己转换行尾。git 不认 --attr-source 时快照里的内容可能已被过滤器改过，没有存下原样字节的不写。
-// 权限：覆盖已有文件不改它的权限位；新建的按 umask 缺省，快照里可执行的另加可执行位（只加在有读权限的那几类上）。
+// 内容：覆盖或删掉之前把原样字节（不经任何转换）存进对象库，切回时规范化内容相同即写回原样字节；读不到（被回收）的只这一个
+// 文件列为无法保真。没有存下的，取快照里的对象——快照复用使用者索引里 stat 干净的条目，那是过滤与编码转换之后的形态，
+// 所以按工作区当前的属性（含 .git/info/attributes，只读不执行）判断：有 filter、working-tree-encoding，或内容是 LFS 指针的，
+// 列为无法保真、不写；-text（或 binary）而 core.autocrlf 不为 false 的文本（快照时已被规范化）同样不写；其余按 eol、text
+// 与 core.autocrlf 自己转换行尾。git 不认 --attr-source 时快照可能被过滤器改过，没有存下原样字节的一律不写。
+// 权限：覆盖已有文件不改它的权限位；恢复被删的（新建）一律 0600，快照里可执行的给属主加执行位（宁窄勿宽）。
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   closeSync,
   constants,
   fchmodSync,
-  fstatSync,
   ftruncateSync,
   lstatSync,
   mkdirSync,
@@ -25,7 +27,7 @@ import {
   realpathSync,
   rmdirSync,
   rmSync,
-  writeSync,
+  writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { PIGEON_DIR } from "../state/paths.ts";
@@ -39,6 +41,7 @@ const GIT_MAX_BUFFER = 256 * 1024 * 1024;
 const NUL = 0;
 const CR = 0x0d;
 const LF = 0x0a;
+const LFS_POINTER = Buffer.from("version https://git-lfs.github.com/spec/");
 
 export class RewindRestoreError extends Error {}
 
@@ -77,22 +80,29 @@ export interface TreeFile {
   blob: string;
 }
 
-export type EolRule = "lf" | "crlf" | "binary" | "auto";
+// 工作区当前对一个路径的属性（只读，不执行任何驱动）
+export interface PathAttributes {
+  text: string;
+  eol: string;
+  filter: string;
+  encoding: string;
+}
 
 // 快照树的读取（同一实例内按提交缓存）与仓库的几项配置。路径相对仓库根、以 / 分隔
 export class SnapshotTrees {
   readonly top: string;
   // 文件系统不分大小写（git 建仓时探测的 core.ignorecase）
   readonly ignoreCase: boolean;
-  // 快照里存的是工作区原样内容（git 认 --attr-source）
+  // 快照写树时没有跑过滤器（git 认 --attr-source）
   readonly faithful: boolean;
-  readonly #autocrlf: string;
+  // core.autocrlf（小写；没配为空）
+  readonly autocrlf: string;
   readonly #files = new Map<string, Map<string, TreeFile>>();
 
   constructor(workspaceRoot: string) {
     this.top = realpathSync(git(workspaceRoot, ["rev-parse", "--show-toplevel"]).trim());
     this.ignoreCase = this.#config("core.ignorecase") === "true";
-    this.#autocrlf = this.#config("core.autocrlf").toLowerCase();
+    this.autocrlf = this.#config("core.autocrlf").toLowerCase();
     this.faithful = attrSourceSupported(this.top);
   }
 
@@ -146,29 +156,34 @@ export class SnapshotTrees {
     }
   }
 
-  // 按工作区当前的 .gitattributes 定这个路径的行尾（只读 eol 与 text，不执行过滤驱动）
-  eolOf(path: string): EolRule {
-    let text = "unspecified";
-    let eol = "unspecified";
+  // 工作区当前的属性（.gitattributes、.git/info/attributes 与全局属性；只读，不执行过滤驱动）
+  attributesOf(path: string): PathAttributes {
+    const attrs: PathAttributes = {
+      text: "unspecified",
+      eol: "unspecified",
+      filter: "unspecified",
+      encoding: "unspecified",
+    };
     try {
       const out = run(
         this.top,
         [...GIT_HARDENING_CONFIG],
-        ["check-attr", "-z", "eol", "text", "--", path]
+        ["check-attr", "-z", "eol", "text", "filter", "working-tree-encoding", "--", path]
       )
         .toString("utf8")
         .split("\0");
       for (let index = 0; index + 2 < out.length; index += 3) {
-        if (out[index + 1] === "eol") eol = out[index + 2] ?? eol;
-        if (out[index + 1] === "text") text = out[index + 2] ?? text;
+        const value = out[index + 2] ?? "unspecified";
+        if (out[index + 1] === "eol") attrs.eol = value;
+        if (out[index + 1] === "text") attrs.text = value;
+        if (out[index + 1] === "filter") attrs.filter = value;
+        if (out[index + 1] === "working-tree-encoding") attrs.encoding = value;
       }
     } catch {
-      // 读不到属性按没有设
+      // 读不到属性：按有过滤处理（拿不准就不写）
+      attrs.filter = "unknown";
     }
-    if (text === "unset") return "binary";
-    if (eol === "lf" || eol === "crlf") return eol;
-    if (text === "set") return this.#autocrlf === "true" ? "crlf" : "lf";
-    return this.#autocrlf === "true" ? "auto" : "binary";
+    return attrs;
   }
 
   // 提交里对象的原样内容（不经过滤与行尾转换）
@@ -186,9 +201,33 @@ export class SnapshotTrees {
       content
     ).trim();
   }
+
+  // 把存下的原样对象挂到一个引用上（防 git gc 回收）：引用指向一个只含这些对象的提交
+  pin(ref: string, blobs: readonly string[]): void {
+    if (blobs.length === 0) return;
+    const listing = [...new Set(blobs)]
+      .map((blob, index) => `100644 blob ${blob}\t${index}`)
+      .join("\0");
+    const tree = git(this.top, ["mktree", "-z"], Buffer.from(`${listing}\0`)).trim();
+    const commit = git(
+      this.top,
+      [
+        "-c",
+        "user.name=pigeon",
+        "-c",
+        "user.email=pigeon@localhost",
+        "commit-tree",
+        tree,
+        "-m",
+        "pigeon rewind saved bytes",
+      ],
+      undefined
+    ).trim();
+    git(this.top, ["update-ref", ref, commit]);
+  }
 }
 
-// 被覆盖或删掉之前存下的原样字节：raw 是不经行尾转换的对象，normalized 是按仓库规则规范化后的对象（与快照里的同一口径）
+// 被覆盖或删掉之前存下的原样字节：raw 是不经任何转换的对象，normalized 是按仓库规则规范化后的对象（与快照里的同一口径）
 export interface SavedBlob {
   path: string;
   raw: string;
@@ -208,6 +247,15 @@ export interface RestoreSkip {
   reason: string;
 }
 
+// 一个文件的结果（逐个交给调用方落盘）
+export interface RestoreStep {
+  path: string;
+  done: "written" | "removed" | "failed";
+  // 动手之前存下的原样字节
+  saved?: SavedBlob;
+  reason?: string;
+}
+
 export interface RestoreResult {
   written: string[];
   removed: string[];
@@ -215,12 +263,18 @@ export interface RestoreResult {
   saved: SavedBlob[];
   // 删掉的目录（删 agent 新建的文件后变空、且是这段时间里新建的）
   removedDirs: string[];
-  // 出错即停：出错的那个文件与原因；之后的没有动
+  // 出错即停：出错的那个文件与原因（可能已被截断，属于撤销范围）；之后的没有动
   failed?: RestoreSkip;
 }
 
 export function hasProgramSegment(path: string): boolean {
   return path.split("/").some((part) => part.toLowerCase() === PIGEON_DIR);
+}
+
+// 目录的建立时刻：取不到（为 0），或与 ctime 相同（老 Linux 上没有 statx 时 libuv 以 ctime 充当）即按取不到给 0
+export function bornAtOf(stat: { birthtimeMs: number; ctimeMs: number }): number {
+  if (stat.birthtimeMs <= 0 || Math.abs(stat.birthtimeMs - stat.ctimeMs) < 1) return 0;
+  return stat.birthtimeMs;
 }
 
 function lstatOrUndefined(path: string): ReturnType<typeof lstatSync> | undefined {
@@ -276,7 +330,9 @@ function toCrlf(content: Buffer): Buffer {
   return Buffer.from(out);
 }
 
-// 写回的字节：存下过原样字节的写它；否则取快照里的原样对象，按工作区当前的规则转换行尾（existing 是磁盘上现有的内容）
+const UNFAITHFUL = "无法保真还原";
+
+// 写回的字节：存下过原样字节的写它；否则取快照里的对象，按工作区当前的属性判断能不能保真、怎么转换行尾
 function contentFor(
   trees: SnapshotTrees,
   path: string,
@@ -287,32 +343,59 @@ function contentFor(
   const raw = [...saved]
     .reverse()
     .find((item) => item.path === path && item.normalized === target.blob)?.raw;
-  if (raw !== undefined) return trees.blob(raw);
+  if (raw !== undefined) {
+    try {
+      return trees.blob(raw);
+    } catch {
+      return { path, reason: `${UNFAITHFUL}（存下的原样字节已被回收）` };
+    }
+  }
   if (!trees.faithful) {
     return {
       path,
-      reason: "这个 git 不支持 --attr-source，快照内容可能被过滤器改过，没有存下原样字节，不写",
+      reason: `${UNFAITHFUL}（这个 git 不支持 --attr-source，快照内容可能被过滤器改过）`,
     };
   }
+  const attrs = trees.attributesOf(path);
+  if (attrs.filter !== "unspecified" && attrs.filter !== "unset") {
+    return { path, reason: `${UNFAITHFUL}（属性里配了过滤器，快照里可能是过滤后的形态）` };
+  }
+  if (attrs.encoding !== "unspecified" && attrs.encoding !== "unset") {
+    return { path, reason: `${UNFAITHFUL}（属性里配了 working-tree-encoding）` };
+  }
   const content = trees.blob(target.blob);
-  if (!isText(content) || hasCrlf(content)) return content;
-  const rule = trees.eolOf(path);
-  if (rule === "crlf") return toCrlf(content);
-  if (rule === "auto") {
+  if (content.subarray(0, LFS_POINTER.length).equals(LFS_POINTER)) {
+    return { path, reason: `${UNFAITHFUL}（快照里是 LFS 指针）` };
+  }
+  if (!isText(content)) return content;
+  const autocrlf = trees.autocrlf === "true" || trees.autocrlf === "input";
+  if (attrs.text === "unset") {
+    // -text：快照时按没有属性规范化过行尾，原来的行尾找不回
+    return autocrlf
+      ? { path, reason: `${UNFAITHFUL}（-text 文件的行尾在快照里已被规范化）` }
+      : content;
+  }
+  if (hasCrlf(content)) return content;
+  if (attrs.eol === "crlf") return toCrlf(content);
+  if (attrs.eol === "lf") return content;
+  if (attrs.text === "set") return trees.autocrlf === "true" ? toCrlf(content) : content;
+  if (trees.autocrlf === "true") {
     // 行尾转换开着、属性没写：照磁盘上现有文件的行尾；没有现有文件按检出规则（CRLF）
     return existing !== undefined && !hasCrlf(existing) ? content : toCrlf(content);
   }
   return content;
 }
 
-export function restoreFiles(input: {
+export async function restoreFiles(input: {
   trees: SnapshotTrees;
   actions: readonly RestoreAction[];
   // 早先回退存下的原样字节（新的在后）
   saved?: readonly SavedBlob[];
   // 删 agent 新建的文件后变空的目录可不可以删（dir 相对仓库根；bornAt 为目录的建立时刻，取不到为 0）
   removableDir?: (dir: string, bornAt: number) => boolean;
-}): RestoreResult {
+  // 每个文件动手之后当场交给调用方落盘（写了、删了、出错）；返回之后才做下一个
+  onStep?: (step: RestoreStep) => Promise<void>;
+}): Promise<RestoreResult> {
   const { trees } = input;
   const top = trees.top;
   const result: RestoreResult = {
@@ -336,12 +419,12 @@ export function restoreFiles(input: {
     }
     return true;
   });
-  // 先把要写的内容取到内存（磁盘上现有的内容只用来定行尾，写前另有核对）
+  // 先把要写的内容取到内存（磁盘上现有的内容只用来定行尾，写前另有核对）；某个文件取不到只跳过它
   const prepared = new Map<string, Buffer | RestoreSkip>();
-  try {
-    for (const action of actions) {
-      if (action.target === undefined) continue;
-      if (action.target.mode !== "100644" && action.target.mode !== "100755") continue;
+  for (const action of actions) {
+    if (action.target === undefined) continue;
+    if (action.target.mode !== "100644" && action.target.mode !== "100755") continue;
+    try {
       const absolute = join(top, ...action.path.split("/"));
       const stat = lstatOrUndefined(absolute);
       const existing = stat?.isFile() === true ? readFileSync(absolute) : undefined;
@@ -349,17 +432,17 @@ export function restoreFiles(input: {
         action.path,
         contentFor(trees, action.path, action.target, input.saved ?? [], existing)
       );
+    } catch (error) {
+      prepared.set(action.path, {
+        path: action.path,
+        reason: `取快照内容失败：${error instanceof Error ? error.message : String(error)}`,
+      });
     }
-  } catch (error) {
-    result.failed = {
-      path: "",
-      reason: `取快照内容失败，没有写任何文件：${error instanceof Error ? error.message : String(error)}`,
-    };
-    return result;
   }
   const deletedParents = new Set<string>();
   for (const action of actions) {
     const { path } = action;
+    let saved: SavedBlob | undefined;
     try {
       if (hasProgramSegment(path)) {
         skip(path, `${PIGEON_DIR} 下的文件不碰`);
@@ -386,6 +469,10 @@ export function restoreFiles(input: {
         skip(path, "磁盘上是符号链接或目录，不碰");
         continue;
       }
+      if (stat !== undefined && stat.nlink > 1) {
+        skip(path, "有别的硬链接，写了会改到别处，不碰");
+        continue;
+      }
       let rawHash: string | undefined;
       if (stat === undefined) {
         if (action.current !== undefined) {
@@ -403,15 +490,16 @@ export function restoreFiles(input: {
           continue;
         }
         rawHash = sha1(bytes);
-        result.saved.push({
-          path,
-          raw: trees.hash(path, bytes, true),
-          normalized: action.current.blob,
-        });
+        saved = { path, raw: trees.hash(path, bytes, true), normalized: action.current.blob };
+        result.saved.push(saved);
       }
-      // 写前最后一次核对：仍是普通文件、字节没变（或仍不存在）
+      // 写前最后一次核对：仍是普通文件、没有别的硬链接、字节没变（或仍不存在）
       const again = lstatOrUndefined(absolute);
-      if (stat === undefined ? again !== undefined : again?.isFile() !== true) {
+      if (
+        stat === undefined
+          ? again !== undefined
+          : again?.isFile() !== true || again.isSymbolicLink() || again.nlink > 1
+      ) {
         skip(path, "核对之后被改动或换成了别的东西");
         continue;
       }
@@ -423,44 +511,44 @@ export function restoreFiles(input: {
         rmSync(absolute);
         result.removed.push(path);
         deletedParents.add(path);
+        await input.onStep?.({ path, done: "removed", ...(saved !== undefined ? { saved } : {}) });
         continue;
       }
       if (content === undefined) continue;
-      // POSIX 上以 O_NOFOLLOW 打开（被换成链接即打不开）；Windows 上数字形式的打开标志不能用（EINVAL），用 "wx" 与 "r+"
-      //（都不新建链接目标之外的东西），靠写前的 lstat 核对
+      // POSIX 上以 O_NOFOLLOW 打开（被换成链接即打不开）；Windows 上数字形式的打开标志不能用（EINVAL），用 "wx" 与 "r+"，
+      // 靠写前的 lstat 核对
       const posix = process.platform !== "win32";
       const nofollow = posix ? (constants.O_NOFOLLOW ?? 0) : 0;
+      let fd: number;
       if (stat === undefined) {
         mkdirSync(dirname(absolute), { recursive: true });
-        const fd = openSync(
+        // 恢复被删的文件一律 0600（宁窄勿宽），快照里可执行的给属主加执行位
+        fd = openSync(
           absolute,
           posix ? constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | nofollow : "wx",
-          0o666
+          0o600
         );
-        try {
-          writeSync(fd, content);
-          if (target.mode === "100755" && process.platform !== "win32") {
-            const mode = fstatSync(fd).mode & 0o777;
-            fchmodSync(fd, mode | ((mode & 0o444) >> 2));
-          }
-        } finally {
-          closeSync(fd);
-        }
       } else {
-        const fd = openSync(
-          absolute,
-          posix ? constants.O_WRONLY | constants.O_TRUNC | nofollow : "r+"
-        );
-        try {
-          if (!posix) ftruncateSync(fd, 0);
-          writeSync(fd, content);
-        } finally {
-          closeSync(fd);
-        }
+        fd = openSync(absolute, posix ? constants.O_WRONLY | constants.O_TRUNC | nofollow : "r+");
+      }
+      try {
+        if (!posix && stat !== undefined) ftruncateSync(fd, 0);
+        writeFileSync(fd, content);
+        if (stat === undefined && posix) fchmodSync(fd, target.mode === "100755" ? 0o700 : 0o600);
+      } finally {
+        closeSync(fd);
       }
       result.written.push(path);
+      await input.onStep?.({ path, done: "written", ...(saved !== undefined ? { saved } : {}) });
     } catch (error) {
-      result.failed = { path, reason: error instanceof Error ? error.message : String(error) };
+      const reason = error instanceof Error ? error.message : String(error);
+      result.failed = { path, reason };
+      await input.onStep?.({
+        path,
+        done: "failed",
+        reason,
+        ...(saved !== undefined ? { saved } : {}),
+      });
       break;
     }
   }
@@ -474,7 +562,7 @@ export function restoreFiles(input: {
         try {
           const stat = lstatSync(absolute);
           if (!stat.isDirectory() || readdirSync(absolute).length > 0) break;
-          if (!removable(dir, stat.birthtimeMs)) break;
+          if (!removable(dir, bornAtOf(stat))) break;
           rmdirSync(absolute);
           result.removedDirs.push(dir);
         } catch {
