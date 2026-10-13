@@ -154,8 +154,9 @@ test("流式增量逐帧落地；CJK 混合文本宽度不错位；user 提交�
     runtime.emit(RuntimeEventKind.RunEnded, { messageCount: 2 });
     await settle();
     assertWidthsWithin(term, WIDTH);
-    assert.ok(screenText(term).includes("-- turn: stop --"), "turn.completed 应渲染轮次标记");
-    assert.ok(screenText(term).includes("== run: completed"), "run 结束应渲染终态摘要");
+    // 决策 452：轮次结束不落标记行；工作结束落一行收尾（不写分类）
+    assert.doesNotMatch(screenText(term), /-- turn:|== run/);
+    assert.match(screenText(term), /done · \d+s/, "工作结束应落收尾行");
   } finally {
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });
@@ -214,7 +215,7 @@ test("工具调用行：工具名+参数摘要+结果状态；settled 原位更�
       syntheticFailure: false,
     });
     await settle();
-    assert.ok(screenText(term).includes("-- turn: toolUse --"));
+    assert.doesNotMatch(screenText(term), /-- turn:/, "决策 452：轮次结束不落标记行");
 
     // stale 增量：非本 Run 的 text_delta 不进消息区（024：增量只认 runId 出处）
     runtime.emitDelta("幽灵增量不应出现", newRunId());
@@ -226,9 +227,9 @@ test("工具调用行：工具名+参数摘要+结果状态；settled 原位更�
   }
 });
 
-test("工具调用轮（无 text_delta）不引入超出统一间距的空行；轮次标记紧随工具行（决策 035）", async () => {
+test("工具调用轮（无 text_delta）不引入超出统一间距的空行；收尾行紧随工具行（决策 035、452）", async () => {
   const { shell, runtime, term, logDir } = makeShell(80, 24);
-  runtime.autoResolve = false; // run 挂起：终态摘要不插队，布局只由本轮事件决定
+  runtime.autoResolve = false; // run 挂起：收尾行在放行之后才落，布局只由本轮事件决定
   try {
     shell.start();
     await settle();
@@ -253,14 +254,16 @@ test("工具调用轮（无 text_delta）不引入超出统一间距的空行；
       syntheticFailure: false,
     });
     await settle();
+    runtime.finishAll();
+    await settle();
 
     const lines = term.screen.contentLines();
     const echoRow = lines.findIndex((line) => line.includes("> 改一下文件"));
     const toolRow = lines.findIndex((line) => line.includes("$ read_file"));
-    const markerRow = lines.findIndex((line) => line.includes("-- turn: toolUse --"));
+    const endRow = lines.findIndex((line) => line.includes("done · "));
     assert.ok(
-      echoRow > -1 && toolRow > -1 && markerRow > -1,
-      `回显行、工具行、轮次标记都应在场：\n${lines.join("\n")}`
+      echoRow > -1 && toolRow > -1 && endRow > -1,
+      `回显行、工具行、收尾行都应在场：\n${lines.join("\n")}`
     );
     // 可观察合同：工具行两侧的间距一致——流式尾巴只在有文本的轮次占行（决策 035 懒创建）。
     // 实证基线：pi-tui 0.84.4 的 Text("") 渲染零行（components/text.js 空文本早退），
@@ -268,12 +271,9 @@ test("工具调用轮（无 text_delta）不引入超出统一间距的空行；
     // 语义变化），届时工具行上方会多出一行而两侧间距不再相等。
     assert.equal(
       toolRow - echoRow,
-      markerRow - toolRow,
-      `工具行上方（回显侧）与下方（轮次标记侧）的间距应一致：\n${lines.join("\n")}`
+      endRow - toolRow,
+      `工具行上方（回显侧）与下方（收尾行侧）的间距应一致：\n${lines.join("\n")}`
     );
-
-    runtime.finishAll();
-    await settle();
   } finally {
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });
@@ -356,7 +356,7 @@ test("dispose 对称：stop 退订全部监听并停 tui；迟到事件与增量
   }
 });
 
-test("集成：真实 PiRuntimeAdapter + fake streamFn 全链路——提交、流式、turn 标记、终态摘要", async () => {
+test("集成：真实 PiRuntimeAdapter + fake streamFn 全链路——提交、流式、收尾行（决策 452）", async () => {
   const reply = "真实链路中文回复，混合 agent 词汇，逐字流出。";
   const snapshot: InjectionSnapshot = {
     version: INJECTION_SNAPSHOT_VERSION,
@@ -385,9 +385,9 @@ test("集成：真实 PiRuntimeAdapter + fake streamFn 全链路——提交、�
     await settle();
     term.input("你好");
     term.input("\r");
-    // 等 run 终态摘要出现（真实 adapter 异步跑循环）
+    // 等收尾行出现（真实 adapter 异步跑循环）
     let text = "";
-    for (let waited = 0; waited < 5000 && !text.includes("== run:"); waited += 50) {
+    for (let waited = 0; waited < 5000 && !text.includes("done · "); waited += 50) {
       await settle(50);
       text = screenText(term);
     }
@@ -396,8 +396,9 @@ test("集成：真实 PiRuntimeAdapter + fake streamFn 全链路——提交、�
       squashSpaces(screenFlat(term)).includes(squashSpaces(reply)),
       `assistant 全文应落地，实际：\n${text}`
     );
-    assert.ok(text.includes("-- turn: stop --"), "turn 标记");
-    assert.ok(text.includes("== run: completed"), "run 终态摘要");
+    // 决策 452：没有轮次标记，工作结束一行收尾
+    assert.doesNotMatch(text, /-- turn:|== run/);
+    assert.match(text, /done · \d+s/, "收尾行");
     assertWidthsWithin(term, 70);
   } finally {
     shell.stop();

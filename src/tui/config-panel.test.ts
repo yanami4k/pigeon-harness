@@ -21,11 +21,7 @@ interface Harness {
   reloadGate?: Promise<void>;
 }
 
-function makeShell(
-  extra: Partial<TuiShellOptions> = {},
-  state: Partial<Harness> = {},
-  rows = 50
-) {
+function makeShell(extra: Partial<TuiShellOptions> = {}, state: Partial<Harness> = {}, rows = 50) {
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-config-"));
   const sessionId = newSessionId();
   const term = new MockTerminal(110, rows);

@@ -23,7 +23,7 @@ export interface ScriptSnapshotPoint {
 
 export function scriptSnapshotRef(runId: string): string {
   if (!/^[a-z0-9-]{1,40}$/.test(runId)) {
-    throw new WorkdirSnapshotError(`脚本运行号不合法：${runId}`);
+    throw new WorkdirSnapshotError(`Invalid script run id: ${runId}`);
   }
   return `${SNAPSHOT_REF_ROOT}scripts/${runId}`;
 }

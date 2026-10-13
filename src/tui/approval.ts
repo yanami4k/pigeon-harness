@@ -13,7 +13,7 @@
 //   addInputListener 接管四键，按键 resolve；接口形状不动。
 // - 面板期间普通输入忽略（简单语义）：除四键外一律吞掉——不进输入缓冲、不提交、不回显。
 // - 无墙钟审批超时（与 cli 版一致：等人是审批语义本身）；取消路径一律 fail-closed
-//   按拒绝处理、理由逐字回模型（决策 001 的自我修正闭环不断）：壳停止
+//   按拒绝处理、理由逐字回模型（决策 001 的自我修正闭环不断；决策 428：交给模型的为英文，面板与消息区显示中文）：壳停止
 //   （APPROVAL_CANCEL_CLOSED）、面板未装配（APPROVAL_CANCEL_DETACHED）、并发审批防御
 //   （APPROVAL_CANCEL_BUSY）。
 // - [n] 单按即拒绝、不带理由：reason 缺省，由治理层落默认文案「人工拒绝」并记为系统默认。
@@ -45,10 +45,23 @@ import {
 } from "../approvals/handler.ts";
 import { keyLabelsOf } from "./keybindings.ts";
 
-// 取消路径的逐字理由（fail-closed 按拒绝处理）
+// 取消路径的逐字理由（fail-closed 按拒绝处理）：面板与消息区显示中文
 export const APPROVAL_CANCEL_CLOSED = "TUI 已停止，审批面板关闭，本次调用按拒绝处理";
 export const APPROVAL_CANCEL_DETACHED = "TUI 审批面板未装配，本次调用按拒绝处理";
 export const APPROVAL_CANCEL_BUSY = "已有另一审批进行中，本次调用按拒绝处理（串行不变量防御）";
+// 决策 428、455：同一理由交给模型（成为工具的错误结果）时用英文
+const CANCEL_REASON_FOR_MODEL: Readonly<Record<string, string>> = {
+  [APPROVAL_CANCEL_CLOSED]:
+    "The terminal UI stopped and closed the approval panel, so this call is treated as rejected.",
+  [APPROVAL_CANCEL_DETACHED]:
+    "No approval panel is attached to the terminal UI, so this call is treated as rejected.",
+  [APPROVAL_CANCEL_BUSY]:
+    "Another approval is already in progress, so this call is treated as rejected.",
+};
+
+export function cancelReasonForModel(reason: string): string {
+  return CANCEL_REASON_FOR_MODEL[reason] ?? reason;
+}
 // 决策 303：worker 的请求等满时限无人批，面板撤下
 export const APPROVAL_WITHDRAWN =
   "[审批] 请求等待超时，已撤回；这个 worker 停下交回，可稍后补批续做";
@@ -172,7 +185,7 @@ export function createTuiApprovalHandler(
   return async (request): Promise<ApprovalDecision> => {
     const panel = face();
     if (panel === undefined) {
-      return { approved: false, reason: APPROVAL_CANCEL_DETACHED };
+      return { approved: false, reason: cancelReasonForModel(APPROVAL_CANCEL_DETACHED) };
     }
     // 放权落点跟随请求来源——worker 请求自带其会话存储
     const target = request.grants ?? grants;
@@ -184,7 +197,7 @@ export function createTuiApprovalHandler(
     }
     if (result.key === "cancel") {
       panel.noteApproval(`审批结果：人工拒绝（${result.reason}）`);
-      return { approved: false, reason: result.reason };
+      return { approved: false, reason: cancelReasonForModel(result.reason) };
     }
     // 受保护路径：面板不收放权键；万一收到按批准一次处理，不建放权
     if (

@@ -8,6 +8,7 @@
 // 决策 301：运行事件在消息区的投影（projectRuntimeEvent）由主会话与进入的 worker 会话共用，同一套措辞。
 import { pathToFileURL } from "node:url";
 import {
+  type Component,
   Container,
   getCapabilities,
   hyperlink,
@@ -23,14 +24,14 @@ import {
   RuntimeEventKind,
   type ToolProposedPayload,
   type ToolSettledPayload,
-  type TurnCompletedPayload,
 } from "../state/runtime-events.ts";
 import { MARKDOWN_OPTIONS, MARKDOWN_THEME } from "./markdown-theme.ts";
+import { secondary } from "./style.ts";
 import { diffOfDetails, type ToolResultView, toolResultBody } from "./tool-output.ts";
 
 // thinking 段视觉弱化（M5 S2，决策 045）：暗色由壳的受信代码在 pi-tui 补齐行宽后逐行包裹；
-// 内容在进 Text 前已经 036 净化，模型文本里的控制序列此时已惰性化，这里的 SGR 不来自模型
-const dimLine = (line: string): string => `\x1b[2m${line}\x1b[22m`;
+// 内容在进 Text 前已经 036 净化，模型文本里的控制序列此时已惰性化，这里的 SGR 不来自模型。
+// 决策 454：与其他次要信息同一个样式函数（style.ts 的 secondary）
 
 export class MessageFlow {
   // Container 承载任意多 Text child；ScrollView 恰好包一个 child（决策 028：main-screen 下
@@ -48,6 +49,8 @@ export class MessageFlow {
     { text: Text; content: string; result?: ToolResultView }
   >();
   private toolsExpanded = false;
+  // 决策 451：对话流最上方的欢迎头（随消息滚动；清空消息区时留着）
+  private header: Component | undefined;
 
   constructor() {
     this.view = new ScrollView(this.list, { follow: "end", primary: true });
@@ -73,16 +76,30 @@ export class MessageFlow {
     return block;
   }
 
-  // 弱化段（thinking）：同样先净化，再由受信的逐行样式函数加暗色
+  // 弱化段（thinking 与收尾行）：同样先净化，再由受信的逐行样式函数加暗色
   private appendDim(text: string): Text {
-    const line = new Text(sanitizeTerminalText(text), 1, 1, dimLine);
+    const line = new Text(sanitizeTerminalText(text), 1, 1, secondary);
     this.list.addChild(line);
     return line;
   }
 
-  // 决策 434：会话回退或切换分支后清空消息区（随后按新的主分支重绘历史）
+  // 决策 451：放欢迎头——总在最上方
+  setHeader(header: Component): void {
+    if (this.header !== undefined) this.list.removeChild(this.header);
+    this.header = header;
+    this.list.children.unshift(header);
+    this.list.invalidate();
+  }
+
+  // 决策 452：一次工作结束的收尾行（次要信息的弱化样式）
+  addWorkEnd(line: string): void {
+    this.appendDim(line);
+  }
+
+  // 决策 434：会话回退或切换分支后清空消息区（随后按新的主分支重绘历史）；欢迎头留着
   clear(): void {
     this.list.clear();
+    if (this.header !== undefined) this.list.addChild(this.header);
     this.streamTail = null;
     this.streamText = "";
     this.thinkingTail = null;
@@ -93,7 +110,7 @@ export class MessageFlow {
   // 历史行（M5 S2，决策 045）：/resume 换绑后一次性渲染；thinking 行弱化，其余同实时流口径
   addHistory(lines: readonly HistoryLine[]): void {
     for (const line of lines) {
-      if (line.kind === "thinking") {
+      if (line.kind === "thinking" || line.kind === "end") {
         this.appendDim(line.text);
       } else if (line.kind === "assistant") {
         this.appendMarkdown(line.text);
@@ -231,22 +248,17 @@ export class MessageFlow {
   }
 }
 
-// 运行事件在消息区的投影（主会话与进入的 worker 会话共用）：轮次开始重置流式段，轮次结束收尾并落一行轮次标记，
-// 工具调用行随提出与结束原位更新。花费、上下文用量与活动 Run 的记账由调用方各自处理
+// 运行事件在消息区的投影（主会话与进入的 worker 会话共用）：轮次开始重置流式段，轮次结束收尾流式段，
+// 工具调用行随提出与结束原位更新。决策 452：轮次结束不再落标记行（工作结束时由壳落一行收尾）。
+// 花费、上下文用量与活动 Run 的记账由调用方各自处理
 export function projectRuntimeEvent(flow: MessageFlow, event: EventEnvelope): void {
   switch (event.kind) {
     case RuntimeEventKind.TurnStarted:
       flow.openStream();
       break;
-    case RuntimeEventKind.TurnCompleted: {
+    case RuntimeEventKind.TurnCompleted:
       flow.closeStream();
-      const payload = event.payload as TurnCompletedPayload;
-      const marker = [`-- turn: ${payload.stopReason}`];
-      if (payload.syntheticFailure) marker.push("(synthetic failure)");
-      if (payload.errorMessage !== undefined) marker.push(`| ${payload.errorMessage}`);
-      flow.addSystem(`${marker.join(" ")} --`);
       break;
-    }
     case RuntimeEventKind.ToolProposed: {
       const payload = event.payload as ToolProposedPayload;
       flow.addToolCall(payload.toolCallId, toolCallLine(payload));

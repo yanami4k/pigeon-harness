@@ -28,6 +28,7 @@ import { ToolRegistry } from "../tools/registry.ts";
 import {
   APPROVAL_CANCEL_CLOSED,
   APPROVAL_CANCEL_DETACHED,
+  cancelReasonForModel,
   createTuiApprovalHandler,
 } from "./approval.ts";
 import { PigeonTuiShell, type TuiRuntimeFace } from "./shell.ts";
@@ -220,7 +221,7 @@ test("[d] 无 path 时不提供该键；仍按下与 cli 版同语义退化为�
   }
 });
 
-test("fail-closed：壳停止时挂起的审批按拒绝处理，理由逐字（决策 029）", async () => {
+test("fail-closed：壳停止时挂起的审批按拒绝处理，理由逐字（决策 029；交给模型的为英文，决策 428）", async () => {
   const { shell, handler, cleanup } = makePanel();
   try {
     shell.start();
@@ -228,7 +229,11 @@ test("fail-closed：壳停止时挂起的审批按拒绝处理，理由逐字（
     const pending = handler(REQUEST);
     await settle();
     shell.stop();
-    assert.deepEqual(await pending, { approved: false, reason: APPROVAL_CANCEL_CLOSED });
+    assert.deepEqual(await pending, {
+      approved: false,
+      reason: cancelReasonForModel(APPROVAL_CANCEL_CLOSED),
+    });
+    assert.match(cancelReasonForModel(APPROVAL_CANCEL_CLOSED), /^The terminal UI stopped/);
   } finally {
     cleanup();
   }
@@ -241,8 +246,9 @@ test("fail-closed：面板未装配（face getter 返回 undefined）按拒绝�
     const detached = createTuiApprovalHandler(store, () => undefined);
     assert.deepEqual(await detached(REQUEST), {
       approved: false,
-      reason: APPROVAL_CANCEL_DETACHED,
+      reason: cancelReasonForModel(APPROVAL_CANCEL_DETACHED),
     });
+    assert.match(cancelReasonForModel(APPROVAL_CANCEL_DETACHED), /^No approval panel/);
     assert.equal(store.list().length, 0, "fail-closed 不得创建 grant");
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -351,13 +357,13 @@ test("集成：真实 adapter 审批闸挂起等按键——[y] 批准后写副�
     assert.ok(text.includes("工具：edit_file"), `审批块\n${text}`);
     assert.equal(readFileSync(join(root, "a.ts"), "utf8"), "alpha\n", "批准前副作用不得发生");
     term.input("y");
-    for (let waited = 0; waited < 5000 && !screenText(term).includes("== run:"); waited += 50) {
+    for (let waited = 0; waited < 5000 && !screenText(term).includes("done · "); waited += 50) {
       await settle(50);
     }
     assert.equal(readFileSync(join(root, "a.ts"), "utf8"), "STEP1\n", "批准后写副作用真实发生");
     const finalText = screenText(term);
     assert.ok(finalText.includes("审批结果：人工批准"), finalText);
-    assert.ok(finalText.includes("== run: completed"), finalText);
+    assert.ok(finalText.includes("done · "), finalText);
   } finally {
     shell.stop();
     await adapter.dispose();

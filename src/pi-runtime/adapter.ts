@@ -1573,7 +1573,7 @@ export class PiRuntimeAdapter {
     } catch (error) {
       return {
         block: true,
-        reason: `治理判定异常（fail-closed 阻断）：${error instanceof Error ? error.message : String(error)}`,
+        reason: `The governance check failed, so the call is blocked: ${error instanceof Error ? error.message : String(error)}`,
       };
     }
   }

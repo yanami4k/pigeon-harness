@@ -11,6 +11,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { sanitizeTerminalText } from "../application/format.ts";
 import { type RecentSession, recentSessionLine } from "../application/recent-sessions.ts";
+import { secondary } from "./style.ts";
 
 // 一屏最多列几行（超出的随选中项滚动）
 export const PICKER_VISIBLE_ROWS = 10;
@@ -29,9 +30,10 @@ const ascii = (text: string): string => text.replaceAll("→", ">");
 const THEME: SelectListTheme = {
   selectedPrefix: ascii,
   selectedText: ascii,
-  description: (text) => text,
-  scrollInfo: (text) => text,
-  noMatch: (text) => text,
+  // 决策 454：滚动提示等次要信息弱化
+  description: secondary,
+  scrollInfo: secondary,
+  noMatch: secondary,
 };
 
 const HEADER = "resume a session: up/down to move, enter to open, esc to cancel";
@@ -66,7 +68,7 @@ export class SessionPicker {
     this.list = list;
     this.view.clear();
     // 提示行不带上下空行（全屏里每一行都要省给列表）
-    this.view.addChild(new Text(HEADER, 1, 0));
+    this.view.addChild(new Text(HEADER, 1, 0, secondary));
     this.view.addChild(list);
   }
 

@@ -4,6 +4,7 @@
 // 上下文用量优先级最高——它决定什么时候该 /compact。
 import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { CostTally } from "../application/session-cost.ts";
+import { secondary } from "./style.ts";
 
 export interface StatusBarState {
   model?: string;
@@ -89,9 +90,9 @@ export class StatusBar implements Component {
 
   invalidate(): void {}
 
-  // 与 Text 同样留 1 格左边距；恰好一行
+  // 与 Text 同样留 1 格左边距；恰好一行。决策 454：次要信息，弱化样式
   render(width: number): string[] {
     const text = statusBarText(this.state, Math.max(0, width - 2));
-    return [text === "" ? "" : ` ${text}`];
+    return [text === "" ? "" : ` ${secondary(text)}`];
   }
 }

@@ -156,6 +156,62 @@ export function failureBadge(failure: FailureClass | null | undefined): string {
   }
 }
 
+// 决策 452：用时的写法——不到一分钟 "12s"，不到一小时 "1m 23s"，再长 "1h 5m"
+export function formatElapsed(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+// 决策 452：一次工作怎么收的尾（终端界面的收尾行用）。实时取运行结果，回看取会话记录里的收尾条目
+export interface WorkEndFacts {
+  status: "completed" | "failed" | "aborted" | "unknown";
+  // 会话记录里的收尾种类（回看时在场）：到上限、打转、熔断等
+  ending?: string;
+  stopReason?: string;
+  errorMessage?: string;
+  // 被治理熔断叫停（不是人打断）
+  breaker?: boolean;
+}
+
+const LIMIT_ENDINGS: Readonly<Record<string, string>> = {
+  "turn-limit": "turn limit",
+  "wall-clock-limit": "time limit",
+  "token-limit": "token limit",
+  looping: "looping",
+  "stop-hook-limit": "stop hook limit",
+};
+
+// 决策 452：工作结束时的一行——正常 "done · 1m 23s"；人打断 "interrupted · 12s"；请求出错 "error · 45s · 原因"；
+// 续跑到上限仍被截断 "stopped: output limit · 2m 3s"，到其他上限或被叫停 "stopped: …"。不写失败分类。没有用时只写前半
+export function workEndLine(facts: WorkEndFacts, elapsedMs?: number): string {
+  const ending = facts.ending;
+  const reason = facts.errorMessage?.split("\n")[0]?.trim();
+  let head: string;
+  let detail: string | undefined;
+  if ((facts.status === "aborted" || ending === "aborted") && facts.breaker !== true) {
+    head = "interrupted";
+  } else if (ending !== undefined && LIMIT_ENDINGS[ending] !== undefined) {
+    head = `stopped: ${LIMIT_ENDINGS[ending]}`;
+  } else if (facts.breaker === true || ending === "breaker") {
+    head = "stopped";
+  } else if (facts.stopReason === "length") {
+    head = "stopped: output limit";
+  } else if (facts.status === "failed" || ending === "error" || ending === "empty-reply") {
+    head = "error";
+    detail = reason !== undefined && reason !== "" ? reason : undefined;
+  } else if (facts.status === "completed" || ending === "completed") {
+    head = "done";
+  } else {
+    head = "ended";
+  }
+  return [head, elapsedMs !== undefined ? formatElapsed(elapsedMs) : undefined, detail]
+    .filter((part): part is string => part !== undefined)
+    .join(" · ");
+}
+
 // Eval 验证器三值判决（M6.5 S3，决策 058）→ 通俗措辞：trace Run 头、replay 时间线与 Eval 报告同一口径
 export function evalVerdictLabel(verdict: "pass" | "fail" | "undetermined"): string {
   return verdict === "pass" ? "通过" : verdict === "fail" ? "失败" : "未判定";

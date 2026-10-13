@@ -1,8 +1,8 @@
-// 会话历史投影（M5 S2，决策 045）：/resume 与重启后渲染全部历史——正文（含 thinking）、轮次标记、工具行与 Run 收尾
-// 按会话文件里的顺序交织；安全上限默认 500 行可配，超出时最早部分折叠为一行提示；单条正文有渲染上限；toolResult 默认
+// 会话历史投影（M5 S2，决策 045）：/resume 与重启后渲染全部历史——正文（含 thinking）、工具行与 Run 收尾行（决策 452：
+// 不再有轮次标记，收尾行与实时同一写法）按会话文件里的顺序交织；安全上限默认 500 行可配，超出时最早部分折叠为一行提示；单条正文有渲染上限；toolResult 默认
 // 折叠只显示工具名与摘要。经只读读取器读新会话存储（决策 181），分支会话只画它自己的部分（开头从来源复制的历史属于
 // 来源会话）。纯投影：输出结构化行，TUI 渲染面与 cli 的 --with-content 各自排版；终端净化在各自边界（036）。
-// 措辞与 TUI 实时流同口径（轮次标记、工具行、thinking 前缀）。
+// 措辞与 TUI 实时流同口径（收尾行、工具行、thinking 前缀）。
 import {
   hasLegacySessionFile,
   LEGACY_READER_HINT,
@@ -16,7 +16,7 @@ import {
 } from "../state/runaway-config.ts";
 import type { ViewMessage } from "../state/session-view.ts";
 import { isStatusMessage, statusSummary } from "../state/status-text.ts";
-import { failureBadge, summarizeArgs } from "./format.ts";
+import { summarizeArgs, workEndLine } from "./format.ts";
 import { LEGACY_LOOP_REMINDER_PREFIX, LOOP_REMINDER_PREFIX } from "./loop-guard.ts";
 import { LEGACY_SCRIPT_NOTICE_PREFIX, SCRIPT_NOTICE_PREFIX } from "./script-texts.ts";
 import { LEGACY_WORKER_NOTICE_PREFIX, WORKER_NOTICE_PREFIX } from "./worker-notices.ts";
@@ -32,7 +32,8 @@ export type HistoryLineKind =
   | "thinking"
   | "tool"
   | "toolResult"
-  | "marker";
+  // 决策 452：一次运行的收尾行
+  | "end";
 
 export interface HistoryLine {
   kind: HistoryLineKind;
@@ -161,13 +162,14 @@ export function loadSessionHistory(
       },
     ];
   }
-  const runBadges = new Map<string, string>(
-    view.runs.map((run) => [run.runId, failureBadge(run.failure)])
-  );
+  const runFailures = new Map(view.runs.map((run) => [run.runId as string, run.failure]));
+  const runStarts = new Map<string, number>();
   const body: HistoryLine[] = [];
   const toolLines = new Map<string, HistoryLine>();
   for (const item of view.items) {
-    if (item.kind === "message") {
+    if (item.kind === "run-start") {
+      runStarts.set(item.data.runId, item.data.startedAt);
+    } else if (item.kind === "message") {
       const message = item.message;
       if (message.role === "toolResult") {
         // 工具行补上结果（同实时流：先落定、再出结果消息）
@@ -181,7 +183,6 @@ export function loadSessionHistory(
       }
       body.push(...messageLines(message, entryChars));
       if (message.role === "assistant") {
-        body.push({ kind: "marker", text: `-- turn: ${message.stopReason ?? "?"} --` });
         for (const block of message.blocks) {
           if (block.type === "toolCall") {
             const line: HistoryLine = {
@@ -194,9 +195,23 @@ export function loadSessionHistory(
         }
       }
     } else if (item.kind === "run-end") {
+      // 决策 452：每次运行一行收尾（与实时同一写法，不写失败分类）；用时取这次运行的开始与收尾时刻
+      const { ending, stopReason, errorMessage, endedAt, runId } = item.data;
+      const failure = runFailures.get(runId);
+      const startedAt = runStarts.get(runId);
       body.push({
-        kind: "marker",
-        text: `== run ended | 分类：${runBadges.get(item.data.runId) ?? "未知"} ==`,
+        kind: "end",
+        text: workEndLine(
+          {
+            status:
+              ending === "completed" ? "completed" : ending === "aborted" ? "aborted" : "failed",
+            ending,
+            ...(stopReason !== undefined ? { stopReason } : {}),
+            ...(errorMessage !== undefined ? { errorMessage } : {}),
+            breaker: failure?.category === "cancelled" && failure.breaker,
+          },
+          startedAt !== undefined ? endedAt - startedAt : undefined
+        ),
       });
     }
   }

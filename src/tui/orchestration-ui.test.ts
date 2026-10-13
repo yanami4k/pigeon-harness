@@ -534,7 +534,7 @@ test("进入 worker 会话期间：主 agent 照常运行（结果留在主会�
     // 主 agent 这一轮在后台结束
     runtime.finishAll();
     await settle();
-    assert.ok(!screenFlat(term).includes("== run: completed"), "worker 会话里不显示主会话的消息");
+    assert.ok(!screenFlat(term).includes("done · "), "worker 会话里不显示主会话的消息");
     // 主会话的审批：不切走，就地弹出，写明来源
     const request: ApprovalRequest = {
       toolName: "edit_file",
@@ -557,7 +557,7 @@ test("进入 worker 会话期间：主 agent 照常运行（结果留在主会�
     // 主会话的消息区照常留下审批记录与后台结束的这一轮
     await type(term, ESC);
     flat = screenFlat(term);
-    assert.ok(flat.includes("== run: completed"), flat);
+    assert.ok(flat.includes("done · "), flat);
     assert.ok(flat.includes("来源：主会话"), flat);
   } finally {
     shell.stop();

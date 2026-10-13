@@ -11,13 +11,13 @@
 //   未配置时清晰报错退出，不静默失败。
 
 import { spawn } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { handbackJobsNotice } from "../application/background-jobs.ts";
 import { runForkCommand } from "../application/fork-command.ts";
 import { failureBadge } from "../application/format.ts";
 import type { GrantsCommandContext } from "../application/grants.ts";
-import { currentHarnessRef, describeHarness } from "../application/harness-ref.ts";
+import { currentHarnessRef, describeHarness, pigeonVersion } from "../application/harness-ref.ts";
 import { HEADLESS_EXIT_CODES, runHeadless } from "../application/headless-core.ts";
 import {
   type LaunchFlags,
@@ -64,7 +64,7 @@ import { memoryWriteNoticeLine } from "../memory/update-memory-tool.ts";
 import { probeUpstreamVersions } from "../pi-runtime/upstream-version.ts";
 import type { TrustEntry } from "../state/config-trust.ts";
 import { asSessionId, newSessionId, type SessionId } from "../state/ids.ts";
-import { BUNDLE_ROLE_ENV, FROM_BUNDLE, packageFileUrl } from "../state/package-paths.ts";
+import { BUNDLE_ROLE_ENV, FROM_BUNDLE } from "../state/package-paths.ts";
 import { pigeonRel } from "../state/paths.ts";
 import type { SessionListFilters } from "../state/session-summary.ts";
 import { loopGuardSettingsOf, withHooksDisabled } from "../state/settings.ts";
@@ -803,18 +803,6 @@ async function lineMain(argv: string[]): Promise<void> {
     warnSandboxJobs(sandbox, bundle, write);
     await disposeRuntime(bundle);
     await finishSandbox(sandbox, write);
-  }
-}
-
-// pigeon --version：包根下 package.json 的版本（源码与打包产物运行时都在包根下）；读不出时如实写 unknown
-export function pigeonVersion(): string {
-  try {
-    const parsed = JSON.parse(readFileSync(packageFileUrl("package.json"), "utf8")) as {
-      version?: unknown;
-    };
-    return typeof parsed.version === "string" ? parsed.version : "unknown";
-  } catch {
-    return "unknown";
   }
 }
 

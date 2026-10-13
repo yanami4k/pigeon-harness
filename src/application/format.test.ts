@@ -4,7 +4,44 @@
 // OSC 8 伪装链接 / CSI 光标与擦除可伪造审批屏）。保留 \n \t；不做 SGR 白名单。
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { approvalSourceLine, sanitizeTerminalText } from "./format.ts";
+import { approvalSourceLine, formatElapsed, sanitizeTerminalText, workEndLine } from "./format.ts";
+
+test("决策 452：用时写法——不到一分钟只写秒，不到一小时写分秒，再长写时分", () => {
+  assert.equal(formatElapsed(0), "0s");
+  assert.equal(formatElapsed(12_400), "12s");
+  assert.equal(formatElapsed(59_400), "59s");
+  assert.equal(formatElapsed(59_600), "1m 0s");
+  assert.equal(formatElapsed(83_000), "1m 23s");
+  assert.equal(formatElapsed(3_599_000), "59m 59s");
+  assert.equal(formatElapsed(3_600_000), "1h 0m");
+  assert.equal(formatElapsed(3_900_000), "1h 5m");
+});
+
+test("决策 452：收尾行——正常 done；人打断 interrupted；出错 error 带原因首行；截断 stopped: output limit；熔断与上限 stopped；不写分类", () => {
+  assert.equal(workEndLine({ status: "completed" }, 83_000), "done · 1m 23s");
+  assert.equal(
+    workEndLine({ status: "aborted", stopReason: "aborted" }, 12_000),
+    "interrupted · 12s"
+  );
+  assert.equal(
+    workEndLine(
+      { status: "failed", stopReason: "error", errorMessage: "429 rate limited\nretry later" },
+      45_000
+    ),
+    "error · 45s · 429 rate limited"
+  );
+  assert.equal(workEndLine({ status: "failed" }, 45_000), "error · 45s");
+  assert.equal(
+    workEndLine({ status: "failed", stopReason: "length" }, 123_000),
+    "stopped: output limit · 2m 3s"
+  );
+  assert.equal(workEndLine({ status: "aborted", breaker: true }, 5_000), "stopped · 5s");
+  assert.equal(
+    workEndLine({ status: "failed", ending: "looping" }, 5_000),
+    "stopped: looping · 5s"
+  );
+  assert.equal(workEndLine({ status: "unknown" }), "ended");
+});
 
 // ESC 引导字节惰性化后，序列其余可打印字节保留在屏上作审计痕迹
 test("CSI 序列（光标定位 / SGR 颜色 / 清屏）失去 ESC，内容可见化为 ␛ + 原文", () => {

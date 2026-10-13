@@ -19,6 +19,7 @@
 // 输入历史按项目存在 .pigeon/state/tui-history.json。
 // 决策 301：编排面接上编排器的只读观察口、发消息与续做（编排面板、树形视图、进入 worker 会话），树形视图按任务清单标注。
 
+import { homedir } from "node:os";
 import { createInterface } from "node:readline/promises";
 import { pathToFileURL } from "node:url";
 import { ProcessTerminal } from "@earendil-works/pi-tui";
@@ -31,6 +32,7 @@ import {
   worktreeContinueNotice,
 } from "../application/enter-worktree-tool.ts";
 import { runForkCommand } from "../application/fork-command.ts";
+import { pigeonVersion } from "../application/harness-ref.ts";
 import {
   type LaunchFlags,
   localRiskNotice,
@@ -139,6 +141,7 @@ import { MainPeerRoute } from "./peer-route.ts";
 import { PigeonTuiShell, type TuiShellOptions, type TuiWorkersFace } from "./shell.ts";
 import { installTerminalReset } from "./terminal-reset.ts";
 import { switchableWarn } from "./warn-sink.ts";
+import { modelLabelOf, tildePath } from "./welcome.ts";
 import { takeWorktreeFlag } from "./worktree-flag.ts";
 import { createWorktreeSwitch } from "./worktree-switch.ts";
 
@@ -539,6 +542,8 @@ export async function main(argv: string[]): Promise<void> {
       grants: bundle.grantStore,
     };
   };
+  // 决策 453：状态栏与欢迎头的模型名
+  const modelLabel = modelLabelOf(slot.bundle.modelInfo);
   const shell = new PigeonTuiShell({
     terminal: new ProcessTerminal(),
     // 决策 439：键位（设置的 keybindings 一节）
@@ -576,7 +581,14 @@ export async function main(argv: string[]): Promise<void> {
     // 决策 325：终端界面日志在程序状态目录下
     logDir: tuiLogDirOf(governanceRoot),
     // 决策 286：状态栏的模型与跨启动的输入历史
-    model: `${flags.provider}/${flags.modelId}`,
+    // 决策 453：模型名取运行面的模型信息（接入模块声明的优先，其次启动参数）；只有占位标签时不显示
+    ...(modelLabel !== undefined ? { model: modelLabel } : {}),
+    // 决策 451：欢迎头（版本、模型、当前目录）
+    welcome: {
+      version: pigeonVersion(),
+      ...(modelLabel !== undefined ? { model: modelLabel } : {}),
+      cwd: tildePath(workspaceRoot, homedir()),
+    },
     provider: flags.provider,
     promptHistory: promptHistoryStore(governanceRoot),
     // S3：/grants /revoke /grants save 的命令上下文（命令层在 application/grants.ts）

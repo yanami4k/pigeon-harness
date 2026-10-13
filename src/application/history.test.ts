@@ -1,4 +1,4 @@
-// M5 S2（决策 045）：历史投影——正文、thinking、工具行、轮次与 Run 标记按会话文件里的顺序交织；
+// M5 S2（决策 045）：历史投影——正文、thinking、工具行与 Run 收尾行（决策 452：没有轮次标记）按会话文件里的顺序交织；
 // toolResult 默认折叠；单条渲染上限；安全上限默认 500 行，超出折叠为一行提示。读新会话存储：
 // 分支会话只画自己的部分；出错的工具调用、上游合成失败与未收尾如实呈现；旧格式会话与不存在的会话各给一行提示。
 // TUI 的 /resume 与 cli 的 --with-content 共用本投影。
@@ -28,9 +28,14 @@ async function withRoot(run: (root: string, sessionsDir: string) => Promise<void
   }
 }
 
-const pairs = (lines: HistoryLine[]) => lines.map((line) => [line.kind, line.text]);
+// 收尾行里的用时随跑测试的快慢变化，比对时换成 <t>
+const pairs = (lines: HistoryLine[]) =>
+  lines.map((line) => [
+    line.kind,
+    line.kind === "end" ? line.text.replace(/ · \d+(h \d+m|m \d+s|s)/, " · <t>") : line.text,
+  ]);
 
-test("时序交织：正文、thinking、轮次标记、工具行、折叠的 toolResult、Run 结束标记", () =>
+test("时序交织：正文、thinking、工具行、折叠的 toolResult、Run 收尾行（决策 452：没有轮次标记，收尾不写分类）", () =>
   withRoot(async (root, sessionsDir) => {
     const sessionId = newSessionId();
     await seedToolRun(sessionsDir, sessionId);
@@ -38,12 +43,10 @@ test("时序交织：正文、thinking、轮次标记、工具行、折叠的 to
       ["user", "> 把 beta 改成大写"],
       ["thinking", "~ 先确认锚点"],
       ["assistant", "我来改"],
-      ["marker", "-- turn: toolUse --"],
       ["tool", '$ edit_file {"path":"a.ts"} -> ok'],
       ["toolResult", "[result] edit_file ok（7 字符，已折叠）"],
       ["assistant", "改好了"],
-      ["marker", "-- turn: stop --"],
-      ["marker", "== run ended | 分类：正常 =="],
+      ["end", "done · <t>"],
     ]);
   }));
 
@@ -55,7 +58,7 @@ test("安全上限：默认 500 行；超出时最早部分折叠为一行提示
     const full = loadSessionHistory(root, sessionId);
     const folded = loadSessionHistory(root, sessionId, { limit: 3 });
     assert.equal(folded.length, 4);
-    assert.deepEqual(folded[0], { kind: "notice", text: "[更早 6 条未展开，/search 可查]" });
+    assert.deepEqual(folded[0], { kind: "notice", text: "[更早 4 条未展开，/search 可查]" });
     assert.deepEqual(folded.slice(1), full.slice(-3));
   }));
 
@@ -69,7 +72,7 @@ test("单条渲染上限：超长正文折叠并标注已截断显示", () =>
     ]);
   }));
 
-test("出错的工具调用、上游合成失败消息与撞上限收尾：工具行标 error，Run 标记带分类", () =>
+test("出错的工具调用与各种收尾：工具行标 error；收尾行说清怎么结束的（出错带原因、到上限、被打断、续跑后仍被截断），不写分类", () =>
   withRoot(async (root, sessionsDir) => {
     const session = createFixtureSession({ sessionsDir });
     session.startRun({ task: "改 a" });
@@ -80,21 +83,29 @@ test("出错的工具调用、上游合成失败消息与撞上限收尾：工�
       isError: true,
     });
     session.assistant({ text: "", stopReason: "error", errorMessage: "provider 故障" });
-    session.endRun({ ending: "error" });
+    session.endRun({ ending: "error", errorMessage: "503 provider 故障\n第二行不显示" });
     session.startRun({ task: "再试" });
     session.assistant({ text: "", stopReason: "aborted" });
     session.endRun({ ending: "turn-limit" });
+    session.startRun({ task: "第三次" });
+    session.assistant({ text: "", stopReason: "aborted" });
+    session.endRun({ ending: "aborted" });
+    session.startRun({ task: "写长文" });
+    session.assistant({ text: "很长", stopReason: "length" });
+    session.endRun({ ending: "completed" });
     const { sessionId } = await session.close();
     assert.deepEqual(pairs(loadSessionHistory(root, sessionId)), [
       ["user", "> 改 a"],
-      ["marker", "-- turn: toolUse --"],
       ["tool", '$ edit_file {"path":"a"} -> error'],
       ["toolResult", "[result] edit_file error（5 字符，已折叠）"],
-      ["marker", "-- turn: error --"],
-      ["marker", "== run ended | 分类：基础设施错误 =="],
+      ["end", "error · <t> · 503 provider 故障"],
       ["user", "> 再试"],
-      ["marker", "-- turn: aborted --"],
-      ["marker", "== run ended | 分类：取消 =="],
+      ["end", "stopped: turn limit · <t>"],
+      ["user", "> 第三次"],
+      ["end", "interrupted · <t>"],
+      ["user", "> 写长文"],
+      ["assistant", "很长"],
+      ["end", "stopped: output limit · <t>"],
     ]);
   }));
 

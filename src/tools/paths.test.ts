@@ -20,7 +20,14 @@ test("版本库元数据判断：任一级为 .git 即算，不分大小写，�
   ]) {
     assert.equal(insideGitMetadata(path), true, path);
   }
-  for (const path of ["a.git/config", ".gitignore", ".github/x", "git/config", "git~/x", "x/.gitx"]) {
+  for (const path of [
+    "a.git/config",
+    ".gitignore",
+    ".github/x",
+    "git/config",
+    "git~/x",
+    "x/.gitx",
+  ]) {
     assert.equal(insideGitMetadata(path), false, path);
   }
 });

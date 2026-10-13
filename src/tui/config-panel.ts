@@ -10,13 +10,15 @@ import {
 } from "@earendil-works/pi-tui";
 import type { ConfigItemView } from "../application/config-options.ts";
 import { SETTINGS_FILE, userPigeonRel } from "../state/paths.ts";
+import { secondary } from "./style.ts";
 
+// 决策 454：选中项的说明与按键提示是次要信息，弱化样式
 const THEME: SettingsListTheme = {
   label: (text) => text,
   value: (text) => text,
-  description: (text) => text,
+  description: secondary,
   cursor: "> ",
-  hint: (text) => text.replaceAll("·", "|"),
+  hint: (text) => secondary(text.replaceAll("·", "|")),
 };
 
 const HEADER = `settings (user level, ${userPigeonRel(SETTINGS_FILE)}): enter/space to change, esc to close`;
@@ -74,7 +76,7 @@ export class ConfigPanel {
     this.list = list;
     this.view.clear();
     // 提示行不带上下空行（全屏里每一行都要省给列表）
-    this.view.addChild(new Text(HEADER, 1, 0));
+    this.view.addChild(new Text(HEADER, 1, 0, secondary));
     this.view.addChild(list);
   }
 

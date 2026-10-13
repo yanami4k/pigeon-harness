@@ -30,10 +30,9 @@
 //   展开或收起全部）；/resume 不带会话号弹出会话选择器（session-picker.ts）；运行期告警经 addWarning 落消息区。
 // - 斜杠命令（S3，决策 030）：/grants /revoke /grants save 走 application/grants.ts 的
 //   命令层（与 cli REPL 同一份），输出经 write 回调投影到消息区——零新增治理语义。
-// - 终态摘要（S5）：run() 决议后落终态行——status + stopReason + 四分类徽章（措辞复用
-//   application/format.ts 的 failureBadge，与 cli trace 同口径）+ errorMessage（若有）+
-//   syntheticFailure 标注（若有）；listenerErrors 非空时消息区增量警告（D2 可见化的
-//   TUI 投影，措辞与增量报数口径同 cli repl：启动即查 + 每次 run 收尾复查）。
+// - 收尾行（决策 452，取代 S5 的终态摘要）：一次工作（从人发出消息到 agent 干完，含 Stop 钩子拦下后接着跑的各轮）结束时落
+//   一行，如 "done · 1m 23s"，不写失败分类（措辞在 application/format.ts 的 workEndLine）；listenerErrors 非空时消息区
+//   增量警告（D2 可见化的 TUI 投影，措辞与增量报数口径同 cli repl：启动即查 + 每次 run 收尾复查）。
 // - dispose 对称：取消键的订阅与监听器一律进 disposers，在 start/stop 里成对出现。
 // - 决策 301（编排进度）：输入框下方、状态栏之下是编排面板（worker-panel.ts，取代原先输入框上方的 worker 状态行）；Ctrl+X 或
 //   /agents 切换整屏的树形视图（worker-tree.ts）；输入框为空时按 ↓ 进入面板选 worker。在面板与树形视图里回车进入 worker 的会话：
@@ -57,7 +56,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { compactionNoticeText, manualCompactionText } from "../application/compaction-text.ts";
 import { type ConfigItemView, parseConfigAssignment } from "../application/config-options.ts";
-import { failureBadge } from "../application/format.ts";
+import { workEndLine } from "../application/format.ts";
 import { loadSessionHistory } from "../application/history.ts";
 import type { HookEventReport } from "../application/hooks.ts";
 import type { PromptHistoryStore } from "../application/prompt-history.ts";
@@ -146,6 +145,8 @@ import { SessionPanel } from "./session-panel.ts";
 import { SessionPicker } from "./session-picker.ts";
 import { familyKindLabel, SessionTree } from "./session-tree.ts";
 import { StatusBar } from "./status-bar.ts";
+import { secondary } from "./style.ts";
+import { WelcomeHeader, type WelcomeInfo } from "./welcome.ts";
 import { WorkerActivityTracker } from "./worker-activity.ts";
 import {
   hasFadingWorkers,
@@ -235,8 +236,10 @@ export interface TuiShellOptions {
   sandbox?: TuiSandboxFace;
   // 决策 294 B1：/tasks 查看当前会话的任务清单（排好的文字）；返回 undefined = 清单没开；缺省 = 命令不可用
   tasks?: () => string | undefined;
-  // 决策 286：状态栏显示的模型（provider/模型号）；缺省不显示
+  // 决策 286、453：状态栏显示的模型（"模型 id · 服务商"，取运行面的模型信息）；缺省不显示
   model?: string;
+  // 决策 451：对话流最上方的欢迎头（版本、模型、当前目录）；缺省不放
+  welcome?: WelcomeInfo;
   // 决策 286：主 agent 的模型接入（DeepSeek 回复自带价格为 0 时按官方人民币价目计会话花费）；缺省不另计价
   provider?: string;
   // 决策 286：输入历史的跨启动存储（按项目）；缺省只在本次启动内保留
@@ -363,7 +366,8 @@ export class PigeonTuiShell
   private readonly options: TuiShellOptions;
   private readonly tui: PigeonAltScreen;
   private readonly flow = new MessageFlow();
-  private readonly statusLine = new Text("");
+  // 决策 454：状态行是次要信息（弱化样式）
+  private readonly statusLine = new Text("", 1, 1, secondary);
   // M5.5 S4（决策 040）：worker 的刷新定时器（有 worker 在跑或还有结束的在淡出期内才开）
   private workerTimerHandle: ReturnType<typeof setInterval> | null = null;
   // 决策 301：worker 活动记录（面板、树形视图与状态栏花费同源）、编排面板、树形视图与当前视图
@@ -419,6 +423,9 @@ export class PigeonTuiShell
   private nextInputNotes: string[] = [];
   // 决策 323：本轮是否被外部取消（Esc / 打转叫停）——取消过的一轮不跑 Stop 钩子
   private runCancelled = false;
+  // 决策 452：这次工作从何时开始（人发出消息、或程序通知叫醒 agent）与最近一次运行的结果；真正空闲时落收尾行后清掉
+  private workStartedAt: number | null = null;
+  private lastRun: { result: RunResult | null; error?: unknown } | null = null;
   // start/stop 的 dispose 对称面：壳级监听器在此成对登记（S5 的同位置留位）；
   // 运行面订阅单独登记——/resume 换绑时只退订运行面，壳级监听（模态键控）不动
   private readonly disposers: Array<() => void> = [];
@@ -550,6 +557,8 @@ export class PigeonTuiShell
       height: () => Math.max(3, this.options.terminal.rows - 2),
       tabToRunning: () => this.current.workers !== undefined,
     });
+    // 决策 451：欢迎头放在对话流最上方
+    if (options.welcome !== undefined) this.flow.setHeader(new WelcomeHeader(options.welcome));
     this.layout();
     for (const line of keyNotices) this.flow.addSystem(line);
     this.input.onSubmit = (value) => this.handleSubmit(value);
@@ -902,6 +911,7 @@ export class PigeonTuiShell
     this.flow.addUserEcho(value);
     this.running = true;
     this.runCancelled = false;
+    this.beginWork();
     this.updateStatus();
     this.tui.requestRender();
     // 决策 309：点名只看人的这条输入
@@ -980,6 +990,7 @@ export class PigeonTuiShell
     ) {
       this.running = true;
       this.runCancelled = false;
+      this.beginWork();
       this.updateStatus();
       runtime.runNotices().then(
         (result) => this.handleRunEnd(result),
@@ -2807,7 +2818,7 @@ export class PigeonTuiShell
 
   private handleRunEnd(result: RunResult | null, error?: unknown): void {
     this.activeRunId = null;
-    this.renderRunSummary(result, error);
+    this.lastRun = { result, error };
     // D2 可见化（S5）：每次 run 收尾复查落盘失败（增量报数，同 repl 口径）
     this.warnEvidenceGaps();
     this.refreshContext();
@@ -2816,23 +2827,38 @@ export class PigeonTuiShell
     void this.afterRun(result);
   }
 
-  // 一轮收尾的终态摘要（S5）：status + stopReason + 四分类徽章（failureBadge，与 cli trace
-  // 同口径）+ syntheticFailure 标注（若有）+ errorMessage（若有）
-  private renderRunSummary(result: RunResult | null, error?: unknown): void {
-    if (result !== null) {
-      // 终态摘要（S5）：status + stopReason + 四分类徽章（failureBadge，与 cli trace
-      // 同口径）+ syntheticFailure 标注（若有）+ errorMessage（若有）
-      const parts = [`== run: ${result.status}`];
-      if (result.stopReason !== undefined) parts.push(`stop: ${result.stopReason}`);
-      parts.push(`分类：${failureBadge(result.failure)}`);
-      if (result.syntheticFailure) parts.push("(synthetic failure)");
-      if (result.errorMessage !== undefined) parts.push(`error: ${result.errorMessage}`);
-      this.flow.addSystem(`${parts.join(" | ")} ==`);
-    } else {
+  // 决策 452：一次工作开始（空闲时人发出消息，或程序通知叫醒 agent）：记下开始时刻
+  private beginWork(): void {
+    this.workStartedAt = this.now();
+    this.lastRun = null;
+  }
+
+  // 决策 452：工作真正结束（Stop 钩子与收尾都跑完、空闲下来）时落一行收尾：用时从开始算到现在，结果取最后一次运行
+  private renderWorkEnd(): void {
+    const last = this.lastRun;
+    const startedAt = this.workStartedAt;
+    this.lastRun = null;
+    this.workStartedAt = null;
+    if (last === null) return;
+    const elapsed = startedAt !== null ? this.now() - startedAt : undefined;
+    const { result, error } = last;
+    if (result === null) {
       // run() 自身抛异常（装配级故障）：如实呈现，不伪装成正常终态
       const message = error instanceof Error ? error.message : String(error);
-      this.flow.addSystem(`== run: error | ${message} ==`);
+      this.flow.addWorkEnd(workEndLine({ status: "failed", errorMessage: message }, elapsed));
+      return;
     }
+    this.flow.addWorkEnd(
+      workEndLine(
+        {
+          status: result.status,
+          ...(result.stopReason !== undefined ? { stopReason: result.stopReason } : {}),
+          ...(result.errorMessage !== undefined ? { errorMessage: result.errorMessage } : {}),
+          breaker: result.failure?.category === "cancelled" && result.failure.breaker,
+        },
+        elapsed
+      )
+    );
   }
 
   // 一轮真正收尾：空闲下来、刷新状态并发排队输入（Stop 钩子跑完之后）。决策 446：先跑 afterTurn（换运行面），跑完才空闲
@@ -2855,6 +2881,7 @@ export class PigeonTuiShell
 
   private finishRunNow(): void {
     this.running = false;
+    this.renderWorkEnd();
     this.updateStatus();
     this.tui.requestRender();
     this.drainQueue();
@@ -2912,7 +2939,7 @@ export class PigeonTuiShell
           "\n\n"
         );
         const continued = await this.current.runtime.run(next);
-        this.renderRunSummary(continued);
+        this.lastRun = { result: continued };
         this.warnEvidenceGaps();
         this.refreshContext();
         this.collectChildCosts();

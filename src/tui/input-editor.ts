@@ -12,8 +12,7 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 import { SLASH_COMMANDS } from "./command-table.ts";
-
-const identity = (text: string): string => text;
+import { secondary } from "./style.ts";
 
 // Editor 以 borderColor 包边框串（"─" 横线与 "↑ n more"/"↓ n more" 滚动提示），在此换成 ASCII
 function asciiBorder(text: string): string {
@@ -26,9 +25,10 @@ const ASCII_THEME: EditorTheme = {
     // 选中项前缀 pi-tui 写死为 "→ "，换成 ASCII
     selectedPrefix: (text) => text.replaceAll("→", ">"),
     selectedText: (text) => text.replaceAll("→", ">"),
-    description: identity,
-    scrollInfo: identity,
-    noMatch: identity,
+    // 决策 454：命令的参数与说明、滚动提示是次要信息，弱化样式
+    description: secondary,
+    scrollInfo: secondary,
+    noMatch: secondary,
   },
 };
 
