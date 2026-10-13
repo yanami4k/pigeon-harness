@@ -400,19 +400,19 @@ Pigeon 拍的工作目录快照——worker 与沙箱的起点、检查点与退
 
 启动时不建 `.pigeon/state/`：打开终端界面或命令行对话、不发消息就退出（只敲了斜杠命令也一样），项目里不留 `.pigeon`。`.pigeon/state/` 在第一次真要写程序状态时才建——第一条消息建会话文件、`pigeon run` 开跑、`/search` 写检索缓存、项目级记忆的写入与编辑、`/grants save` 写个人设置等。斜杠命令在程序状态目录还没有时不记进跨启动的输入历史（本次启动内仍可用 ↑ 翻到）。
 
-忽略规则写在使用者的全局 git 排除文件里，不再写 `.pigeon/.gitignore`（以前写下的不动，快照与沙箱交回照旧认得它）。在 git 仓库里第一次建程序状态或写 `settings.local.json` 时，若 `.pigeon/state/`、`.pigeon/settings.local.json`、`.pigeon/worktrees/` 尚未被忽略，把下面缺的行追加进全局排除文件，已有的行不重复，并在终端提示一行写进了哪个文件：
+忽略规则写在使用者的全局 git 排除文件里，不再写 `.pigeon/.gitignore`（以前写下的不动，快照与沙箱交回照旧认得它）。在 git 仓库里第一次建程序状态或写 `settings.local.json` 时，若 `.pigeon/state/`、`.pigeon/settings.local.json`、`.pigeon/wt/` 尚未被忽略，把下面缺的行追加进全局排除文件，已有的行不重复，并在终端提示一行写进了哪个文件：
 
 ```gitignore
 **/.pigeon/state/
 **/.pigeon/settings.local.json
-**/.pigeon/worktrees/
+**/.pigeon/wt/
 ```
 
 全局排除文件的位置与 git 实际读的一致：用户级 git 配置（连同其中 include 进来的配置）设了 `core.excludesFile` 时用它（`~` 按 `HOME` 展开）；没设时用 `$XDG_CONFIG_HOME/git/ignore`，没设 `XDG_CONFIG_HOME` 时用 `$HOME/.config/git/ignore`。`core.excludesFile` 设成相对路径时位置不明，Pigeon 不写，只提示一行请你自行加入。写一次即覆盖本机所有仓库、工作树与新克隆；写完会再核一遍 git 是否确实忽略了，没生效同样提示。非 git 目录不写任何忽略规则。写不进时只提示一行（附上要加的三行），不影响运行。终端界面里这一行提示显示在消息区。不想让 Pigeon 改全局排除文件的，事先自己在项目的 `.gitignore` 或全局排除文件里忽略这三处即可（已被忽略就不会再写）。
 
 `pigeon run --governance-root <目录>` 把治理根与工作区根分开：设置三层、项目 `.mcp.json` 与程序状态（`.pigeon/state/` 全部内容，含会话与检索缓存）锚到治理根，工作区只是 agent 干活的代码——工作区自带的 `.pigeon/` 设置与 `.mcp.json` 不生效，程序状态也不落进工作区。缺省与 `--root` 相同（行为不变）；不与 `--sandbox` 同用。
 
-快照、checkpoint 与 worker 改动叠加只排除 `.pigeon/state` 与 `.pigeon/settings.local.json`；仓库已跟踪的 `.pigeon/settings.json` 与 `.pigeon/skills` 是项目内容，照常进快照与叠加。列目录与命令的文件变化报告仍不列整个 `.pigeon`。命令的文件变化在 git 工作区里按命令前后两次 git status 找候选，被 `.gitignore` 忽略的文件不报；非 git 工作区比全量清单，跳过依赖、虚拟环境、构建产物与缓存目录（`node_modules`、`.venv`、`venv`、`dist`、`build`、`target`、`__pycache__`、`.next`、`coverage` 等）。Pigeon 自己在后台起的 git（文件变化的取证、代码快照、退出快照等）不执行仓库里配置的过滤（clean、smudge、process）、钩子与 fsmonitor——这些命令可能指向工作区里写工具改得到的脚本；写工具也一律不写 `.git`。影响：文件变化报告照常；用 LFS 一类过滤的仓库里，快照存进大文件的真实内容而不是指针，本地对象库会变大。
+快照、checkpoint 与 worker 改动叠加只排除 `.pigeon/state`、`.pigeon/settings.local.json` 与独立工作树所在的 `.pigeon/wt`；仓库已跟踪的 `.pigeon/settings.json` 与 `.pigeon/skills` 是项目内容，照常进快照与叠加。列目录与命令的文件变化报告仍不列整个 `.pigeon`。命令的文件变化在 git 工作区里按命令前后两次 git status 找候选，被 `.gitignore` 忽略的文件不报；非 git 工作区比全量清单，跳过依赖、虚拟环境、构建产物与缓存目录（`node_modules`、`.venv`、`venv`、`dist`、`build`、`target`、`__pycache__`、`.next`、`coverage` 等）。Pigeon 自己在后台起的 git（文件变化的取证、代码快照、退出快照等）不执行仓库里配置的过滤（clean、smudge、process）、钩子与 fsmonitor——这些命令可能指向工作区里写工具改得到的脚本；写工具也一律不写 `.git`。影响：文件变化报告照常；用 LFS 一类过滤的仓库里，快照存进大文件的真实内容而不是指针，本地对象库会变大。
 
 ## worker 与续接
 
@@ -454,16 +454,16 @@ config/secrets.json
 
 ## 独立工作树
 
-`pigeon --worktree <名字>`（也可写 `--worktree=<名字>`）在 `<主仓库根>/.pigeon/worktrees/<名字>` 的 git 工作树里开终端界面的会话，分支为 `pigeon-wt/<名字>`。名字只能用小写字母、数字、下划线与连字符，字母或数字开头，最长 64。只有终端界面支持；不与 `--sandbox`、`--continue`、`--resume` 同用（续接开在工作树里的会话时会自动回到那个工作树）。不在 git 仓库里时报错。
+`pigeon --worktree <名字>`（也可写 `--worktree=<名字>`）在 `<主仓库根>/.pigeon/wt/<名字>` 的 git 工作树里开终端界面的会话，分支为 `pigeon-wt/<名字>`。名字只能用小写字母、数字、下划线与连字符，字母或数字开头，最长 64。只有终端界面支持；不与 `--sandbox`、`--continue`、`--resume` 同用（续接开在工作树里的会话时会自动回到那个工作树）。不在 git 仓库里时报错。
 
-- 新建时的起点：缺省为远端默认分支（`origin/HEAD` 指向的分支）的最新版——远端引用超过 24 小时没取过就先 `git fetch` 一次，限时约 5 秒，不弹任何交互（不问密码、ssh 以批处理方式）；没有远端默认分支、取不到或超时就用当前 HEAD，进入时的一行提示写明用了哪个起点。设置 `worktree.baseRef` 为 `"head"` 时直接用当前 HEAD。按 `.worktreeinclude` 复制被忽略的本地文件（见上文"worker 与续接"），并确保全局排除文件里有 `**/.pigeon/worktrees/`（见上文"程序状态目录"）。
+- 新建时的起点：缺省为远端默认分支（`origin/HEAD` 指向的分支）的最新版——远端引用超过 24 小时没取过就先 `git fetch` 一次，限时约 5 秒，不弹任何交互（不问密码；没有自己指定 ssh——`GIT_SSH_COMMAND`、`GIT_SSH` 与 git 配置 `core.sshCommand` 都没设——时 ssh 以批处理方式）；没有远端默认分支、取不到或超时就用当前 HEAD，进入时的一行提示写明用了哪个起点。设置 `worktree.baseRef` 为 `"head"` 时直接用当前 HEAD。按 `.worktreeinclude` 复制被忽略的本地文件（见上文"worker 与续接"），并确保全局排除文件里有 `**/.pigeon/wt/`（见上文"程序状态目录"）。建立时把起点提交记在仓库配置的 `branch.pigeon-wt/<名字>.pigeonBase`（删分支时随之删掉）；之后判断有没有新提交按它，记录不在即按"起点不明"处理。
 - 同名的工作树已在就直接打开，不重建；同名目录在却不是本仓库的工作树即报错。
 - 会话记录、设置与记忆仍在主仓库根的 `.pigeon`（与主检出里的会话在同一处，`/sessions`、`/resume` 都看得到），代码改动在工作树里。
-- 退出时：工作树没有改动（没有未提交的改动与未跟踪文件、HEAD 与分支仍指向起点）就删掉工作树与分支；有改动就在终端里问一句：`k` 保留（打印下次进入的命令 `pigeon --worktree <名字>`）或 `d` 删除（改动与分支上的提交都会丢失）；没有终端可问时保留。
-- `/worktrees` 与 `pigeon worktrees list` 也列出独立工作树（标明"独立工作树"），`clean` 不带编号与 `--all` 都不挑它们，点名才删（同样不跟随链接）。有会话开在里面时算在用、不删。
-- `.pigeon/worktrees/` 以前是 worker 工作树的位置（迁移命令会把旧的 worker 工作树挪进 `.pigeon/state/worktrees/`）；挂在 `pigeon-wt/` 分支上的工作树不算旧布局，启动检查与迁移命令都不动它们。
+- 退出时：另有仍在的进程开着这个工作树（`--worktree` 或 `enter_worktree` 进入的会话，不论有没有会话文件）就保留不删并说明；否则工作树没有改动（没有未提交的改动与未跟踪文件、仍在 `pigeon-wt/<名字>` 上、HEAD 与分支仍指向记下的起点）就删掉工作树与分支；有改动、起点不明或工作树已换到别的分支上，就在终端里问一句：`k` 保留（打印下次进入的命令 `pigeon --worktree <名字>`）或 `d` 删除（工作树里的改动与 `pigeon-wt/<名字>` 上的提交都会丢失）；没有终端可问时保留。删除只删 `pigeon-wt/<名字>` 这一个分支，工作树换到的别的分支不动。
+- `/worktrees` 与 `pigeon worktrees list` 也列出独立工作树（标明"独立工作树"），`clean` 不带编号与 `--all` 都不挑它们，点名才删（同样不跟随链接，只删 `pigeon-wt/<名字>` 分支）。有仍在的进程开着它时算在用、不删（会话开在独立工作树里的期间，进程在用户级程序状态目录的 `worktree-use/` 下持有一个标记，进程退出即释放，崩溃留下的在下次检查时按进程已不在清掉）。工作树已换到别的分支上的，未取走的改动记为"不明"。
+- 独立工作树放在 `.pigeon/wt/` 而不是 `.pigeon/worktrees/`：后者是以前 worker 工作树的位置，启动检查与迁移命令按"目录在即旧布局"处理它（迁移命令把其中旧的 worker 工作树挪进 `.pigeon/state/worktrees/`）。
 
-模型也能在会话中途建工作树并把会话移进去（工具 `enter_worktree`，参照 Claude Code 的 EnterWorktree）：只给终端界面的主会话注册（命令行对话、`pigeon run`、worker、沙箱都没有），工作区不是 git 仓库时不注册；工具说明与系统提示都写明只在你明确要求"在工作树里做"时才用。它按写操作审批（建目录与分支），与 `--worktree` 同一套建立、起点与 `.worktreeinclude` 复制。移动发生在这一轮结束时：终端界面按 `/reload` 的先建后换重建运行面（同一会话文件、同一放权，系统提示不变），工作区换成工作树，然后自动递一条通知让 agent 接着做；消息区各有一行提示。主检出里未提交的改动不会带进工作树，工具结果与提示都写明有几个文件没带过去。会话里记一条 `pigeon.worktree` 条目，续接、`/resume`、`/reload` 都按主分支上最后一条回到工作树（工作树已删就回到主检出）。退出时的清理与 `--worktree` 相同。已在工作树里时再调即拒绝。
+模型也能在会话中途建工作树并把会话移进去（工具 `enter_worktree`，参照 Claude Code 的 EnterWorktree）：只给终端界面的主会话注册（命令行对话、`pigeon run`、worker、沙箱都没有），工作区不是 git 仓库时不注册；工具说明与系统提示都写明只在你明确要求"在工作树里做"时才用。它按写操作审批（建目录与分支），与 `--worktree` 同一套建立、起点与 `.worktreeinclude` 复制。移动发生在这一轮结束时：终端界面按 `/reload` 的先建后换重建运行面（同一会话文件、同一放权，系统提示不变），工作区换成工作树，然后自动递一条通知让 agent 接着做；消息区各有一行提示。主检出里未提交的改动不会带进工作树，工具结果与提示都写明有几个文件没带过去。移动成功之后会话里记一条 `pigeon.worktree` 条目，续接、`/resume`、`/reload` 都按主分支上最后一条回到工作树（工作树已删就回到主检出）；`/resume` 换到开在主检出里的会话时，消息区说明离开了哪个工作树（工作树保留）与回去的命令。退出时的清理与 `--worktree` 相同。以下情况不移：已在工作树里（再调即拒绝）；同一轮里已调过一次（再调即拒绝）；有 worker 在跑、排队或等补批续做（调用时即拒绝，轮末才出现的同样不移）；这一轮被 Esc 中止；重建运行面失败。不移时工作树留着，消息区与递给模型的通知都写明原因，会话留在原处，不自动开下一轮。
 
 ## 记忆与人写的说明
 
