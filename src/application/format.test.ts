@@ -4,7 +4,7 @@
 // OSC 8 伪装链接 / CSI 光标与擦除可伪造审批屏）。保留 \n \t；不做 SGR 白名单。
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { sanitizeTerminalText } from "./format.ts";
+import { approvalSourceLine, sanitizeTerminalText } from "./format.ts";
 
 // ESC 引导字节惰性化后，序列其余可打印字节保留在屏上作审计痕迹
 test("CSI 序列（光标定位 / SGR 颜色 / 清屏）失去 ESC，内容可见化为 ␛ + 原文", () => {
@@ -60,4 +60,16 @@ test("C1 控制字符（0x80–0x9f，0x9b 在部分终端里等同 ESC [）换�
   const replacement = String.fromCharCode(0xfffd);
   assert.equal(cleaned, `a${replacement}2Jb${replacement}c${String.fromCharCode(0xa0)}d`);
   assert.equal(sanitizeTerminalText(cleaned), cleaned);
+});
+
+test("审批来源行：会话面板派出的会话写明会话名（决策 443），worker 照旧，主会话没有", () => {
+  assert.equal(
+    approvalSourceLine({ sessionId: "sess_01ABCDEFGHJKMNPQRSTVWXYZ00", pooled: { name: "s2" } }),
+    "来源：会话 s2 ｜ 会话号 sess_01ABCDEF…"
+  );
+  assert.equal(
+    approvalSourceLine({ worker: { name: "w", role: "explorer" } }),
+    "来源：worker w（explorer）"
+  );
+  assert.equal(approvalSourceLine({}), undefined);
 });

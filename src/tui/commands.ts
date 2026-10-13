@@ -95,6 +95,10 @@ export interface CommandsHost {
   readonly configCommand?: ((args: string) => void) | undefined;
   // 决策 435：/rewind 打开消息树（缺省 = 不可用）
   readonly rewindCommand?: (() => void) | undefined;
+  // 决策 443：/panel 打开会话面板（缺省 = 不可用）
+  readonly panelCommand?: (() => void) | undefined;
+  // 决策 443：/take <名字> 是会话面板里的会话时取回它工作树里的改动；不是即 undefined（照旧按 worker 处理）
+  takePooled?(name: string): string | undefined;
 }
 
 // 命令表判断可用性用的只读面
@@ -114,6 +118,7 @@ export function commandAvailability(host: CommandsHost): CommandAvailability {
     rename: () => host.renamePeer !== undefined,
     config: () => host.configCommand !== undefined,
     rewind: () => host.rewindCommand !== undefined,
+    panel: () => host.panelCommand !== undefined,
     workers: () => {
       const workers = host.workers();
       return workers === undefined
@@ -230,6 +235,14 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
       return;
     }
     // 决策 279：/take <worker 名> 把已收尾 worker 自己的改动叠进工作目录
+    // 决策 443：会话面板里的会话按名字取回
+    if (tokens[0] === "take" && tokens[1] !== undefined) {
+      const pooled = host.takePooled?.(tokens[1]);
+      if (pooled !== undefined) {
+        host.addSystem(pooled);
+        return;
+      }
+    }
     if (workers !== undefined && tokens[0] === "take") {
       host.takeCommand(workers, tokens[1]);
       return;
@@ -319,6 +332,11 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
     const worktrees = host.worktrees?.();
     if (tokens[0] === "worktrees" && worktrees !== undefined) {
       host.addSystem(worktrees.run(tokens.slice(1)));
+      return;
+    }
+    // 决策 443：/panel 打开会话面板
+    if (tokens[0] === "panel" && host.panelCommand !== undefined) {
+      host.panelCommand();
       return;
     }
     // 决策 435：/rewind 打开消息树

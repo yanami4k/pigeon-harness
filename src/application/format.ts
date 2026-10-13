@@ -18,7 +18,15 @@ const ARGS_SUMMARY_LIMIT = 160;
 export function approvalSourceLine(request: {
   readonly sessionId?: string;
   readonly worker?: { readonly name: string; readonly role: string };
+  readonly pooled?: { readonly name: string };
 }): string | undefined {
+  // 决策 443：会话面板派出的会话
+  if (request.pooled !== undefined) {
+    return (
+      `来源：会话 ${request.pooled.name}` +
+      (request.sessionId !== undefined ? ` ｜ 会话号 ${shortId(request.sessionId)}` : "")
+    );
+  }
   if (request.worker === undefined) {
     return undefined;
   }

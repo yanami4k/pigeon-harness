@@ -32,6 +32,8 @@ export interface CommandAvailability {
   config?(): boolean;
   // 决策 435：/rewind（会话回退）
   rewind?(): boolean;
+  // 决策 443：/panel（会话面板）
+  panel?(): boolean;
 }
 
 export interface SlashCommandSpec {
@@ -148,7 +150,7 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   },
   {
     name: "take",
-    usage: "/take <worker>",
+    usage: "/take <worker|会话面板里的会话>",
     whileRunning: { allow: false, reason: `${WORKDIR}（叠入 worker 的改动）` },
     available: (host) => host.workers()?.take === true && !host.inSandbox(),
   },
@@ -214,6 +216,13 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     usage: "/rewind",
     whileRunning: { allow: false, reason: `${MAIN_STATE}（回退会换掉对话与工作区文件）` },
     available: (host) => host.rewind?.() === true,
+  },
+  // 决策 443：会话面板——列出本进程里开着的独立会话，派新会话、偷看、回复、进入、停止；只看与派发，运行中可用
+  {
+    name: "panel",
+    usage: "/panel",
+    whileRunning: { allow: true },
+    available: (host) => host.panel?.() === true,
   },
   // 决策 450：改本会话在本机会话名录里的名字，只动名录，运行中可用
   {

@@ -24,6 +24,8 @@ export interface ApprovalRequest {
   // 面板据此区分来源；主会话自己的请求缺省
   readonly sessionId?: SessionId;
   readonly worker?: { readonly name: string; readonly role: string };
+  // 决策 443：会话面板派出的独立会话的审批汇到同一队列时在场（面板写明来源会话的名字）
+  readonly pooled?: { readonly name: string };
   // M5.5 S3（决策 040）：放权落点——[a]/[d] 创建的会话 grant 写进请求来源会话的存储。
   // worker 请求由其装配根挂上 worker 自己的存储（grant 只活在该 worker 会话内）；
   // 缺省 = 审批 handler 绑定的主会话存储

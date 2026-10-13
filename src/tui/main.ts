@@ -128,6 +128,7 @@ import { readWindowsClipboard } from "./clipboard.ts";
 import { resolveStartTarget, takeContinueFlags } from "./continue-flags.ts";
 import { findFdPath } from "./fd-path.ts";
 import { guardTuiAgent } from "./loop-guard-view.ts";
+import { createSessionPool } from "./main-pool.ts";
 import {
   type MainReloadContext,
   reopenMainSessionForReload,
@@ -505,6 +506,26 @@ export async function main(argv: string[]): Promise<void> {
       : {}),
   };
   // 决策 433–438：会话回退的运行面（每次按当前的 slot 现取）
+  // 决策 443：会话面板（进程内版）：派出的会话进各自的工作树；沙箱会话不开。退出时全部停止
+  let poolExiting = false;
+  const sessionPool =
+    sandbox === undefined
+      ? createSessionPool({
+          governanceRoot,
+          streamFn,
+          flags,
+          settings: () => settings,
+          warn,
+          createApprovalHandler: createHandler,
+          memoryWrite,
+          webToolsFor,
+          mainWorkspace: () => workspaceRoot,
+          notice: (line) => {
+            if (poolExiting) console.error(line);
+            else shellHolder.current?.addSystem(line);
+          },
+        })
+      : undefined;
   const rewindHost = (): RewindHost => {
     const bundle = slot.bundle;
     return {
@@ -525,6 +546,7 @@ export async function main(argv: string[]): Promise<void> {
       ? { keybindings: keybindingsSectionOf(settings) }
       : {}),
     // 决策 433–438：会话回退——按当前运行面现取（/reload、/resume 换了运行面之后照样对）；没有快照的会话只退对话
+    ...(sessionPool !== undefined ? { pool: sessionPool.face } : {}),
     rewind: {
       tree: () => loadRewindTree(rewindHost()),
       prepare: (to: string | null) => prepareRewind(rewindHost(), to),
@@ -938,6 +960,9 @@ export async function main(argv: string[]): Promise<void> {
       // 决策 323、324：退出前跑一次 SessionEnd（reason "exit"）——必须在释放运行面之前，记录才落盘
       // （331：补做复盘记录已随复盘删除，退出不再等补做）
       await shellHolder.current?.endSession("exit");
+      // 决策 443：关掉 Pigeon，会话面板里的会话全部停止（工作树没有改动即删，有改动保留）
+      poolExiting = true;
+      await sessionPool?.pool.closeAll().catch(() => {});
       await closeTuiSession({
         governanceRoot: governanceRoot,
         sessionId: current.sessionId,
