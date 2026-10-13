@@ -60,15 +60,39 @@ interface Calls {
   applied: Array<{ mode: RewindMode; revert: string[] }>;
 }
 
-function face(options: { code: boolean; conflicts?: string[] }, calls: Calls): TuiRewindFace {
+function face(
+  options: { code: boolean; conflicts?: string[]; undo?: boolean; failed?: boolean },
+  calls: Calls
+): TuiRewindFace {
   return {
     tree: async () => NODES,
+    prepareUndo: async () =>
+      options.undo === true
+        ? ({
+            file: {},
+            trees: undefined,
+            plan: {
+              from: "e9",
+              to: "e9",
+              files: [{ path: "a.txt" }],
+              untouchable: [],
+              createdAfter: new Map(),
+              undo: true,
+            },
+          } as unknown as PreparedRewind)
+        : undefined,
     prepare: async (to) => {
       calls.prepared.push(to);
       return {
         file: {},
         trees: undefined,
-        plan: { from: "e9", to, files: options.code ? [{ path: "a.txt" }] : [] },
+        plan: {
+          from: "e9",
+          to,
+          files: options.code ? [{ path: "a.txt" }] : [],
+          untouchable: [],
+          createdAfter: new Map(),
+        },
       } as unknown as PreparedRewind;
     },
     check: async () => {
@@ -77,7 +101,10 @@ function face(options: { code: boolean; conflicts?: string[] }, calls: Calls): T
         before: { ref: "r", commit: "c", tree: "t" },
         classified: {
           actions: [{ path: "a.txt" }],
-          conflicts: (options.conflicts ?? []).map((path) => ({ path })),
+          conflicts: (options.conflicts ?? []).map((path) => ({
+            path,
+            reason: "agent 改过之后又被手改过",
+          })),
         },
       } as unknown as CodeCheck;
     },
@@ -88,8 +115,13 @@ function face(options: { code: boolean; conflicts?: string[] }, calls: Calls): T
         kept: (options.conflicts ?? []).filter((path) => !(applied.revert ?? new Set()).has(path)),
         grantsAdded: 0,
         grantsRevoked: 0,
+        untouchable: [],
+        ...(options.undo === true ? { undo: true } : {}),
+        ...(options.failed === true ? { failed: { path: "b.txt", reason: "EPERM" } } : {}),
         ...(applied.mode !== "conversation"
-          ? { restore: { written: ["a.txt"], removed: [], skipped: [], saved: [] } }
+          ? {
+              restore: { written: ["a.txt"], removed: [], skipped: [], saved: [], removedDirs: [] },
+            }
           : {}),
       };
       return outcome;
@@ -97,7 +129,12 @@ function face(options: { code: boolean; conflicts?: string[] }, calls: Calls): T
   };
 }
 
-function makeShell(options: { code: boolean; conflicts?: string[] }) {
+function makeShell(options: {
+  code: boolean;
+  conflicts?: string[];
+  undo?: boolean;
+  failed?: boolean;
+}) {
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-rewind-"));
   const sessionId = newSessionId();
   const term = new MockTerminal(100, 40);
@@ -256,7 +293,7 @@ test("退代码：手改过的文件逐个选（缺省保留，空格切换为�
     assert.deepEqual(calls.applied, [{ mode: "both", revert: ["c.txt"] }]);
     const after = screenText(term);
     assert.match(after, /写回：a\.txt/);
-    assert.match(after, /保留了手改过的：b\.txt/);
+    assert.match(after, /保留了拿不准的：b\.txt/);
   } finally {
     cleanup();
   }
@@ -275,6 +312,49 @@ test("消息树开着时排队的输入不发出，关了再发", async () => {
     term.input(ESC);
     await settle();
     assert.deepEqual(runtime.runs, ["排队的一条"]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("当前位置回车：有可撤销的上一次退代码即给撤销，撤销走拍现状与写回", async () => {
+  const { term, calls, cleanup } = makeShell({ code: true, undo: true });
+  try {
+    await settle();
+    term.input("/rewind");
+    term.input("\r");
+    await settle();
+    term.input("\r");
+    await settle();
+    assert.match(screenText(term), /\[1\] 撤销上次退代码/);
+    term.input("\r");
+    await settle();
+    assert.equal(calls.checked, 1);
+    assert.deepEqual(calls.applied, [{ mode: "code", revert: [] }]);
+    assert.match(screenText(term), /已撤销上次退代码/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("写回中途出错：如实列出写了哪些、哪个出错，对话没有退，原消息不放回输入框", async () => {
+  const { term, cleanup } = makeShell({ code: true, failed: true });
+  try {
+    await settle();
+    term.input("/rewind");
+    term.input("\r");
+    await settle();
+    term.input(UP);
+    term.input("\r");
+    await settle();
+    term.input("1");
+    await settle();
+    const screen = screenText(term);
+    assert.match(screen, /写回中途出错，停在出错的那个文件：对话没有退/);
+    assert.match(screen, /写回：a\.txt/);
+    assert.match(screen, /出错：b\.txt：EPERM/);
+    assert.match(screen, /撤销上次退代码/);
+    assert.doesNotMatch(screen, /second task/);
   } finally {
     cleanup();
   }

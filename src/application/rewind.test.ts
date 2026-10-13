@@ -3,20 +3,24 @@
 // 对话换成目标分支；切回原分支后文件逐字节一致（行尾转换开与不开都是）；agent 改后又被手改的列为冲突、缺省保留；
 // 被忽略的文件不动；没有快照的会话只退对话；授权沿用切换前的状态并在目标分支补记；花费按全部分支。
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, test } from "vitest";
+import type { SessionFileView } from "../persistence/session-reader.ts";
 import { pruneSeedFromEntries } from "../pi-runtime/context-prune.ts";
 import type { FakeReply } from "../pi-runtime/fixtures.ts";
 import { newSessionId } from "../state/ids.ts";
 import { SessionEntryType } from "../state/session-entries.ts";
+import type { SettingsSnapshot } from "../state/settings.ts";
 import { previousJobsOfSession } from "./background-jobs.ts";
 import { noMcpSession } from "./mcp.ts";
 import {
   applyRewind,
   checkCode,
   loadRewindTree,
+  planRewind,
   prepareRewind,
+  prepareUndo,
   type RewindHost,
   type RewindNode,
 } from "./rewind.ts";
@@ -55,14 +59,19 @@ const overwrite = (path: string, content: string) => ({
 const lastText = (messages: readonly unknown[]) =>
   textOf((messages.at(-1) ?? {}) as { content?: unknown });
 
-async function openSession(root: string, replies: FakeReply[]) {
+async function openSession(
+  root: string,
+  replies: FakeReply[],
+  options: { turnSnapshots?: boolean; settings?: SettingsSnapshot } = {}
+) {
   const { streamFn, calls } = routedModel({ main: replies });
   const sessionId = newSessionId();
   const opened: OpenedSessionRuntime = await openSessionRuntime({
     governanceRoot: root,
     sessionId,
     streamFn,
-    turnSnapshots: true,
+    turnSnapshots: options.turnSnapshots ?? true,
+    ...(options.settings !== undefined ? { settings: options.settings } : {}),
     flags: { yolo: true, provider: "custom", modelId: "custom", persistThinking: true },
     homeDir: root,
     startMcp: noMcpSession,
@@ -392,4 +401,331 @@ test("续跑时作业号按全部分支编号，丢失的作业只看主分支",
     seeded.lost.map((item) => item.jobId),
     ["j2"]
   );
+});
+
+// ---- 审查修正 ----
+
+test("agent 改 .gitignore 放出原本被忽略的文件：退代码不删它（列为拿不准、缺省保留）", async () => {
+  const root = repo(false);
+  writeFileSync(join(root, ".gitignore"), ".pigeon/\n.env\n");
+  git(root, ["add", "-A"]);
+  git(root, ["commit", "-q", "-m", "ignore env"]);
+  writeFileSync(join(root, ".env"), "SECRET=1\n");
+  const { bundle, host } = await openSession(root, [
+    overwrite(".gitignore", ".pigeon/\n"),
+    { text: "改了忽略规则" },
+  ]);
+  await bundle.adapter.run("first");
+  await host.checkpoints?.settle();
+  const prepared = await prepareRewind(
+    host,
+    messageNode(await loadRewindTree(host), "first").target
+  );
+  const code = await checkCode(host, prepared);
+  assert.deepEqual(
+    code.classified.conflicts.map((action) => [action.path, action.reason]),
+    [[".env", "这段里忽略规则变过，删掉拿不准"]]
+  );
+  const outcome = await applyRewind(host, prepared, { mode: "code", code });
+  assert.deepEqual(outcome.restore?.written, [".gitignore"]);
+  assert.deepEqual(outcome.kept, [".env"]);
+  assert.equal(readFileSync(join(root, ".env"), "utf8"), "SECRET=1\n", "使用者原有的文件不删");
+});
+
+test("快照记为过大没收的文件：agent 把它改小之后退代码也不删不写", async () => {
+  const root = repo(false);
+  mkdirSync(join(root, ".pigeon"), { recursive: true });
+  writeFileSync(
+    join(root, ".pigeon", "settings.json"),
+    JSON.stringify({ snapshot: { untrackedFileMaxBytes: 64 } })
+  );
+  writeFileSync(join(root, "big.bin"), "x".repeat(200));
+  const { loadSettings } = await import("../persistence/settings.ts");
+  const { bundle, host } = await openSession(
+    root,
+    [overwrite("big.bin", "small\n"), { text: "改小了" }],
+    { settings: loadSettings(root, { homeDir: root }) }
+  );
+  await bundle.adapter.run("first");
+  await host.checkpoints?.settle();
+  const prepared = await prepareRewind(
+    host,
+    messageNode(await loadRewindTree(host), "first").target
+  );
+  assert.deepEqual(prepared.plan.untouchable, ["big.bin"]);
+  assert.deepEqual(prepared.plan.files, []);
+  assert.equal(readFileSync(join(root, "big.bin"), "utf8"), "small\n");
+});
+
+test("写回中途出错（只读文件）：停在出错处，已写的照实记下，对话不退；撤销上次退代码回到原样", async () => {
+  const root = repo(false);
+  writeFileSync(join(root, "b.txt"), "bee\n");
+  git(root, ["add", "-A"]);
+  git(root, ["commit", "-q", "-m", "b"]);
+  const { bundle, host } = await openSession(root, [
+    overwrite("a.txt", "agent a\n"),
+    overwrite("b.txt", "agent b\n"),
+    { text: "改完" },
+  ]);
+  await bundle.adapter.run("first");
+  await host.checkpoints?.settle();
+  chmodSync(join(root, "b.txt"), 0o444);
+  try {
+    const prepared = await prepareRewind(
+      host,
+      messageNode(await loadRewindTree(host), "first").target
+    );
+    const outcome = await applyRewind(host, prepared, {
+      mode: "both",
+      code: await checkCode(host, prepared),
+    });
+    assert.equal(outcome.failed?.path, "b.txt");
+    assert.deepEqual(outcome.restore?.written, ["a.txt"]);
+    assert.equal(readFileSync(join(root, "a.txt"), "utf8"), "one\n");
+    assert.equal(lastText(bundle.adapter.transcript()), "改完", "对话没有退");
+    const record = mainEntries(root, bundle.adapter.sessionId)
+      .filter((entry) => entry.customType === SessionEntryType.Rewind)
+      .at(-1)?.data as { written?: string[]; failed?: { path: string } };
+    assert.deepEqual(record.written, ["a.txt"]);
+    assert.equal(record.failed?.path, "b.txt");
+  } finally {
+    chmodSync(join(root, "b.txt"), 0o644);
+  }
+  const undo = await prepareUndo(host);
+  assert.ok(undo !== undefined);
+  assert.deepEqual(
+    undo.plan.files.map((file) => file.path),
+    ["a.txt"]
+  );
+  const undone = await applyRewind(host, undo, {
+    mode: "code",
+    code: await checkCode(host, undo),
+  });
+  assert.equal(undone.undo, true);
+  assert.equal(readFileSync(join(root, "a.txt"), "utf8"), "agent a\n");
+  assert.equal(await prepareUndo(host), undefined, "撤销之后不再有可撤销的");
+});
+
+test("只退代码之后在当前位置可撤销，回到退之前的样子", async () => {
+  const root = repo(false);
+  const { bundle, host } = await openSession(root, [
+    overwrite("a.txt", "agent\n"),
+    write("n.txt", "new\n"),
+    { text: "改完" },
+  ]);
+  await bundle.adapter.run("first");
+  await host.checkpoints?.settle();
+  const prepared = await prepareRewind(
+    host,
+    messageNode(await loadRewindTree(host), "first").target
+  );
+  await applyRewind(host, prepared, { mode: "code", code: await checkCode(host, prepared) });
+  assert.equal(existsSync(join(root, "n.txt")), false);
+  const undo = await prepareUndo(host);
+  assert.ok(undo !== undefined);
+  await applyRewind(host, undo, { mode: "code", code: await checkCode(host, undo) });
+  assert.equal(readFileSync(join(root, "a.txt"), "utf8"), "agent\n");
+  assert.equal(readFileSync(join(root, "n.txt"), "utf8"), "new\n");
+});
+
+test("回退点之后有消息没有发消息时的快照：只给退对话并说明原因", async () => {
+  const root = repo(false);
+  const { bundle, host } = await openSession(
+    root,
+    [overwrite("a.txt", "agent\n"), { text: "改完" }],
+    { turnSnapshots: false }
+  );
+  await bundle.adapter.run("first");
+  await host.checkpoints?.settle();
+  const prepared = await prepareRewind(
+    host,
+    messageNode(await loadRewindTree(host), "first").target
+  );
+  assert.match(prepared.plan.codeBlocked ?? "", /没有发消息时的快照/);
+  await assert.rejects(() => checkCode(host, prepared), /没有发消息时的快照/);
+});
+
+test.skipIf(process.platform === "win32")(
+  "写回保持现有文件的权限位（0600 不变成所有人可读）",
+  async () => {
+    const root = repo(false);
+    chmodSync(join(root, "a.txt"), 0o600);
+    const { bundle, host } = await openSession(root, [
+      overwrite("a.txt", "agent\n"),
+      { text: "改完" },
+    ]);
+    await bundle.adapter.run("first");
+    await host.checkpoints?.settle();
+    const prepared = await prepareRewind(
+      host,
+      messageNode(await loadRewindTree(host), "first").target
+    );
+    await applyRewind(host, prepared, { mode: "code", code: await checkCode(host, prepared) });
+    assert.equal(statSync(join(root, "a.txt")).mode & 0o777, 0o600);
+  }
+);
+
+test("使用者原有的空目录不删：只删这段时间里 agent 新建、删空了的目录", async () => {
+  const root = repo(false);
+  mkdirSync(join(root, "keep"));
+  const { bundle, host } = await openSession(root, [
+    write("keep/agent.txt", "a\n"),
+    write("fresh/agent.txt", "b\n"),
+    { text: "建完" },
+  ]);
+  await bundle.adapter.run("first");
+  await host.checkpoints?.settle();
+  const prepared = await prepareRewind(
+    host,
+    messageNode(await loadRewindTree(host), "first").target
+  );
+  const outcome = await applyRewind(host, prepared, {
+    mode: "code",
+    code: await checkCode(host, prepared),
+  });
+  assert.deepEqual(outcome.restore?.removed, ["fresh/agent.txt", "keep/agent.txt"]);
+  assert.deepEqual(outcome.restore?.removedDirs, ["fresh"]);
+  assert.equal(existsSync(join(root, "keep")), true);
+  assert.equal(existsSync(join(root, "fresh")), false);
+});
+
+test("授权补记与挪主分支同一次落盘：之后换上下文出错，续接时撤过的授权仍是撤销", async () => {
+  const { root, cleanup } = tempRoot("pigeon-rewind-grants-crash-");
+  cleanups.push(cleanup);
+  const { bundle, host } = await openSession(root, [{ text: "一" }, { text: "二" }]);
+  const grant = bundle.grantStore.create({
+    tool: "run_command",
+    command: "npm test",
+    firstCall: { toolCallId: "c0", args: { command: "npm test" } },
+  });
+  await bundle.adapter.run("first");
+  await bundle.adapter.run("second");
+  // 撤销落在第二条之后（旧分支上）：回退到第二条之前，要靠补记才仍是撤销
+  bundle.grantStore.revoke(grant.grantId);
+  const broken: RewindHost = {
+    ...host,
+    adapter: {
+      replaceMessages: () => {
+        throw new Error("模拟换上下文时出错");
+      },
+    },
+  };
+  const prepared = await prepareRewind(
+    broken,
+    messageNode(await loadRewindTree(broken), "second").target
+  );
+  await assert.rejects(
+    () => applyRewind(broken, prepared, { mode: "conversation" }),
+    /模拟换上下文时出错/
+  );
+  const { loadStoreSession } = await import("../persistence/session-view.ts");
+  const { storeActiveGrants } = await import("../state/session-judge.ts");
+  const loaded = loadStoreSession(sessionsDirOf(root), bundle.adapter.sessionId);
+  assert.ok(loaded !== undefined);
+  assert.deepEqual(storeActiveGrants(loaded.view), [], "撤过的授权没有复活");
+});
+
+test("回退跨了移进独立工作树：只给退对话，退后在新位置补记当前的工作树（续接回到同一处）", async () => {
+  const root = repo(false);
+  const { bundle, host } = await openSession(root, [{ text: "一" }, { text: "二" }]);
+  await bundle.adapter.run("first");
+  await bundle.adapter.run("second");
+  const worktree = {
+    version: 1 as const,
+    name: "w",
+    path: join(root, ".pigeon", "wt", "w"),
+    branch: "pigeon-wt/w",
+    baseLabel: "HEAD",
+    created: true,
+    enteredAt: 0,
+  };
+  bundle.sessionStore.append({ customType: SessionEntryType.Worktree, data: worktree });
+  await bundle.sessionStore.flush();
+  const prepared = await prepareRewind(
+    host,
+    messageNode(await loadRewindTree(host), "second").target
+  );
+  assert.match(prepared.plan.codeBlocked ?? "", /不在同一个工作区/);
+  await applyRewind(host, prepared, { mode: "conversation" });
+  const last = mainEntries(root, bundle.adapter.sessionId)
+    .filter((entry) => entry.customType === SessionEntryType.Worktree)
+    .at(-1)?.data;
+  assert.deepEqual(last, worktree);
+});
+
+test("目标分支在独立工作树里、现在在主检出：不能切过去", () => {
+  const entry = (
+    id: string,
+    parentId: string | null,
+    seq: number,
+    customType: string,
+    data: unknown
+  ) => ({ type: "custom", id, parentId, seq, timestamp: seq, customType, data });
+  const message = (id: string, parentId: string, seq: number, text: string) => ({
+    type: "message",
+    id,
+    parentId,
+    seq,
+    timestamp: seq,
+    message: { role: "user", content: [{ type: "text", text }] },
+  });
+  const entries = [
+    entry("e1", null, 1, SessionEntryType.RunStart, { runId: "run_1" }),
+    message("e2", "e1", 2, "first"),
+    entry("e3", "e2", 3, SessionEntryType.Worktree, { path: "/wt" }),
+    entry("e4", "e3", 4, SessionEntryType.RunStart, { runId: "run_2" }),
+    message("e5", "e4", 5, "second"),
+  ];
+  const file = {
+    path: "x",
+    header: { id: "sess_x" },
+    entries,
+    entriesById: new Map(entries.map((item) => [item.id, item])),
+    lanes: new Map([["main", "e2"]]),
+    labels: new Map(),
+    warnings: [],
+  } as unknown as SessionFileView;
+  const plan = planRewind({ file, trees: undefined, from: "e2", to: "e5" });
+  assert.match(plan.conversationBlocked ?? "", /不能切过去/);
+});
+
+test("切回 agent 删过使用者文件的分支：删掉不是这段里 agent 新建的文件拿不准，列为冲突、缺省保留", async () => {
+  const root = repo(false);
+  const { bundle, host } = await openSession(root, [
+    { text: "删", toolCalls: [{ name: "run_command", args: { command: "git rm -q m.txt" } }] },
+    { text: "删完" },
+  ]);
+  await bundle.adapter.run("first");
+  await host.checkpoints?.settle();
+  assert.equal(existsSync(join(root, "m.txt")), false);
+  const back = await prepareRewind(host, messageNode(await loadRewindTree(host), "first").target);
+  await applyRewind(host, back, { mode: "both", code: await checkCode(host, back) });
+  assert.equal(readFileSync(join(root, "m.txt"), "utf8"), "mine\n");
+  const tip = (await loadRewindTree(host)).find((node) => node.kind === "tip" && !node.current);
+  assert.ok(tip !== undefined);
+  const again = await prepareRewind(host, tip.target);
+  const code = await checkCode(host, again);
+  assert.deepEqual(
+    code.classified.conflicts.map((action) => [action.path, action.reason]),
+    [["m.txt", "不是这段里 agent 新建的文件，删掉拿不准"]]
+  );
+  await applyRewind(host, again, { mode: "code", code });
+  assert.equal(readFileSync(join(root, "m.txt"), "utf8"), "mine\n", "缺省保留");
+});
+
+test("写者：主分支的叶子不是预期的即什么都不写", async () => {
+  const { root, cleanup } = tempRoot("pigeon-rewind-lane-");
+  cleanups.push(cleanup);
+  const { bundle } = await openSession(root, [{ text: "一" }]);
+  await bundle.adapter.run("first");
+  const leaf = await bundle.sessionStore.leafId();
+  const before = mainEntries(root, bundle.adapter.sessionId).length;
+  const result = await bundle.sessionStore.rewindLane({
+    expectLeaf: "not-the-leaf",
+    to: null,
+    entries: [],
+  });
+  assert.equal(result, "changed");
+  assert.equal(await bundle.sessionStore.leafId(), leaf);
+  assert.equal(mainEntries(root, bundle.adapter.sessionId).length, before);
 });

@@ -604,6 +604,14 @@ export const RewindDataSchema = Type.Object({
       })
     )
   ),
+  // 退代码时写回的目标快照（撤销时据此判断写回之后有没有被改过）
+  target: Type.Optional(GitObjectIdSchema),
+  // 删 agent 新建的文件后变空、一并删掉的目录
+  removedDirs: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+  // 写回中途出错：出错的文件与原因（之后的没有动，对话没有退）
+  failed: Type.Optional(Type.Object({ path: Type.String(), reason: Type.String() })),
+  // 撤销上一次退代码（写回那次之前的现状快照）
+  undo: Type.Optional(Type.Literal(true)),
   rewoundAt: Type.Integer({ minimum: 0 }),
 });
 export type RewindData = Static<typeof RewindDataSchema>;

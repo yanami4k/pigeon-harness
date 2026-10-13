@@ -15,10 +15,14 @@ const TAB_HINT = "[tab] running | ";
 
 export type MessageTreeStage = "loading" | "tree" | "choose" | "conflicts" | "busy";
 
-const CHOICES: ReadonlyArray<{ mode: RewindMode; label: string }> = [
+// 三选一之外的"撤销上次退代码"（当前位置上回车）
+export type RewindChoice = RewindMode | "undo";
+
+const CHOICES: ReadonlyArray<{ mode: RewindChoice; label: string }> = [
   { mode: "both", label: "代码与对话都退" },
   { mode: "conversation", label: "只退对话" },
   { mode: "code", label: "只退代码" },
+  { mode: "undo", label: "撤销上次退代码（写回那次之前的样子）" },
 ];
 
 function oneLine(text: string): string {
@@ -52,9 +56,10 @@ export class MessageTree implements Component {
   private current: MessageTreeStage = "loading";
   private busyText = "";
   private target: RewindNode | undefined;
-  private choices: RewindMode[] = [];
+  private choices: RewindChoice[] = [];
+  private chooseNote: string | undefined;
   private choiceCursor = 0;
-  private conflictList: Array<{ path: string; revert: boolean }> = [];
+  private conflictList: Array<{ path: string; reason: string; revert: boolean }> = [];
   private conflictCursor = 0;
 
   constructor(source: MessageTreeSource) {
@@ -111,20 +116,21 @@ export class MessageTree implements Component {
     return this.list.noteText();
   }
 
-  // 选了一点：三选一（没有代码要退时只有退对话）
-  choose(node: RewindNode, codeAvailable: boolean): void {
+  // 选了一点：可选的几项（三选一、只退对话、撤销上次退代码）与说明为什么只有这几项
+  choose(node: RewindNode, choices: readonly RewindChoice[], note?: string): void {
     this.current = "choose";
     this.target = node;
-    this.choices = codeAvailable ? ["both", "conversation", "code"] : ["conversation"];
+    this.choices = [...choices];
+    this.chooseNote = note;
     this.choiceCursor = 0;
   }
 
   // 数字键直接选第几项（没有这一项为 undefined）
-  choiceAt(index: number): RewindMode | undefined {
+  choiceAt(index: number): RewindChoice | undefined {
     return this.current === "choose" ? this.choices[index] : undefined;
   }
 
-  choice(): RewindMode | undefined {
+  choice(): RewindChoice | undefined {
     return this.current === "choose" ? this.choices[this.choiceCursor] : undefined;
   }
 
@@ -132,9 +138,9 @@ export class MessageTree implements Component {
     return this.target;
   }
 
-  conflicts(paths: readonly string[]): void {
+  conflicts(items: ReadonlyArray<{ path: string; reason: string }>): void {
     this.current = "conflicts";
-    this.conflictList = paths.map((path) => ({ path, revert: false }));
+    this.conflictList = items.map((item) => ({ ...item, revert: false }));
     this.conflictCursor = 0;
   }
 
@@ -183,9 +189,11 @@ export class MessageTree implements Component {
     if (this.current === "choose" && node !== undefined) {
       lines.push(
         clipToWidth(
-          node.kind === "message"
-            ? `  退到这条消息之前：${oneLine(node.text)}`
-            : `  切到这条分支的末端：${oneLine(node.text)}`,
+          node.current
+            ? "  当前位置"
+            : node.kind === "message"
+              ? `  退到这条消息之前：${oneLine(node.text)}`
+              : `  切到这条分支的末端：${oneLine(node.text)}`,
           width
         )
       );
@@ -195,19 +203,16 @@ export class MessageTree implements Component {
           clipToWidth(` ${index === this.choiceCursor ? ">" : " "} [${index + 1}] ${label}`, width)
         );
       });
-      if (this.choices.length === 1) {
-        lines.push(
-          clipToWidth("  这一点之后没有要退的代码（或这个会话没有代码快照），只退对话", width)
-        );
-      }
+      if (this.chooseNote !== undefined)
+        lines.push(clipToWidth(`  ${oneLine(this.chooseNote)}`, width));
       lines.push(clipToWidth("  [up/down] move, [enter] confirm, [esc] back", width));
       return lines;
     }
-    lines.push(clipToWidth("  这些文件 agent 改过之后又被手改过：缺省保留，空格切换为退回", width));
+    lines.push(clipToWidth("  这些文件拿不准（后面写着原因）：缺省保留，空格切换为退回", width));
     this.conflictList.forEach((item, index) => {
       lines.push(
         clipToWidth(
-          ` ${index === this.conflictCursor ? ">" : " "} [${item.revert ? "revert" : "keep"}] ${oneLine(item.path)}`,
+          ` ${index === this.conflictCursor ? ">" : " "} [${item.revert ? "revert" : "keep"}] ${oneLine(item.path)}（${oneLine(item.reason)}）`,
           width
         )
       );

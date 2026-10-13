@@ -31,6 +31,13 @@ function git(root: string, args: string[]): string {
   return execFileSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true }).trim();
 }
 
+// 这台机器的临时目录所在的文件系统不分大小写（Windows、macOS 缺省）
+function caseInsensitiveFs(): boolean {
+  const dir = temp("pigeon-restore-case-");
+  writeFileSync(join(dir, "probe"), "");
+  return existsSync(join(dir, "PROBE"));
+}
+
 // 文件按仓库规则规范化后的对象号（与快照同一口径）
 function blobOf(root: string, path: string): string {
   return git(root, ["hash-object", `--path=${path}`, "--", join(root, path)]);
@@ -140,7 +147,50 @@ test("没有存下原样字节、磁盘上的文件是 LF 时照 LF 写（行尾
       { path: "b.txt", target: b, current: { mode: "100644", blob: blobOf(root, "b.txt") } },
     ],
   });
+  assert.deepEqual(result.failed, undefined);
+  assert.deepEqual(result.skipped, []);
   assert.deepEqual(result.written, ["a.txt", "b.txt"]);
   assert.deepEqual(readFileSync(join(root, "a.txt")), Buffer.from("target\n"));
   assert.deepEqual(readFileSync(join(root, "b.txt")), Buffer.from("target b\r\n"));
 });
+
+test("没有原样字节时行尾按工作区当前的 .gitattributes（*.sh text eol=lf 在行尾转换开着时仍写 LF）", () => {
+  const { root, commit } = repo({
+    "build.sh": "echo hi\n",
+    ".gitattributes": "*.sh text eol=lf\n",
+  });
+  git(root, ["config", "core.autocrlf", "true"]);
+  const trees = new SnapshotTrees(root);
+  const target = trees.file(commit, "build.sh");
+  assert.ok(target !== undefined);
+  rmSync(join(root, "build.sh"));
+  const result = restoreFiles({ trees, actions: [{ path: "build.sh", target }] });
+  assert.deepEqual(result.written, ["build.sh"]);
+  assert.deepEqual(readFileSync(join(root, "build.sh")), Buffer.from("echo hi\n"));
+});
+
+test.skipIf(!caseInsensitiveFs())(
+  "文件系统不分大小写：只差大小写的两条一律不写，.Pigeon 也当 .pigeon",
+  () => {
+    const { root, commit } = repo({ "a.txt": "target\n" });
+    const trees = new SnapshotTrees(root);
+    const target = trees.file(commit, "a.txt");
+    assert.ok(target !== undefined);
+    assert.equal(trees.ignoreCase, true);
+    rmSync(join(root, "a.txt"));
+    const result = restoreFiles({
+      trees,
+      actions: [
+        { path: "A.txt", target },
+        { path: "a.txt", target },
+        { path: ".Pigeon/state/x", target },
+      ],
+    });
+    assert.deepEqual(result.written, []);
+    assert.deepEqual(
+      result.skipped.map((item) => item.path),
+      ["A.txt", "a.txt", ".Pigeon/state/x"]
+    );
+    assert.equal(existsSync(join(root, "a.txt")), false);
+  }
+);

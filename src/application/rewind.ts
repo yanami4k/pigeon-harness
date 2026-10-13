@@ -9,6 +9,7 @@
 //   orchestration/rewind-restore.ts。没有快照的会话只退对话。
 import type { Checkpointer, CheckpointResult } from "../orchestration/checkpoint.ts";
 import {
+  hasProgramSegment,
   type RestoreAction,
   type RestoreResult,
   restoreFiles,
@@ -26,9 +27,13 @@ import { type PruneSeed, pruneSeedFromEntries } from "../pi-runtime/context-prun
 import type { AgentMessage } from "../pi-runtime/index.ts";
 import { restoreSessionContext } from "../pi-runtime/session-store.ts";
 import type { ActiveGrant } from "../state/grants.ts";
-import { PIGEON_DIR } from "../state/paths.ts";
-import { type RewindMode, SessionEntryType } from "../state/session-entries.ts";
-import { storeActiveGrants } from "../state/session-judge.ts";
+import { asSessionId } from "../state/ids.ts";
+import {
+  type RewindMode,
+  type SessionCustomEntry,
+  SessionEntryType,
+} from "../state/session-entries.ts";
+import { storeActiveGrants, storeSessionView } from "../state/session-judge.ts";
 import { isStatusMessage } from "../state/status-text.ts";
 import { JOB_NOTICE_PREFIX } from "./background-jobs.ts";
 import { isProgramNotice } from "./history.ts";
@@ -233,6 +238,8 @@ export function rewindTree(file: SessionFileView): RewindNode[] {
 interface RunCode {
   runId: string;
   index: number;
+  // Run 开始的时刻（判断目录是不是这段时间里新建的）
+  startedAt: number;
   start?: string;
   first?: string;
   last?: string;
@@ -261,15 +268,41 @@ function snapshotsByRun(file: SessionFileView): RunSnapshots {
   return runs;
 }
 
+// 会话里任何快照记下的"过大没收"的路径：这些文件快照里看不到，写回一律不碰
+function skippedPaths(file: SessionFileView): Set<string> {
+  const paths = new Set<string>();
+  for (const entry of file.entries) {
+    if (
+      !isCustom(entry, SessionEntryType.TurnSnapshot) &&
+      !isCustom(entry, SessionEntryType.Checkpoint)
+    ) {
+      continue;
+    }
+    const list = dataOf(entry).untrackedSkipped;
+    if (!Array.isArray(list)) continue;
+    for (const item of list) if (typeof item?.path === "string") paths.add(item.path);
+  }
+  return paths;
+}
+
 // 一条分支上的各 Run（Run 开始条目在路径上的位置）与它们的快照
 function runsOnPath(path: readonly StoredEntry[], snapshots: RunSnapshots): RunCode[] {
   const runs: RunCode[] = [];
   path.forEach((entry, index) => {
     if (!isCustom(entry, SessionEntryType.RunStart)) return;
     const runId = String(dataOf(entry).runId ?? "");
-    runs.push({ runId, index, ...snapshots.get(runId) });
+    runs.push({ runId, index, startedAt: entry.timestamp, ...snapshots.get(runId) });
   });
   return runs;
+}
+
+// 一条分支上最后一次移进的独立工作树（决策 446；续接时据此回到工作树）；没有为 undefined
+function lastWorktree(path: readonly StoredEntry[]): StoredEntry | undefined {
+  for (let index = path.length - 1; index >= 0; index -= 1) {
+    const entry = path[index];
+    if (entry !== undefined && isCustom(entry, SessionEntryType.Worktree)) return entry;
+  }
+  return undefined;
 }
 
 export interface PlannedFile {
@@ -278,6 +311,8 @@ export interface PlannedFile {
   expected?: TreeFile;
   // 要写回的样子；没有即删掉
   target?: TreeFile;
+  // 拿不准（删掉的不确定是 agent 在两点之间新建的等）：列为手改冲突，缺省保留
+  uncertain?: string;
 }
 
 export interface RewindPlan {
@@ -285,11 +320,28 @@ export interface RewindPlan {
   to: string | null;
   // 两点之间 agent 改过、且目标与 agent 留下的不同的文件；为空即没有代码要退
   files: PlannedFile[];
+  // 不能退代码的原因（没有发消息时的快照、跨了工作区等）；有即只给退对话
+  codeBlocked?: string;
+  // 会话里记为过大没进快照、这次不碰的文件
+  untouchable: string[];
+  // 写回的目标快照
+  targetCommit?: string;
+  // agent 新建文件的那个 Run 开始的时刻（按路径）：删空的目录只删在这之后建立的
+  createdAfter: Map<string, number>;
+  // 退对话之后要补记在新位置上的工作树条目（续接时回到与运行面同一个工作区）
+  worktreeEntry?: { customType: string; data: unknown };
+  // 不能退对话的原因（目标分支在独立工作树里、当前不在）
+  conversationBlocked?: string;
+  // 撤销上一次退代码
+  undo?: boolean;
 }
 
 function sameFile(left: TreeFile | undefined, right: TreeFile | undefined): boolean {
   return left?.blob === right?.blob && left?.mode === right?.mode;
 }
+
+const NO_TURN_SNAPSHOT =
+  "这一点之后有消息没有发消息时的快照（拍摄失败、超时，或是在命令行里发的），分不清 agent 的改动与手改，只能退对话";
 
 export function planRewind(input: {
   file: SessionFileView;
@@ -298,10 +350,24 @@ export function planRewind(input: {
   to: string | null;
 }): RewindPlan {
   const { file, trees, from, to } = input;
-  const plan: RewindPlan = { from, to, files: [] };
-  if (trees === undefined) return plan;
   const current = branchEntries(file, from);
   const target = branchEntries(file, to);
+  const plan: RewindPlan = { from, to, files: [], untouchable: [], createdAfter: new Map() };
+  // 决策 446：两点之间跨了工作区切换——退代码只在同一工作区内做；退对话后在新位置补记当前的工作树，续接与运行面一致
+  const here = lastWorktree(current);
+  const there = lastWorktree(target);
+  const herePath = here !== undefined ? dataOf(here).path : undefined;
+  const therePath = there !== undefined ? dataOf(there).path : undefined;
+  if (herePath !== therePath) {
+    plan.codeBlocked = "这一点与现在不在同一个工作区（中间移进过独立工作树），只能退对话";
+    if (here !== undefined) {
+      plan.worktreeEntry = { customType: SessionEntryType.Worktree, data: here.data };
+    } else {
+      plan.conversationBlocked =
+        "目标分支在独立工作树里、现在在主检出：退过去续接时会回到工作树，与现在的运行面不一致，不能切过去";
+    }
+  }
+  if (trees === undefined || plan.codeBlocked !== undefined) return plan;
   let common = 0;
   while (
     common < current.length &&
@@ -314,20 +380,15 @@ export function planRewind(input: {
   const after = (runs: RunCode[]) => runs.filter((run) => run.index >= common);
   const currentRuns = after(runsOnPath(current, snapshots));
   const targetRuns = after(runsOnPath(target, snapshots));
-  const before = (run: RunCode): string | undefined =>
-    run.start ?? (run.first !== undefined ? trees.parentOf(run.first) : undefined);
-  const agentFiles = (run: RunCode): string[] => {
-    const base = before(run);
-    return base !== undefined && run.last !== undefined ? trees.changed(base, run.last) : [];
-  };
-  // 分叉处的状态：分叉之后第一个有快照的 Run 开工时的样子
-  let atFork: string | undefined;
-  for (const run of [...currentRuns, ...targetRuns]) {
-    atFork = before(run);
-    if (atFork !== undefined) break;
+  // 决策 433、436：以发消息时的快照为界；分叉之后哪个 Run 没有它即分不清手改，只退对话
+  if ([...currentRuns, ...targetRuns].some((run) => run.start === undefined)) {
+    plan.codeBlocked = NO_TURN_SNAPSHOT;
+    return plan;
   }
+  const atFork = currentRuns[0]?.start ?? targetRuns[0]?.start;
   if (atFork === undefined) return plan;
-  // 目标处的状态：目标分支在分叉之后最后一个有快照的 Run 收尾时（或开工时）的样子；没有即分叉处
+  const agentFiles = (run: RunCode): string[] =>
+    run.start !== undefined && run.last !== undefined ? trees.changed(run.start, run.last) : [];
   let targetCommit = atFork;
   for (const run of [...targetRuns].reverse()) {
     const last = run.last ?? run.start;
@@ -336,10 +397,18 @@ export function planRewind(input: {
       break;
     }
   }
+  plan.targetCommit = targetCommit;
+  const skipped = skippedPaths(file);
+  // agent 留下的样子：按文件取 agent 最后一次改它的那个 Run 收尾时的快照；agent 在这段里新建的记下那个 Run
   const expected = new Map<string, TreeFile | undefined>();
+  const created = new Map<string, number>();
   for (const run of currentRuns) {
+    if (run.last === undefined || run.start === undefined) continue;
     for (const path of agentFiles(run)) {
-      if (run.last !== undefined) expected.set(path, trees.file(run.last, path));
+      expected.set(path, trees.file(run.last, path));
+      if (trees.file(run.start, path) === undefined && trees.file(run.last, path) !== undefined) {
+        if (!created.has(path)) created.set(path, run.startedAt);
+      }
     }
   }
   for (const run of targetRuns) {
@@ -347,32 +416,60 @@ export function planRewind(input: {
       if (!expected.has(path)) expected.set(path, trees.file(atFork, path));
     }
   }
+  // 忽略规则在这段里变过（agent 改 .gitignore 等）：快照里"没有"不再能当作"磁盘上没有"
+  const lastHere = [...currentRuns].reverse().find((run) => run.last !== undefined)?.last;
+  const ignoreRulesChanged =
+    lastHere !== undefined &&
+    trees.changed(atFork, lastHere).some((path) => /(^|\/)\.gitignore$/i.test(path));
   for (const [path, left] of [...expected].sort(([a], [b]) => a.localeCompare(b))) {
-    if (path.split("/").includes(PIGEON_DIR)) continue;
+    if (hasProgramSegment(path)) continue;
+    if (skipped.has(path)) {
+      plan.untouchable.push(path);
+      continue;
+    }
     const goal = trees.file(targetCommit, path);
     if (sameFile(left, goal)) continue;
+    let uncertain: string | undefined;
+    if (goal === undefined) {
+      // 只删在回退点确定不存在、且是 agent 在两点之间新建的文件
+      if (!created.has(path)) uncertain = "不是这段里 agent 新建的文件，删掉拿不准";
+      else if (ignoreRulesChanged) uncertain = "这段里忽略规则变过，删掉拿不准";
+      else if (trees.ignored(path)) uncertain = "按现在的规则被忽略，删掉拿不准";
+      else plan.createdAfter.set(path, created.get(path) ?? 0);
+    }
     plan.files.push({
       path,
       ...(left !== undefined ? { expected: left } : {}),
       ...(goal !== undefined ? { target: goal } : {}),
+      ...(uncertain !== undefined ? { uncertain } : {}),
     });
   }
   return plan;
 }
 
-export interface ClassifiedPlan {
-  actions: RestoreAction[];
-  // agent 改后又被手改过的：缺省保留，选了才退
-  conflicts: RestoreAction[];
+export interface ConflictAction extends RestoreAction {
+  // 为什么列为冲突（手改过，或删掉拿不准）
+  reason: string;
 }
 
-// 拿现状快照分类：现状已是目标的不动；与 agent 留下的一样的直接退；其余是手改过的
+export interface ClassifiedPlan {
+  actions: RestoreAction[];
+  // agent 改后又被手改过的、删掉拿不准的：缺省保留，选了才退
+  conflicts: ConflictAction[];
+}
+
+// 拿现状快照分类：现状已是目标的不动；与 agent 留下的一样且拿得准的直接退；其余列为冲突。
+// 文件系统不分大小写时，只差大小写的几条整体列为冲突
 export function classifyPlan(
   plan: RewindPlan,
   trees: SnapshotTrees,
   currentCommit: string
 ): ClassifiedPlan {
   const result: ClassifiedPlan = { actions: [], conflicts: [] };
+  const keyOf = (path: string) => (trees.ignoreCase ? path.toLowerCase() : path);
+  const counts = new Map<string, number>();
+  for (const file of plan.files)
+    counts.set(keyOf(file.path), (counts.get(keyOf(file.path)) ?? 0) + 1);
   for (const file of plan.files) {
     const now = trees.file(currentCommit, file.path);
     if (sameFile(now, file.target)) continue;
@@ -381,7 +478,14 @@ export function classifyPlan(
       ...(file.target !== undefined ? { target: file.target } : {}),
       ...(now !== undefined ? { current: now } : {}),
     };
-    (sameFile(now, file.expected) ? result.actions : result.conflicts).push(action);
+    const reason =
+      (counts.get(keyOf(file.path)) ?? 0) > 1
+        ? "与另一个文件只差大小写"
+        : !sameFile(now, file.expected)
+          ? "agent 改过之后又被手改过"
+          : file.uncertain;
+    if (reason === undefined) result.actions.push(action);
+    else result.conflicts.push({ ...action, reason });
   }
   return result;
 }
@@ -406,6 +510,26 @@ export function savedBlobsOf(file: SessionFileView): SavedBlob[] {
   return saved;
 }
 
+// 当前主分支上最后一次退代码（写了或删了文件、带还原前的现状快照、本身不是撤销、之后没有被撤销过）
+function lastCodeRewind(file: SessionFileView): Record<string, unknown> | undefined {
+  const main = branchEntries(file, file.lanes.get("main") ?? null);
+  for (let index = main.length - 1; index >= 0; index -= 1) {
+    const entry = main[index];
+    if (entry === undefined || !isCustom(entry, SessionEntryType.Rewind)) continue;
+    const data = dataOf(entry);
+    if (data.undo === true) return undefined;
+    const touched =
+      (Array.isArray(data.written) ? data.written.length : 0) +
+      (Array.isArray(data.removed) ? data.removed.length : 0);
+    const before = data.before as { commit?: unknown } | undefined;
+    if (touched > 0 && typeof before?.commit === "string" && typeof data.target === "string") {
+      return data;
+    }
+    return undefined;
+  }
+  return undefined;
+}
+
 // ---- 执行 ----
 
 export interface RewindHost {
@@ -414,8 +538,11 @@ export interface RewindHost {
     flush(): Promise<void>;
     filePath(): Promise<string | undefined>;
     leafId(): Promise<string | null | undefined>;
-    moveMain(entryId: string | null): Promise<boolean>;
-    append(entry: ReturnType<typeof rewindEntry>): void;
+    rewindLane(input: {
+      expectLeaf: string | null;
+      to?: string | null;
+      entries: readonly SessionCustomEntry[];
+    }): Promise<"ok" | "changed" | "failed">;
     appendMessage(message: AgentMessage): void;
   };
   // 有快照的会话才有
@@ -445,25 +572,62 @@ async function readFile(host: RewindHost): Promise<SessionFileView> {
   return loaded.file;
 }
 
+function treesOf(host: RewindHost): SnapshotTrees | undefined {
+  if (host.checkpoints === undefined) return undefined;
+  try {
+    return new SnapshotTrees(host.workspaceRoot);
+  } catch {
+    return undefined;
+  }
+}
+
 // 打开消息树：读会话文件（先等快照拍完、写入落盘）
 export async function loadRewindTree(host: RewindHost): Promise<RewindNode[]> {
   return rewindTree(await readFile(host));
 }
 
-// 选定一个点之后：规划代码写回（还不拍现状）。没有快照的会话 plan.files 为空，只能退对话
+// 选定一个点之后：规划代码写回（还不拍现状）。plan.files 为空或有 codeBlocked 即只能退对话
 export async function prepareRewind(host: RewindHost, to: string | null): Promise<PreparedRewind> {
   const file = await readFile(host);
   const from = file.lanes.get("main") ?? null;
   if (to !== null && !file.entriesById.has(to)) throw new RewindError("会话里没有这个点");
-  let trees: SnapshotTrees | undefined;
-  if (host.checkpoints !== undefined) {
-    try {
-      trees = new SnapshotTrees(host.workspaceRoot);
-    } catch {
-      trees = undefined;
-    }
-  }
+  const trees = treesOf(host);
   return { file, trees, plan: planRewind({ file, trees, from, to }) };
+}
+
+// 当前位置上：有没有可撤销的上一次退代码；有即给出撤销的规划（写回那次之前的现状快照里的样子）
+export async function prepareUndo(host: RewindHost): Promise<PreparedRewind | undefined> {
+  const file = await readFile(host);
+  const last = lastCodeRewind(file);
+  const trees = treesOf(host);
+  if (last === undefined || trees === undefined) return undefined;
+  const from = file.lanes.get("main") ?? null;
+  const before = String((last.before as { commit: string }).commit);
+  const wrote = String(last.target);
+  const paths = [
+    ...(Array.isArray(last.written) ? last.written : []),
+    ...(Array.isArray(last.removed) ? last.removed : []),
+  ].filter((path): path is string => typeof path === "string");
+  const plan: RewindPlan = {
+    from,
+    to: from,
+    files: [],
+    untouchable: [],
+    targetCommit: before,
+    createdAfter: new Map(),
+    undo: true,
+  };
+  for (const path of [...new Set(paths)].sort()) {
+    const expected = trees.file(wrote, path);
+    const target = trees.file(before, path);
+    if (sameFile(expected, target)) continue;
+    plan.files.push({
+      path,
+      ...(expected !== undefined ? { expected } : {}),
+      ...(target !== undefined ? { target } : {}),
+    });
+  }
+  return { file, trees, plan };
 }
 
 export interface CodeCheck {
@@ -477,6 +641,7 @@ export async function checkCode(host: RewindHost, prepared: PreparedRewind): Pro
   if (checkpoints === undefined || prepared.trees === undefined) {
     throw new RewindError("这个会话没有代码快照，只能退对话");
   }
+  if (prepared.plan.codeBlocked !== undefined) throw new RewindError(prepared.plan.codeBlocked);
   await checkpoints.settle();
   const before = await checkpoints.checkpointer.snapshotNow();
   return { before, classified: classifyPlan(prepared.plan, prepared.trees, before.commit) };
@@ -486,8 +651,59 @@ export interface RewindOutcome {
   mode: RewindMode;
   restore?: RestoreResult;
   kept: string[];
+  // 这次没碰的过大文件
+  untouchable: string[];
   grantsAdded: number;
   grantsRevoked: number;
+  // 写回中途出错：对话没有退；已写的在 restore 里
+  failed?: { path: string; reason: string };
+  // 写完文件之后会话又有了新内容：写回照实记下，对话没有退
+  conversationSkipped?: string;
+  undo?: boolean;
+}
+
+// 437：目标分支上与内存不一致的授权——补记（落在新位置上）
+function grantEntries(
+  host: RewindHost,
+  file: SessionFileView,
+  to: string | null,
+  now: number
+): { entries: SessionCustomEntry[]; added: number; revoked: number } {
+  const result = { entries: [] as SessionCustomEntry[], added: 0, revoked: 0 };
+  if (host.grants === undefined) return result;
+  const view = storeSessionView({
+    sessionId: asSessionId(file.header.id),
+    ...(file.header.parentSessionId !== undefined
+      ? { parentSessionId: file.header.parentSessionId }
+      : {}),
+    ...(file.header.metadata !== undefined ? { metadata: file.header.metadata } : {}),
+    entries: branchEntries(file, to),
+  });
+  const memory = host.grants.list();
+  const onBranch = new Map(storeActiveGrants(view).map((grant) => [grant.grantId, grant]));
+  const inMemory = new Set(memory.map((grant) => grant.grantId as string));
+  for (const grant of memory) {
+    if (onBranch.has(grant.grantId)) continue;
+    result.entries.push(
+      grantCreatedEntry({
+        grantId: grant.grantId,
+        tool: grant.tool,
+        ...(grant.pathPrefix !== undefined ? { pathPrefix: grant.pathPrefix } : {}),
+        ...(grant.command !== undefined ? { command: grant.command } : {}),
+        ...(grant.shell !== undefined ? { shell: grant.shell } : {}),
+        ...(grant.host !== undefined ? { host: grant.host } : {}),
+        firstCall: grant.firstCall,
+        createdAt: grant.createdAt,
+      })
+    );
+    result.added += 1;
+  }
+  for (const grantId of onBranch.keys()) {
+    if (inMemory.has(grantId)) continue;
+    result.entries.push(grantRevokedEntry({ grantId, revokedAt: now }));
+    result.revoked += 1;
+  }
+  return result;
 }
 
 export async function applyRewind(
@@ -495,9 +711,20 @@ export async function applyRewind(
   prepared: PreparedRewind,
   options: { mode: RewindMode; code?: CodeCheck; revert?: ReadonlySet<string> }
 ): Promise<RewindOutcome> {
-  const { mode } = options;
-  const { plan } = prepared;
-  const outcome: RewindOutcome = { mode, kept: [], grantsAdded: 0, grantsRevoked: 0 };
+  const { plan, file } = prepared;
+  const mode: RewindMode = plan.undo === true ? "code" : options.mode;
+  const now = (host.now ?? Date.now)();
+  const outcome: RewindOutcome = {
+    mode,
+    kept: [],
+    untouchable: plan.untouchable,
+    grantsAdded: 0,
+    grantsRevoked: 0,
+    ...(plan.undo === true ? { undo: true } : {}),
+  };
+  if (mode !== "code" && plan.conversationBlocked !== undefined) {
+    throw new RewindError(plan.conversationBlocked);
+  }
   // 主分支在规划之后动过（又有了写入）即不按旧规划做
   const leaf = await host.sessionStore.leafId();
   if (leaf !== plan.from) throw new RewindError("会话在选点之后又有了新内容，请重新打开回退");
@@ -514,69 +741,80 @@ export async function applyRewind(
     outcome.kept = code.classified.conflicts
       .filter((action) => !revert.has(action.path))
       .map((action) => action.path);
+    const trees = prepared.trees;
+    const targetCommit = plan.targetCommit;
     outcome.restore = restoreFiles({
-      trees: prepared.trees,
+      trees,
       actions,
-      saved: savedBlobsOf(prepared.file),
+      saved: savedBlobsOf(file),
+      // 删空的目录：快照里那时这个目录下没有文件、且目录是在新建其中文件的那个 Run 开始之后建立的
+      removableDir: (dir, bornAt) => {
+        if (targetCommit === undefined || trees.hasDir(targetCommit, dir)) return false;
+        const createdAt = [...plan.createdAfter]
+          .filter(([path]) => path.startsWith(`${dir}/`))
+          .map(([, at]) => at);
+        return bornAt > 0 && createdAt.length > 0 && bornAt >= Math.min(...createdAt);
+      },
     });
+    if (outcome.restore.failed !== undefined) outcome.failed = outcome.restore.failed;
     await host.checkpoints?.checkpointer.resync?.();
   }
-  if (mode !== "code" && !(await host.sessionStore.moveMain(plan.to))) {
-    throw new RewindError("挪动主分支没有成功（会话存储告警已给出原因）");
-  }
   const restore = outcome.restore;
-  host.sessionStore.append(
-    rewindEntry({
-      from: plan.from,
-      to: plan.to,
-      mode,
-      ...(options.code !== undefined
-        ? { before: { ref: options.code.before.ref, commit: options.code.before.commit } }
-        : {}),
-      ...(restore !== undefined && restore.written.length > 0 ? { written: restore.written } : {}),
-      ...(restore !== undefined && restore.removed.length > 0 ? { removed: restore.removed } : {}),
-      ...(outcome.kept.length > 0 ? { kept: outcome.kept } : {}),
-      ...(restore !== undefined && restore.skipped.length > 0 ? { skipped: restore.skipped } : {}),
-      ...(restore !== undefined && restore.saved.length > 0 ? { saved: restore.saved } : {}),
-      rewoundAt: (host.now ?? Date.now)(),
-    })
-  );
-  if (mode === "code") {
-    await host.sessionStore.flush();
+  const moveConversation = mode !== "code" && outcome.failed === undefined;
+  const grants = moveConversation
+    ? grantEntries(host, file, plan.to, now)
+    : { entries: [], added: 0, revoked: 0 };
+  const record = rewindEntry({
+    from: plan.from,
+    to: plan.to,
+    mode,
+    ...(options.code !== undefined
+      ? { before: { ref: options.code.before.ref, commit: options.code.before.commit } }
+      : {}),
+    ...(restore !== undefined && plan.targetCommit !== undefined
+      ? { target: plan.targetCommit }
+      : {}),
+    ...(restore !== undefined && restore.written.length > 0 ? { written: restore.written } : {}),
+    ...(restore !== undefined && restore.removed.length > 0 ? { removed: restore.removed } : {}),
+    ...(restore !== undefined && restore.removedDirs.length > 0
+      ? { removedDirs: restore.removedDirs }
+      : {}),
+    ...(outcome.kept.length > 0 ? { kept: outcome.kept } : {}),
+    ...(restore !== undefined && restore.skipped.length > 0 ? { skipped: restore.skipped } : {}),
+    ...(restore !== undefined && restore.saved.length > 0 ? { saved: restore.saved } : {}),
+    ...(outcome.failed !== undefined ? { failed: outcome.failed } : {}),
+    ...(plan.undo === true ? { undo: true as const } : {}),
+    rewoundAt: now,
+  });
+  // 437：挪主分支、回退记录与授权补记在同一个写入请求里落盘（中途退出也不会让撤过的授权复活）
+  const lane = await host.sessionStore.rewindLane({
+    expectLeaf: plan.from,
+    ...(moveConversation ? { to: plan.to } : {}),
+    entries: [
+      record,
+      ...(moveConversation && plan.worktreeEntry !== undefined
+        ? [plan.worktreeEntry as SessionCustomEntry]
+        : []),
+      ...grants.entries,
+    ],
+  });
+  if (lane === "changed") {
+    // 文件已写：照实记在当前位置上，对话不退
+    await host.sessionStore.rewindLane({
+      expectLeaf: (await host.sessionStore.leafId()) ?? null,
+      entries: [record],
+    });
+    outcome.conversationSkipped = "会话在写回期间又有了新内容，对话没有退（写回的文件已记下）";
     return outcome;
   }
+  if (lane === "failed") throw new RewindError("写回退记录没有成功（会话存储告警已给出原因）");
+  if (!moveConversation) return outcome;
+  outcome.grantsAdded = grants.added;
+  outcome.grantsRevoked = grants.revoked;
   await host.sessionStore.flush();
   const path = await host.sessionStore.filePath();
   const loaded = path !== undefined ? loadStoreSessionFile(path) : undefined;
   if (loaded === undefined) throw new RewindError("回退之后读不到会话文件");
-  // 437：授权沿用切换前的状态——目标分支上与内存不一致的补记
-  if (host.grants !== undefined) {
-    const memory = host.grants.list();
-    const onBranch = new Map(storeActiveGrants(loaded.view).map((grant) => [grant.grantId, grant]));
-    const inMemory = new Set(memory.map((grant) => grant.grantId as string));
-    const now = (host.now ?? Date.now)();
-    for (const grant of memory) {
-      if (onBranch.has(grant.grantId)) continue;
-      host.sessionStore.append(
-        grantCreatedEntry({
-          grantId: grant.grantId,
-          tool: grant.tool,
-          ...(grant.pathPrefix !== undefined ? { pathPrefix: grant.pathPrefix } : {}),
-          ...(grant.command !== undefined ? { command: grant.command } : {}),
-          ...(grant.shell !== undefined ? { shell: grant.shell } : {}),
-          ...(grant.host !== undefined ? { host: grant.host } : {}),
-          firstCall: grant.firstCall,
-          createdAt: grant.createdAt,
-        })
-      );
-      outcome.grantsAdded += 1;
-    }
-    for (const grantId of onBranch.keys()) {
-      if (inMemory.has(grantId)) continue;
-      host.sessionStore.append(grantRevokedEntry({ grantId, revokedAt: now }));
-      outcome.grantsRevoked += 1;
-    }
-  }
   const { messages, interrupted } = restoreSessionContext(loaded.main);
   for (const message of interrupted) host.sessionStore.appendMessage(message);
   await host.sessionStore.flush();

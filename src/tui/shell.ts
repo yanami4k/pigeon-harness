@@ -125,7 +125,7 @@ import { createPromptEditor, type PromptAutocomplete } from "./input-editor.ts";
 import { InputQueue } from "./input-queue.ts";
 import { installKeybindings, isKey } from "./keybindings.ts";
 import { attachToolResultTo, MessageFlow, projectRuntimeEvent } from "./message-flow.ts";
-import { MessageTree } from "./message-tree.ts";
+import { MessageTree, type RewindChoice } from "./message-tree.ts";
 import {
   askApprovalPanel,
   closePendingModals,
@@ -303,6 +303,8 @@ export type TreeMode = "running" | "sessions" | "messages";
 export interface TuiRewindFace {
   tree(): Promise<RewindNode[]>;
   prepare(to: string | null): Promise<PreparedRewind>;
+  // 当前位置上可撤销的上一次退代码（没有为 undefined）
+  prepareUndo(): Promise<PreparedRewind | undefined>;
   check(prepared: PreparedRewind): Promise<CodeCheck>;
   apply(
     prepared: PreparedRewind,
@@ -1085,11 +1087,8 @@ export class PigeonTuiShell
       } else if (matchesKey(data, "enter")) {
         const node = tree.selected();
         if (node === undefined) return;
-        if (node.current) {
-          tree.setNote("已经在这里");
-          return;
-        }
-        this.planRewind(node);
+        if (node.current) this.planUndo(node);
+        else this.planRewind(node);
       }
       return;
     }
@@ -1100,13 +1099,13 @@ export class PigeonTuiShell
         tree.move(-1);
       } else if (matchesKey(data, "down")) {
         tree.move(1);
-      } else if (/^[1-3]$/.test(data) || matchesKey(data, "enter")) {
-        const mode = /^[1-3]$/.test(data) ? tree.choiceAt(Number(data) - 1) : tree.choice();
-        if (mode !== undefined) this.chooseRewindMode(mode);
+      } else if (/^[1-4]$/.test(data) || matchesKey(data, "enter")) {
+        const choice = /^[1-4]$/.test(data) ? tree.choiceAt(Number(data) - 1) : tree.choice();
+        if (choice !== undefined) this.chooseRewindMode(choice);
       }
       return;
     }
-    // 手改过的文件逐个选
+    // 拿不准的文件逐个选
     if (matchesKey(data, "escape")) {
       tree.back("没有回退");
     } else if (matchesKey(data, "up")) {
@@ -1127,7 +1126,7 @@ export class PigeonTuiShell
     this.tui.requestRender();
   }
 
-  // 选了一点：先规划（不拍快照），据此给三选一
+  // 选了一点：先规划（不拍快照），据此给可选的几项与原因
   private planRewind(node: RewindNode): void {
     const rewind = this.options.rewind;
     if (rewind === undefined) return;
@@ -1138,18 +1137,61 @@ export class PigeonTuiShell
         this.rewinding = false;
         this.rewindPrepared = prepared;
         this.rewindCode = undefined;
-        this.messageTree.choose(node, prepared.plan.files.length > 0);
+        const plan = prepared.plan;
+        const code = plan.codeBlocked === undefined && plan.files.length > 0;
+        const choices: RewindChoice[] =
+          plan.conversationBlocked !== undefined
+            ? []
+            : code
+              ? ["both", "conversation", "code"]
+              : ["conversation"];
+        if (choices.length === 0) {
+          this.messageTree.back(`不能回退：${plan.conversationBlocked ?? ""}`);
+        } else {
+          this.messageTree.choose(
+            node,
+            choices,
+            code
+              ? plan.untouchable.length > 0
+                ? `过大没进快照的不碰：${plan.untouchable.join("、")}`
+                : undefined
+              : (plan.codeBlocked ?? "这一点之后没有要退的代码（或这个会话没有代码快照），只退对话")
+          );
+        }
         this.tui.requestRender();
       },
       (error: unknown) => this.rewindFailed(error)
     );
   }
 
-  // 三选一之后：退代码的先给现状拍快照（433），有手改过的文件让人逐个选
-  private chooseRewindMode(mode: RewindMode): void {
+  // 当前位置上回车：有可撤销的上一次退代码即给"撤销"，否则说明已在这里
+  private planUndo(node: RewindNode): void {
+    const rewind = this.options.rewind;
+    if (rewind === undefined) return;
+    this.rewinding = true;
+    this.messageTree.busy("正在读会话与快照...");
+    rewind.prepareUndo().then(
+      (prepared) => {
+        this.rewinding = false;
+        if (prepared === undefined || prepared.plan.files.length === 0) {
+          this.messageTree.back("已经在这里");
+        } else {
+          this.rewindPrepared = prepared;
+          this.rewindCode = undefined;
+          this.messageTree.choose(node, ["undo"]);
+        }
+        this.tui.requestRender();
+      },
+      (error: unknown) => this.rewindFailed(error)
+    );
+  }
+
+  // 选定之后：退代码的先给现状拍快照（433），拿不准的文件让人逐个选
+  private chooseRewindMode(choice: RewindChoice): void {
     const rewind = this.options.rewind;
     const prepared = this.rewindPrepared;
     if (rewind === undefined || prepared === undefined) return;
+    const mode: RewindMode = choice === "undo" ? "code" : choice;
     this.pendingRewindMode = mode;
     if (mode === "conversation") {
       this.applyRewind(mode, new Set());
@@ -1160,10 +1202,12 @@ export class PigeonTuiShell
     rewind.check(prepared).then(
       (code) => {
         this.rewindCode = code;
-        const conflicts = code.classified.conflicts.map((action) => action.path);
+        const conflicts = code.classified.conflicts;
         if (conflicts.length > 0) {
           this.rewinding = false;
-          this.messageTree.conflicts(conflicts);
+          this.messageTree.conflicts(
+            conflicts.map((action) => ({ path: action.path, reason: action.reason }))
+          );
           this.tui.requestRender();
           return;
         }
@@ -1193,23 +1237,35 @@ export class PigeonTuiShell
       );
   }
 
-  // 回退完成：退了对话的按新的主分支重绘消息区，原消息放回输入框；写回结果如实列出
+  // 回退完成（或部分完成）：退了对话的按新的主分支重绘消息区，原消息放回输入框；写回结果与出错如实列出
   private rewindDone(node: RewindNode, outcome: RewindOutcome): void {
     this.rewinding = false;
     this.rewindPrepared = undefined;
     this.rewindCode = undefined;
     this.returnTo = { view: "main" };
     this.showView("main");
-    if (outcome.mode !== "code") {
+    const moved =
+      outcome.mode !== "code" &&
+      outcome.failed === undefined &&
+      outcome.conversationSkipped === undefined;
+    if (moved) {
       this.flow.clear();
       this.flow.addSystem("== 回退之后的对话 ==");
       this.renderHistoryInto(this.flow, this.current.sessionId, "== 以上为回退之后的对话 ==");
     }
     const what =
       outcome.mode === "both" ? "代码与对话" : outcome.mode === "conversation" ? "对话" : "代码";
-    this.flow.addSystem(
-      node.kind === "message" ? `已退回（${what}）到这条消息之前` : `已切到这条分支（${what}）`
-    );
+    if (outcome.undo === true) {
+      this.flow.addSystem(
+        outcome.failed === undefined ? "已撤销上次退代码" : "撤销上次退代码没有做完"
+      );
+    } else if (outcome.failed !== undefined) {
+      this.flow.addSystem("写回中途出错，停在出错的那个文件：对话没有退");
+    } else {
+      this.flow.addSystem(
+        node.kind === "message" ? `已退回（${what}）到这条消息之前` : `已切到这条分支（${what}）`
+      );
+    }
     const restore = outcome.restore;
     if (restore !== undefined) {
       const list = (paths: readonly string[]) =>
@@ -1218,22 +1274,40 @@ export class PigeonTuiShell
           : paths.join("、");
       if (restore.written.length > 0) this.flow.addSystem(`写回：${list(restore.written)}`);
       if (restore.removed.length > 0) this.flow.addSystem(`删掉：${list(restore.removed)}`);
+      if (restore.removedDirs.length > 0) {
+        this.flow.addSystem(`删掉空目录：${list(restore.removedDirs)}`);
+      }
       for (const skipped of restore.skipped) {
         this.flow.addSystem(`没动：${skipped.path}（${skipped.reason}）`);
       }
-      if (restore.written.length + restore.removed.length + restore.skipped.length === 0) {
+      if (
+        restore.written.length + restore.removed.length + restore.skipped.length === 0 &&
+        outcome.failed === undefined
+      ) {
         this.flow.addSystem("没有要写回的文件");
       }
     }
+    if (outcome.failed !== undefined) {
+      this.flow.addSystem(
+        `出错：${outcome.failed.path === "" ? "" : `${outcome.failed.path}：`}${outcome.failed.reason}`
+      );
+      if ((restore?.written.length ?? 0) + (restore?.removed.length ?? 0) > 0) {
+        this.flow.addSystem("已写的可撤销：/rewind 里在当前位置回车，选撤销上次退代码");
+      }
+    }
+    if (outcome.conversationSkipped !== undefined) this.flow.addSystem(outcome.conversationSkipped);
+    for (const path of outcome.untouchable) {
+      this.flow.addSystem(`没动：${path}（过大没进快照）`);
+    }
     if (outcome.kept.length > 0) {
-      this.flow.addSystem(`保留了手改过的：${outcome.kept.join("、")}`);
+      this.flow.addSystem(`保留了拿不准的：${outcome.kept.join("、")}`);
     }
     if (outcome.grantsAdded + outcome.grantsRevoked > 0) {
       this.flow.addSystem(
         `授权沿用回退前的状态（补记 ${outcome.grantsAdded} 条授权、${outcome.grantsRevoked} 条撤销）`
       );
     }
-    if (node.kind === "message" && outcome.mode !== "code" && node.prefill !== undefined) {
+    if (moved && node.kind === "message" && node.prefill !== undefined) {
       this.input.setText(node.prefill);
     }
     this.updateStatus();

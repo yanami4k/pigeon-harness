@@ -65,6 +65,7 @@ import {
   loadRewindTree,
   type PreparedRewind,
   prepareRewind,
+  prepareUndo,
   type RewindHost,
 } from "../application/rewind.ts";
 import {
@@ -527,6 +528,7 @@ export async function main(argv: string[]): Promise<void> {
     rewind: {
       tree: () => loadRewindTree(rewindHost()),
       prepare: (to: string | null) => prepareRewind(rewindHost(), to),
+      prepareUndo: () => prepareUndo(rewindHost()),
       check: (prepared: PreparedRewind) => checkCode(rewindHost(), prepared),
       apply: (prepared: PreparedRewind, options: Parameters<typeof applyRewind>[2]) =>
         applyRewind(rewindHost(), prepared, options),

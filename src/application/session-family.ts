@@ -4,7 +4,7 @@
 // 时间、轮数、花费与结果。花费按会话花费的同一计价（costTallyOfView：回复自带价格、DeepSeek 按官方人民币价目、无价格的记 token），
 // 每个节点只计它自己的，不含子会话（子会话各自成节点）。读不到的文件成一个"读不到"节点，不中断。只读，不写任何记录。
 
-import { readSessionView } from "../persistence/session-catalog.ts";
+import { readSessionBranchViews, readSessionView } from "../persistence/session-catalog.ts";
 import {
   listSessionFiles,
   readSessionHeader,
@@ -13,7 +13,13 @@ import {
 } from "../persistence/session-reader.ts";
 import { HEADER_METADATA_KEY } from "../state/session-entries.ts";
 import type { SessionView } from "../state/session-view.ts";
-import { type CostTally, costTallyOfView, emptyCostTally, mergeCostTally } from "./session-cost.ts";
+import {
+  branchesCostTally,
+  type CostTally,
+  costTallyOfView,
+  emptyCostTally,
+  mergeCostTally,
+} from "./session-cost.ts";
 import { workerStateLabel } from "./workers-commands.ts";
 
 // 主会话、分支（/fork，manual）、失败重试（retry-on-fail）、worker、复盘（带复盘标记）、未标明的分叉（有来源会话、
@@ -201,7 +207,11 @@ export function loadSessionFamily(
         }
       }
       node.turns = view.runs.length;
-      node.cost = costTallyOfView(view);
+      // 决策 438：会话花费按会话文件里全部分支（测试注入了读法时按注入的视图）
+      node.cost =
+        options.readView === undefined
+          ? branchesCostTally(readSessionBranchViews(info.ref))
+          : costTallyOfView(view);
       if (node.kind === "retry" || node.kind === "branch") {
         const result = branchResultOf(view);
         if (result !== undefined) node.result = result;

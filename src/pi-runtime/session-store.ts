@@ -28,6 +28,7 @@ import {
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
   HEADER_METADATA_KEY,
+  type SessionCustomEntry,
   type SessionEntrySink,
   SessionEntryType,
   type SessionHeaderMetadata,
@@ -131,9 +132,14 @@ export interface SessionStoreWriter extends SessionStoreSink {
   close(): Promise<void>;
   // 决策 434：主分支的叶子（排在此前的写入之后）；会话没打开时为 undefined，空会话为 null
   leafId(): Promise<string | null | undefined>;
-  // 决策 434：把主分支改挂到某条目（null 即会话开头）上，排在此前的写入之后；原来的后续留在文件里成为分支。
-  // 条目不存在或写失败返回 false（失败另交告警口）
-  moveMain(entryId: string | null): Promise<boolean>;
+  // 决策 434、437：会话回退的一次落盘，排在此前的写入之后、在同一个写入请求里做完：先核对主分支的叶子仍是 expectLeaf
+  //（不是即什么都不写，返回 "changed"），给了 to 即把主分支改挂到它上面（null 即会话开头；原来的后续留在文件里成为分支），
+  // 再依次写 entries（回退记录、授权补记等，落在新位置上）。条目不存在或写失败返回 "failed"（失败另交告警口）
+  rewindLane(input: {
+    expectLeaf: string | null;
+    to?: string | null;
+    entries: readonly SessionCustomEntry[];
+  }): Promise<"ok" | "changed" | "failed">;
 }
 
 // 排进队列的一次写入：失败交给发起它的写者的告警口
@@ -351,14 +357,33 @@ export function openSessionStoreWriter(options: SessionStoreWriterOptions): Sess
       shared.deferred !== undefined && !closed
         ? Promise.resolve(null)
         : request("读主分支叶子", (session) => session.getLeafId()),
-    moveMain: async (entryId) =>
-      (await request("挪动主分支", async (session) => {
-        if (entryId !== null && (await session.getEntry(entryId)) === undefined) {
-          throw new Error(`会话里没有条目 ${entryId}`);
-        }
-        await session.moveLane("main", entryId);
-        return true;
-      })) === true,
+    rewindLane: async (input) => {
+      let entries: Array<{ customType: string; data: unknown }>;
+      try {
+        entries = input.entries.map((entry) => ({
+          customType: entry.customType,
+          data: stripUndefined(entry.data),
+        }));
+      } catch (error) {
+        report(options.onFault, "写回退记录", error);
+        return "failed";
+      }
+      return (
+        (await request("回退主分支", async (session) => {
+          if ((await session.getLeafId()) !== input.expectLeaf) return "changed" as const;
+          const to = input.to;
+          if (to !== undefined) {
+            if (to !== null && (await session.getEntry(to)) === undefined) {
+              throw new Error(`会话里没有条目 ${to}`);
+            }
+            await session.moveLane("main", to);
+          }
+          for (const entry of entries)
+            await session.appendCustomEntry(entry.customType, entry.data);
+          return "ok" as const;
+        })) ?? "failed"
+      );
+    },
     appendCompaction: (result) => {
       let entry: Omit<CompactionEntry, "id" | "parentId" | "seq" | "timestamp">;
       try {
