@@ -91,6 +91,8 @@ export interface CommandsHost {
   worktrees?(): TuiWorktreesFace | undefined;
   // 决策 450：/rename 改本会话在本机会话名录里的名字（缺省 = /rename 不可用）
   readonly renamePeer?: ((name: string) => string) | undefined;
+  // 决策 442：/config（缺省 = 不可用）；参数为空即打开面板，"选项=值" 即直接改
+  readonly configCommand?: ((args: string) => void) | undefined;
 }
 
 // 命令表判断可用性用的只读面
@@ -108,6 +110,7 @@ export function commandAvailability(host: CommandsHost): CommandAvailability {
     memory: () => host.memory?.() !== undefined,
     worktrees: () => host.worktrees?.() !== undefined,
     rename: () => host.renamePeer !== undefined,
+    config: () => host.configCommand !== undefined,
     workers: () => {
       const workers = host.workers();
       return workers === undefined
@@ -313,6 +316,11 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
     const worktrees = host.worktrees?.();
     if (tokens[0] === "worktrees" && worktrees !== undefined) {
       host.addSystem(worktrees.run(tokens.slice(1)));
+      return;
+    }
+    // 决策 442：/config 打开设置面板；/config 选项=值 直接改
+    if (tokens[0] === "config" && host.configCommand !== undefined) {
+      host.configCommand(value.trim().slice("/config".length).trim());
       return;
     }
     // 决策 450：/rename <名字> 改本会话在本机会话名录里的名字（别的会话按它找到本会话）

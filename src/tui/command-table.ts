@@ -28,6 +28,8 @@ export interface CommandAvailability {
   worktrees?(): boolean;
   // 决策 450：/rename 改会话名（开了收件口才在场）
   rename?(): boolean;
+  // 决策 442：/config 设置面板（装配方给了才在场）
+  config?(): boolean;
 }
 
 export interface SlashCommandSpec {
@@ -196,6 +198,13 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     usage: "/worktrees [clean [编号…] [--all] | confirm]",
     whileRunning: { allow: true },
     available: (host) => host.worktrees?.() === true && !host.inSandbox(),
+  },
+  // 决策 442：设置面板——改了即写用户级设置并重建运行面，运行中不可用
+  {
+    name: "config",
+    usage: "/config [选项=值]",
+    whileRunning: { allow: false, reason: `${MAIN_STATE}（改设置后重建运行面）` },
+    available: (host) => host.config?.() === true,
   },
   // 决策 450：改本会话在本机会话名录里的名字，只动名录，运行中可用
   {

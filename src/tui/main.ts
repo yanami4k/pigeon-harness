@@ -23,6 +23,7 @@ import { pathToFileURL } from "node:url";
 import { ProcessTerminal } from "@earendil-works/pi-tui";
 import { createSessionAttemptRunner } from "../application/attempt-group.ts";
 import type { CheckpointAttachment } from "../application/checkpoints.ts";
+import { configView, setUserConfig } from "../application/config-options.ts";
 import {
   EnterWorktreeSlot,
   recordWorktreeEntry,
@@ -496,6 +497,11 @@ export async function main(argv: string[]): Promise<void> {
     ...(keybindingsSectionOf(settings) !== undefined
       ? { keybindings: keybindingsSectionOf(settings) }
       : {}),
+    // 决策 442：/config 设置面板——生效值取本会话当前的设置快照，改动写用户级设置（随后壳按 /reload 重建）
+    config: {
+      view: () => configView(settings),
+      set: (id: string, value: string) => setUserConfig(governanceRoot, id, value),
+    },
     // 决策 439：输入框补全，路径与 @ 引用以工作区为根
     autocomplete: { basePath: workspaceRoot, fdPath: findFdPath() },
     // 决策 441：Windows 上右键粘贴取系统剪贴板

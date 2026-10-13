@@ -56,6 +56,7 @@ import {
   VStack,
 } from "@earendil-works/pi-tui";
 import { compactionNoticeText, manualCompactionText } from "../application/compaction-text.ts";
+import { type ConfigItemView, parseConfigAssignment } from "../application/config-options.ts";
 import { failureBadge } from "../application/format.ts";
 import { loadSessionHistory } from "../application/history.ts";
 import type { HookEventReport } from "../application/hooks.ts";
@@ -111,6 +112,7 @@ import {
   type TuiGrantsContext,
   type TuiMemoryFace,
 } from "./commands.ts";
+import { ConfigPanel } from "./config-panel.ts";
 import type { TuiHooksFace } from "./hooks-view.ts";
 import { createPromptEditor, type PromptAutocomplete } from "./input-editor.ts";
 import { InputQueue } from "./input-queue.ts";
@@ -258,6 +260,11 @@ export interface TuiShellOptions {
   renamePeer?: (name: string) => string;
   // 决策 441：读系统剪贴板（Windows 上右键粘贴用）；缺省 = 右键不粘贴
   readClipboard?: () => Promise<string>;
+  // 决策 442：/config 的取数与改动（生效值、用户级的值与覆盖情况；改动写用户级设置，返回写到的文件）；缺省 = 不可用
+  config?: {
+    view(): ConfigItemView[];
+    set(id: string, value: string): string;
+  };
   // 决策 439：输入框补全（"/" 命令、Tab 路径、"@" 文件）；缺省不接
   autocomplete?: PromptAutocomplete;
   // 决策 439：设置里的键位（keybindings 一节）；缺省全用缺省键位
@@ -495,6 +502,7 @@ export class PigeonTuiShell
                 this.statusLine,
                 this.queue.view,
                 this.picker.view,
+                this.configPanel.view,
                 this.input,
                 this.statusBar,
                 this.panel,
@@ -835,6 +843,71 @@ export class PigeonTuiShell
     return this.options.worktrees;
   }
 
+  // 决策 442：/config（CommandsHost）——不带参数打开面板，"选项=值" 直接改
+  private readonly configPanel = new ConfigPanel();
+  get configCommand(): ((args: string) => void) | undefined {
+    const face = this.options.config;
+    if (face === undefined) return undefined;
+    return (args) => {
+      if (args === "") {
+        this.configPanel.open(
+          face.view(),
+          (id, value) => this.applyConfig(id, value),
+          () => this.tui.requestRender()
+        );
+        this.tui.requestRender();
+        return;
+      }
+      const assignment = parseConfigAssignment(args);
+      if (assignment === undefined) {
+        this.flow.addSystem("用法：/config 或 /config 选项=值（例如 /config web.enabled=false）");
+        this.tui.requestRender();
+        return;
+      }
+      this.applyConfig(assignment.id, assignment.value);
+    };
+  }
+
+  // 写进用户级设置，再按 /reload 的重建当场生效（重建期间与 Run 同样占住输入）；面板开着时随后刷新
+  private applyConfig(id: string, value: string): void {
+    const face = this.options.config;
+    if (face === undefined) return;
+    let file: string;
+    try {
+      file = face.set(id, value);
+    } catch (error) {
+      this.flow.addSystem(`没有改：${error instanceof Error ? error.message : String(error)}`);
+      this.tui.requestRender();
+      return;
+    }
+    this.flow.addSystem(`已写进 ${file}：${id} = ${value}`);
+    const view = face.view().find((item) => item.option.id === id);
+    if (view?.overriddenBy !== undefined) {
+      this.flow.addSystem(`注意：${id} 被项目设置覆盖，改用户级不生效`);
+    }
+    const reload = this.options.reload;
+    if (reload === undefined) {
+      this.flow.addSystem("下次启动时生效");
+      this.configPanel.refresh(face.view(), id);
+      this.tui.requestRender();
+      return;
+    }
+    this.running = true;
+    this.updateStatus();
+    this.tui.requestRender();
+    const finish = (lines: readonly string[]): void => {
+      this.running = false;
+      for (const line of lines) this.flow.addSystem(line);
+      this.configPanel.refresh(face.view(), id);
+      this.updateStatus();
+      this.tui.requestRender();
+      this.drainQueue();
+    };
+    reload([]).then(finish, (error: unknown) =>
+      finish([`重读设置失败：${error instanceof Error ? error.message : String(error)}`])
+    );
+  }
+
   // 决策 450：输入框为空（扣住的消息面板等它为空再弹）
   inputIsEmpty(): boolean {
     return this.input.getText().trim() === "";
@@ -898,6 +971,12 @@ export class PigeonTuiShell
   // ---- 决策 286：视图按键（选择器、Ctrl+O、退回排队）----
 
   private handleViewKey(data: string): { consume: true } | undefined {
+    // 决策 442：设置面板开着时按键归它（方向键、Enter/空格改值、Esc 关）
+    if (this.configPanel.isOpen()) {
+      this.configPanel.handleInput(data);
+      this.tui.requestRender();
+      return { consume: true };
+    }
     if (this.picker.isOpen()) {
       // 决策 439：按键交给选择列表（方向键、翻页、回车、Esc）；其余吞掉，输入框内容不动
       this.picker.handleInput(data);

@@ -176,6 +176,8 @@ test("命令放行表：只读类与 /cancel、/quit 运行中可用，其余逐
     "take",
     "memory edit",
     "reload",
+    // 决策 442：改设置后重建运行面
+    "config",
     "export",
   ]);
   for (const name of rejected) {
