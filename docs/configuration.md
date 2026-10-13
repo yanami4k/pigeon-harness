@@ -947,6 +947,14 @@ config/secrets.json
 - 输入框补全：行首打 `/` 列出命令，方向键选、Tab 或回车套用；Tab 补全路径（以工作区为根）；`@` 后跟文件名补全工作区里的文件路径（需要本机有 `fd` 程序，没有即不出结果）。补全只改输入框里的文字，`@路径` 发出时原样作为文字，不会自动附上文件内容。补全列表开着时 Esc 只关列表。
 - `/resume` 不带会话号弹出的会话列表：方向键选，PageUp/PageDown 翻页，回车进，Esc 退。
 
+### 设置面板 `/config`
+
+`/config` 在输入框上方打开设置面板（在布局里，不是浮层），列一小组常用的个人选项：思考档位 `thinking.level`、联网工具 `web.enabled`、打转检测 `loopGuard.enabled`、模型请求重试次数 `modelRequest.maxRetries`、上下文裁剪 `contextPrune.enabled`、撞上限续跑 `truncationContinuation.enabled`。每项显示用户级写的值（`default` 即没写、取缺省）与本会话的生效值；被项目共享设置（`.pigeon/settings.json`）或项目个人设置（`settings.local.json`）覆盖的，写明"改用户级不生效"。
+
+- 方向键选项，Enter 或空格在可选值间轮换；每改一次即写进用户级 `~/.pigeon/settings.json`（文件里的其余内容不动，`default` 即删掉这个键），随后按 `/reload` 的做法重建运行面当场生效。Esc 关面板。
+- `/config 选项=值` 直接改一项，例如 `/config web.enabled=false`、`/config modelRequest.maxRetries=2`（重试次数可写 0 到 999 的整数）。值不合法、用户级设置文件不是合法 JSON 时不写并说明。
+- 运行中不能用（它会重建运行面）；有 worker 在跑时重建同 `/reload` 一样被拒，设置已写进文件、下次 `/reload` 或启动时生效。
+
 键位可以在设置的 `keybindings` 一节里改：键是动作名，值是一个键或一组键（写法同 pi，例如 `"ctrl+t"`、`["alt+up", "alt+q"]`），空数组即取消。三层合并照旧，按动作名逐个覆盖。未知的动作名、以及两个 Pigeon 动作绑了同一个键，开局时在消息区提示一行。
 
 | 动作名 | 缺省 | 说明 |
