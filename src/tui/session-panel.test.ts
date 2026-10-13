@@ -8,21 +8,42 @@ import { join } from "node:path";
 import { test } from "vitest";
 import { LocalSessionPool, type PooledRuntime } from "../application/session-pool.ts";
 import type { StreamTextDelta } from "../pi-runtime/adapter.ts";
+import type { EventEnvelope } from "../state/events.ts";
 import { newSessionId } from "../state/ids.ts";
+import { RuntimeEventKind } from "../state/runtime-events.ts";
+import { MessageFlow, projectRuntimeEvent } from "./message-flow.ts";
 import { orchestrationHarness } from "./orchestration-fixtures.ts";
 import { ScriptedRuntime } from "./runtime-fixtures.ts";
 import { PigeonTuiShell, type TuiPoolFace, type TuiShellOptions } from "./shell.ts";
 import { MockTerminal, screenText, settle } from "./testing.ts";
+
+test("面板会话的实时消息区没有收尾行：轮内出错照样写一行原因（只取首行）；主会话的投影不写（由收尾行写）", () => {
+  const turnFailed = {
+    kind: RuntimeEventKind.TurnCompleted,
+    payload: {
+      stopReason: "error",
+      syntheticFailure: true,
+      errorMessage: "503 upstream down\nmore",
+    },
+  } as unknown as EventEnvelope;
+  const pooled = new MessageFlow();
+  projectRuntimeEvent(pooled, turnFailed, { turnErrors: true });
+  assert.ok(pooled.view.render(80).join("\n").includes("error · 503 upstream down"));
+  assert.ok(!pooled.view.render(80).join("\n").includes("more"));
+  const main = new MessageFlow();
+  projectRuntimeEvent(main, turnFailed);
+  assert.ok(!main.view.render(80).join("\n").includes("503"));
+});
 
 interface Live {
   subscribe(listener: (event: never) => void): () => void;
   subscribeStream(listener: (delta: StreamTextDelta) => void): () => void;
 }
 
-function makeShell(extra: Partial<TuiShellOptions> = {}) {
+function makeShell(extra: Partial<TuiShellOptions> = {}, rows = 40) {
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-panel-"));
   const sessionId = newSessionId();
-  const term = new MockTerminal(110, 40);
+  const term = new MockTerminal(110, rows);
   const runtime = new ScriptedRuntime(sessionId);
   const runs: string[] = [];
   const finishers: Array<(reply: string) => void> = [];
@@ -245,6 +266,40 @@ test("面板里审批块照样显示并写明来源；审批挂着时按键归�
     await settle();
     assert.deepEqual(decided, { key: "y" });
     assert.doesNotMatch(screenText(term), /> y\b/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("矮窗口里面板来了很高的审批块：按 r 写理由时输入框仍在屏幕上（审批框照常可压缩，输入框不压缩）", async () => {
+  const { shell, term, cleanup } = makeShell({}, 24);
+  try {
+    await settle();
+    term.input("/panel");
+    term.input("\r");
+    await settle();
+    let decided: unknown;
+    void shell
+      .askApproval({
+        toolName: "write_file",
+        toolCallId: "c2",
+        args: { path: "big.txt", content: "x".repeat(3000) },
+        diffPreview: Array.from({ length: 60 }, (_, index) => `+line ${index}`).join("\n"),
+        sessionId: "sess_pool9" as never,
+        pooled: { name: "s9" },
+      })
+      .then((result) => {
+        decided = result;
+      });
+    await settle();
+    term.input("r");
+    await settle();
+    term.input("REASON-TYPED-HERE");
+    await settle();
+    assert.ok(screenText(term).includes("REASON-TYPED-HERE"), screenText(term));
+    term.input("\r");
+    await settle();
+    assert.deepEqual(decided, { key: "r", reason: "REASON-TYPED-HERE" });
   } finally {
     cleanup();
   }

@@ -269,6 +269,42 @@ test("矮窗口里 /resume 的列表不被布局按比例压掉：提示行与�
   }
 });
 
+test("列表打开之后窗口变矮：行数按当前窗口高度现取，输入框仍在屏幕上，选中项保留、往下选照样看得见", async () => {
+  const project = await makeProject();
+  // 再加 8 个会话（共 12 个可选）：40 行时列表显示 10 行，缩到 14 行后只放得下 6 行
+  for (let index = 0; index < 8; index += 1) {
+    await mainSession(join(project.root, ".pigeon", "state", "sessions"), [`补充的任务 ${index}`]);
+  }
+  const { shell, term, rebinds, cleanup } = makeResumeShell(project.root, 40);
+  try {
+    shell.start();
+    await settle();
+    term.input("/resume");
+    term.input("\r");
+    await settle();
+    term.input("\x1b[B");
+    await settle();
+    const selected = term.screen.contentLines().find((line) => line.startsWith("> "));
+    assert.ok(selected !== undefined);
+    term.resize(120, 14);
+    await settle();
+    const lines = term.screen.contentLines();
+    // 输入框上下两道边框都在
+    assert.equal(lines.filter((line) => /^-{20,}/.test(line)).length, 2, lines.join("\n"));
+    // 选中项保留
+    assert.ok(lines.includes(selected), lines.join("\n"));
+    for (let index = 0; index < 10; index += 1) term.input("\x1b[B");
+    await settle();
+    assert.ok(screenText(term).includes("最早的任务"), screenText(term));
+    term.input("\r");
+    await settle();
+    assert.deepEqual(rebinds, [project.older]);
+  } finally {
+    cleanup();
+    project.cleanup();
+  }
+});
+
 test("/resume 不带 ID 弹出会话列表：↑↓ 选、回车进（照 /resume <id> 换绑）、Esc 退；沙箱会话标记且不在本机续接", async () => {
   const project = await makeProject();
   const { shell, term, rebinds, cleanup } = makeResumeShell(project.root);

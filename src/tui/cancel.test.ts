@@ -278,6 +278,41 @@ test("收尾行的用时是整次工作：从人发出消息算到真正空闲�
   }
 });
 
+test("打转检测叫停：收尾行写 stopped: looping（与回看历史同一写法），不写 interrupted（决策 452）", async () => {
+  const { shell, runtime, term, logDir } = makeShell(100, 30);
+  runtime.autoResolve = false;
+  runtime.nextResult = {
+    status: "aborted",
+    stopReason: "aborted",
+    failure: { category: "cancelled", breaker: false },
+  };
+  try {
+    shell.start();
+    await settle();
+    term.input("打转的任务");
+    term.input("\r");
+    await settle();
+    shell.stopForLoop("[loop] 检测到打转，已叫停");
+    await settle();
+    runtime.finishRun();
+    await settle();
+    assert.match(screenText(term), /stopped: looping · \d+s/);
+    assert.doesNotMatch(screenText(term), /interrupted/);
+    // 下一次工作不带上次的叫停原因：人按 Esc 打断写 interrupted
+    term.input("下一件");
+    term.input("\r");
+    await settle();
+    term.input("\x1b");
+    await settle();
+    runtime.finishRun();
+    await settle();
+    assert.match(screenText(term), /interrupted · \d+s/);
+  } finally {
+    shell.stop();
+    rmSync(logDir, { recursive: true, force: true });
+  }
+});
+
 test("listenerErrors 增量警告：启动即查 + run 收尾复查；同批故障不重复刷屏，新故障以累计数提醒", async () => {
   const { shell, runtime, term, logDir } = makeShell(80, 60);
   runtime.errors.push(new Error("模拟磁盘故障"));

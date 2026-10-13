@@ -191,10 +191,10 @@ export function workEndLine(facts: WorkEndFacts, elapsedMs?: number): string {
   const reason = facts.errorMessage?.split("\n")[0]?.trim();
   let head: string;
   let detail: string | undefined;
-  if ((facts.status === "aborted" || ending === "aborted") && facts.breaker !== true) {
-    head = "interrupted";
-  } else if (ending !== undefined && LIMIT_ENDINGS[ending] !== undefined) {
+  if (ending !== undefined && LIMIT_ENDINGS[ending] !== undefined) {
     head = `stopped: ${LIMIT_ENDINGS[ending]}`;
+  } else if ((facts.status === "aborted" || ending === "aborted") && facts.breaker !== true) {
+    head = "interrupted";
   } else if (facts.breaker === true || ending === "breaker") {
     head = "stopped";
   } else if (facts.stopReason === "length") {

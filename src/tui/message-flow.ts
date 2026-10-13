@@ -24,6 +24,7 @@ import {
   RuntimeEventKind,
   type ToolProposedPayload,
   type ToolSettledPayload,
+  type TurnCompletedPayload,
 } from "../state/runtime-events.ts";
 import { MARKDOWN_OPTIONS, MARKDOWN_THEME } from "./markdown-theme.ts";
 import { secondary } from "./style.ts";
@@ -251,14 +252,24 @@ export class MessageFlow {
 // 运行事件在消息区的投影（主会话与进入的 worker 会话共用）：轮次开始重置流式段，轮次结束收尾流式段，
 // 工具调用行随提出与结束原位更新。决策 452：轮次结束不再落标记行（工作结束时由壳落一行收尾）。
 // 花费、上下文用量与活动 Run 的记账由调用方各自处理
-export function projectRuntimeEvent(flow: MessageFlow, event: EventEnvelope): void {
+export function projectRuntimeEvent(
+  flow: MessageFlow,
+  event: EventEnvelope,
+  options: { turnErrors?: boolean } = {}
+): void {
   switch (event.kind) {
     case RuntimeEventKind.TurnStarted:
       flow.openStream();
       break;
-    case RuntimeEventKind.TurnCompleted:
+    case RuntimeEventKind.TurnCompleted: {
       flow.closeStream();
+      // 没有收尾行的消息区（面板会话）：轮内出错写一行原因
+      const message = (event.payload as TurnCompletedPayload).errorMessage?.split("\n")[0];
+      if (options.turnErrors === true && message !== undefined && message !== "") {
+        flow.addSystem(`error · ${message}`);
+      }
       break;
+    }
     case RuntimeEventKind.ToolProposed: {
       const payload = event.payload as ToolProposedPayload;
       flow.addToolCall(payload.toolCallId, toolCallLine(payload));

@@ -300,8 +300,9 @@ function fill(component: Component): StackChild {
   return { component, basis: 0, grow: 1, minSize: 1 };
 }
 
-// 要作答或要看全的块（会话选择器、设置面板、审批框、输入框）：窗口装不下时不跟着按比例压缩——VStack 缺省按高度
-// 加权压缩，最高的一块被压得最多，选择器会只剩提示行、列表被裁掉；先压消息区、标题与状态行
+// 要作答或要看全的块（会话选择器、设置面板、输入框）：窗口装不下时不跟着按比例压缩——VStack 缺省按高度加权压缩，
+// 最高的一块被压得最多，选择器会只剩提示行、列表被裁掉；先压消息区、标题与状态行。审批框照常可压缩：它可能很高，
+// 按 [r] 写理由时输入框必须留在屏幕上；两个列表的行数按当前窗口高度现取，不会自己撑出屏幕
 function keep(component: Component): StackChild {
   return { component, shrink: 0 };
 }
@@ -423,9 +424,11 @@ export class PigeonTuiShell
   private nextInputNotes: string[] = [];
   // 决策 323：本轮是否被外部取消（Esc / 打转叫停）——取消过的一轮不跑 Stop 钩子
   private runCancelled = false;
-  // 决策 452：这次工作从何时开始（人发出消息、或程序通知叫醒 agent）与最近一次运行的结果；真正空闲时落收尾行后清掉
+  // 决策 452：这次工作从何时开始（人发出消息、或程序通知叫醒 agent）与最近一次运行的结果；真正空闲时落收尾行后清掉。
+  // stopCause：本次工作被打转检测等叫停的原因（收尾行写 stopped，不写 interrupted）
   private workStartedAt: number | null = null;
   private lastRun: { result: RunResult | null; error?: unknown } | null = null;
+  private stopCause: RunStopCause | undefined;
   // start/stop 的 dispose 对称面：壳级监听器在此成对登记（S5 的同位置留位）；
   // 运行面订阅单独登记——/resume 换绑时只退订运行面，壳级监听（模态键控）不动
   private readonly disposers: Array<() => void> = [];
@@ -579,7 +582,7 @@ export class PigeonTuiShell
                   ? this.messageTree
                   : this.tree
             ),
-            keep(this.approvalBox),
+            this.approvalBox,
             this.statusBar,
           ]
         : this.view === "panel"
@@ -587,7 +590,7 @@ export class PigeonTuiShell
               this.title,
               fill(this.sessionPanel),
               this.statusLine,
-              keep(this.approvalBox),
+              this.approvalBox,
               keep(this.input),
               this.statusBar,
             ]
@@ -596,7 +599,7 @@ export class PigeonTuiShell
                 this.title,
                 fill(this.pooledSession.flow.view),
                 this.statusLine,
-                keep(this.approvalBox),
+                this.approvalBox,
                 keep(this.input),
                 this.statusBar,
               ]
@@ -605,7 +608,7 @@ export class PigeonTuiShell
                   this.title,
                   fill(this.historySession.flow.view),
                   this.statusLine,
-                  keep(this.approvalBox),
+                  this.approvalBox,
                   this.statusBar,
                 ]
               : this.view === "worker" && this.workerSession !== undefined
@@ -900,6 +903,8 @@ export class PigeonTuiShell
 
   // 立即提交一条输入（空闲时的回车，或空闲后从队列取出的一条）
   private submitNow(value: string): void {
+    // 决策 452：人的下一条输入或命令出现之前，先落上一次工作的收尾行（排队的输入在收尾时依次发出）
+    this.renderWorkEnd();
     // S3 斜杠命令：grant 治理面投影（/grants /revoke /grants save）——命令层与
     // cli REPL 同一份（application/grants.ts，决策 030），write 回调落消息区
     if (value.startsWith("/")) {
@@ -990,7 +995,8 @@ export class PigeonTuiShell
     ) {
       this.running = true;
       this.runCancelled = false;
-      this.beginWork();
+      // 决策 452：刚收尾就有通知叫醒（换工作树后自动续一轮、worker 的结果等）算同一次工作接着跑
+      this.beginWork(true);
       this.updateStatus();
       runtime.runNotices().then(
         (result) => this.handleRunEnd(result),
@@ -1037,7 +1043,7 @@ export class PigeonTuiShell
             this.drainQueue();
             this.tui.requestRender();
           },
-          Math.max(1, this.options.terminal.rows - CONFIG_CHROME_ROWS)
+          () => Math.max(1, this.options.terminal.rows - CONFIG_CHROME_ROWS)
         );
         this.tui.requestRender();
         return;
@@ -1312,7 +1318,8 @@ export class PigeonTuiShell
     if (live !== undefined) {
       disposers.push(
         live.subscribe((event) => {
-          projectRuntimeEvent(flow, event);
+          // 面板会话没有收尾行（决策 452），轮内出错在消息区写一行
+          projectRuntimeEvent(flow, event, { turnErrors: true });
           this.updateStatus();
           this.tui.requestRender();
         }),
@@ -1860,7 +1867,7 @@ export class PigeonTuiShell
         this.tui.requestRender();
         this.drainQueue();
       },
-      Math.max(1, this.options.terminal.rows - LIST_CHROME_ROWS)
+      () => Math.max(1, this.options.terminal.rows - LIST_CHROME_ROWS)
     );
     this.tui.requestRender();
   }
@@ -2175,6 +2182,8 @@ export class PigeonTuiShell
   requestInterrupt(cause?: RunStopCause): void {
     if (this.interrupting) return;
     this.interrupting = true;
+    // 决策 452：被打转检测等叫停的，收尾行写 stopped 与原因
+    if (cause !== undefined) this.stopCause = cause;
     // 决策 323：被取消的一轮不跑 Stop 钩子（外部取消与打转叫停都算）
     this.runCancelled = true;
     this.flow.addSystem("[cancel] interrupt requested; waiting for run to settle");
@@ -2827,18 +2836,24 @@ export class PigeonTuiShell
     void this.afterRun(result);
   }
 
-  // 决策 452：一次工作开始（空闲时人发出消息，或程序通知叫醒 agent）：记下开始时刻
-  private beginWork(): void {
+  // 决策 452：一次工作开始（空闲时人发出消息，或程序通知叫醒 agent）：记下开始时刻。continuing：上一次工作刚收尾、
+  // 收尾行还没落时由通知接着跑，算同一次工作（开始时刻不变）
+  private beginWork(continuing = false): void {
+    if (continuing && this.workStartedAt !== null && this.lastRun !== null) return;
+    this.renderWorkEnd();
     this.workStartedAt = this.now();
     this.lastRun = null;
+    this.stopCause = undefined;
   }
 
   // 决策 452：工作真正结束（Stop 钩子与收尾都跑完、空闲下来）时落一行收尾：用时从开始算到现在，结果取最后一次运行
   private renderWorkEnd(): void {
     const last = this.lastRun;
     const startedAt = this.workStartedAt;
+    const stopCause = this.stopCause;
     this.lastRun = null;
     this.workStartedAt = null;
+    this.stopCause = undefined;
     if (last === null) return;
     const elapsed = startedAt !== null ? this.now() - startedAt : undefined;
     const { result, error } = last;
@@ -2852,6 +2867,7 @@ export class PigeonTuiShell
       workEndLine(
         {
           status: result.status,
+          ...(stopCause !== undefined ? { ending: stopCause } : {}),
           ...(result.stopReason !== undefined ? { stopReason: result.stopReason } : {}),
           ...(result.errorMessage !== undefined ? { errorMessage: result.errorMessage } : {}),
           breaker: result.failure?.category === "cancelled" && result.failure.breaker,
@@ -2881,10 +2897,11 @@ export class PigeonTuiShell
 
   private finishRunNow(): void {
     this.running = false;
-    this.renderWorkEnd();
     this.updateStatus();
     this.tui.requestRender();
     this.drainQueue();
+    // 决策 452：排队的输入已先落了收尾行；通知接着跑的算同一次工作，等它跑完再落
+    if (!this.running) this.renderWorkEnd();
   }
 
   // 决策 323、324：一轮收尾后的 Stop 钩子。外部取消过、run 自身报错或钩子停用即直接收尾；

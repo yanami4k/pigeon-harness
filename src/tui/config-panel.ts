@@ -46,25 +46,60 @@ export class ConfigPanel {
   private list: SettingsList | undefined;
   private onChange: ((id: string, value: string) => void) | undefined;
   private onClose: (() => void) | undefined;
-  private maxRows = Number.MAX_SAFE_INTEGER;
+  private items: readonly ConfigItemView[] = [];
+  private maxRows: () => number = () => Number.MAX_SAFE_INTEGER;
+  private visibleRows = 0;
 
   isOpen(): boolean {
     return this.list !== undefined;
   }
 
-  // maxRows：列表最多显示几项（矮窗口里由壳按窗口高度给，超出的随选中项滚动）
+  // maxRows：列表最多显示几项（矮窗口里由壳按当前窗口高度给，每次画时现取——窗口变了即保留选中项重建列表；超出的随
+  // 选中项滚动）
   open(
     items: readonly ConfigItemView[],
     onChange: (id: string, value: string) => void,
     onClose: () => void,
-    maxRows: number = Number.MAX_SAFE_INTEGER
+    maxRows: () => number = () => Number.MAX_SAFE_INTEGER
   ): void {
     this.onChange = onChange;
     this.onClose = onClose;
     this.maxRows = maxRows;
+    this.items = items;
+    this.build(undefined);
+    this.view.clear();
+    // 提示行不带上下空行（全屏里每一行都要省给列表）
+    this.view.addChild(new Text(HEADER, 1, 0, secondary));
+    this.view.addChild({
+      render: (width) => this.renderList(width),
+      invalidate: () => this.list?.invalidate(),
+    });
+  }
+
+  // 改完之后按最新的读数重建各项（生效值与覆盖说明跟着变），选中项不变
+  refresh(items: readonly ConfigItemView[], selectedId: string): void {
+    if (this.list === undefined || this.onChange === undefined || this.onClose === undefined)
+      return;
+    this.items = items;
+    this.build(selectedId);
+  }
+
+  close(): void {
+    this.list = undefined;
+    this.onChange = undefined;
+    this.onClose = undefined;
+    this.view.clear();
+  }
+
+  private fitRows(): number {
+    return Math.max(1, Math.min(this.items.length, this.maxRows()));
+  }
+
+  private build(selectedId: string | undefined): void {
+    const rows = this.fitRows();
     const list = new SettingsList(
-      items.map(settingItemOf),
-      Math.max(1, Math.min(items.length, maxRows)),
+      this.items.map(settingItemOf),
+      rows,
       THEME,
       (id, value) => this.onChange?.(id, value),
       () => {
@@ -73,26 +108,21 @@ export class ConfigPanel {
         close?.();
       }
     );
+    if (selectedId !== undefined) list.selectItem(selectedId);
     this.list = list;
-    this.view.clear();
-    // 提示行不带上下空行（全屏里每一行都要省给列表）
-    this.view.addChild(new Text(HEADER, 1, 0, secondary));
-    this.view.addChild(list);
+    this.visibleRows = rows;
   }
 
-  // 改完之后按最新的读数重建各项（生效值与覆盖说明跟着变），选中项不变
-  refresh(items: readonly ConfigItemView[], selectedId: string): void {
-    if (this.list === undefined || this.onChange === undefined || this.onClose === undefined)
-      return;
-    this.open(items, this.onChange, this.onClose, this.maxRows);
-    this.list?.selectItem(selectedId);
+  // 当前选中项：pi-tui 0.84.4 的 SettingsList 没有公开的取法，读它的内部序号（取不到即第一项；升级 pi-tui 时须核对）
+  private selectedId(): string | undefined {
+    const index = this.list === undefined ? undefined : Reflect.get(this.list, "selectedIndex");
+    return this.items[typeof index === "number" ? index : 0]?.option.id;
   }
 
-  close(): void {
-    this.list = undefined;
-    this.onChange = undefined;
-    this.onClose = undefined;
-    this.view.clear();
+  private renderList(width: number): string[] {
+    if (this.list === undefined) return [];
+    if (this.fitRows() !== this.visibleRows) this.build(this.selectedId());
+    return this.list?.render(width) ?? [];
   }
 
   handleInput(data: string): void {

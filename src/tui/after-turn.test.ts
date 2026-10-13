@@ -6,10 +6,70 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
+import type { RunResult } from "../pi-runtime/adapter.ts";
 import { newSessionId } from "../state/ids.ts";
 import { ScriptedRuntime } from "./runtime-fixtures.ts";
 import { PigeonTuiShell } from "./shell.ts";
 import { MockTerminal, screenText, settle } from "./testing.ts";
+
+// 带程序通知的替身运行面：通知排着时壳在空闲下来之前叫醒 agent 再跑一轮
+class NoticeRuntime extends ScriptedRuntime {
+  notices: string[] = [];
+  pendingNotices = (): number => this.notices.length;
+  runNotices = (): Promise<RunResult> => {
+    const text = this.notices.join("\n");
+    this.notices = [];
+    return this.run(text);
+  };
+}
+
+test("决策 452：收尾后由通知自动续一轮（如换进工作树后接着做）算同一次工作：只落一行收尾，用时从发出消息算起", async () => {
+  const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-after-"));
+  const sessionId = newSessionId();
+  const term = new MockTerminal(90, 30);
+  const runtime = new NoticeRuntime(sessionId);
+  let clock = 1_000_000;
+  let calls = 0;
+  const shell = new PigeonTuiShell({
+    terminal: term,
+    runtime,
+    sessionId,
+    logDir,
+    now: () => clock,
+    afterTurn: () => {
+      calls += 1;
+      if (calls === 1) {
+        clock += 5_000;
+        runtime.notices.push("continue in the worktree");
+      } else {
+        clock += 55_000;
+      }
+      return undefined;
+    },
+  });
+  try {
+    shell.start();
+    await settle();
+    term.input("做");
+    term.input("\r");
+    await settle();
+    assert.deepEqual(runtime.runs, ["做", "continue in the worktree"]);
+    const ends = screenText(term).match(/done · [0-9a-z ]+/g) ?? [];
+    assert.deepEqual(
+      ends.map((line) => line.trim()),
+      ["done · 1m 0s"]
+    );
+    // 下一条人的输入：上一次工作的收尾行已在它的回显之前
+    term.input("下一条");
+    term.input("\r");
+    await settle();
+    const text = screenText(term);
+    assert.ok(text.indexOf("done · 1m 0s") < text.indexOf("> 下一条"), text);
+  } finally {
+    shell.stop();
+    rmSync(logDir, { recursive: true, force: true });
+  }
+});
 
 function makeShell(afterTurn: (info: { cancelled: boolean }) => Promise<void> | undefined) {
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-after-"));

@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { test } from "vitest";
 import { CONFIG_OPTIONS, ConfigError, type ConfigItemView } from "../application/config-options.ts";
 import { newSessionId } from "../state/ids.ts";
+import { ConfigPanel } from "./config-panel.ts";
 import { orchestrationHarness } from "./orchestration-fixtures.ts";
 import { ScriptedRuntime } from "./runtime-fixtures.ts";
 import { PigeonTuiShell, type TuiShellOptions } from "./shell.ts";
@@ -132,6 +133,67 @@ test("矮窗口里打开 /config：面板不被按比例压掉，提示行、选
     assert.ok(last !== undefined);
     assert.ok(screenText(term).includes(`> ${last.label}`), screenText(term));
     assert.ok(screenText(term).includes(`${last.id}：`), screenText(term));
+  } finally {
+    cleanup();
+  }
+});
+
+test("设置面板的可见项数每次画时按 maxRows 现取：变了即重建，选中项保留", () => {
+  const panel = new ConfigPanel();
+  let rows = CONFIG_OPTIONS.length;
+  const items: ConfigItemView[] = CONFIG_OPTIONS.map((option) => ({
+    option,
+    user: "default",
+    effective: "x",
+  }));
+  panel.open(
+    items,
+    () => {},
+    () => {},
+    () => rows
+  );
+  panel.handleInput(DOWN);
+  panel.handleInput(DOWN);
+  const third = CONFIG_OPTIONS[2];
+  assert.ok(third !== undefined);
+  const shown = (lines: string[]): number =>
+    lines.filter((line) => CONFIG_OPTIONS.some((option) => line.includes(option.label))).length;
+  const before = panel.view.render(100);
+  assert.equal(shown(before), CONFIG_OPTIONS.length);
+  assert.ok(
+    before.some((line) => line.startsWith(`> ${third.label}`)),
+    before.join("\n")
+  );
+  rows = 2;
+  const after = panel.view.render(100);
+  assert.equal(shown(after), 2, after.join("\n"));
+  assert.ok(
+    after.some((line) => line.startsWith(`> ${third.label}`)),
+    after.join("\n")
+  );
+});
+
+test("面板打开之后窗口变矮：行数按当前窗口高度现取，选中项保留，按键提示与输入框仍在屏幕上", async () => {
+  const { term, cleanup } = makeShell({}, {}, 40);
+  try {
+    await settle();
+    term.input("/config");
+    term.input("\r");
+    await settle();
+    term.input(DOWN);
+    term.input(DOWN);
+    await settle();
+    const third = CONFIG_OPTIONS[2];
+    assert.ok(third !== undefined);
+    assert.ok(screenText(term).includes(`> ${third.label}`), screenText(term));
+    term.resize(110, 15);
+    await settle();
+    const screen = screenText(term);
+    assert.ok(screen.includes(`> ${third.label}`), screen);
+    assert.ok(screen.includes(`${third.id}：`), screen);
+    assert.match(screen, /Enter\/Space to change/);
+    const borders = term.screen.contentLines().filter((line) => /^-{20,}/.test(line));
+    assert.equal(borders.length, 2, screen);
   } finally {
     cleanup();
   }
