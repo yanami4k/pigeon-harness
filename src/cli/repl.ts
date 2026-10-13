@@ -76,6 +76,8 @@ export interface ReplOptions {
   fork?: (args: string) => Promise<string>;
   // 决策 245：/export 把沙箱里的改动手动交回成分支（只在沙箱里）；缺省时不可用
   exportChanges?: () => Promise<string>;
+  // 决策 450：空行回车时若有已到的通知（别的会话发来的消息），开一轮交给 agent
+  runPendingNotices?: boolean;
 }
 
 export async function runRepl(options: ReplOptions): Promise<void> {
@@ -119,6 +121,14 @@ async function replLoop(options: ReplOptions, warnEvidenceGaps: () => void): Pro
       break;
     }
     if (task === "") {
+      if (options.runPendingNotices === true && adapter.pendingNotices() > 0) {
+        try {
+          printRunResult(write, await adapter.runNotices());
+          warnEvidenceGaps();
+        } catch (error) {
+          write(`Run 失败：${error instanceof Error ? error.message : String(error)}\n`);
+        }
+      }
       continue;
     }
     // M4 S6（决策 3）：斜杠命令——grant 治理面的唯一人机入口（/grants 唯一展示面）
@@ -163,23 +173,30 @@ async function replLoop(options: ReplOptions, warnEvidenceGaps: () => void): Pro
     try {
       const result = await adapter.run(task);
       warnEvidenceGaps();
-      write(`\n终态：${result.status}（stopReason=${result.stopReason ?? "无"}）\n`);
-      if (result.errorMessage !== undefined) {
-        write(`错误：${result.errorMessage}\n`);
-      }
-      if (result.toolExecutions.length === 0) {
-        write("工具执行：无\n");
-      } else {
-        write(`工具执行：${result.toolExecutions.length} 次\n`);
-        for (const record of result.toolExecutions) {
-          const decision = record.decision;
-          write(
-            `  ${record.toolName}：${decision?.outcome ?? "无决定"}（${decision?.approvedBy ?? "-"}）→ ${record.state}\n`
-          );
-        }
-      }
+      printRunResult(write, result);
     } catch (error) {
       write(`Run 失败：${error instanceof Error ? error.message : String(error)}\n`);
+    }
+  }
+}
+
+function printRunResult(
+  write: WriteFn,
+  result: Awaited<ReturnType<PiRuntimeAdapter["run"]>>
+): void {
+  write(`\n终态：${result.status}（stopReason=${result.stopReason ?? "无"}）\n`);
+  if (result.errorMessage !== undefined) {
+    write(`错误：${result.errorMessage}\n`);
+  }
+  if (result.toolExecutions.length === 0) {
+    write("工具执行：无\n");
+  } else {
+    write(`工具执行：${result.toolExecutions.length} 次\n`);
+    for (const record of result.toolExecutions) {
+      const decision = record.decision;
+      write(
+        `  ${record.toolName}：${decision?.outcome ?? "无决定"}（${decision?.approvedBy ?? "-"}）→ ${record.state}\n`
+      );
     }
   }
 }

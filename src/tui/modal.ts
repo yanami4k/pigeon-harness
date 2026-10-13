@@ -6,8 +6,10 @@ import {
   APPROVAL_CANCEL_BUSY,
   APPROVAL_CANCEL_CLOSED,
   APPROVAL_WITHDRAWN,
+  APPROVAL_YIELDED,
   type ApprovalPanelResult,
   approvalBlockText,
+  PEER_HOLD_WITHDRAWN,
 } from "./approval.ts";
 
 // 挂起中的审批决议（resolve 四键或 cancel）；串行不变量（决策 002）下同时最多一个
@@ -17,6 +19,8 @@ export interface PendingApproval {
   scriptKind?: boolean;
   // 决策 326 ①：受保护路径的请示只收 [y]/[n]/[r]，不收放权键
   protectedPath?: boolean;
+  // 决策 450：扣住待放行的消息——只收 [y]/[n]；有工具审批要上面板时让位
+  peerMessage?: boolean;
 }
 
 // 壳侧窄接口：模态状态的读写与壳动作（状态本体在壳里）
@@ -63,7 +67,13 @@ export function askApprovalPanel(
   if (!host.isStarted()) {
     return Promise.resolve({ key: "cancel", reason: APPROVAL_CANCEL_CLOSED });
   }
-  if (host.pendingApproval() !== null) {
+  const current = host.pendingApproval();
+  if (current?.peerMessage === true && request.peerMessage === undefined) {
+    // 决策 450：扣住的消息让位给工具审批
+    host.setPendingApproval(null);
+    host.setReasonMode(false);
+    current.resolve({ key: "cancel", reason: APPROVAL_YIELDED });
+  } else if (current !== null) {
     return Promise.resolve({ key: "cancel", reason: APPROVAL_CANCEL_BUSY });
   }
   const panelText = approvalBlockText(request, directoryGrant, host.outsideMainView?.() === true);
@@ -79,6 +89,7 @@ export function askApprovalPanel(
       ? { scriptKind: true }
       : {}),
     ...(request.protectedPath !== undefined ? { protectedPath: true } : {}),
+    ...(request.peerMessage !== undefined ? { peerMessage: true } : {}),
   };
   host.setPendingApproval(pending);
   host.updateStatus();
@@ -90,7 +101,10 @@ export function askApprovalPanel(
       if (host.pendingApproval() !== pending) return;
       host.setPendingApproval(null);
       host.setReasonMode(false);
-      approvalLine(host, APPROVAL_WITHDRAWN);
+      approvalLine(
+        host,
+        request.peerMessage !== undefined ? PEER_HOLD_WITHDRAWN : APPROVAL_WITHDRAWN
+      );
       host.updateStatus();
       host.render();
       resolve({ key: "cancel", reason: APPROVAL_WITHDRAWN });
@@ -168,6 +182,15 @@ export function handleModalKey(host: ModalHost, data: string): { consume: true }
       return undefined;
     }
     const key = data.toLowerCase();
+    // 决策 450：扣住的消息只收 [y] 放行与 [n] 丢弃
+    if (approval.peerMessage === true) {
+      if (key === "y" || key === "n") {
+        host.setPendingApproval(null);
+        host.updateStatus();
+        approval.resolve({ key });
+      }
+      return { consume: true };
+    }
     // [r] 拒绝并说明（决策 066）：打开理由行，不在此决议
     if (key === "r") {
       host.setReasonMode(true);

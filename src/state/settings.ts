@@ -35,6 +35,7 @@ import {
 } from "./loop-guard-config.ts";
 import { type DotMcpJson, type McpConfig, McpSectionSchema, mergeMcpConfig } from "./mcp-config.ts";
 import { type MemoryLimits, MemorySectionSchema, memoryLimits } from "./memory-config.ts";
+import { type MessagingSection, MessagingSectionSchema } from "./messaging-config.ts";
 import { type ModelInfoSection, ModelInfoSectionSchema } from "./model-info.ts";
 import {
   type ModelRequestSection,
@@ -117,6 +118,7 @@ export const SETTINGS_SECTIONS = {
   sessionSearch: SessionSearchSectionSchema,
   thinking: ThinkingSectionSchema,
   worktree: WorktreeSectionSchema,
+  messaging: MessagingSectionSchema,
   modelRequest: ModelRequestSectionSchema,
 } as const satisfies Record<string, TSchema>;
 export type SettingsSectionName = keyof typeof SETTINGS_SECTIONS;
@@ -148,6 +150,7 @@ export const SettingsFileSchema = Type.Object(
     sessionSearch: Type.Optional(SessionSearchSectionSchema),
     thinking: Type.Optional(ThinkingSectionSchema),
     worktree: Type.Optional(WorktreeSectionSchema),
+    messaging: Type.Optional(MessagingSectionSchema),
     modelRequest: Type.Optional(ModelRequestSectionSchema),
     [DISABLE_ALL_HOOKS_KEY]: Type.Optional(Type.Boolean()),
     [STOP_HOOK_BLOCK_CAP_KEY]: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -309,6 +312,7 @@ export interface MergedSettings {
   sessionSearch?: Static<typeof SessionSearchSectionSchema>;
   thinking?: ThinkingSection;
   worktree?: WorktreeSection;
+  messaging?: MessagingSection;
   modelRequest?: ModelRequestSection;
   trustedDirectories: string[];
   // 停用全部钩子（324）：三层按标量覆盖（高优先层说了算），缺省 false
@@ -514,6 +518,11 @@ export function sessionSearchEnabledOf(snapshot: SettingsSnapshot): boolean {
 // 推理档位（决策 390）：合并后的 thinking 一节（没写为 undefined，按模型信息定缺省档位）
 export function thinkingSectionOf(snapshot: SettingsSnapshot): ThinkingSection | undefined {
   return snapshot.merged.thinking;
+}
+
+// 决策 450：本机会话间通信（合并后的 messaging 一节）
+export function messagingSectionOf(snapshot: SettingsSnapshot): MessagingSection | undefined {
+  return snapshot.merged.messaging;
 }
 
 // 决策 445：独立工作树的起点档位（合并后的 worktree 一节；没写为 fresh）

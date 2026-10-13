@@ -22,6 +22,7 @@ import { previousJobsOf } from "./background-jobs.ts";
 import { attachCheckpoints, type CheckpointAttachment } from "./checkpoints.ts";
 import type { EnterWorktreeSlot } from "./enter-worktree-tool.ts";
 import { describeMcpStartup, type McpSession, noMcpSession, startMcpSession } from "./mcp.ts";
+import type { PeerSlot } from "./peer-tools.ts";
 import {
   buildRuntime,
   disposeRuntime,
@@ -87,6 +88,8 @@ export interface OpenSessionRuntimeRequest {
   workspaceRoot?: string;
   // 决策 446：enter_worktree 的工具槽（终端界面主会话给）；worker 会话与沙箱不注册
   enterWorktree?: EnterWorktreeSlot;
+  // 决策 450：会话间通信的工具槽（开了收件口的入口给）；worker 会话与沙箱不注册
+  peers?: PeerSlot;
   // MCP 启动提示（启动问题与注解配置冲突）：cli 打 stdout、tui 打 stderr，由调用方决定
   onMcpNote?: (note: string) => void;
   // 缺省按治理根与作用域工作区根启动真实 MCP 会话；测试注入替身。reuse 为 /reload 时的旧 MCP 会话（沿用未变的连接）
@@ -276,6 +279,11 @@ export async function openSessionRuntime(
       scope.parentSessionId === undefined &&
       request.workspaceHost === undefined
         ? { enterWorktree: request.enterWorktree }
+        : {}),
+      ...(request.peers !== undefined &&
+      scope.parentSessionId === undefined &&
+      request.workspaceHost === undefined
+        ? { peers: request.peers }
         : {}),
       ...(request.taskList === true ? { taskList: true } : {}),
       ...(request.webTools !== undefined ? { webTools: request.webTools } : {}),

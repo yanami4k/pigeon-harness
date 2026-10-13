@@ -52,6 +52,13 @@ export const APPROVAL_CANCEL_BUSY = "已有另一审批进行中，本次调用�
 export const APPROVAL_WITHDRAWN =
   "[审批] 请求等待超时，已撤回；这个 worker 停下交回，可稍后补批续做";
 
+// 决策 450：扣住待放行的消息为工具审批让位（稍后再弹）
+export const APPROVAL_YIELDED = "让位给工具审批，稍后再问";
+// 决策 450：扣住的消息等放行超时或已被丢弃，面板撤下
+export const PEER_HOLD_WITHDRAWN = "[消息] 这条扣住的消息已不在（等放行超时或被丢弃），面板撤下";
+// 面板里显示的消息内容上限（全文在放行后交给 agent）
+const PEER_TEXT_SHOWN = 2000;
+
 // s：本次脚本内同类都允许（决策 303 的脚本部分；只在请求带同类时提供）
 export type ApprovalPanelKey = "y" | "n" | "a" | "d" | "s";
 
@@ -82,6 +89,18 @@ export function approvalBlockText(
   // 决策 301：面板不在主会话视图里弹出时，主会话自己的请求也写明来源
   labelMainSource = false
 ): string {
+  // 决策 450：别的会话发来、被扣住的消息
+  if (request.peerMessage !== undefined) {
+    return [
+      "—— 别的会话发来的消息（扣住，等你放行）——",
+      `来自：${request.peerMessage.from}（工作目录 ${request.peerMessage.cwd}）`,
+      "内容：",
+      request.peerMessage.text.length > PEER_TEXT_SHOWN
+        ? `${request.peerMessage.text.slice(0, PEER_TEXT_SHOWN)}…（共 ${request.peerMessage.text.length} 字，只显示开头）`
+        : request.peerMessage.text,
+      "放行给 agent？[y] 放行 / [n] 丢弃（不算你的授权；agent 的审批照常）",
+    ].join("\n");
+  }
   const lines = ["—— 人工审批 ——"];
   // M5.5 S3（决策 040）：worker 请求标明来源
   const source = approvalSourceLine(request);

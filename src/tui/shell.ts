@@ -247,6 +247,10 @@ export interface TuiShellOptions {
   // 决策 446：一轮真正收尾、空闲下来之前调用（会话移进工作树时在这里换运行面）；期间仍按在跑处理，输入排队
   // 没有要做的返回 undefined（照常同步空闲下来）
   afterTurn?: (info: { cancelled: boolean }) => Promise<void> | undefined;
+  // 决策 450：忙闲变化（一轮开始、真正空闲）
+  onBusyChange?: (busy: boolean) => void;
+  // 决策 450：/rename 改本会话在本机会话名录里的名字；返回给人看的一行。缺省 = 命令不可用
+  renamePeer?: (name: string) => string;
 }
 
 // 决策 301：界面所处的视图——主会话、整屏的树形视图、进入的 worker 会话
@@ -325,7 +329,16 @@ export class PigeonTuiShell
   // 运行面订阅单独登记——/resume 换绑时只退订运行面，壳级监听（模态键控）不动
   private readonly disposers: Array<() => void> = [];
   private runtimeDisposers: Array<() => void> = [];
-  private running = false;
+  private runningState = false;
+  // 决策 450：忙闲变化即告诉装配方（会话名录里的忙闲、空闲通知）
+  private get running(): boolean {
+    return this.runningState;
+  }
+  private set running(value: boolean) {
+    if (value === this.runningState) return;
+    this.runningState = value;
+    this.options.onBusyChange?.(value);
+  }
   private activeRunId: RunId | null = null;
   private started = false;
   // S4：/resume 进行中——输入排队、改状态的命令被拒（决策 286，同运行中）
@@ -719,6 +732,11 @@ export class PigeonTuiShell
   // 决策 448：/worktrees 的命令面（CommandsHost）
   worktrees(): TuiWorktreesFace | undefined {
     return this.options.worktrees;
+  }
+
+  // 决策 450：/rename（CommandsHost）
+  get renamePeer(): ((name: string) => string) | undefined {
+    return this.options.renamePeer;
   }
 
   // 接管 Esc（CommandsHost）：/memory edit 排队保存期间按 Esc 取消；后接管的优先，交还时只撤自己那一份

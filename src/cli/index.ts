@@ -30,6 +30,8 @@ import {
 } from "../application/launch-flags.ts";
 import { LOOP_GUARD_TEXTS } from "../application/loop-guard.ts";
 import { MIGRATE_CONFIG_USAGE, runMigrateConfig } from "../application/migrate-config.ts";
+import { openPeerInbox } from "../application/peer-session.ts";
+import { PeerSlot } from "../application/peer-tools.ts";
 import { runResumeFlow } from "../application/resume.ts";
 import {
   disposeRuntime,
@@ -478,6 +480,8 @@ async function runMain(argv: string[]): Promise<void> {
     // 决策 287–291：联网工具缺省给出，--sandbox-network off 不给
     ...webToolsOptionOf(flags, settings),
     loopGuard,
+    // 决策 450：开本机会话间通信的收件口（--sandbox 时由 headless 略过）
+    peerInbox: {},
   };
   // 决策 379：本机放手且联网工具开着时提示一行风险（写标准错误，不混进 --json 的一行结果）
   const riskNotice = localRiskNotice(flags, runOptions.webTools !== undefined);
@@ -704,6 +708,8 @@ async function lineMain(argv: string[]): Promise<void> {
   const write = writeOut;
   const { ask, close } = createAsker(process.stdin, write);
   const sessionId = newSessionId();
+  // 决策 450：会话间通信的工具槽（收件口在运行面装好后打开并绑定）
+  const peerSlot = new PeerSlot();
   // 决策 237：--sandbox 先开容器（与沙箱不相容的参数在起容器之前报错）
   let sandbox: Sandbox | undefined;
   let opened: Awaited<ReturnType<typeof openSessionRuntime>>;
@@ -733,7 +739,7 @@ async function lineMain(argv: string[]): Promise<void> {
       deferSessionFile: true,
       ...(sandbox !== undefined
         ? { workspaceHost: sandbox.host, statusFacts: sandboxStatusFacts(sandbox) }
-        : {}),
+        : { peers: peerSlot }),
       // 决策 294 B1：任务清单按编排配置（缺省开），与 pigeon run、终端界面一致
       taskList: orchestrationSettingsOf(flags, settings).taskList,
       ...webToolsOptionOf(flags, settings),
@@ -754,8 +760,30 @@ async function lineMain(argv: string[]): Promise<void> {
   // 决策 330：人写的说明超出上限被截断时提示一行
   if (bundle.instructionsNotice !== undefined) write(`${bundle.instructionsNotice}\n`);
   if (bundle.toolsNotice !== undefined) write(`${bundle.toolsNotice}\n`);
+  // 决策 450：本机会话间通信的收件口（沙箱里不开）。命令行对话没有放行面板：扣住的消息到时限丢弃并回告发送方；
+  // 收到的消息进通知队列，下一条任务随之带上，空行回车即开一轮交给 agent
+  const peerMessaging =
+    sandbox === undefined
+      ? await openPeerInbox({
+          sessionId,
+          cwd: workspaceRoot,
+          yolo: flags.yolo,
+          settings: bundle.settings,
+          deliver: (text) => {
+            bundle.adapter.notify(text);
+            write("\n[消息] 已到，空行回车交给 agent（或随下一条任务带上）\n");
+          },
+          pendingCount: () => bundle.adapter.pendingNotices(),
+          ui: (line) => write(`[消息] ${line}\n`),
+        })
+      : undefined;
+  if (peerMessaging !== undefined) {
+    peerSlot.bind(peerMessaging);
+    write(`本会话在本机会话名录里叫 ${peerMessaging.name}\n`);
+  }
   try {
     await runRepl({
+      runPendingNotices: true,
       adapter: bundle.adapter,
       ask,
       write,
@@ -771,6 +799,7 @@ async function lineMain(argv: string[]): Promise<void> {
     });
   } finally {
     close();
+    await peerMessaging?.close().catch(() => {});
     warnSandboxJobs(sandbox, bundle, write);
     await disposeRuntime(bundle);
     await finishSandbox(sandbox, write);

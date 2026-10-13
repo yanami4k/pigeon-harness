@@ -44,6 +44,8 @@ export interface ApprovalRequest {
   readonly protectedPath?: string;
   // 决策 355：读档工具要读工作区以外的文件时在场，为其真实路径（面板标明；[a]/[d] 照常建放权）
   readonly outsidePath?: string;
+  // 决策 450：别的会话发来、被扣住待放行的消息（不是工具调用）：面板只收 [y] 放行与 [n] 丢弃；有工具审批要上面板时它让位
+  readonly peerMessage?: { readonly from: string; readonly cwd: string; readonly text: string };
 }
 
 // 会话 grant 的创建面（SessionGrantStore 满足）

@@ -26,6 +26,8 @@ export interface CommandAvailability {
   hooks?(): boolean;
   // 决策 448：/worktrees 列出与删除留下的工作树（缺省即不在场）
   worktrees?(): boolean;
+  // 决策 450：/rename 改会话名（开了收件口才在场）
+  rename?(): boolean;
 }
 
 export interface SlashCommandSpec {
@@ -194,6 +196,13 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     usage: "/worktrees [clean [编号…] [--all] | confirm]",
     whileRunning: { allow: true },
     available: (host) => host.worktrees?.() === true && !host.inSandbox(),
+  },
+  // 决策 450：改本会话在本机会话名录里的名字，只动名录，运行中可用
+  {
+    name: "rename",
+    usage: "/rename <名字>",
+    whileRunning: { allow: true },
+    available: (host) => host.rename?.() === true,
   },
   {
     name: "export",

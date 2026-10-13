@@ -89,6 +89,8 @@ export interface CommandsHost {
   captureEscape?(onEscape: () => void): () => void;
   // 决策 448：/worktrees 的命令面（缺省 = /worktrees 不可用）
   worktrees?(): TuiWorktreesFace | undefined;
+  // 决策 450：/rename 改本会话在本机会话名录里的名字（缺省 = /rename 不可用）
+  readonly renamePeer?: ((name: string) => string) | undefined;
 }
 
 // 命令表判断可用性用的只读面
@@ -105,6 +107,7 @@ export function commandAvailability(host: CommandsHost): CommandAvailability {
     scripts: () => host.scriptCommands?.() !== undefined,
     memory: () => host.memory?.() !== undefined,
     worktrees: () => host.worktrees?.() !== undefined,
+    rename: () => host.renamePeer !== undefined,
     workers: () => {
       const workers = host.workers();
       return workers === undefined
@@ -310,6 +313,12 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
     const worktrees = host.worktrees?.();
     if (tokens[0] === "worktrees" && worktrees !== undefined) {
       host.addSystem(worktrees.run(tokens.slice(1)));
+      return;
+    }
+    // 决策 450：/rename <名字> 改本会话在本机会话名录里的名字（别的会话按它找到本会话）
+    if (tokens[0] === "rename" && host.renamePeer !== undefined) {
+      const name = value.trim().slice("/rename".length).trim();
+      host.addSystem(name === "" ? "用法：/rename <名字>" : host.renamePeer(name));
       return;
     }
     // 决策 189：/compact [重点] 手动压缩（重点作为摘要的附加说明）

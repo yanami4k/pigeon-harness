@@ -52,6 +52,9 @@ import {
   reenterCommand,
   reopenNamedWorktree,
 } from "../application/named-worktree.ts";
+import { type PeerMessaging, validPeerName } from "../application/peer-messaging.ts";
+import { openPeerInbox } from "../application/peer-session.ts";
+import { PeerSlot } from "../application/peer-tools.ts";
 import { restoreSessionWorkers } from "../application/previous-workers.ts";
 import { promptHistoryStore } from "../application/prompt-history.ts";
 import {
@@ -116,6 +119,7 @@ import {
   reopenMainSessionForReload,
   spawnWorkerOption,
 } from "./main-reload.ts";
+import { HeldPresenter } from "./peer-inbox.ts";
 import { PigeonTuiShell, type TuiShellOptions, type TuiWorkersFace } from "./shell.ts";
 import { switchableWarn } from "./warn-sink.ts";
 import { takeWorktreeFlag } from "./worktree-flag.ts";
@@ -214,6 +218,10 @@ export async function main(argv: string[]): Promise<void> {
   let releaseWorktreeUse: (() => void) | undefined =
     namedWorktree !== undefined ? holdWorktreeInUse(namedWorktree.path) : undefined;
   const enterWorktreeSlot = new EnterWorktreeSlot();
+  // 决策 450：会话间通信的工具槽（收件口在壳就位后打开并绑定）；沙箱会话不给
+  const peerSlot = new PeerSlot();
+  let peerMessaging: PeerMessaging | undefined;
+  let heldPresenter: HeldPresenter | undefined;
   // 决策 297–303：编排设定——设置的 orchestration 一节（缺失取缺省），--worker-concurrency 与 --worker-limit 优先
   let orchestration = orchestrationSettingsOf(flags, settings);
   // 决策 308：打转检测——设置的 loopGuard 一节（缺失取缺省即开着）
@@ -412,7 +420,7 @@ export async function main(argv: string[]): Promise<void> {
     governanceRoot: governanceRoot,
     // 决策 445：独立工作树里的会话，/reload 重建时工作区仍是工作树（第一条消息之前会话文件还没建，推导不出）
     ...(namedWorktree !== undefined ? { workspaceRoot: namedWorktree.path } : {}),
-    ...(sandbox === undefined ? { enterWorktree: enterWorktreeSlot } : {}),
+    ...(sandbox === undefined ? { enterWorktree: enterWorktreeSlot, peers: peerSlot } : {}),
     streamFn,
     flags,
     ...(sandbox !== undefined
@@ -429,7 +437,7 @@ export async function main(argv: string[]): Promise<void> {
   const mainOpened = await openSessionRuntime({
     governanceRoot: governanceRoot,
     ...(namedWorktree !== undefined ? { workspaceRoot: namedWorktree.path } : {}),
-    ...(sandbox === undefined ? { enterWorktree: enterWorktreeSlot } : {}),
+    ...(sandbox === undefined ? { enterWorktree: enterWorktreeSlot, peers: peerSlot } : {}),
     settings,
     sessionId,
     streamFn,
@@ -553,6 +561,20 @@ export async function main(argv: string[]): Promise<void> {
     },
     // 决策 446：模型调了 enter_worktree 的那一轮收尾后，按 /reload 的先建后换移进工作树，再递一条通知让 agent 接着做
     afterTurn: (info) => worktreeSwitch.afterTurn(info),
+    // 决策 450：忙闲进会话名录，空闲时回告订了空闲通知的会话
+    onBusyChange: (busy) => peerMessaging?.setBusy(busy),
+    ...(sandbox === undefined
+      ? {
+          renamePeer: (name: string) => {
+            if (peerMessaging === undefined) return "会话间通信的收件口没开，改不了名";
+            if (!validPeerName(name)) {
+              return "名字只能用字母、数字、下划线、连字符与点，最长 40 个字符";
+            }
+            peerMessaging.rename(name);
+            return `本会话在本机会话名录里改名为 ${name}`;
+          },
+        }
+      : {}),
     // 决策 448：/worktrees 列出与删除留下的 worker 工作树（git 仓库、不在沙箱里才有）
     ...(sandbox === undefined && isGitWorkspace(governanceRoot)
       ? {
@@ -646,7 +668,7 @@ export async function main(argv: string[]): Promise<void> {
           governanceRoot: governanceRoot,
           settings,
           sessionId: targetId,
-          ...(sandbox === undefined ? { enterWorktree: enterWorktreeSlot } : {}),
+          ...(sandbox === undefined ? { enterWorktree: enterWorktreeSlot, peers: peerSlot } : {}),
           streamFn,
           flags,
           ...spawnWorkerOption(flags, orchestration),
@@ -662,6 +684,10 @@ export async function main(argv: string[]): Promise<void> {
         const bundle = opened.bundle;
         // 决策 445、446：换到的会话开在独立工作树里时，工作区与退出清理跟着它
         adoptWorkspace(opened.scope.workspaceRoot);
+        // 决策 450：收件口跟着换到的主会话（名字不变）；查看 worker 会话期间名录里仍是原主会话
+        if (opened.scope.parentSessionId === undefined) {
+          peerMessaging?.moveTo({ sessionId: targetId, cwd: opened.scope.workspaceRoot });
+        }
         if (bundle.instructionsNotice !== undefined) {
           shellHolder.current?.addSystem(bundle.instructionsNotice);
         }
@@ -719,6 +745,8 @@ export async function main(argv: string[]): Promise<void> {
     adopt: (worktree) => {
       setActiveWorktree(worktree);
       recordWorktreeEntry(slot.bundle.sessionStore, worktree);
+      // 决策 450：会话名录里的所在目录跟着换
+      peerMessaging?.moveTo({ sessionId: slot.sessionId, cwd: worktree.path });
     },
     system: (line) => shellHolder.current?.addSystem(line),
     notify: (text) => slot.bundle.adapter.notify(text),
@@ -765,6 +793,36 @@ export async function main(argv: string[]): Promise<void> {
   // "resume"，否则 "startup"；补的上下文存进壳、下一条输入带上
   await shell.beginSession(resumed ? "resume" : "startup");
   shell.start();
+  // 决策 450：本机会话间通信的收件口（沙箱会话不开）。消息进当前主会话的通知队列，空闲时叫醒；扣住的逐条弹到审批面板
+  if (sandbox === undefined) {
+    const presenter = new HeldPresenter({
+      ask: (request) => shell.askApproval(request),
+      approve: (id) => peerMessaging?.approveHeld(id),
+      decline: (id) => peerMessaging?.dropHeld(id, "declined"),
+    });
+    heldPresenter = presenter;
+    peerMessaging = await openPeerInbox({
+      sessionId: slot.sessionId,
+      cwd: workspaceRoot,
+      yolo: flags.yolo,
+      settings,
+      deliver: (text) => {
+        slot.bundle.adapter.notify(text);
+        shellHolder.current?.runNotices();
+      },
+      pendingCount: () => slot.bundle.adapter.pendingNotices(),
+      onHeld: (held) => presenter.held(held),
+      onHeldGone: (id) => presenter.gone(id),
+      ui: (line) => {
+        shellHolder.current?.addSystem(line);
+        shellHolder.current?.render();
+      },
+    });
+    if (peerMessaging !== undefined) {
+      peerSlot.bind(peerMessaging);
+      shell.addSystem(`本会话在本机会话名录里叫 ${peerMessaging.name}（/rename 改名）`);
+    }
+  }
   // 决策 330：人写的说明超出上限被截断时在消息区提示一行
   if (mainBundle.instructionsNotice !== undefined) shell.addSystem(mainBundle.instructionsNotice);
   if (mainBundle.toolsNotice !== undefined) shell.addSystem(mainBundle.toolsNotice);
@@ -805,6 +863,8 @@ export async function main(argv: string[]): Promise<void> {
         });
       }
       releaseWorktreeUse?.();
+      heldPresenter?.stop();
+      await peerMessaging?.close().catch(() => {});
     })().finally(() => {
       process.exit(0);
     });
