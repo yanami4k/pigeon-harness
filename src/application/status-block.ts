@@ -234,6 +234,12 @@ export class StatusTracker {
   }
 
   // 最后发出的一份（/reload 交给新运行面）
+  // 决策 434：会话回退或切换分支后，起点改为目标分支上最后一条状态条目（没有即下次给完整块）
+  reseed(initial: StatusHashes | undefined): void {
+    this.#sent = initial;
+    this.#pending = undefined;
+  }
+
   sent(): StatusHashes | undefined {
     return this.#sent;
   }

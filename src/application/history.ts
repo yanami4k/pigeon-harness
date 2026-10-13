@@ -61,7 +61,7 @@ const PROGRAM_NOTICE_PREFIXES = [
   LEGACY_SCRIPT_NOTICE_PREFIX,
 ];
 
-function isProgramNotice(text: string): boolean {
+export function isProgramNotice(text: string): boolean {
   return PROGRAM_NOTICE_PREFIXES.some((prefix) => text.startsWith(prefix));
 }
 

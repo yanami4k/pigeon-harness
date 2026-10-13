@@ -328,6 +328,8 @@ export class PiRuntimeAdapter {
   readonly #toolResultListeners = new Set<(notice: ToolResultNotice) => void>();
   // 决策 350：工具执行前的等待口
   readonly #toolGates = new Set<() => Promise<void>>();
+  // 决策 436：Run 开始（开始条目已排进写入）的观察口
+  readonly #runStartListeners = new Set<(runId: RunId) => void>();
   // 决策 363：状态通道；压缩过之后的下一次要重发完整块；有工具结果的一轮把状态与通知留到轮间再入队
   readonly #status: StatusChannel | undefined;
   #statusCompacted = false;
@@ -577,6 +579,13 @@ export class PiRuntimeAdapter {
       this.#listenerErrors.push(error);
     }
     this.#recordRunStart(runId, advertisedTools, extras);
+    for (const listener of this.#runStartListeners) {
+      try {
+        listener(runId);
+      } catch (error) {
+        this.#listenerErrors.push(error);
+      }
+    }
     // 决策 361：模型、工具集或系统提示与上一个 Run 不同，下一次请求之前一次裁光
     this.#prune?.observeRun({
       model: `${this.#snapshot.model.provider}/${this.#snapshot.model.id}`,
@@ -973,6 +982,12 @@ export class PiRuntimeAdapter {
   }
 
   // 决策 350：登记工具执行前的等待口（审批之后、真正执行之前）；返回撤销函数
+  // 决策 436：订阅 Run 开始（开始条目已排进写入之后、第一次模型请求之前）；listener 抛异常只进 listenerErrors
+  subscribeRunStart(listener: (runId: RunId) => void): () => void {
+    this.#runStartListeners.add(listener);
+    return () => this.#runStartListeners.delete(listener);
+  }
+
   addToolGate(gate: () => Promise<void>): () => void {
     this.#toolGates.add(gate);
     return () => this.#toolGates.delete(gate);
@@ -1063,6 +1078,17 @@ export class PiRuntimeAdapter {
       throw new Error("只能在运行面跑任何 Run 之前还原对话上下文");
     }
     this.#agent.state.messages = structuredClone([...messages]);
+  }
+
+  // 决策 434：会话回退或切换分支——空闲时以目标分支还原出的消息换掉 Agent 的对话上下文（深拷贝）。
+  // 运行中或手动压缩中不可用；待递的通知留着，下一次 Run 照常带上（决策 438）
+  replaceMessages(messages: readonly AgentMessage[]): void {
+    this.#assertUsable();
+    if (this.#currentRunId !== null || this.#manualCompacting) {
+      throw new Error("运行中不能换对话上下文");
+    }
+    this.#agent.state.messages = structuredClone([...messages]);
+    this.#statusCompacted = false;
   }
 
   // M7（决策 078）：本 Run 已分配的最后一个条目号（message_end 累计序号）；Run 之外为 0

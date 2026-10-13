@@ -80,6 +80,16 @@ export class MessageFlow {
     return line;
   }
 
+  // 决策 434：会话回退或切换分支后清空消息区（随后按新的主分支重绘历史）
+  clear(): void {
+    this.list.clear();
+    this.streamTail = null;
+    this.streamText = "";
+    this.thinkingTail = null;
+    this.thinkingText = "";
+    this.toolLines.clear();
+  }
+
   // 历史行（M5 S2，决策 045）：/resume 换绑后一次性渲染；thinking 行弱化，其余同实时流口径
   addHistory(lines: readonly HistoryLine[]): void {
     for (const line of lines) {

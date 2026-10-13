@@ -55,6 +55,8 @@ export const SessionEntryType = {
   BackgroundJob: "pigeon.background-job",
   RequestRetry: "pigeon.request-retry",
   Worktree: "pigeon.worktree",
+  TurnSnapshot: "pigeon.turn-snapshot",
+  Rewind: "pigeon.rewind",
 } as const;
 export type SessionEntryTypeName = (typeof SessionEntryType)[keyof typeof SessionEntryType];
 
@@ -552,6 +554,60 @@ export const WorktreeDataSchema = Type.Object({
 });
 export type WorktreeData = Static<typeof WorktreeDataSchema>;
 
+// 决策 436：使用者发消息时（Run 开始）在后台拍的工作区快照，以它为界区分 agent 的改动与两条消息之间的手改。
+// 不接入快照链（挂自己的 ref）；拍摄失败不写条目
+export const TurnSnapshotDataSchema = Type.Object({
+  version: VERSION,
+  runId: RunIdSchema,
+  ref: Type.String({ minLength: 1 }),
+  commit: GitObjectIdSchema,
+  tree: GitObjectIdSchema,
+  untrackedSkipped: Type.Optional(
+    Type.Array(
+      Type.Object({ path: Type.String({ minLength: 1 }), bytes: Type.Integer({ minimum: 0 }) })
+    )
+  ),
+});
+export type TurnSnapshotData = Static<typeof TurnSnapshotDataSchema>;
+
+// 决策 433–437：会话回退或切换分支。主分支改挂到 to（条目号；null 即会话开头）之后写在新位置上：from 是之前的叶子，
+// mode 是退了什么（只退代码时主分支不动，to 只记所选的点）；退代码时记还原前的现状快照与写回的结果（写了、删了、因手改
+// 保留、因护栏跳过的路径，相对仓库根）
+export const RewindModeSchema = Type.Union([
+  Type.Literal("both"),
+  Type.Literal("conversation"),
+  Type.Literal("code"),
+]);
+export type RewindMode = Static<typeof RewindModeSchema>;
+const NullableEntryId = Type.Union([Type.String({ minLength: 1 }), Type.Null()]);
+export const RewindDataSchema = Type.Object({
+  version: VERSION,
+  from: NullableEntryId,
+  to: NullableEntryId,
+  mode: RewindModeSchema,
+  before: Type.Optional(
+    Type.Object({ ref: Type.String({ minLength: 1 }), commit: GitObjectIdSchema })
+  ),
+  written: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+  removed: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+  kept: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+  skipped: Type.Optional(
+    Type.Array(Type.Object({ path: Type.String({ minLength: 1 }), reason: Type.String() }))
+  ),
+  // 被覆盖或删掉的文件的原样字节（不经行尾转换的对象）与规范化后的对象：切回时据此逐字节写回
+  saved: Type.Optional(
+    Type.Array(
+      Type.Object({
+        path: Type.String({ minLength: 1 }),
+        raw: GitObjectIdSchema,
+        normalized: GitObjectIdSchema,
+      })
+    )
+  ),
+  rewoundAt: Type.Integer({ minimum: 0 }),
+});
+export type RewindData = Static<typeof RewindDataSchema>;
+
 // 一条待写的自定义条目：customType 与数据成对
 export type SessionCustomEntry =
   | { customType: typeof SessionEntryType.RunStart; data: RunStartData }
@@ -570,7 +626,9 @@ export type SessionCustomEntry =
   | { customType: typeof SessionEntryType.Prune; data: PruneData }
   | { customType: typeof SessionEntryType.BackgroundJob; data: BackgroundJobData }
   | { customType: typeof SessionEntryType.RequestRetry; data: RequestRetryData }
-  | { customType: typeof SessionEntryType.Worktree; data: WorktreeData };
+  | { customType: typeof SessionEntryType.Worktree; data: WorktreeData }
+  | { customType: typeof SessionEntryType.TurnSnapshot; data: TurnSnapshotData }
+  | { customType: typeof SessionEntryType.Rewind; data: RewindData };
 
 // 各 customType 的数据 schema（读者校验用）
 export const SESSION_ENTRY_SCHEMAS = {
@@ -591,6 +649,8 @@ export const SESSION_ENTRY_SCHEMAS = {
   [SessionEntryType.BackgroundJob]: BackgroundJobDataSchema,
   [SessionEntryType.RequestRetry]: RequestRetryDataSchema,
   [SessionEntryType.Worktree]: WorktreeDataSchema,
+  [SessionEntryType.TurnSnapshot]: TurnSnapshotDataSchema,
+  [SessionEntryType.Rewind]: RewindDataSchema,
 } as const;
 
 // 自定义条目的写入面：写者自身从不抛，写失败按内部故障处理（向标准错误输出去重告警），不中断运行。

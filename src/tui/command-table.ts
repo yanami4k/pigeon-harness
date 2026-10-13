@@ -30,6 +30,8 @@ export interface CommandAvailability {
   rename?(): boolean;
   // 决策 442：/config 设置面板（装配方给了才在场）
   config?(): boolean;
+  // 决策 435：/rewind（会话回退）
+  rewind?(): boolean;
 }
 
 export interface SlashCommandSpec {
@@ -205,6 +207,13 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     usage: "/config [选项=值]",
     whileRunning: { allow: false, reason: `${MAIN_STATE}（改设置后重建运行面）` },
     available: (host) => host.config?.() === true,
+  },
+  // 决策 435：会话回退——打开消息树选一点退回或切换分支；会改对话与工作区文件，运行中不可用
+  {
+    name: "rewind",
+    usage: "/rewind",
+    whileRunning: { allow: false, reason: `${MAIN_STATE}（回退会换掉对话与工作区文件）` },
+    available: (host) => host.rewind?.() === true,
   },
   // 决策 450：改本会话在本机会话名录里的名字，只动名录，运行中可用
   {

@@ -5,6 +5,7 @@ import type { Component } from "@earendil-works/pi-tui";
 import type { FamilyNode, SessionFamily } from "../application/session-family.ts";
 import { familyTotal, flattenFamily } from "../application/session-family.ts";
 import { clipToWidth, formatCost } from "./status-bar.ts";
+import { TreeList } from "./tree-list.ts";
 
 export const SESSION_TREE_HEADER =
   "== sessions tree | [tab] running | [up/down] move, [enter] view, [r] resume here, [esc] close ==";
@@ -58,14 +59,15 @@ export function familyNodeText(node: FamilyNode, currentSessionId: string): stri
 export interface SessionTreeSource {
   // 视图可用的行数（终端高度减去标题与状态栏）
   height(): number;
+  // 决策 435：有会话回退时 Tab 去消息树（缺省回运行中）
+  tabToMessages?(): boolean;
 }
 
 export class SessionTree implements Component {
   private readonly source: SessionTreeSource;
   private family: SessionFamily | undefined;
-  private problem: string | undefined;
-  private cursor = 0;
-  private note = "";
+  // 决策 435：压平、光标与说明行与消息树共用
+  private readonly list = new TreeList<FamilyNode>();
 
   constructor(source: SessionTreeSource) {
     this.source = source;
@@ -74,20 +76,24 @@ export class SessionTree implements Component {
   // 打开会话树时装入这一家；光标落在当前会话上
   load(family: SessionFamily): void {
     this.family = family;
-    this.problem = undefined;
-    this.note = "";
     const rows = flattenFamily(family.root);
-    this.cursor = Math.max(
-      0,
-      rows.findIndex((row) => row.node.sessionId === family.currentSessionId)
+    this.list.load(
+      rows.map((row) => ({
+        item: row.node,
+        depth: row.depth,
+        text: familyNodeText(row.node, family.currentSessionId),
+      })),
+      Math.max(
+        0,
+        rows.findIndex((row) => row.node.sessionId === family.currentSessionId)
+      )
     );
   }
 
   // 装不起来（没有会话根等）：只显示一行原因
   fail(problem: string): void {
     this.family = undefined;
-    this.problem = problem;
-    this.note = "";
+    this.list.fail(problem);
   }
 
   currentSessionId(): string | undefined {
@@ -95,53 +101,30 @@ export class SessionTree implements Component {
   }
 
   selected(): FamilyNode | undefined {
-    if (this.family === undefined) return undefined;
-    return flattenFamily(this.family.root)[this.cursor]?.node;
+    return this.list.selected();
   }
 
   move(delta: 1 | -1): void {
-    if (this.family === undefined) return;
-    const count = flattenFamily(this.family.root).length;
-    this.cursor = Math.max(0, Math.min(count - 1, this.cursor + delta));
-    this.note = "";
+    this.list.move(delta);
   }
 
   // 树下方的一行说明（动作被拒的原因、续接的用法等）
   setNote(note: string): void {
-    this.note = note;
+    this.list.setNote(note);
   }
 
   noteText(): string {
-    return this.note;
+    return this.list.noteText();
   }
 
   invalidate(): void {}
 
   render(width: number): string[] {
-    const body: string[] = [];
-    if (this.family === undefined) {
-      body.push(`  ${this.problem ?? "(no sessions)"}`);
-    } else {
-      const current = this.family.currentSessionId;
-      const rows = flattenFamily(this.family.root);
-      const rendered = rows.map((row, index) =>
-        clipToWidth(
-          ` ${index === this.cursor ? ">" : " "}${"  ".repeat(row.depth + 1)}${familyNodeText(row.node, current)}`,
-          width
-        )
-      );
-      const room = Math.max(1, this.source.height() - 2);
-      if (rendered.length > room) {
-        const start = Math.max(
-          0,
-          Math.min(rendered.length - room, this.cursor - Math.floor(room / 2))
-        );
-        body.push(...rendered.slice(start, start + room));
-      } else {
-        body.push(...rendered);
-      }
-    }
-    const lines = [clipToWidth(SESSION_TREE_HEADER, width)];
+    const header =
+      this.source.tabToMessages?.() === true
+        ? SESSION_TREE_HEADER.replace("[tab] running", "[tab] messages")
+        : SESSION_TREE_HEADER;
+    const lines = [clipToWidth(header, width)];
     // 这一家合计（各节点自己的花费相加，不重复）
     if (this.family !== undefined) {
       const total = familyTotal(this.family.root);
@@ -152,8 +135,7 @@ export class SessionTree implements Component {
         )
       );
     }
-    lines.push(...body);
-    if (this.note !== "") lines.push(clipToWidth(` ${this.note}`, width));
+    lines.push(...this.list.render(width, this.source.height() - 2, "(no sessions)"));
     return lines;
   }
 }

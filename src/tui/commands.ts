@@ -93,6 +93,8 @@ export interface CommandsHost {
   readonly renamePeer?: ((name: string) => string) | undefined;
   // 决策 442：/config（缺省 = 不可用）；参数为空即打开面板，"选项=值" 即直接改
   readonly configCommand?: ((args: string) => void) | undefined;
+  // 决策 435：/rewind 打开消息树（缺省 = 不可用）
+  readonly rewindCommand?: (() => void) | undefined;
 }
 
 // 命令表判断可用性用的只读面
@@ -111,6 +113,7 @@ export function commandAvailability(host: CommandsHost): CommandAvailability {
     worktrees: () => host.worktrees?.() !== undefined,
     rename: () => host.renamePeer !== undefined,
     config: () => host.configCommand !== undefined,
+    rewind: () => host.rewindCommand !== undefined,
     workers: () => {
       const workers = host.workers();
       return workers === undefined
@@ -316,6 +319,11 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
     const worktrees = host.worktrees?.();
     if (tokens[0] === "worktrees" && worktrees !== undefined) {
       host.addSystem(worktrees.run(tokens.slice(1)));
+      return;
+    }
+    // 决策 435：/rewind 打开消息树
+    if (tokens[0] === "rewind" && host.rewindCommand !== undefined) {
+      host.rewindCommand();
       return;
     }
     // 决策 442：/config 打开设置面板；/config 选项=值 直接改

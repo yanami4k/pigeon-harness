@@ -178,6 +178,8 @@ test("命令放行表：只读类与 /cancel、/quit 运行中可用，其余逐
     "reload",
     // 决策 442：改设置后重建运行面
     "config",
+    // 决策 435：回退会换掉对话与工作区文件
+    "rewind",
     "export",
   ]);
   for (const name of rejected) {

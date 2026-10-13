@@ -7,7 +7,7 @@
 // 只读会话文件，不写任何记录。
 import {
   listSessionRefs,
-  loadSessionView,
+  readSessionBranchViews,
   readSessionView,
   sessionRefTime,
 } from "../persistence/session-catalog.ts";
@@ -80,12 +80,17 @@ function numberOr(value: unknown): number | undefined {
 // 一个会话视图自己的花费：助手消息的用量，加工具执行中另发的模型请求（web_fetch 的提炼等）；分叉复制段不计（视图已跳过）。
 // 助手消息的模型接入取消息自带的 provider，开始时刻取消息自带的 timestamp、结束时刻取写入时刻；工具另发的请求沿用
 // 其前最近一条助手消息的模型接入，时刻取工具结果的写入时刻
-export function costTallyOfView(view: SessionView): CostTally {
+// counted：已计过的消息条目（多条分支共有的前段只计一次），计过的照常用来定模型接入
+export function costTallyOfView(view: SessionView, counted?: Set<string>): CostTally {
   const tally = emptyCostTally();
   let provider: string | undefined;
   for (const message of view.messages) {
     if (message.role === "assistant" && typeof message.raw.provider === "string") {
       provider = message.raw.provider;
+    }
+    if (counted !== undefined) {
+      if (counted.has(message.entryId)) continue;
+      counted.add(message.entryId);
     }
     if (message.usage !== undefined) {
       const startMs = numberOr(message.raw.timestamp);
@@ -108,10 +113,20 @@ export function costTallyOfView(view: SessionView): CostTally {
   return tally;
 }
 
-// 按会话号读一个会话自己的花费；会话存储里没有该会话即为零
+// 决策 438：一个会话文件全部分支的花费（会话回退之后旧分支上花的照算），共有的前段只计一次
+export function branchesCostTally(views: readonly SessionView[]): CostTally {
+  const tally = emptyCostTally();
+  const counted = new Set<string>();
+  for (const view of views) {
+    mergeCostTally(tally, costTallyOfView(view, counted));
+  }
+  return tally;
+}
+
+// 按会话号读一个会话自己的花费（全部分支）；会话存储里没有该会话即为零
 export function sessionCostTally(sessionsRoot: string, sessionId: string): CostTally {
-  const view = loadSessionView(sessionsRoot, sessionId);
-  return view !== undefined ? costTallyOfView(view) : emptyCostTally();
+  const ref = listSessionRefs(sessionsRoot).find((file) => file.sessionId === sessionId);
+  return ref !== undefined ? branchesCostTally(readSessionBranchViews(ref)) : emptyCostTally();
 }
 
 // 复盘会话：Run 开始条目带复盘标记（175、192、207）
@@ -139,10 +154,7 @@ export function accumulatedSessionCost(sessionsRoot: string, sessionId: string):
       }
       continue;
     }
-    const view = readSessionView(ref);
-    if (view !== undefined) {
-      mergeCostTally(tally, costTallyOfView(view));
-    }
+    mergeCostTally(tally, branchesCostTally(readSessionBranchViews(ref)));
   }
   return tally;
 }

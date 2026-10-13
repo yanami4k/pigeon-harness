@@ -18,7 +18,7 @@ import type { LoopGuardSettings } from "../state/loop-guard-config.ts";
 import type { ThinkingLevel } from "../state/runtime-events.ts";
 import { emptySettingsSnapshot, mcpConfigOf, type SettingsSnapshot } from "../state/settings.ts";
 import type { WorkspaceHost } from "../tools/workspace-host.ts";
-import { previousJobsOf } from "./background-jobs.ts";
+import { previousJobsOfSession } from "./background-jobs.ts";
 import { attachCheckpoints, type CheckpointAttachment } from "./checkpoints.ts";
 import type { EnterWorktreeSlot } from "./enter-worktree-tool.ts";
 import { describeMcpStartup, type McpSession, noMcpSession, startMcpSession } from "./mcp.ts";
@@ -72,6 +72,8 @@ export function pushedMemoryRunOptions(flags: SessionRuntimeFlags): { pushedMemo
 export interface OpenSessionRuntimeRequest {
   // 治理根：.pigeon/（设置、程序状态、Skill）所在
   governanceRoot: string;
+  // 决策 436：发消息时也拍工作区快照（会话回退用；只有终端界面开）
+  turnSnapshots?: boolean;
   // 决策 325：本会话的设置快照（入口在会话开始时读一次并确认过会执行命令的条目；本会话内各处都从它取）。
   // 缺省为空快照（不读任何设置文件）；日常入口一律显式给出
   settings?: SettingsSnapshot;
@@ -212,8 +214,11 @@ export async function openSessionRuntime(
   const recordedPromptModel = recordedStart?.modelInfo;
   // 决策 365：/reload 接着管旧运行面的后台作业；续跑时取会话记录里上一进程的作业（已丢失的与用过的作业号）
   const reloadJobs = request.reloadFrom?.jobs;
+  // 决策 438：作业号按全部分支编号（会话回退后旧分支上用过的号不再用）；丢失的作业只看主分支
   const previousJobs =
-    reloadJobs === undefined && recorded !== undefined ? previousJobsOf(recorded.main) : undefined;
+    reloadJobs === undefined && recorded !== undefined
+      ? previousJobsOfSession(recorded.main, recorded.file.entries)
+      : undefined;
   const statusSent =
     request.reloadFrom !== undefined
       ? request.reloadFrom.status.sent()
@@ -336,6 +341,7 @@ export async function openSessionRuntime(
             bundle,
             workspaceRoot: scope.workspaceRoot,
             ...(request.warn !== undefined ? { warn: request.warn } : {}),
+            ...(request.turnSnapshots === true ? { turnSnapshots: true } : {}),
           })
         : undefined;
     if (checkpoints !== undefined) {

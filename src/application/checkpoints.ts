@@ -22,7 +22,7 @@ import { type SettingsSnapshot, untrackedLimitsOfSettings } from "../state/setti
 import type { ToolRiskTier } from "../tools/registry.ts";
 import type { SessionHooks } from "./hooks.ts";
 import type { RuntimeBundle } from "./runtime.ts";
-import { checkpointEntry, checkpointMarkEntry } from "./session-store.ts";
+import { checkpointEntry, checkpointMarkEntry, turnSnapshotEntry } from "./session-store.ts";
 import { dedupedWarner, failureDetail, type WarnSink } from "./warnings.ts";
 
 // 等未完成快照的上限：git 卡住时会话不能永远挂住
@@ -46,7 +46,8 @@ export interface CheckpointHost {
   adapter: Pick<
     PiRuntimeAdapter,
     "sessionId" | "subscribe" | "subscribeToolResults" | "addToolGate" | "entrySeq"
-  >;
+  > &
+    Partial<Pick<PiRuntimeAdapter, "subscribeRunStart">>;
   toolTiers: ReadonlyMap<string, ToolRiskTier>;
   sessionStore: Pick<RuntimeBundle["sessionStore"], "append">;
   // 决策 365：拍摄时在跑的后台作业记进快照条目
@@ -101,6 +102,8 @@ export function attachCheckpoints(options: {
   waitMs?: number;
   // 缺省按工作区新建
   checkpointer?: Checkpointer;
+  // 决策 436：使用者发消息（Run 开始）时也在后台拍一份（会话回退据此区分 agent 的改动与手改）；只有终端界面开
+  turnSnapshots?: boolean;
 }): CheckpointAttachment | undefined {
   const { bundle, workspaceRoot } = options;
   if (options.checkpointer === undefined && !isGitWorkspace(workspaceRoot)) {
@@ -262,9 +265,29 @@ export function attachCheckpoints(options: {
       mark
     );
   });
+  // 决策 436：发消息时的快照与第一次模型请求同时进行，第一个工具执行前（工具等待口）照常等它拍完；拍失败只告警、不写条目
+  const unsubscribeRunStart =
+    options.turnSnapshots === true
+      ? bundle.adapter.subscribeRunStart?.((runId) => {
+          start(
+            (signal) => checkpointer.snapshotNow(signal),
+            (snapshot) => {
+              bundle.sessionStore.append(
+                turnSnapshotEntry(runId, {
+                  ref: snapshot.ref,
+                  commit: snapshot.commit,
+                  tree: snapshot.tree,
+                  ...(snapshot.skipped !== undefined ? { untrackedSkipped: snapshot.skipped } : {}),
+                })
+              );
+            }
+          );
+        })
+      : undefined;
   const removeGate = bundle.adapter.addToolGate(settle);
   const removeHookGate = bundle.hooks?.addGate(settle);
   const stop = () => {
+    unsubscribeRunStart?.();
     unsubscribe();
     unsubscribeResults();
     removeGate();

@@ -21,6 +21,7 @@ import {
 import type { RunId } from "../state/ids.ts";
 import {
   type CheckpointMarkState,
+  type RewindData,
   SESSION_ENTRY_VERSION,
   type SessionCustomEntry,
   type SessionEntrySink,
@@ -131,6 +132,39 @@ export function openSessionStore(input: {
 }
 
 // ---- 写入输入 → 条目 ----
+
+// 决策 436：发消息时的工作区快照
+export function turnSnapshotEntry(
+  runId: RunId,
+  payload: {
+    ref: string;
+    commit: string;
+    tree: string;
+    untrackedSkipped?: Array<{ path: string; bytes: number }>;
+  }
+): SessionCustomEntry {
+  return {
+    customType: SessionEntryType.TurnSnapshot,
+    data: {
+      version: SESSION_ENTRY_VERSION,
+      runId,
+      ref: payload.ref,
+      commit: payload.commit,
+      tree: payload.tree,
+      ...(payload.untrackedSkipped !== undefined && payload.untrackedSkipped.length > 0
+        ? { untrackedSkipped: payload.untrackedSkipped }
+        : {}),
+    },
+  };
+}
+
+// 决策 433–437：会话回退或切换分支
+export function rewindEntry(payload: Omit<RewindData, "version">): SessionCustomEntry {
+  return {
+    customType: SessionEntryType.Rewind,
+    data: { version: SESSION_ENTRY_VERSION, ...payload },
+  };
+}
 
 export function checkpointEntry(
   runId: RunId,

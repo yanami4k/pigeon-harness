@@ -69,6 +69,8 @@ export interface Checkpointer {
   snapshotNow(signal?: AbortSignal): Promise<CheckpointResult>;
   // 给已有提交挂一个快照 ref（改前基线在分叉时被引用，防止被 git 回收）；返回 ref
   pin(commit: string, signal?: AbortSignal): Promise<string>;
+  // 决策 434：会话回退把工作区写回之后调用：之后的改动与写回后的现状比较（还没有快照时把现状记为改前基线）
+  resync?(signal?: AbortSignal): Promise<void>;
   // 排队的操作做完后删掉临时索引；之后再用会重新复制
   close(): Promise<void>;
 }
@@ -556,6 +558,17 @@ export function createCheckpointer(input: {
       serial(async () => {
         await init(signal);
         return nextRef(commit, signal);
+      }),
+    resync: (signal) =>
+      serial(async () => {
+        await init(signal);
+        const { tree } = await currentTree(signal);
+        if (previous === undefined) {
+          baseTree = tree;
+          baseLost = false;
+        } else {
+          lastTree = tree;
+        }
       }),
     close: () =>
       serial(async () => {

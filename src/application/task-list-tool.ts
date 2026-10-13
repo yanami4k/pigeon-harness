@@ -124,6 +124,13 @@ export class TaskList {
     return this.items();
   }
 
+  // 决策 434：会话回退或切换分支后按目标分支重来：先清空，再取最后一次 update_tasks 的整份清单
+  replace(messages: readonly AgentMessage[]): void {
+    this.#items = [];
+    this.#nextId = 1;
+    this.restore(messages);
+  }
+
   // 从会话还原：取最后一次 update_tasks 工具结果里的整份清单
   restore(messages: readonly AgentMessage[]): void {
     for (let index = messages.length - 1; index >= 0; index -= 1) {

@@ -1,0 +1,395 @@
+// 决策 433–438：会话回退与切换分支（运行面与终端界面同一条装配路径，假模型，临时 git 仓库）。
+// 发消息时拍快照；消息树列出人发的消息与分支末端；退两者：只还原 agent 改过的文件、agent 新建的删掉、手改不碰、
+// 对话换成目标分支；切回原分支后文件逐字节一致（行尾转换开与不开都是）；agent 改后又被手改的列为冲突、缺省保留；
+// 被忽略的文件不动；没有快照的会话只退对话；授权沿用切换前的状态并在目标分支补记；花费按全部分支。
+import assert from "node:assert/strict";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, test } from "vitest";
+import { pruneSeedFromEntries } from "../pi-runtime/context-prune.ts";
+import type { FakeReply } from "../pi-runtime/fixtures.ts";
+import { newSessionId } from "../state/ids.ts";
+import { SessionEntryType } from "../state/session-entries.ts";
+import { previousJobsOfSession } from "./background-jobs.ts";
+import { noMcpSession } from "./mcp.ts";
+import {
+  applyRewind,
+  checkCode,
+  loadRewindTree,
+  prepareRewind,
+  type RewindHost,
+  type RewindNode,
+} from "./rewind.ts";
+import { sessionCostTally } from "./session-cost.ts";
+import { type OpenedSessionRuntime, openSessionRuntime } from "./session-runtime.ts";
+import { statusFromEntries } from "./status-block.ts";
+import {
+  git,
+  initRepo,
+  mainEntries,
+  routedModel,
+  tempRoot,
+  textOf,
+} from "./tui-session-fixtures.ts";
+import { sessionsDirOf } from "./workspace.ts";
+
+const cleanups: Array<() => Promise<void> | void> = [];
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+});
+
+const write = (path: string, content: string) => ({
+  text: "写",
+  toolCalls: [{ name: "write_file", args: { path, content } }],
+});
+
+// 覆盖已有文件：write_file 要求本会话先读过
+const overwrite = (path: string, content: string) => ({
+  text: "改",
+  toolCalls: [
+    { name: "read_file", args: { path } },
+    { name: "write_file", args: { path, content } },
+  ],
+});
+
+const lastText = (messages: readonly unknown[]) =>
+  textOf((messages.at(-1) ?? {}) as { content?: unknown });
+
+async function openSession(root: string, replies: FakeReply[]) {
+  const { streamFn, calls } = routedModel({ main: replies });
+  const sessionId = newSessionId();
+  const opened: OpenedSessionRuntime = await openSessionRuntime({
+    governanceRoot: root,
+    sessionId,
+    streamFn,
+    turnSnapshots: true,
+    flags: { yolo: true, provider: "custom", modelId: "custom", persistThinking: true },
+    homeDir: root,
+    startMcp: noMcpSession,
+  });
+  const bundle = opened.bundle;
+  cleanups.push(async () => {
+    await opened.checkpoints?.close();
+    await bundle.sessionStore.close();
+  });
+  const host: RewindHost = {
+    workspaceRoot: root,
+    sessionStore: bundle.sessionStore,
+    ...(opened.checkpoints !== undefined ? { checkpoints: opened.checkpoints } : {}),
+    adapter: bundle.adapter,
+    status: bundle.status,
+    prune: bundle.prune,
+    ...(bundle.taskList !== undefined ? { taskList: bundle.taskList } : {}),
+    grants: bundle.grantStore,
+  };
+  return { sessionId, bundle, opened, host, calls };
+}
+
+function repo(autocrlf: boolean): string {
+  const { root, cleanup } = tempRoot("pigeon-rewind-");
+  cleanups.push(cleanup);
+  initRepo(root, { "a.txt": "one\n", "m.txt": "mine\n" });
+  git(root, ["config", "core.autocrlf", autocrlf ? "true" : "false"]);
+  return root;
+}
+
+const bytes = (root: string, path: string) => readFileSync(join(root, path));
+
+function messageNode(nodes: RewindNode[], text: string): RewindNode {
+  const node = nodes.find((item) => item.kind === "message" && item.text === text);
+  assert.ok(node !== undefined, `消息树里有"${text}"`);
+  return node;
+}
+
+for (const autocrlf of [false, true]) {
+  test(`改—退—切回：只退 agent 改过的、新建的删掉、手改不碰；切回原分支文件逐字节一致（core.autocrlf=${autocrlf}）`, async () => {
+    const root = repo(autocrlf);
+    const { bundle, host } = await openSession(root, [
+      overwrite("a.txt", "two\n"),
+      { text: "第一条做完" },
+      overwrite("a.txt", "three\n"),
+      write("d/new.txt", "N\r\nmixed\n"),
+      { text: "第二条做完" },
+    ]);
+    await bundle.adapter.run("first");
+    // 两条消息之间的手改：agent 没碰过的文件（等第一条的快照拍完，手改不混进 agent 的改动）
+    await host.checkpoints?.settle();
+    writeFileSync(join(root, "m.txt"), "mine, edited\n");
+    writeFileSync(join(root, "c.txt"), "hand made\n");
+    await bundle.adapter.run("second");
+    await host.checkpoints?.settle();
+    const after = {
+      a: bytes(root, "a.txt"),
+      n: bytes(root, "d/new.txt"),
+    };
+    // 发消息时的快照记在各自的 Run 上
+    const turns = mainEntries(root, bundle.adapter.sessionId).filter(
+      (entry) => entry.type === "custom" && entry.customType === SessionEntryType.TurnSnapshot
+    );
+    assert.equal(turns.length, 2);
+
+    const tree = await loadRewindTree(host);
+    assert.deepEqual(
+      tree.map((node) => [node.kind, node.text, node.current]),
+      [
+        ["message", "first", false],
+        ["message", "second", false],
+        ["tip", "第二条做完", true],
+      ]
+    );
+    const second = messageNode(tree, "second");
+    assert.equal(second.prefill, "second");
+    const prepared = await prepareRewind(host, second.target);
+    assert.deepEqual(
+      prepared.plan.files.map((file) => file.path),
+      ["a.txt", "d/new.txt"]
+    );
+    const code = await checkCode(host, prepared);
+    assert.equal(code.classified.conflicts.length, 0);
+    const outcome = await applyRewind(host, prepared, { mode: "both", code });
+    assert.deepEqual(outcome.restore?.written, ["a.txt"]);
+    assert.deepEqual(outcome.restore?.removed, ["d/new.txt"]);
+    assert.equal(readFileSync(join(root, "a.txt"), "utf8").replace(/\r\n/g, "\n"), "two\n");
+    assert.equal(existsSync(join(root, "d")), false, "agent 新建的目录删空即删");
+    assert.equal(readFileSync(join(root, "m.txt"), "utf8"), "mine, edited\n", "手改不碰");
+    assert.equal(readFileSync(join(root, "c.txt"), "utf8"), "hand made\n", "手建不碰");
+    // 对话换成目标分支：最后一条是第一条的回复
+    const transcript = bundle.adapter.transcript();
+    assert.equal(lastText(transcript), "第一条做完");
+    assert.ok(!transcript.some((message) => textOf(message as { content?: unknown }) === "second"));
+
+    // 切回原分支的末端
+    const back = (await loadRewindTree(host)).find(
+      (node) => node.kind === "tip" && node.text === "第二条做完"
+    );
+    assert.ok(back !== undefined && !back.current);
+    const again = await prepareRewind(host, back.target);
+    const againCode = await checkCode(host, again);
+    assert.equal(againCode.classified.conflicts.length, 0);
+    await applyRewind(host, again, { mode: "both", code: againCode });
+    assert.deepEqual(bytes(root, "a.txt"), after.a, "a.txt 逐字节一致");
+    assert.deepEqual(bytes(root, "d/new.txt"), after.n, "d/new.txt 逐字节一致");
+    assert.equal(readFileSync(join(root, "m.txt"), "utf8"), "mine, edited\n");
+    assert.equal(lastText(bundle.adapter.transcript()), "第二条做完");
+  });
+}
+
+test("agent 改后又被手改的列为冲突：缺省保留，选了才退；被忽略的文件不动", async () => {
+  const root = repo(false);
+  writeFileSync(join(root, ".gitignore"), ".pigeon/\nbuild/\n");
+  const { bundle, host } = await openSession(root, [
+    { text: "第一条做完" },
+    overwrite("a.txt", "agent\n"),
+    write("b.txt", "agent b\n"),
+    write("build/out.log", "ignored output\n"),
+    { text: "第二条做完" },
+  ]);
+  await bundle.adapter.run("first");
+  await bundle.adapter.run("second");
+  await host.checkpoints?.settle();
+  writeFileSync(join(root, "a.txt"), "agent, then hand\n");
+  const tree = await loadRewindTree(host);
+  const prepared = await prepareRewind(host, messageNode(tree, "second").target);
+  assert.ok(!prepared.plan.files.some((file) => file.path.startsWith("build/")));
+  const code = await checkCode(host, prepared);
+  assert.deepEqual(
+    code.classified.conflicts.map((action) => action.path),
+    ["a.txt"]
+  );
+  const outcome = await applyRewind(host, prepared, { mode: "code", code });
+  assert.deepEqual(outcome.kept, ["a.txt"]);
+  assert.equal(readFileSync(join(root, "a.txt"), "utf8"), "agent, then hand\n", "缺省保留");
+  assert.equal(existsSync(join(root, "b.txt")), false);
+  assert.equal(readFileSync(join(root, "build/out.log"), "utf8"), "ignored output\n");
+  // 只退代码：对话不动
+  assert.equal(lastText(bundle.adapter.transcript()), "第二条做完");
+
+  // 再退一次、选了退回：手改的那份也退
+  const again = await prepareRewind(host, messageNode(await loadRewindTree(host), "second").target);
+  const againCode = await checkCode(host, again);
+  assert.deepEqual(
+    againCode.classified.conflicts.map((action) => action.path),
+    ["a.txt"]
+  );
+  await applyRewind(host, again, { mode: "code", code: againCode, revert: new Set(["a.txt"]) });
+  assert.equal(readFileSync(join(root, "a.txt"), "utf8"), "one\n");
+});
+
+test("没有快照的会话（非 git 工作区）只退对话；退对话后原消息可再发；切回再退不留多余的末端；状态块与裁剪起点按目标分支重设", async () => {
+  const { root, cleanup } = tempRoot("pigeon-rewind-plain-");
+  cleanups.push(cleanup);
+  mkdirSync(join(root, "src"));
+  const { bundle, host } = await openSession(root, [
+    { text: "第一条做完" },
+    { text: "第二条做完" },
+    { text: "第三条" },
+    { text: "重发之后" },
+  ]);
+  const reseeds: string[] = [];
+  const watched: RewindHost = {
+    ...host,
+    status: {
+      reseed: (value) => {
+        reseeds.push(`status:${JSON.stringify(value)}`);
+        host.status.reseed(value);
+      },
+    },
+    prune: {
+      reseed: (value) => {
+        reseeds.push(`prune:${JSON.stringify(value)}`);
+        host.prune.reseed(value);
+      },
+    },
+  };
+  assert.equal(host.checkpoints, undefined);
+  await bundle.adapter.run("first");
+  await bundle.adapter.run("second");
+  const tree = await loadRewindTree(watched);
+  const prepared = await prepareRewind(watched, messageNode(tree, "second").target);
+  assert.deepEqual(prepared.plan.files, []);
+  await assert.rejects(() => checkCode(watched, prepared), /只能退对话/);
+  // 选点之后又有了新内容：不按旧规划做
+  await bundle.adapter.run("third");
+  await assert.rejects(() => applyRewind(watched, prepared, { mode: "conversation" }), /新内容/);
+  const fresh = await prepareRewind(
+    watched,
+    messageNode(await loadRewindTree(watched), "second").target
+  );
+  await applyRewind(watched, fresh, { mode: "conversation" });
+  const main = mainEntries(root, bundle.adapter.sessionId);
+  assert.deepEqual(reseeds, [
+    `status:${JSON.stringify(statusFromEntries(main))}`,
+    `prune:${JSON.stringify(pruneSeedFromEntries(main))}`,
+  ]);
+  // 切回原分支的末端再退回来：中间留下的回退条目不成为多余的末端
+  const tip = (await loadRewindTree(watched)).find((node) => node.kind === "tip" && !node.current);
+  assert.ok(tip !== undefined);
+  await applyRewind(watched, await prepareRewind(watched, tip.target), { mode: "conversation" });
+  await applyRewind(
+    watched,
+    await prepareRewind(watched, messageNode(await loadRewindTree(watched), "second").target),
+    { mode: "conversation" }
+  );
+  await bundle.adapter.run("second, rewritten");
+  const nodes = await loadRewindTree(watched);
+  // 两条分支：原来的 second（与 third）与重发的
+  assert.deepEqual(
+    nodes.map((node) => [node.kind, node.text, node.depth]),
+    [
+      ["message", "first", 0],
+      ["message", "second", 1],
+      ["message", "third", 1],
+      ["tip", "第三条", 1],
+      ["message", "second, rewritten", 1],
+      ["tip", "重发之后", 1],
+    ]
+  );
+  assert.equal(nodes.at(-1)?.current, true);
+});
+
+test("一个 Run 最后那份快照的条目落在下一个 Run 之后也认得：退到最早一条之前时它改的照样退", async () => {
+  const root = repo(false);
+  const { bundle, host } = await openSession(root, [
+    write("x.txt", "x\n"),
+    { text: "一" },
+    write("y.txt", "y\n"),
+    { text: "二" },
+    { text: "重发" },
+  ]);
+  // 两条之间不等快照：第一条的快照条目通常写在第二条开始之后
+  await bundle.adapter.run("first");
+  await bundle.adapter.run("second");
+  const second = messageNode(await loadRewindTree(host), "second");
+  let prepared = await prepareRewind(host, second.target);
+  await applyRewind(host, prepared, { mode: "both", code: await checkCode(host, prepared) });
+  assert.equal(existsSync(join(root, "y.txt")), false);
+  assert.equal(existsSync(join(root, "x.txt")), true);
+  await bundle.adapter.run("second again");
+  prepared = await prepareRewind(host, messageNode(await loadRewindTree(host), "first").target);
+  assert.deepEqual(
+    prepared.plan.files.map((file) => file.path),
+    ["x.txt"]
+  );
+  await applyRewind(host, prepared, { mode: "both", code: await checkCode(host, prepared) });
+  assert.equal(existsSync(join(root, "x.txt")), false);
+});
+
+test("授权沿用切换前的状态：回退点之后给的照样有效、撤过的照样撤销，目标分支上补记", async () => {
+  const { root, cleanup } = tempRoot("pigeon-rewind-grants-");
+  cleanups.push(cleanup);
+  const { bundle, host } = await openSession(root, [{ text: "一" }, { text: "二" }]);
+  const early = bundle.grantStore.create({
+    tool: "run_command",
+    command: "npm test",
+    firstCall: { toolCallId: "c0", args: { command: "npm test" } },
+  });
+  await bundle.adapter.run("first");
+  const late = bundle.grantStore.create({
+    tool: "run_command",
+    command: "npm run build",
+    firstCall: { toolCallId: "c1", args: { command: "npm run build" } },
+  });
+  bundle.grantStore.revoke(early.grantId);
+  await bundle.adapter.run("second");
+  const prepared = await prepareRewind(
+    host,
+    messageNode(await loadRewindTree(host), "first").target
+  );
+  const outcome = await applyRewind(host, prepared, { mode: "conversation" });
+  assert.equal(outcome.grantsAdded, 1);
+  assert.equal(outcome.grantsRevoked, 1);
+  const { loadStoreSession } = await import("../persistence/session-view.ts");
+  const { storeActiveGrants } = await import("../state/session-judge.ts");
+  const loaded = loadStoreSession(sessionsDirOf(root), bundle.adapter.sessionId);
+  assert.ok(loaded !== undefined);
+  assert.deepEqual(
+    storeActiveGrants(loaded.view).map((grant) => grant.grantId),
+    [late.grantId]
+  );
+  assert.deepEqual(
+    bundle.grantStore.list().map((grant) => grant.grantId),
+    [late.grantId]
+  );
+});
+
+test("会话花费按全部分支统计：回退之后旧分支上花的照算", async () => {
+  const { root, cleanup } = tempRoot("pigeon-rewind-cost-");
+  cleanups.push(cleanup);
+  const { bundle, host } = await openSession(root, [{ text: "一" }, { text: "二" }]);
+  await bundle.adapter.run("first");
+  await bundle.adapter.run("second");
+  await bundle.sessionStore.flush();
+  const before = sessionCostTally(sessionsDirOf(root), bundle.adapter.sessionId);
+  const prepared = await prepareRewind(
+    host,
+    messageNode(await loadRewindTree(host), "second").target
+  );
+  await applyRewind(host, prepared, { mode: "conversation" });
+  const after = sessionCostTally(sessionsDirOf(root), bundle.adapter.sessionId);
+  assert.ok(before.pricedTokens + before.unpricedTokens > 0);
+  assert.deepEqual(after, before);
+});
+
+test("续跑时作业号按全部分支编号，丢失的作业只看主分支", () => {
+  const job = (jobId: string, event: "started" | "ended") => ({
+    type: "custom",
+    customType: SessionEntryType.BackgroundJob,
+    data: {
+      version: 1,
+      event,
+      jobId,
+      command: "sleep",
+      ...(event === "started"
+        ? { marker: "m", output: "o" }
+        : { state: "exited", exitCode: 0, outputBytes: 0 }),
+    },
+  });
+  const main = [job("j1", "started"), job("j1", "ended"), job("j2", "started")];
+  const dead = [job("j5", "started")];
+  const seeded = previousJobsOfSession(main, [...main, ...dead]);
+  assert.equal(seeded.lastId, 5);
+  assert.deepEqual(
+    seeded.lost.map((item) => item.jobId),
+    ["j2"]
+  );
+});

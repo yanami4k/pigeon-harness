@@ -50,6 +50,31 @@ export function readSessionView(ref: Pick<SessionFileRef, "path">): SessionView 
   return view;
 }
 
+// 决策 438：一个会话文件里每条分支的原生视图——主分支在前，其余按叶子写入先后（会话回退留下的分支、移出的截断回复）。
+// 各视图从根到各自的叶子，共有的前段在每个视图里都有，按条目号去重由调用方做
+export function readSessionBranchViews(ref: Pick<SessionFileRef, "path">): SessionView[] {
+  const file = readSessionFile(ref.path);
+  if (file === undefined) {
+    return [];
+  }
+  const main = file.lanes.get("main") ?? null;
+  const parents = new Set<string>();
+  for (const entry of file.entries) {
+    if (entry.parentId !== null) parents.add(entry.parentId);
+  }
+  const leaves = [
+    main,
+    ...file.entries
+      .filter((entry) => !parents.has(entry.id) && entry.id !== main)
+      .map((entry) => entry.id),
+  ];
+  return leaves.map((leaf) => {
+    const view = buildSessionView({ header: file.header, entries: branchEntries(file, leaf) });
+    view.warnings.unshift(...file.warnings);
+    return view;
+  });
+}
+
 // 按会话号读原生视图；新存储里没有该会话返回 undefined
 export function loadSessionView(sessionsRoot: string, sessionId: string): SessionView | undefined {
   const ref = listSessionFiles(sessionsRoot).find((file) => file.sessionId === sessionId);

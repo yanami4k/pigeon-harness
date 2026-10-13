@@ -62,6 +62,12 @@ import { loadSessionHistory } from "../application/history.ts";
 import type { HookEventReport } from "../application/hooks.ts";
 import type { PromptHistoryStore } from "../application/prompt-history.ts";
 import { listRecentMainSessions } from "../application/recent-sessions.ts";
+import type {
+  CodeCheck,
+  PreparedRewind,
+  RewindNode,
+  RewindOutcome,
+} from "../application/rewind.ts";
 import type { ScriptCommands } from "../application/script-commands.ts";
 import {
   accumulatedSessionCost,
@@ -97,7 +103,7 @@ import { DEFAULT_STOP_HOOK_BLOCK_CAP } from "../state/hooks.ts";
 import type { RunId, SessionId } from "../state/ids.ts";
 import type { TurnCompletedPayload } from "../state/runtime-events.ts";
 import { RuntimeEventKind } from "../state/runtime-events.ts";
-import type { RunStopCause } from "../state/session-entries.ts";
+import type { RewindMode, RunStopCause } from "../state/session-entries.ts";
 import { toolResultModelUsage } from "../state/tool-usage.ts";
 import { openExternalUrl, PigeonAltScreen, TrimmedTranscript } from "./alt-screen.ts";
 import type { ApprovalPanelResult, TuiApprovalFace } from "./approval.ts";
@@ -119,6 +125,7 @@ import { createPromptEditor, type PromptAutocomplete } from "./input-editor.ts";
 import { InputQueue } from "./input-queue.ts";
 import { installKeybindings, isKey } from "./keybindings.ts";
 import { attachToolResultTo, MessageFlow, projectRuntimeEvent } from "./message-flow.ts";
+import { MessageTree } from "./message-tree.ts";
 import {
   askApprovalPanel,
   closePendingModals,
@@ -263,6 +270,8 @@ export interface TuiShellOptions {
   openUrl?: (url: string) => void;
   // 决策 441：读系统剪贴板（Windows 上右键粘贴用）；缺省 = 右键不粘贴
   readClipboard?: () => Promise<string>;
+  // 决策 433–438：会话回退（读消息树、规划、给现状拍快照、执行）；缺省 = 不可用
+  rewind?: TuiRewindFace;
   // 决策 442：/config 的取数与改动（生效值、用户级的值与覆盖情况；改动写用户级设置，返回写到的文件）；缺省 = 不可用
   config?: {
     view(): ConfigItemView[];
@@ -288,7 +297,21 @@ function fill(component: Component): StackChild {
 export type ShellView = "main" | "tree" | "worker" | "history";
 
 // 决策 304：树形视图的两种模式
-export type TreeMode = "running" | "sessions";
+export type TreeMode = "running" | "sessions" | "messages";
+
+// 决策 433–438：终端界面的会话回退面（入口在 tui/main.ts，按当前运行面现取）
+export interface TuiRewindFace {
+  tree(): Promise<RewindNode[]>;
+  prepare(to: string | null): Promise<PreparedRewind>;
+  check(prepared: PreparedRewind): Promise<CodeCheck>;
+  apply(
+    prepared: PreparedRewind,
+    options: { mode: RewindMode; code?: CodeCheck; revert?: ReadonlySet<string> }
+  ): Promise<RewindOutcome>;
+}
+
+// 决策 435：双击 Esc 的间隔
+const DOUBLE_ESCAPE_MS = 500;
 
 // 从哪里进入的 worker 会话或历史查看（Esc 回到那里）
 type ReturnTo = { view: "main" } | { view: "tree"; mode: TreeMode };
@@ -320,6 +343,9 @@ export class PigeonTuiShell
   // 决策 304：树形视图的模式、会话树、只读历史查看与 Esc 回到哪里
   private treeMode: TreeMode = "running";
   private readonly sessionTree: SessionTree;
+  // 决策 435：消息树（会话回退）与双击 Esc 的上一下
+  private readonly messageTree: MessageTree;
+  private lastIdleEscapeAt: number | undefined;
   private historySession: { sessionId: string; flow: MessageFlow } | undefined;
   private returnTo: ReturnTo = { view: "main" };
   // 决策 301：树形视图里就地显示的审批面板（审批挂起期间）
@@ -390,6 +416,11 @@ export class PigeonTuiShell
   private started = false;
   // S4：/resume 进行中——输入排队、改状态的命令被拒（决策 286，同运行中）
   private resuming = false;
+  // 决策 433：回退进行中（规划、拍快照、写回、换上下文）：与运行同样占住输入与排队
+  private rewinding = false;
+  private rewindPrepared: PreparedRewind | undefined;
+  private rewindCode: CodeCheck | undefined;
+  private pendingRewindMode: RewindMode = "conversation";
   // S3 审批面板：挂起中的审批决议（resolve 四键或 cancel）；串行不变量（决策 002）下
   // 同时最多一个，非空即面板期间
   private pendingApprovalState: PendingApproval | null = null;
@@ -470,6 +501,11 @@ export class PigeonTuiShell
     });
     this.sessionTree = new SessionTree({
       height: () => Math.max(3, this.options.terminal.rows - 2),
+      tabToMessages: () => this.options.rewind !== undefined,
+    });
+    this.messageTree = new MessageTree({
+      height: () => Math.max(3, this.options.terminal.rows - 2),
+      tabToRunning: () => this.current.workers !== undefined,
     });
     this.layout();
     for (const line of keyNotices) this.flow.addSystem(line);
@@ -484,7 +520,13 @@ export class PigeonTuiShell
       this.view === "tree"
         ? [
             this.title,
-            fill(this.treeMode === "sessions" ? this.sessionTree : this.tree),
+            fill(
+              this.treeMode === "sessions"
+                ? this.sessionTree
+                : this.treeMode === "messages"
+                  ? this.messageTree
+                  : this.tree
+            ),
             this.approvalBox,
             this.statusBar,
           ]
@@ -746,7 +788,7 @@ export class PigeonTuiShell
 
   // 运行中（含压缩）或 /resume 进行中：输入排队、改状态的命令被拒
   private isBusy(): boolean {
-    return this.running || this.resuming;
+    return this.running || this.resuming || this.rewinding;
   }
 
   // 立即提交一条输入（空闲时的回车，或空闲后从队列取出的一条）
@@ -821,6 +863,7 @@ export class PigeonTuiShell
       this.started &&
       !this.picker.isOpen() &&
       !this.configPanel.isOpen() &&
+      !this.messageTreeOpen() &&
       this.queue.size() > 0
     ) {
       const next = this.queue.take();
@@ -833,6 +876,7 @@ export class PigeonTuiShell
       this.started &&
       !this.picker.isOpen() &&
       !this.configPanel.isOpen() &&
+      !this.messageTreeOpen() &&
       runtime.runNotices !== undefined &&
       (runtime.pendingNotices?.() ?? 0) > 0
     ) {
@@ -975,6 +1019,226 @@ export class PigeonTuiShell
     reload([]).then(finish, (error: unknown) =>
       finish([`重读设置失败：${error instanceof Error ? error.message : String(error)}`])
     );
+  }
+
+  // 决策 435：/rewind
+  get rewindCommand(): (() => void) | undefined {
+    return this.options.rewind === undefined ? undefined : () => this.openRewind();
+  }
+
+  private messageTreeOpen(): boolean {
+    return this.view === "tree" && this.treeMode === "messages";
+  }
+
+  // 决策 435：打开消息树（双击 Esc、/rewind、会话树里 Tab）
+  openRewind(): void {
+    const rewind = this.options.rewind;
+    if (rewind === undefined) return;
+    if (this.isBusy()) {
+      this.flow.addSystem("运行中不能回退：等它结束或先中断");
+      this.tui.requestRender();
+      return;
+    }
+    this.panel.blur();
+    this.treeMode = "messages";
+    this.messageTree.loading();
+    this.showView("tree");
+    rewind.tree().then(
+      (nodes) => {
+        if (this.messageTreeOpen()) this.messageTree.load(nodes);
+        this.tui.requestRender();
+      },
+      (error: unknown) => {
+        this.messageTree.fail(
+          `读消息树失败：${error instanceof Error ? error.message : String(error)}`
+        );
+        this.tui.requestRender();
+      }
+    );
+  }
+
+  private closeMessageTree(): void {
+    this.rewindPrepared = undefined;
+    this.rewindCode = undefined;
+    this.returnTo = { view: "main" };
+    this.showView("main");
+    this.drainQueue();
+  }
+
+  private handleMessageTreeKey(data: string): void {
+    const tree = this.messageTree;
+    const stage = tree.stage();
+    // 读取与执行进行中：只等它（读取中 Esc 可关）
+    if (stage === "loading" || stage === "busy") {
+      if (stage === "loading" && matchesKey(data, "escape")) this.closeMessageTree();
+      return;
+    }
+    if (stage === "tree") {
+      if (matchesKey(data, "escape") || isKey(data, "pigeon.tree")) {
+        this.closeMessageTree();
+      } else if (matchesKey(data, "tab")) {
+        if (this.current.workers !== undefined) this.showTree("running");
+      } else if (matchesKey(data, "up")) {
+        tree.move(-1);
+      } else if (matchesKey(data, "down")) {
+        tree.move(1);
+      } else if (matchesKey(data, "enter")) {
+        const node = tree.selected();
+        if (node === undefined) return;
+        if (node.current) {
+          tree.setNote("已经在这里");
+          return;
+        }
+        this.planRewind(node);
+      }
+      return;
+    }
+    if (stage === "choose") {
+      if (matchesKey(data, "escape")) {
+        tree.back();
+      } else if (matchesKey(data, "up")) {
+        tree.move(-1);
+      } else if (matchesKey(data, "down")) {
+        tree.move(1);
+      } else if (/^[1-3]$/.test(data) || matchesKey(data, "enter")) {
+        const mode = /^[1-3]$/.test(data) ? tree.choiceAt(Number(data) - 1) : tree.choice();
+        if (mode !== undefined) this.chooseRewindMode(mode);
+      }
+      return;
+    }
+    // 手改过的文件逐个选
+    if (matchesKey(data, "escape")) {
+      tree.back("没有回退");
+    } else if (matchesKey(data, "up")) {
+      tree.move(-1);
+    } else if (matchesKey(data, "down")) {
+      tree.move(1);
+    } else if (matchesKey(data, "space")) {
+      tree.toggle();
+    } else if (matchesKey(data, "enter")) {
+      this.applyRewind(this.pendingRewindMode, tree.reverts());
+    }
+  }
+
+  private rewindFailed(error: unknown): void {
+    this.rewinding = false;
+    this.messageTree.back(`没有回退：${error instanceof Error ? error.message : String(error)}`);
+    this.updateStatus();
+    this.tui.requestRender();
+  }
+
+  // 选了一点：先规划（不拍快照），据此给三选一
+  private planRewind(node: RewindNode): void {
+    const rewind = this.options.rewind;
+    if (rewind === undefined) return;
+    this.rewinding = true;
+    this.messageTree.busy("正在读会话与快照...");
+    rewind.prepare(node.target).then(
+      (prepared) => {
+        this.rewinding = false;
+        this.rewindPrepared = prepared;
+        this.rewindCode = undefined;
+        this.messageTree.choose(node, prepared.plan.files.length > 0);
+        this.tui.requestRender();
+      },
+      (error: unknown) => this.rewindFailed(error)
+    );
+  }
+
+  // 三选一之后：退代码的先给现状拍快照（433），有手改过的文件让人逐个选
+  private chooseRewindMode(mode: RewindMode): void {
+    const rewind = this.options.rewind;
+    const prepared = this.rewindPrepared;
+    if (rewind === undefined || prepared === undefined) return;
+    this.pendingRewindMode = mode;
+    if (mode === "conversation") {
+      this.applyRewind(mode, new Set());
+      return;
+    }
+    this.rewinding = true;
+    this.messageTree.busy("正在给现状拍快照...");
+    rewind.check(prepared).then(
+      (code) => {
+        this.rewindCode = code;
+        const conflicts = code.classified.conflicts.map((action) => action.path);
+        if (conflicts.length > 0) {
+          this.rewinding = false;
+          this.messageTree.conflicts(conflicts);
+          this.tui.requestRender();
+          return;
+        }
+        this.applyRewind(mode, new Set());
+      },
+      (error: unknown) => this.rewindFailed(error)
+    );
+  }
+
+  private applyRewind(mode: RewindMode, revert: ReadonlySet<string>): void {
+    const rewind = this.options.rewind;
+    const prepared = this.rewindPrepared;
+    const node = this.messageTree.chosenNode();
+    if (rewind === undefined || prepared === undefined || node === undefined) return;
+    this.rewinding = true;
+    this.messageTree.busy(mode === "conversation" ? "正在退对话..." : "正在写回文件...");
+    const code = this.rewindCode;
+    rewind
+      .apply(prepared, {
+        mode,
+        ...(code !== undefined && mode !== "conversation" ? { code } : {}),
+        revert,
+      })
+      .then(
+        (outcome) => this.rewindDone(node, outcome),
+        (error: unknown) => this.rewindFailed(error)
+      );
+  }
+
+  // 回退完成：退了对话的按新的主分支重绘消息区，原消息放回输入框；写回结果如实列出
+  private rewindDone(node: RewindNode, outcome: RewindOutcome): void {
+    this.rewinding = false;
+    this.rewindPrepared = undefined;
+    this.rewindCode = undefined;
+    this.returnTo = { view: "main" };
+    this.showView("main");
+    if (outcome.mode !== "code") {
+      this.flow.clear();
+      this.flow.addSystem("== 回退之后的对话 ==");
+      this.renderHistoryInto(this.flow, this.current.sessionId, "== 以上为回退之后的对话 ==");
+    }
+    const what =
+      outcome.mode === "both" ? "代码与对话" : outcome.mode === "conversation" ? "对话" : "代码";
+    this.flow.addSystem(
+      node.kind === "message" ? `已退回（${what}）到这条消息之前` : `已切到这条分支（${what}）`
+    );
+    const restore = outcome.restore;
+    if (restore !== undefined) {
+      const list = (paths: readonly string[]) =>
+        paths.length > 6
+          ? `${paths.slice(0, 6).join("、")} 等 ${paths.length} 个`
+          : paths.join("、");
+      if (restore.written.length > 0) this.flow.addSystem(`写回：${list(restore.written)}`);
+      if (restore.removed.length > 0) this.flow.addSystem(`删掉：${list(restore.removed)}`);
+      for (const skipped of restore.skipped) {
+        this.flow.addSystem(`没动：${skipped.path}（${skipped.reason}）`);
+      }
+      if (restore.written.length + restore.removed.length + restore.skipped.length === 0) {
+        this.flow.addSystem("没有要写回的文件");
+      }
+    }
+    if (outcome.kept.length > 0) {
+      this.flow.addSystem(`保留了手改过的：${outcome.kept.join("、")}`);
+    }
+    if (outcome.grantsAdded + outcome.grantsRevoked > 0) {
+      this.flow.addSystem(
+        `授权沿用回退前的状态（补记 ${outcome.grantsAdded} 条授权、${outcome.grantsRevoked} 条撤销）`
+      );
+    }
+    if (node.kind === "message" && outcome.mode !== "code" && node.prefill !== undefined) {
+      this.input.setText(node.prefill);
+    }
+    this.updateStatus();
+    this.tui.requestRender();
+    this.drainQueue();
   }
 
   // 决策 450：输入框为空（扣住的消息面板等它为空再弹）
@@ -1231,6 +1495,30 @@ export class PigeonTuiShell
 
   isRunning(): boolean {
     return this.running;
+  }
+
+  // 决策 435：空闲、主视图、输入框为空、没有补全与面板时，双击取消键打开消息树
+  idleEscape(): boolean {
+    if (
+      this.options.rewind === undefined ||
+      this.view !== "main" ||
+      this.input.getText() !== "" ||
+      this.input.isShowingAutocomplete() ||
+      this.picker.isOpen() ||
+      this.configPanel.isOpen()
+    ) {
+      this.lastIdleEscapeAt = undefined;
+      return false;
+    }
+    const now = Date.now();
+    const last = this.lastIdleEscapeAt;
+    if (last !== undefined && now - last <= DOUBLE_ESCAPE_MS) {
+      this.lastIdleEscapeAt = undefined;
+      this.openRewind();
+      return true;
+    }
+    this.lastIdleEscapeAt = now;
+    return false;
   }
 
   pendingApproval(): PendingApproval | null {
@@ -1817,6 +2105,12 @@ export class PigeonTuiShell
       this.escapeCapture();
       return { consume: true };
     }
+    // 决策 435：消息树不依赖 worker 编排面
+    if (this.view === "tree" && this.treeMode === "messages") {
+      this.handleMessageTreeKey(data);
+      this.tui.requestRender();
+      return { consume: true };
+    }
     const workers = this.current.workers;
     if (workers === undefined) return undefined;
     if (this.view === "tree" && this.treeMode === "sessions") {
@@ -1824,7 +2118,9 @@ export class PigeonTuiShell
         this.returnTo = { view: "main" };
         this.showView("main");
       } else if (matchesKey(data, "tab")) {
-        this.showTree("running");
+        // 决策 435：有会话回退时依次是运行中、会话树、消息树
+        if (this.options.rewind !== undefined) this.openRewind();
+        else this.showTree("running");
       } else if (matchesKey(data, "up")) {
         this.sessionTree.move(-1);
       } else if (matchesKey(data, "down")) {

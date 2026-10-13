@@ -129,6 +129,11 @@ export interface SessionStoreWriter extends SessionStoreSink {
   fileDeferred?(): boolean;
   // flush 后关闭；同进程最后一个写者关闭时释放锁
   close(): Promise<void>;
+  // 决策 434：主分支的叶子（排在此前的写入之后）；会话没打开时为 undefined，空会话为 null
+  leafId(): Promise<string | null | undefined>;
+  // 决策 434：把主分支改挂到某条目（null 即会话开头）上，排在此前的写入之后；原来的后续留在文件里成为分支。
+  // 条目不存在或写失败返回 false（失败另交告警口）
+  moveMain(entryId: string | null): Promise<boolean>;
 }
 
 // 排进队列的一次写入：失败交给发起它的写者的告警口
@@ -342,6 +347,18 @@ export function openSessionStoreWriter(options: SessionStoreWriterOptions): Sess
     dropTruncatedReply: () => {
       enqueue("移出截断的回复", (session) => dropTruncatedReply(session));
     },
+    leafId: () =>
+      shared.deferred !== undefined && !closed
+        ? Promise.resolve(null)
+        : request("读主分支叶子", (session) => session.getLeafId()),
+    moveMain: async (entryId) =>
+      (await request("挪动主分支", async (session) => {
+        if (entryId !== null && (await session.getEntry(entryId)) === undefined) {
+          throw new Error(`会话里没有条目 ${entryId}`);
+        }
+        await session.moveLane("main", entryId);
+        return true;
+      })) === true,
     appendCompaction: (result) => {
       let entry: Omit<CompactionEntry, "id" | "parentId" | "seq" | "timestamp">;
       try {

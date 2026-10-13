@@ -54,6 +54,8 @@ export interface ModalHost {
   // 决策 441：有拖选的选区时复制它并返回 true（Ctrl+C 即复制，不计退出布防）；缺省没有选区
   copySelection?(): boolean;
   requestInterrupt(): void;
+  // 决策 435：空闲时按了取消键：第二下落在双击间隔内即打开消息树并返回 true；缺省没有回退
+  idleEscape?(): boolean;
   // 决策 301：审批面板的各行（审批块、撤回、理由行提示）写到哪里——就地显示在当前视图；缺省即 addSystem
   addApprovalLine?(line: string): void;
   // 决策 301：当前不在主会话视图（审批块里给主会话的请求写明来源）；缺省即在
@@ -160,6 +162,8 @@ export function handleShellKey(host: ModalHost, data: string): { consume: true }
     host.requestInterrupt();
     return { consume: true };
   }
+  // 决策 435：空闲且输入框为空时双击 Esc 打开消息树（会话回退）
+  if (isKey(data, "pigeon.cancel") && host.idleEscape?.() === true) return { consume: true };
   return undefined;
 }
 

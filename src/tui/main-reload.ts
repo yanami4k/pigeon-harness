@@ -86,6 +86,7 @@ export async function reopenMainSessionForReload(
   await current.bundle.sessionStore.flush();
   const opened = await openSessionRuntime({
     governanceRoot: context.governanceRoot,
+    turnSnapshots: true,
     ...(context.workspaceRoot !== undefined ? { workspaceRoot: context.workspaceRoot } : {}),
     ...(context.enterWorktree !== undefined ? { enterWorktree: context.enterWorktree } : {}),
     ...(context.peers !== undefined ? { peers: context.peers } : {}),

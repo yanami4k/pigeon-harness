@@ -237,6 +237,14 @@ export function previousJobsOf(
   };
 }
 
+// 决策 438：续跑时的作业记录——丢失的作业只看主分支，作业号按会话文件里全部分支编号（会话回退后旧分支上用过的号不再用）
+export function previousJobsOfSession(
+  main: ReadonlyArray<{ type: string; customType?: unknown; data?: unknown }>,
+  all: ReadonlyArray<{ type: string; customType?: unknown; data?: unknown }>
+): PreviousJobs {
+  return { lost: previousJobsOf(main).lost, lastId: previousJobsOf(all).lastId };
+}
+
 export function lostJobsText(lost: PreviousJobs["lost"]): string {
   return (
     `Background jobs started by the previous process were lost when it exited (they have no end record): ${lost.map((job) => `${job.jobId} (${commandLabel(job.command)})`).join(", ")}. ` +

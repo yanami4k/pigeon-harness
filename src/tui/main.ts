@@ -18,6 +18,7 @@
 // --resume 不带会话号开壳后弹出会话选择器；运行期告警在壳接管终端期间落消息区（之前与之后照旧写标准错误输出）；
 // 输入历史按项目存在 .pigeon/state/tui-history.json。
 // 决策 301：编排面接上编排器的只读观察口、发消息与续做（编排面板、树形视图、进入 worker 会话），树形视图按任务清单标注。
+
 import { createInterface } from "node:readline/promises";
 import { pathToFileURL } from "node:url";
 import { ProcessTerminal } from "@earendil-works/pi-tui";
@@ -58,6 +59,14 @@ import { openPeerInbox } from "../application/peer-session.ts";
 import { PeerSlot } from "../application/peer-tools.ts";
 import { restoreSessionWorkers } from "../application/previous-workers.ts";
 import { promptHistoryStore } from "../application/prompt-history.ts";
+import {
+  applyRewind,
+  checkCode,
+  loadRewindTree,
+  type PreparedRewind,
+  prepareRewind,
+  type RewindHost,
+} from "../application/rewind.ts";
 import {
   disposeRuntime,
   loadStreamFn,
@@ -446,6 +455,8 @@ export async function main(argv: string[]): Promise<void> {
   };
   const mainOpened = await openSessionRuntime({
     governanceRoot: governanceRoot,
+    // 决策 436：会话回退要用发消息时的快照
+    turnSnapshots: true,
     ...(namedWorktree !== undefined ? { workspaceRoot: namedWorktree.path } : {}),
     ...(sandbox === undefined ? { enterWorktree: enterWorktreeSlot, peers: peerSlot } : {}),
     settings,
@@ -492,12 +503,34 @@ export async function main(argv: string[]): Promise<void> {
       ? { workers: workersFor(mainOpened, mainOpened.scope.parentSessionId) }
       : {}),
   };
+  // 决策 433–438：会话回退的运行面（每次按当前的 slot 现取）
+  const rewindHost = (): RewindHost => {
+    const bundle = slot.bundle;
+    return {
+      workspaceRoot,
+      sessionStore: bundle.sessionStore,
+      ...(slot.checkpoints !== undefined ? { checkpoints: slot.checkpoints } : {}),
+      adapter: bundle.adapter,
+      status: bundle.status,
+      prune: bundle.prune,
+      ...(bundle.taskList !== undefined ? { taskList: bundle.taskList } : {}),
+      grants: bundle.grantStore,
+    };
+  };
   const shell = new PigeonTuiShell({
     terminal: new ProcessTerminal(),
     // 决策 439：键位（设置的 keybindings 一节）
     ...(keybindingsSectionOf(settings) !== undefined
       ? { keybindings: keybindingsSectionOf(settings) }
       : {}),
+    // 决策 433–438：会话回退——按当前运行面现取（/reload、/resume 换了运行面之后照样对）；没有快照的会话只退对话
+    rewind: {
+      tree: () => loadRewindTree(rewindHost()),
+      prepare: (to: string | null) => prepareRewind(rewindHost(), to),
+      check: (prepared: PreparedRewind) => checkCode(rewindHost(), prepared),
+      apply: (prepared: PreparedRewind, options: Parameters<typeof applyRewind>[2]) =>
+        applyRewind(rewindHost(), prepared, options),
+    },
     // 决策 442：/config 设置面板——生效值取本会话当前的设置快照，改动写用户级设置（随后壳按 /reload 重建）
     config: {
       view: () => configView(settings),
@@ -698,6 +731,7 @@ export async function main(argv: string[]): Promise<void> {
         // 决策 3b：会话 grant 种子还原。两者与 MCP 启动一并在 session-runtime.ts（与 cli resume 同一份）
         const opened = await openSessionRuntime({
           governanceRoot: governanceRoot,
+          turnSnapshots: true,
           settings,
           sessionId: targetId,
           ...(sandbox === undefined ? { enterWorktree: enterWorktreeSlot, peers: peerSlot } : {}),
