@@ -252,6 +252,24 @@ test(".worktreeinclude：既匹配规则又被忽略的文件复制进新工作�
   }
 });
 
+test(".worktreeinclude：带 .git 段的（含 8.3 短名 git~1）不复制，与写文件工具同一判断", () => {
+  const { repo, cleanup } = makeRepo();
+  try {
+    writeFileSync(join(repo, ".gitignore"), "vendor/\n");
+    writeFileSync(join(repo, ".worktreeinclude"), "vendor/\n");
+    git(repo, ["add", ".gitignore", ".worktreeinclude"]);
+    git(repo, ["commit", "-q", "-m", "ignore"]);
+    mkdirSync(join(repo, "vendor", "git~1"), { recursive: true });
+    writeFileSync(join(repo, "vendor", "keep.txt"), "keep\n");
+    writeFileSync(join(repo, "vendor", "git~1", "config"), "[core]\n");
+    const w = addWorktree({ repoRoot: repo, sessionId: newSessionId(), name: "gitseg" });
+    assert.equal(readFileSync(join(w.path, "vendor", "keep.txt"), "utf8"), "keep\n");
+    assert.equal(existsSync(join(w.path, "vendor", "git~1")), false);
+  } finally {
+    cleanup();
+  }
+});
+
 test(".worktreeinclude：没有该文件时什么都不复制；includeSource 指定来源目录", () => {
   const { repo, cleanup } = makeRepo();
   try {

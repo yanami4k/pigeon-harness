@@ -86,6 +86,22 @@ test("上级目录是目录联接（或符号链接）时不写，链接指向�
   assert.equal(readFileSync(join(outside, "f.txt"), "utf8"), "outside\n");
 });
 
+test("带 .git 段的路径一律不写（不分大小写、段尾点与空格、8.3 短名）：版本库元数据能让 git 执行任意命令", async () => {
+  const { root, commit } = repo({ "a.txt": "#!/bin/sh\necho pwned\n" });
+  const trees = new SnapshotTrees(root);
+  const target = trees.file(commit, "a.txt");
+  assert.ok(target !== undefined);
+  const paths = [".git/hooks/pre-commit", "sub/.GIT/config", "sub/.git. /config", "GIT~1/config"];
+  const result = await restoreFiles({ trees, actions: paths.map((path) => ({ path, target })) });
+  assert.deepEqual(result.written, []);
+  assert.deepEqual(
+    result.skipped.map((item) => [item.path, item.reason]),
+    paths.map((path) => [path, "版本库元数据（.git）不碰"])
+  );
+  assert.equal(existsSync(join(root, ".git", "hooks", "pre-commit")), false);
+  assert.equal(existsSync(join(root, "sub")), false);
+});
+
 test(".pigeon 下不碰；目标是符号链接不写；磁盘上有、现状快照里没有的不碰；规划之后又被改过的不碰", async () => {
   const { root, commit } = repo({ "a.txt": "target\n", "b.txt": "target b\n" });
   const trees = new SnapshotTrees(root);

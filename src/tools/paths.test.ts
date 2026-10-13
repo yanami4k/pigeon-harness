@@ -5,7 +5,25 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
-import { isPathInsideDir } from "./paths.ts";
+import { insideGitMetadata, isPathInsideDir } from "./paths.ts";
+
+test("版本库元数据判断：任一级为 .git 即算，不分大小写，去掉段尾点与空格再比，8.3 短名 GIT~1 一类也算", () => {
+  for (const path of [
+    ".git",
+    ".git/config",
+    "sub/.GIT/hooks/pre-commit",
+    "sub\\.Git\\config",
+    ".git./config",
+    "a/.git . /config",
+    "GIT~1/config",
+    "a/git~12/x",
+  ]) {
+    assert.equal(insideGitMetadata(path), true, path);
+  }
+  for (const path of ["a.git/config", ".gitignore", ".github/x", "git/config", "git~/x", "x/.gitx"]) {
+    assert.equal(insideGitMetadata(path), false, path);
+  }
+});
 
 function makeWorkspace(files: Record<string, string>): { root: string; cleanup: () => void } {
   const root = mkdtempSync(join(tmpdir(), "pigeon-paths-"));

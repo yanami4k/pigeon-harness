@@ -21,6 +21,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { SessionId } from "../state/ids.ts";
 import { isUnderPigeonDir, worktreesDirOf } from "../state/paths.ts";
 import { GIT_HARDENING_CONFIG, hardenedGitArgs } from "../tools/git-hardening.ts";
+import { insideGitMetadata } from "../tools/paths.ts";
 
 export class WorktreeError extends Error {}
 
@@ -190,7 +191,7 @@ export interface WorktreeIncludes {
 
 // 决策 449：来源工作目录所在仓库里，既匹配仓库顶层 .worktreeinclude 规则（gitignore 语法）、又被 git 忽略的文件（相对顶层）。
 // 匹配借 git 自己：ls-files --others --ignored --exclude-from 只按 .worktreeinclude 的规则列出未跟踪的文件，
-// 再经 check-ignore 留下真被忽略的（已跟踪的本就在检出里，不在 --others 之列）。.pigeon 下的不要。
+// 再经 check-ignore 留下真被忽略的（已跟踪的本就在检出里，不在 --others 之列）。.pigeon 下的、带 .git 段的不要。
 // 没有 .worktreeinclude 即 undefined
 export function listWorktreeIncludes(sourceRoot: string): WorktreeIncludes | undefined {
   const top = resolve(runGit(sourceRoot, ["rev-parse", "--show-toplevel"]).trim());
@@ -205,7 +206,7 @@ export function listWorktreeIncludes(sourceRoot: string): WorktreeIncludes | und
       undefined,
       LIST_MAX_BUFFER
     )
-  ).filter((path) => !isUnderPigeonDir(path));
+  ).filter((path) => !isUnderPigeonDir(path) && !insideGitMetadata(path));
   if (matched.length === 0) {
     return { top, files: [] };
   }
@@ -234,12 +235,13 @@ function inside(root: string, path: string): boolean {
   return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
-// 按清单复制进工作树的同一位置。来源一路上不能有链接、真实路径须在来源仓库顶层之内、本身是普通文件；目标一路上不能有链接，
+// 按清单复制进工作树的同一位置。带 .git 段的不复制（与写文件工具同一判断）；来源一路上不能有链接、真实路径须在来源仓库顶层之内、本身是普通文件；目标一路上不能有链接，
 // 已存在的不覆盖（COPYFILE_EXCL）。单个文件读不了或已不在即跳过；其余错误上抛（由建工作树的一方回滚）。返回复制了的相对路径
 function copyListedIncludes(includes: WorktreeIncludes, worktreePath: string): string[] {
   const realTop = realpathSync.native(includes.top);
   const copied: string[] = [];
   for (const file of includes.files) {
+    if (insideGitMetadata(file)) continue;
     const from = join(includes.top, file);
     const to = join(worktreePath, file);
     let stat: ReturnType<typeof lstatSync>;

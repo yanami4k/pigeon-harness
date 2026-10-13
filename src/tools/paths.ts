@@ -47,9 +47,13 @@ export function controlCharsRefused(inputPath: string): WorkspacePathError {
 }
 
 // 版本库元数据不可写：.git 里的配置（过滤、钩子、fsmonitor 等）能让 git 执行任意命令，写工具一律不写。
-// relative 为相对工作区根的路径（解析之后）；任一级名为 .git（不分大小写）即算
+// relative 为相对工作区根的路径（解析之后）；任一级名为 .git 即算：不分大小写，Windows 会丢掉的段尾点与空格去掉再比，
+// 8.3 短名（GIT~1 一类）也算（会话回退写回与 .worktreeinclude 复制同用这一判断）
 export function insideGitMetadata(relative: string): boolean {
-  return relative.split(/[\\/]/).some((segment) => segment.toLowerCase() === ".git");
+  return relative.split(/[\\/]/).some((segment) => {
+    const name = segment.toLowerCase().replace(/[. ]+$/, "");
+    return name === ".git" || /^git~\d+$/.test(name);
+  });
 }
 
 export function gitMetadataRefused(inputPath: string): WorkspaceWriteRefusedError {

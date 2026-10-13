@@ -38,6 +38,7 @@ import {
 } from "../state/session-entries.ts";
 import { storeActiveGrants, storeSessionView } from "../state/session-judge.ts";
 import { isStatusMessage } from "../state/status-text.ts";
+import { insideGitMetadata } from "../tools/paths.ts";
 import { JOB_NOTICE_PREFIX } from "./background-jobs.ts";
 import { isProgramNotice } from "./history.ts";
 import {
@@ -468,7 +469,7 @@ export function planRewind(input: {
     for (const path of trees.changed(end, next.start)) manual.add(path);
   }
   for (const [path, left] of [...expected].sort(([a], [b]) => a.localeCompare(b))) {
-    if (hasProgramSegment(path)) continue;
+    if (hasProgramSegment(path) || insideGitMetadata(path)) continue;
     if (skipped.has(path)) {
       plan.untouchable.push(path);
       continue;

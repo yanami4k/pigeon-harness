@@ -1,7 +1,7 @@
 // 会话回退的代码写回（决策 433、436）：按快照把工作区里的指定文件写回目标内容或删掉。只动调用方列出的文件（agent 改过的）。
 // 总原则：拿不准就不写，列出来交给人。先把要写的内容全部从 git 取到内存，再逐文件"核对 → 立即写"，每个文件的结果交给
 // 调用方当场落盘（中途退出也有据可查、可撤销），出错即停。护栏：
-// - 路径带 .pigeon 段的（不分大小写）、目标是符号链接或子模块的、磁盘上是符号链接、目录或有别的硬链接的不碰；
+// - 路径带 .pigeon 段的（不分大小写）、带 .git 段的（与写文件工具同一判断，含 8.3 短名）、目标是符号链接或子模块的、磁盘上是符号链接、目录或有别的硬链接的不碰；
 // - 路径上任何一级目录是符号链接或目录联接（Windows）、或实际位置落到仓库之外的不碰（不跟随链接写到工作区外）；
 // - 磁盘上有、现状快照里没有的（被忽略、过大的未跟踪文件）不碰；内容与规划时的现状不同的不碰；
 // - 写之前再 lstat 一次、再读一次比对原样字节，期间被换成链接或被改过的不碰；POSIX 上以 O_NOFOLLOW 打开；
@@ -36,6 +36,7 @@ import {
   GIT_HARDENING_CONFIG,
   hardenedGitArgs,
 } from "../tools/git-hardening.ts";
+import { insideGitMetadata } from "../tools/paths.ts";
 
 const GIT_MAX_BUFFER = 256 * 1024 * 1024;
 const NUL = 0;
@@ -460,6 +461,11 @@ export async function restoreFiles(input: {
     try {
       if (hasProgramSegment(path)) {
         skip(path, `${PIGEON_DIR} 下的文件不碰`);
+        continue;
+      }
+      // 快照树与现状里本不会有 .git（git 不收），这里再显式挡一道：版本库元数据能让 git 执行任意命令
+      if (insideGitMetadata(path)) {
+        skip(path, "版本库元数据（.git）不碰");
         continue;
       }
       const target = action.target;
