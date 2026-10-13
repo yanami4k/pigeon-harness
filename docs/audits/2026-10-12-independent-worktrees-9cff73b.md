@@ -56,3 +56,48 @@
 - enter_worktree 在真实模型下的走查：模型调用后收尾、消息区两行提示、自动续上的一轮在工作树里改文件、`/reload` 与续接后仍在工作树、退出清理。
 - 远端需要凭据（https 私有仓库、ssh 带口令的密钥）时 fetch 不弹交互、5 秒内退回 HEAD 的实际表现。
 - 服务器全量验证。
+
+## 六、审查修正（e689efc 之后）
+
+### 改了什么
+
+- 换进工作树后 worker、`/take`、脚本编排仍按主检出：终端界面里 worker 编排（派出的起点快照、`take_worker`/`/take` 的写入目标、脚本编排）改为一律取所在运行面自己的工作区（`opened.scope.workspaceRoot`），不再读外层可变的工作区变量；移入流程先换工作区再重建运行面，重建失败即换回。移入流程抽到 `src/tui/worktree-switch.ts`。
+- 换根前查 worker：有 worker 在跑、排队或等补批续做时，`enter_worktree` 直接拒绝并告诉模型原因；调用之后到轮末才出现的同样不移。同一轮里已有待移入的，再调即拒绝。本轮被 Esc 中止时不移。不移时（中止、worker、重建失败）消息区一行说明，给模型的说明随人的下一条输入带上，不自动开新的一轮；工作树留着。
+- `pigeon.worktree` 条目改为移入成功之后才记（工具里不再写）。
+- 位置改名：独立工作树从 `.pigeon/worktrees/<名字>` 改到 `.pigeon/wt/<名字>`（路径常量 `NAMED_WORKTREES_DIR` 在 `src/state/paths.ts`），全局排除规则的第三行改为 `**/.pigeon/wt/`；旧布局检查与迁移命令恢复为"`.pigeon/worktrees` 目录在即旧布局"（去掉按工作树 HEAD 判断的那段）。`.pigeon/wt` 加进 `PROGRAM_OWNED_PATHS`，全局排除没生效时快照、checkpoint 与叠加同样排除它。
+- 只删自己的分支：独立工作树的分支一律按 `pigeon-wt/<名字>`（不再取工作树当前所在的分支）；工作树当前不在这个分支上（换到别的分支或分离头指针）时按有改动对待，退出时问，问句写明当前分支、删除只删 `pigeon-wt/<名字>`；`/worktrees` 列出时它的未取走改动记为"不明"。
+- 起点记录：新建时把起点提交写进仓库配置 `branch.pigeon-wt/<名字>.pigeonBase`（删分支时 git 随之删掉这一节）；重新打开、退出判断与 `/worktrees` 都按它，取不到即"不明"（按有改动），不再从分支引用日志推。
+- 在用锁：会话开在独立工作树里的期间（`--worktree` 进入、`enter_worktree` 移入、续接或 `/resume` 回到），进程在用户级程序状态目录的 `worktree-use/` 下持有一个标记文件（按工作树路径散列与进程号命名）；离开、换到别的会话或退出时释放。退出清理先查别的仍在的进程是否持有，有即保留不删；`/worktrees` 按"有进程持有（含本进程）"判在用，点名也不删。进程已不在的标记在查询时清掉。原先按会话文件锁判断的那段删掉（没有会话文件的会话也覆盖到）。
+- `/resume` 换到开在主检出里的会话时，消息区一行说明离开了哪个工作树（保留）与回去的命令。
+- 取远端时只在使用者没有自己指定 ssh（`GIT_SSH_COMMAND`、`GIT_SSH`、git 配置 `core.sshCommand` 都没设）时才加 `ssh -o BatchMode=yes`。
+- `enter-worktree-tool.test.ts` 原 76 行的 lint（可选链取值后再取属性）随用例改写去掉。
+
+### 测试
+
+- `src/tui/worktree-switch.test.ts`（新，5 条）：成功时先换工作区再重建（重建看到的是工作树）、之后记条目与通知；同一轮再调拒绝、有 worker 时拒绝；Esc 中止不移、不重建、不记条目；轮末有 worker 不移；重建失败换回原工作区。
+- `src/application/enter-worktree-tool.test.ts`：工具不再记条目、宿主说不能移即拒绝且不建工作树；续接在记条目之前仍回主检出、记了之后回工作树；新增"移进工作树之后 worker 从工作树开工（带上工作树里未提交的文件）、取用写进工作树、主检出不动"（真实 git 与假模型）。
+- `src/application/named-worktree.test.ts`：位置改为 `.pigeon/wt`；旧布局用例改为"独立工作树不触发、`.pigeon/worktrees` 目录在即旧布局"；新增工作树换到别的分支（按有改动、问句写明、删除只删 `pigeon-wt/<名字>`、别的分支还在）、起点记录（写进配置、记录删掉后为不明）、在用锁（别人持有即保留、本进程的不算别人但算在用、释放幂等、已不在的进程的标记清掉）、`/worktrees` 在用锁拒删与换分支后改动为不明且只删自己的分支、ssh 环境四种情况。
+- `src/tui/after-turn.test.ts`：新增 Esc 取消的那轮 afterTurn 收到 `cancelled: true`，下一轮为 false。
+- `src/execution/workdir-snapshot.test.ts`：快照不收 `.pigeon/wt` 下的文件。`src/persistence/global-ignore.test.ts` 的规则断言改为 `**/.pigeon/wt/`（随本次改名，属新定的语义）。
+- `src/tui/after-turn.test.ts` 另加"随下一条输入带给模型的说明不自己开一轮、只带一次"。
+- 变异核对（均已恢复，15 处全部变红）：移入流程不查中止、不查 worker、重建之后才换工作区、重建失败不换回、同一轮不拒第二次；工具不查 blocked；退出判断不看当前分支、分支取工作树当前所在的、不记起点；退出清理不查在用锁、在用不算本进程、已不在的进程的标记不清；`/worktrees` 换分支后改动仍按已知；`PROGRAM_OWNED_PATHS` 去掉 `.pigeon/wt`；ssh 判断不看 `GIT_SSH`。
+
+### 真实运行（打包产物，本机 Windows；GIT_CONFIG_GLOBAL、XDG_CONFIG_HOME、HOME、USERPROFILE 指临时）
+
+- 临时克隆（克隆后远端又推了一个提交），隐藏窗口起 `pigeon --worktree demo`：建出 `.pigeon/wt/demo`，没有 `.pigeon/worktrees`；分支 `pigeon-wt/demo`，HEAD 为远端最新；仓库配置 `branch.pigeon-wt/demo.pigeonBase` 记的就是它；临时用户目录的 `worktree-use/` 下有 1 个在用标记；全局排除文件三行，第三行 `**/.pigeon/wt/`；主检出 `git status` 干净；`.pigeon/state` 没建。
+- 强行结束进程后 `pigeon worktrees list` 列出 demo（独立工作树、没有未取走的改动），列出时把已不在的进程留下的标记清掉（0 个）；`pigeon worktrees clean demo --yes` 删掉工作树与分支，起点那一节配置随分支一并没了。
+- 退出时的问答与 enter_worktree 的实际移动仍未在本机无人值守地走一遍（同第五节）。
+
+### 自定的细节
+
+- `.pigeon/wt` 这个目录名是暂定的改名（决策 445 原写 `.pigeon/worktrees/<名字>`），为避开旧布局检查与迁移命令对 `.pigeon/worktrees` 的"目录在即旧布局"判断；待确认后再定。
+- 起点记在 `branch.pigeon-wt/<名字>.pigeonBase`（仓库本地配置）：删分支时 git 会连这一节一起删；以前建的独立工作树没有这条记录，重新打开时起点为"不明"（退出时会问，不自动删）。
+- 在用锁放在用户级程序状态目录（`~/.pigeon/state/worktree-use/`），按工作树路径散列（Windows 上不分大小写）与进程号命名，同一进程多次持有按次数计；释放时只删本进程那一个文件。判断进程是否还在用信号 0（无权限按在算）。`/worktrees` 判在用时含本进程（本会话开着的那个也不删），退出清理只看别的进程。
+- 不移时给模型的说明用壳的"随下一条输入带上"（新加 `addNextInputNote`，与 SessionStart 补的上下文分开，不依赖钩子），不走通知队列——通知队列会在空闲时自己开一轮，与"中止后不自动接着做"相悖。移入成功仍走通知队列开一轮。
+- worker 是否"在跑"沿用 `/worktrees` 在用判断的口径（在跑、排队、等补批续做）；`/reload` 原有的判断只看在跑与排队，没有改。
+- `/resume` 换到 worker 会话时（工作区是 worker 的工作树）不算离开独立工作树，回到主会话时照旧；换到开在主检出里的主会话才提示离开并释放在用锁。
+
+### 尚待确认（补充）
+
+- `.pigeon/wt` 的目录名（相对决策 445 的暂定偏离）。
+- 以前建的、没有起点记录的独立工作树按"不明"处理（退出时总会问）是否可接受。
