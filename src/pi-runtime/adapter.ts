@@ -217,6 +217,8 @@ export interface ToolResultNotice {
   // 结果里文本块的拼接（图片等非文本块不含）
   text: string;
   details: unknown;
+  // 决策 439：结果里的图片块（read_file 交给模型的图片），终端界面在消息区显示
+  images?: ReadonlyArray<{ data: string; mimeType: string }>;
 }
 
 // 整轮观察口的转发单位（决策 305）：一轮结束（上游 turn_end）时这一轮助手消息里的工具调用与它们的返回结果。
@@ -1114,6 +1116,7 @@ export class PiRuntimeAdapter {
           .filter((text) => text !== "")
           .join("\n"),
         details: structuredClone(message.details),
+        ...imagesOf(message.content),
       });
     } catch (error) {
       this.#listenerErrors.push(error);
@@ -1959,4 +1962,19 @@ function deepFreeze<T>(value: T): T {
     Object.freeze(value);
   }
   return value;
+}
+
+// 工具结果里的图片块（决策 439）
+function imagesOf(content: ReadonlyArray<{ type: string; data?: unknown; mimeType?: unknown }>): {
+  images?: Array<{ data: string; mimeType: string }>;
+} {
+  const images = content
+    .filter(
+      (block): block is { type: "image"; data: string; mimeType: string } =>
+        block.type === "image" &&
+        typeof block.data === "string" &&
+        typeof block.mimeType === "string"
+    )
+    .map((block) => ({ data: block.data, mimeType: block.mimeType }));
+  return images.length > 0 ? { images } : {};
 }

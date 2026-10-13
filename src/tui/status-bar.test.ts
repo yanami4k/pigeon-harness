@@ -12,7 +12,7 @@ import { newSessionId, type SessionId } from "../state/ids.ts";
 import { RuntimeEventKind } from "../state/runtime-events.ts";
 import { ScriptedRuntime, usageOf } from "./runtime-fixtures.ts";
 import { PigeonTuiShell } from "./shell.ts";
-import { formatCost, statusBarText } from "./status-bar.ts";
+import { clipToWidth, formatCost, statusBarText } from "./status-bar.ts";
 import { MockTerminal, screenText, settle } from "./testing.ts";
 
 function lastLine(term: MockTerminal): string {
@@ -319,4 +319,15 @@ test("窄终端按优先级截断、不折行：先换短写法，再依次去�
   } finally {
     cleanup();
   }
+});
+
+test("clipToWidth（决策 439 改用 truncateToWidth）：按显示宽度硬截、不补省略号与空格、宽字符不劈开；长串线性", () => {
+  assert.equal(clipToWidth("abcdef", 4), "abcd");
+  assert.equal(clipToWidth("中文字符", 5), "中文");
+  assert.equal(clipToWidth("ab", 10), "ab");
+  assert.equal(clipToWidth("abc", 0), "");
+  const long = "x".repeat(200_000);
+  const started = Date.now();
+  assert.equal(clipToWidth(long, 120).length, 120);
+  assert.ok(Date.now() - started < 500);
 });

@@ -47,6 +47,7 @@
 import {
   type Component,
   type Editor,
+  Loader,
   matchesKey,
   type StackChild,
   type Terminal,
@@ -111,7 +112,7 @@ import {
   type TuiMemoryFace,
 } from "./commands.ts";
 import type { TuiHooksFace } from "./hooks-view.ts";
-import { createPromptEditor } from "./input-editor.ts";
+import { createPromptEditor, type PromptAutocomplete } from "./input-editor.ts";
 import { InputQueue } from "./input-queue.ts";
 import { installKeybindings, isKey } from "./keybindings.ts";
 import { attachToolResultTo, MessageFlow, projectRuntimeEvent } from "./message-flow.ts";
@@ -130,7 +131,7 @@ import {
   renderHistory,
   type SessionBinding,
 } from "./resume-view.ts";
-import { type PickerKey, SessionPicker } from "./session-picker.ts";
+import { SessionPicker } from "./session-picker.ts";
 import { familyKindLabel, SessionTree } from "./session-tree.ts";
 import { StatusBar } from "./status-bar.ts";
 import { WorkerActivityTracker } from "./worker-activity.ts";
@@ -257,9 +258,13 @@ export interface TuiShellOptions {
   renamePeer?: (name: string) => string;
   // 决策 441：读系统剪贴板（Windows 上右键粘贴用）；缺省 = 右键不粘贴
   readClipboard?: () => Promise<string>;
+  // 决策 439：输入框补全（"/" 命令、Tab 路径、"@" 文件）；缺省不接
+  autocomplete?: PromptAutocomplete;
   // 决策 439：设置里的键位（keybindings 一节）；缺省全用缺省键位
   keybindings?: Record<string, string | string[]> | undefined;
 }
+
+const identity = (text: string): string => text;
 
 // 决策 441：布局里占满剩余高度的那一块（消息区、树形视图）
 function fill(component: Component): StackChild {
@@ -350,7 +355,23 @@ export class PigeonTuiShell
   private set running(value: boolean) {
     if (value === this.runningState) return;
     this.runningState = value;
+    this.setWaiting(value);
     this.options.onBusyChange?.(value);
+  }
+  // 决策 439：等模型时的转圈（一轮开始到第一段输出之间；ASCII 帧）
+  private loader: Loader | undefined;
+  private setWaiting(on: boolean): void {
+    if (on && this.loader === undefined && this.started) {
+      this.loader = new Loader(this.tui, identity, identity, "waiting for model", {
+        frames: ["-", "\\", "|", "/"],
+        intervalMs: 120,
+      });
+      this.layout();
+    } else if (!on && this.loader !== undefined) {
+      this.loader.stop();
+      this.loader = undefined;
+      this.layout();
+    }
   }
   private activeRunId: RunId | null = null;
   private started = false;
@@ -394,7 +415,11 @@ export class PigeonTuiShell
         ? { onRightClickPaste: () => void this.pasteClipboard() }
         : {}),
     });
-    this.input = createPromptEditor(this.tui, options.promptHistory?.load() ?? []);
+    this.input = createPromptEditor(
+      this.tui,
+      options.promptHistory?.load() ?? [],
+      options.autocomplete
+    );
     this.statusBar = new StatusBar({
       ...(options.model !== undefined ? { model: options.model } : {}),
       cost: emptyCostTally(),
@@ -466,6 +491,7 @@ export class PigeonTuiShell
             : [
                 this.title,
                 fill(this.flow.view),
+                ...(this.loader !== undefined ? [this.loader] : []),
                 this.statusLine,
                 this.queue.view,
                 this.picker.view,
@@ -490,6 +516,12 @@ export class PigeonTuiShell
     if (text === "" || !this.started) return;
     this.input.handleInput(`\x1b[200~${text}\x1b[201~`);
     this.tui.requestRender();
+  }
+
+  // 按键让给别人：全屏的搜索框开着（浮层），或输入框的补全列表开着（Esc、方向键、回车归它）；审批面板挂着时不让
+  private keysToOthers(_data: string): boolean {
+    if (this.pendingApprovalState !== null) return false;
+    return this.tui.hasOverlay() || this.input.isShowingAutocomplete();
   }
 
   // 决策 439：/reload 之后按新快照重装键位表
@@ -519,13 +551,13 @@ export class PigeonTuiShell
     // 决策 441：全屏的搜索框开着时（它是浮层）按键一律让给它，Ctrl+C 除外
     this.disposers.push(
       this.tui.addInputListener((data) =>
-        this.tui.hasOverlay() ? undefined : this.handleOrchestrationKey(data)
+        this.keysToOthers(data) ? undefined : this.handleOrchestrationKey(data)
       )
     );
     // 壳级键控（S3 审批面板 + S4 恢复菜单 + S5 取消键）：模态挂起期间接管终端输入
     this.disposers.push(
       this.tui.addInputListener((data) =>
-        this.tui.hasOverlay() && !isKey(data, "pigeon.exit")
+        this.keysToOthers(data) && !isKey(data, "pigeon.exit")
           ? undefined
           : handleShellKey(this, data)
       )
@@ -533,7 +565,7 @@ export class PigeonTuiShell
     // 决策 286：会话选择器、Ctrl+O 与退回排队内容的按键（模态与取消键之后、输入框之前）
     this.disposers.push(
       this.tui.addInputListener((data) =>
-        this.tui.hasOverlay() ? undefined : this.handleViewKey(data)
+        this.keysToOthers(data) ? undefined : this.handleViewKey(data)
       )
     );
     this.bindRuntime(this.current.runtime);
@@ -599,6 +631,8 @@ export class PigeonTuiShell
       clearInterval(this.workerTimerHandle);
       this.workerTimerHandle = null;
     }
+    this.loader?.stop();
+    this.loader = undefined;
     if (this.started) {
       this.started = false;
       // 决策 441：离开全屏时把对话（标题与主会话的消息区）完整打印到普通屏幕
@@ -865,20 +899,9 @@ export class PigeonTuiShell
 
   private handleViewKey(data: string): { consume: true } | undefined {
     if (this.picker.isOpen()) {
-      const key: PickerKey | undefined = matchesKey(data, "up")
-        ? "up"
-        : matchesKey(data, "down")
-          ? "down"
-          : matchesKey(data, "enter")
-            ? "enter"
-            : matchesKey(data, "escape")
-              ? "escape"
-              : undefined;
-      if (key !== undefined) {
-        this.picker.press(key);
-        this.tui.requestRender();
-      }
-      // 选择器打开期间其余按键吞掉，输入框内容不动
+      // 决策 439：按键交给选择列表（方向键、翻页、回车、Esc）；其余吞掉，输入框内容不动
+      this.picker.handleInput(data);
+      this.tui.requestRender();
       return { consume: true };
     }
     if (isKey(data, "pigeon.toggleToolOutput")) {
@@ -2054,6 +2077,7 @@ export class PigeonTuiShell
   private handleDelta(delta: StreamTextDelta): void {
     // 024：增量只认 runId 出处——非本 Run 的迟到/幽灵增量不进消息区
     if (this.activeRunId === null || delta.runId !== this.activeRunId) return;
+    this.setWaiting(false);
     // M5 S2（决策 045）：thinking 增量单独一段弱化渲染，正文增量照常生长
     if (delta.kind === "thinking") {
       this.flow.appendThinkingDelta(delta.delta);
@@ -2068,9 +2092,11 @@ export class PigeonTuiShell
     if (event.kind === RuntimeEventKind.TurnStarted) {
       this.activeRunId = event.runId;
       this.turnStartedAt = event.timestamp;
+      if (this.running) this.setWaiting(true);
     }
     projectRuntimeEvent(this.flow, event);
     if (event.kind === RuntimeEventKind.TurnCompleted) {
+      this.setWaiting(false);
       const payload = event.payload as TurnCompletedPayload;
       // 286：主 agent 每轮的用量与价格计入本会话花费；上下文用量按最近一次回复重算
       if (payload.usage !== undefined) {

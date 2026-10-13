@@ -6,7 +6,16 @@
 // 决策 286：工具结果显示在调用行下方，与调用行同一个 Text（仍是每消息一个 Text）；结果块缺省收起，
 // setToolsExpanded 一次切换全部（Ctrl+O），此后到达的结果按当前状态显示。
 // 决策 301：运行事件在消息区的投影（projectRuntimeEvent）由主会话与进入的 worker 会话共用，同一套措辞。
-import { Container, ScrollView, Text } from "@earendil-works/pi-tui";
+import { pathToFileURL } from "node:url";
+import {
+  Container,
+  getCapabilities,
+  hyperlink,
+  Image,
+  Markdown,
+  ScrollView,
+  Text,
+} from "@earendil-works/pi-tui";
 import { sanitizeTerminalText, summarizeArgs } from "../application/format.ts";
 import type { HistoryLine } from "../application/history.ts";
 import type { EventEnvelope } from "../state/events.ts";
@@ -16,6 +25,7 @@ import {
   type ToolSettledPayload,
   type TurnCompletedPayload,
 } from "../state/runtime-events.ts";
+import { MARKDOWN_OPTIONS, MARKDOWN_THEME } from "./markdown-theme.ts";
 import { diffOfDetails, type ToolResultView, toolResultBody } from "./tool-output.ts";
 
 // thinking 段视觉弱化（M5 S2，决策 045）：暗色由壳的受信代码在 pi-tui 补齐行宽后逐行包裹；
@@ -27,7 +37,8 @@ export class MessageFlow {
   // 裁剪/follow 由终端 scrollback 实现，ScrollView 声明意图并兼容 alt-screen 布局引擎）
   readonly view: ScrollView;
   private readonly list = new Container();
-  private streamTail: Text | null = null;
+  // 决策 439：模型回复的正文段用 Markdown 渲染（流式时每帧整段 setText，pi-tui 按文本与宽度缓存）
+  private streamTail: Markdown | null = null;
   private streamText = "";
   // M5 S2（决策 045）：thinking 流式段——与正文尾巴分开，谁的增量到了谁开段（同 035 懒创建）
   private thinkingTail: Text | null = null;
@@ -43,9 +54,23 @@ export class MessageFlow {
   }
 
   private append(text: string): Text {
-    const line = new Text(sanitizeTerminalText(text));
+    const line = new Text(linkify(sanitizeTerminalText(text)));
     this.list.addChild(line);
     return line;
+  }
+
+  // 模型回复正文：先净化，再交给 Markdown
+  private appendMarkdown(text: string): Markdown {
+    const block = new Markdown(
+      sanitizeTerminalText(text),
+      1,
+      1,
+      MARKDOWN_THEME,
+      undefined,
+      MARKDOWN_OPTIONS
+    );
+    this.list.addChild(block);
+    return block;
   }
 
   // 弱化段（thinking）：同样先净化，再由受信的逐行样式函数加暗色
@@ -60,6 +85,8 @@ export class MessageFlow {
     for (const line of lines) {
       if (line.kind === "thinking") {
         this.appendDim(line.text);
+      } else if (line.kind === "assistant") {
+        this.appendMarkdown(line.text);
       } else {
         this.append(line.text);
       }
@@ -105,7 +132,7 @@ export class MessageFlow {
     // thinking 段收尾：正文另起一段
     this.thinkingTail = null;
     this.thinkingText = "";
-    if (this.streamTail === null) this.streamTail = this.append("");
+    if (this.streamTail === null) this.streamTail = this.appendMarkdown("");
     this.streamText += delta;
     // 累积文本整体重净化（幂等为前提）：跨 delta 劈开的序列在补齐帧被惰性化，
     // 中间帧的裸 ESC 显示为 ␛ 是正常形态
@@ -134,7 +161,7 @@ export class MessageFlow {
   private renderTool(entry: { text: Text; content: string; result?: ToolResultView }): void {
     const body = entry.result !== undefined ? toolResultBody(entry.result, this.toolsExpanded) : "";
     entry.text.setText(
-      sanitizeTerminalText(body === "" ? entry.content : `${entry.content}\n${body}`)
+      linkify(sanitizeTerminalText(body === "" ? entry.content : `${entry.content}\n${body}`))
     );
   }
 
@@ -148,6 +175,23 @@ export class MessageFlow {
     }
     entry.result = result;
     this.renderTool(entry);
+  }
+
+  // 决策 439：工具结果里的图片（read_file 交给模型的）——能显示图片的终端里显示，不能的退回一行文字占位（pi-tui 的 Image）
+  addImages(images: ReadonlyArray<{ data: string; mimeType: string }>): void {
+    for (const image of images) {
+      this.list.addChild(
+        new Image(
+          image.data,
+          image.mimeType,
+          { fallbackColor: (text) => text },
+          {
+            maxWidthCells: 60,
+            maxHeightCells: 20,
+          }
+        )
+      );
+    }
   }
 
   toolsExpandedState(): boolean {
@@ -219,12 +263,40 @@ export function toolSettledState(payload: ToolSettledPayload): string {
 // 工具结果（决策 286）挂到调用行下方：details 带 diff 的显示 diff
 export function attachToolResultTo(
   flow: MessageFlow,
-  notice: { toolCallId: string; toolName: string; isError: boolean; text: string; details: unknown }
+  notice: {
+    toolCallId: string;
+    toolName: string;
+    isError: boolean;
+    text: string;
+    details: unknown;
+    images?: ReadonlyArray<{ data: string; mimeType: string }>;
+  }
 ): void {
   const diff = diffOfDetails(notice.details);
   flow.attachToolResult(notice.toolCallId, notice.toolName, {
     isError: notice.isError,
     text: notice.text,
     ...(diff !== undefined ? { diff } : {}),
+  });
+  if (notice.images !== undefined && notice.images.length > 0) flow.addImages(notice.images);
+}
+
+// 决策 439：网址与绝对路径输出成 OSC 8 链接（终端支持超链接时）；在净化之后加，序列来自受信代码
+// 网址；绝对路径（盘符或 / 开头、带扩展名，且前面不是路径或词的一部分）
+const LINK_PATTERN =
+  /(https?:\/\/[^\s<>"'`）」，。]+)|(?<![\w./\\-])((?:[A-Za-z]:\\|\/)[^\s<>"'`:*?|）」，。]+\.[A-Za-z0-9]{1,8})/g;
+
+export function linkify(text: string, hyperlinks = getCapabilities().hyperlinks): string {
+  if (!hyperlinks) return text;
+  return text.replace(LINK_PATTERN, (match, url: string | undefined) => {
+    // 句末标点不算进链接
+    const core = match.replace(/[.,;:)\]]+$/, "");
+    const tail = match.slice(core.length);
+    if (url !== undefined) return `${hyperlink(core, core)}${tail}`;
+    try {
+      return `${hyperlink(core, pathToFileURL(core).href)}${tail}`;
+    } catch {
+      return match;
+    }
   });
 }

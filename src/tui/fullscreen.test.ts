@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
 import { newSessionId } from "../state/ids.ts";
+import { RuntimeEventKind } from "../state/runtime-events.ts";
 import { ScriptedRuntime } from "./runtime-fixtures.ts";
 import { PigeonTuiShell, type TuiShellOptions } from "./shell.ts";
 import { MockTerminal, screenText, settle } from "./testing.ts";
@@ -99,7 +100,7 @@ test("暂离全屏（外部编辑器）：回到普通屏幕时不打印对话�
       main: term.screen.contentLines().join("\n"),
     }));
     assert.equal(seen.alternate, false);
-    assert.doesNotMatch(seen.main, /先说一句/);
+    assert.doesNotMatch(seen.main, /== pigeon tui|state: idle|先说一句/, "普通屏幕上什么都没打印");
     await settle();
     assert.equal(term.screen.alternate, true);
   } finally {
@@ -166,6 +167,56 @@ test("拖选出选区后 Ctrl+C 复制选区（写出 OSC 52），不清输入�
     assert.ok(term.writes.join("").includes("\x1b]52;c;"), "复制走 OSC 52");
     assert.doesNotMatch(screenText(term), /\[cleared\]/);
     term.input("\x1b[<0;20;2m");
+    await settle();
+  } finally {
+    cleanup();
+  }
+});
+
+test("等模型时转圈（ASCII 帧）：一轮开始即出现，第一段输出到来即收起，跑完不留", async () => {
+  const { shell, term, runtime, cleanup } = makeShell(80, 20);
+  try {
+    shell.start();
+    await settle();
+    runtime.autoResolve = false;
+    term.input("问一句");
+    term.input("\r");
+    await settle(200);
+    assert.match(screenText(term), /waiting for model/);
+    assert.doesNotMatch(screenText(term), /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+    runtime.emit(RuntimeEventKind.TurnStarted, {});
+    await settle();
+    assert.match(screenText(term), /waiting for model/, "新的一轮开始仍在等");
+    runtime.emitDelta("text", "答");
+    await settle();
+    assert.doesNotMatch(screenText(term), /waiting for model/);
+    runtime.finishAll();
+    await settle();
+    assert.doesNotMatch(screenText(term), /waiting for model/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("运行中打开搜索：Esc 关搜索框，不取消正在跑的这一轮", async () => {
+  const { shell, term, runtime, cleanup } = makeShell();
+  try {
+    shell.start();
+    await settle();
+    runtime.autoResolve = false;
+    term.input("跑");
+    term.input("\r");
+    await settle();
+    term.input("\x1bOR");
+    await settle();
+    term.input("\x1b");
+    await settle();
+    assert.equal(runtime.interrupts, 0, "Esc 归搜索框");
+    // 搜索框关了之后 Esc 照常取消
+    term.input("\x1b");
+    await settle();
+    assert.equal(runtime.interrupts, 1);
+    runtime.finishAll();
     await settle();
   } finally {
     cleanup();

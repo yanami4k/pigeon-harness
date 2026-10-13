@@ -115,6 +115,7 @@ import { worktreeBaseModeOf } from "../state/worktree-config.ts";
 import { createTuiApprovalHandler, type TuiApprovalFace } from "./approval.ts";
 import { readWindowsClipboard } from "./clipboard.ts";
 import { resolveStartTarget, takeContinueFlags } from "./continue-flags.ts";
+import { findFdPath } from "./fd-path.ts";
 import { guardTuiAgent } from "./loop-guard-view.ts";
 import {
   type MainReloadContext,
@@ -495,6 +496,8 @@ export async function main(argv: string[]): Promise<void> {
     ...(keybindingsSectionOf(settings) !== undefined
       ? { keybindings: keybindingsSectionOf(settings) }
       : {}),
+    // 决策 439：输入框补全，路径与 @ 引用以工作区为根
+    autocomplete: { basePath: workspaceRoot, fdPath: findFdPath() },
     // 决策 441：Windows 上右键粘贴取系统剪贴板
     ...(process.platform === "win32" ? { readClipboard: readWindowsClipboard } : {}),
     runtime: slot.bundle.adapter,

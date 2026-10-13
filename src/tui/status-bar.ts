@@ -2,7 +2,7 @@
 // 显示模型、上下文用量百分比、本会话花费。纯 ASCII（spike 纪律：歧义宽字符不进 chrome）。
 // 窄终端按优先级截断、不折行：先把各段换成短写法，再依次去掉模型、花费，最后硬截到宽度。
 // 上下文用量优先级最高——它决定什么时候该 /compact。
-import { type Component, visibleWidth } from "@earendil-works/pi-tui";
+import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { CostTally } from "../application/session-cost.ts";
 
 export interface StatusBarState {
@@ -63,14 +63,13 @@ export function statusBarText(state: StatusBarState, width: number): string {
   return clipToWidth(build({ short: true, model: false, cost: false }), width);
 }
 
-// 按显示宽度硬截（不补省略号、不带任何控制序列）；编排面板与树形视图同样用它
+// 按显示宽度硬截（不补省略号、不补空格）；编排面板与树形视图同样用它。决策 439：改用 pi-tui 的 truncateToWidth
+//（逐字形累加再量宽度的旧写法在长串上是二次方开销）
 export function clipToWidth(text: string, width: number): string {
-  let out = "";
-  for (const { segment } of new Intl.Segmenter("en", { granularity: "grapheme" }).segment(text)) {
-    if (visibleWidth(out + segment) > width) break;
-    out += segment;
-  }
-  return out;
+  const out = truncateToWidth(text, Math.max(0, width), "");
+  // 截断时它在末尾补一个样式复位；原文本没有控制序列时去掉，保持"不带任何控制序列"
+  const reset = "\x1b[0m";
+  return !text.includes("\x1b") && out.endsWith(reset) ? out.slice(0, -reset.length) : out;
 }
 
 export class StatusBar implements Component {
