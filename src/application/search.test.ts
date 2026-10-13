@@ -52,7 +52,6 @@ test("/search 命中排版：按会话归并——会话行带命中条目数，
         `  第 1 条 user  ${user?.entryId}  命中：部署`,
         "  部署网关",
         `  第 3 条 toolResult（read_file）  ${result?.entryId}  命中：部署`,
-        "  以前的工具输出，可能已过时",
         "  部署日志第一行",
         "",
       ].join("\n")

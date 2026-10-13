@@ -35,7 +35,6 @@ import { runForkCommand } from "../application/fork-command.ts";
 import { pigeonVersion } from "../application/harness-ref.ts";
 import {
   type LaunchFlags,
-  localRiskNotice,
   orchestrationSettingsOf,
   parseLaunchFlags,
   resolveStreamFnSpec,
@@ -50,7 +49,6 @@ import {
 import {
   closeNamedWorktree,
   type NamedWorktree,
-  namedWorktreeOpenedLine,
   namedWorktreeRepoRoot,
   openNamedWorktree,
   reenterCommand,
@@ -111,9 +109,7 @@ import { prepareWorkspace } from "../application/workspace.ts";
 import { createTuiWorktreesFace, isGitWorkspace } from "../application/worktree-cleanup.ts";
 import type { SessionGrantStore } from "../approvals/grant-store.ts";
 import { createApprovalQueue } from "../approvals/queue.ts";
-import { memoryWriteNoticeLine } from "../memory/update-memory-tool.ts";
 import { holdWorktreeInUse } from "../persistence/worktree-in-use.ts";
-import { probeUpstreamVersions } from "../pi-runtime/upstream-version.ts";
 import type { TrustEntry } from "../state/config-trust.ts";
 import { asSessionId, newSessionId, type SessionId } from "../state/ids.ts";
 import { FROM_BUNDLE } from "../state/package-paths.ts";
@@ -183,10 +179,8 @@ async function askTrustOnStderr(entries: readonly TrustEntry[]): Promise<TrustCh
 }
 
 export async function main(argv: string[]): Promise<void> {
-  // M7（ROADMAP §M7）：启动时探测上游版本，与已验证版本不一致时明确告警（壳接管终端前打到 stderr）
-  for (const warning of probeUpstreamVersions().warnings) {
-    console.error(warning);
-  }
+  // 壳接管终端之前的提示与报错先存着，壳起来后落消息区（全屏之前写到标准错误输出的会被备用屏盖住，看不见）
+  const early: Array<{ line: string; alert: boolean }> = [];
   const continued = takeContinueFlags(argv);
   // 决策 445：--worktree <名字> 在独立工作树里开会话
   const worktreeFlag = takeWorktreeFlag(continued.argv);
@@ -225,11 +219,11 @@ export async function main(argv: string[]): Promise<void> {
           cwd: governanceRoot,
           name: worktreeFlag.name,
           baseMode: worktreeBaseModeOf(worktreeSectionOf(settings)),
-          notice: (line) => console.error(line),
+          notice: (line) => early.push({ line, alert: true }),
         })
       : undefined;
-  if (namedWorktree !== undefined) {
-    console.error(namedWorktreeOpenedLine(namedWorktree));
+  if (namedWorktree?.created === true && namedWorktree.baseLabel.startsWith("HEAD（取远端")) {
+    early.push({ line: `工作树起点：${namedWorktree.baseLabel}`, alert: true });
   }
   // 决策 446：会话移进工作树后换成工作树（worker 编排、取用、脚本等闭包按它取）
   let workspaceRoot = namedWorktree?.path ?? governanceRoot;
@@ -258,7 +252,7 @@ export async function main(argv: string[]): Promise<void> {
   // 决策 286：启动时打开哪个会话（新会话，或 --continue / --resume <id> 直接续接）；会话不存在等在接管终端前报错
   const target = resolveStartTarget(governanceRoot, continued.mode, flags.sandbox !== undefined);
   if (target.kind === "new" && target.note !== undefined) {
-    console.error(target.note);
+    early.push({ line: target.note, alert: false });
   }
   const resumed = target.kind === "resume";
   const sessionId = target.kind === "resume" ? asSessionId(target.sessionId) : newSessionId();
@@ -274,13 +268,14 @@ export async function main(argv: string[]): Promise<void> {
     approvalQueue.wrap(createTuiApprovalHandler(grants, () => faceHolder.current));
   // 决策 297：worker 完成通知显示在消息区、空闲时叫醒主 agent——壳晚于编排器构造，晚绑定
   const shellHolder: { current: PigeonTuiShell | undefined } = { current: undefined };
-  // 决策 331：有人对话，带记忆工具；写入后在消息区显示一行记下的内容与层级（壳晚于运行面构造，晚绑定）
-  const memoryWrite: MemoryWriteConfig = {
-    source: "tui",
-    onWritten: (notice) => {
-      shellHolder.current?.addSystem(memoryWriteNoticeLine(notice));
-      shellHolder.current?.render();
-    },
+  // 决策 331：有人对话，带记忆工具（写入的内容在工具调用行里，消息区不另写一行）
+  const memoryWrite: MemoryWriteConfig = { source: "tui" };
+  // 壳起来之前的放进 early，起来之后直接落消息区（报错醒目，其余弱化）
+  const say = (line: string, alert: boolean): void => {
+    const shell = shellHolder.current;
+    if (shell === undefined) early.push({ line, alert });
+    else if (alert) shell.addAlert(line);
+    else shell.addSystem(line);
   };
   // 决策 331、332：/memory 的上下文（两层上限取本会话的设置快照）
   const memoryContext = { governanceRoot: governanceRoot, limits: memoryLimitsOf(settings) };
@@ -333,13 +328,10 @@ export async function main(argv: string[]): Promise<void> {
         workspaceRoot,
         hostSessionId: bundle.adapter.sessionId,
         runKey: () => runKey,
-        // 决策 297：完成通知进主 agent 的下一轮，空闲时叫醒它；通知同时显示在消息区
+        // 决策 297：完成通知进主 agent 的下一轮，空闲时叫醒它（通知是给模型的原文，不显示在消息区）
         target: bundle.adapter,
         wake: () => shellHolder.current?.runNotices(),
-        onNotice: (text) => {
-          shellHolder.current?.addSystem(text);
-          shellHolder.current?.render();
-        },
+        onNotice: () => shellHolder.current?.render(),
       });
       notices = bound.notices;
       // 决策 309–314：脚本编排的运行器——汇总与 worker 完成通知同一条队列；收回按写操作请示（放手模式或已放权即直接做）
@@ -462,8 +454,8 @@ export async function main(argv: string[]): Promise<void> {
     memoryWrite,
     memoryContext,
     webToolsFor,
-    hooksNotice: (line) => shellHolder.current?.addSystem(line),
-    onMcpNote: (note) => shellHolder.current?.addSystem(`[mcp] ${note}`),
+    hooksNotice: (line) => say(line, true),
+    onMcpNote: (note) => say(`[mcp] ${note}`, true),
   };
   const mainOpened = await openSessionRuntime({
     governanceRoot: governanceRoot,
@@ -494,10 +486,8 @@ export async function main(argv: string[]): Promise<void> {
     // 决策 432：新开的会话等第一次真要落盘时才建会话文件
     ...(resumed ? { resume: true } : { deferSessionFile: true }),
     // 决策 324：钩子拦下或出错的一行提示落消息区（壳尚未接管终端时落壳持有格，接管后进消息区）
-    hooksNotice: (line) => shellHolder.current?.addSystem(line),
-    onMcpNote: (note) => {
-      console.error(`[mcp] ${note}`);
-    },
+    hooksNotice: (line) => say(line, true),
+    onMcpNote: (note) => say(`[mcp] ${note}`, true),
   }).catch(async (error: unknown) => {
     await sandbox?.discard().catch(() => {});
     throw error;
@@ -688,7 +678,7 @@ export async function main(argv: string[]): Promise<void> {
       if (peerMessaging !== undefined && peerMessaging.sessionId === slot.sessionId) {
         peerMessaging.rename(name);
       }
-      return `本会话改名为 ${name}`;
+      return "";
     },
     // 决策 456：会话名（面板上当前会话的卡片、/take 的说明用）
     sessionName: (id: string) =>
@@ -727,13 +717,10 @@ export async function main(argv: string[]): Promise<void> {
       shell: () => shellHolder.current,
     });
     bundle.disposers = [...(bundle.disposers ?? []), async () => detach()];
-    // 决策 365：后台作业结束的通知显示在消息区，主 agent 空闲时叫醒它（同 worker 完成通知）
+    // 决策 365：后台作业结束时主 agent 空闲即叫醒它（同 worker 完成通知；通知是给模型的原文，不显示在消息区）
     bundle.jobNotices?.bind({
       wake: () => shellHolder.current?.runNotices(),
-      onNotice: (text) => {
-        shellHolder.current?.addSystem(text);
-        shellHolder.current?.render();
-      },
+      onNotice: () => shellHolder.current?.render(),
     });
   }
   // 决策 340：/reload 的先建后换；决策 446：会话移进工作树时同样按这条路重建（reloadContext.workspaceRoot 先换成工作树）
@@ -993,10 +980,11 @@ export async function main(argv: string[]): Promise<void> {
   // 决策 330：人写的说明超出上限被截断时在消息区提示一行
   if (mainBundle.instructionsNotice !== undefined) shell.addSystem(mainBundle.instructionsNotice);
   if (mainBundle.toolsNotice !== undefined) shell.addSystem(mainBundle.toolsNotice);
-  // 决策 379：本机放手且联网工具开着时提示一行风险
-  const riskNotice = localRiskNotice(flags, webToolsOption.webTools !== undefined);
-  if (riskNotice !== undefined) shell.addSystem(riskNotice);
   warnSink.attach((line) => shell.addWarning(line));
+  for (const item of early.splice(0)) {
+    if (item.alert) shell.addAlert(item.line);
+    else shell.addSystem(item.line);
+  }
   if (target.kind === "resume") {
     shell.announceResumed(governanceRoot, target.report);
   } else if (target.picker) {

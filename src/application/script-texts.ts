@@ -211,7 +211,3 @@ export function collectSourceLine(name: string, runId: string): string {
 
 // 审批新键
 export const SCRIPT_KIND_KEY_LABEL = "[s] 本次脚本内同类都允许";
-
-export function scriptKindAllowedLine(kind: string): string {
-  return `已允许本次脚本内同类调用（${kind}），脚本结束即失效`;
-}

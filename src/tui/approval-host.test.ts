@@ -39,10 +39,7 @@ test("[a] 建按网站的放权，结果行点名网站；[y] 只批准一次", 
     store.list().map((grant) => [grant.tool, grant.host]),
     [["web_fetch", "docs.example"]]
   );
-  assert.match(
-    notes.join("\n"),
-    /已创建会话放权 grant_[0-9A-Z]+（web_fetch，仅限网站 docs\.example）/
-  );
+  assert.equal(notes.join("\n"), "✓ allowed for this session: web_fetch docs.example");
   key = "y";
   assert.deepEqual(await handler(request), { approved: true });
   assert.equal(store.list().length, 1);

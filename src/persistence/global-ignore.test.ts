@@ -86,8 +86,8 @@ test("git 仓库里三行都缺：写进 $XDG_CONFIG_HOME/git/ignore，提示一
   assert.equal(result.file, file);
   assert.deepEqual(result.added, ALL);
   assert.equal(readFileSync(file, "utf8"), `${ALL.join("\n")}\n`);
-  assert.equal(notices.length, 1);
-  assert.match(notices[0] ?? "", /已在 git 全局排除文件 .* 加入 Pigeon 程序状态的忽略规则/);
+  // 写进去不告知（文档写明）
+  assert.equal(notices.length, 0);
   for (const path of [
     ".pigeon/state/sessions/x.jsonl",
     ".pigeon/settings.local.json",
@@ -99,7 +99,7 @@ test("git 仓库里三行都缺：写进 $XDG_CONFIG_HOME/git/ignore，提示一
   assert.equal(ignored(root, s.env, ".pigeon/settings.json"), false, "项目共享设置照常可提交");
   const again = ensureGlobalIgnoreRules(root, { env: s.env, notice: (line) => notices.push(line) });
   assert.deepEqual(again.added, []);
-  assert.equal(notices.length, 1);
+  assert.equal(notices.length, 0);
   assert.equal(readFileSync(file, "utf8"), `${ALL.join("\n")}\n`);
   assert.equal(existsSync(join(s.home, ".config")), false, "没有碰 HOME");
 });
@@ -255,12 +255,11 @@ test("同一进程同一目录只做一次；第一次没带提示口时，提�
     ensureStateDirOf(join(root, ".pigeon", "state", "tui-history.json"), undefined, s.home);
     assert.ok(existsSync(join(root, ".pigeon", "state")));
     assert.equal(readFileSync(file, "utf8"), `${ALL.join("\n")}\n`);
-    // 之后建会话文件时带提示口：补发那一行，且只补一次
+    // 之后建会话文件时带提示口：写成了的不再补发
     const notices: string[] = [];
     ensureProjectStateDir(root, (line) => notices.push(line));
     ensureProjectStateDir(root, (line) => notices.push(line));
-    assert.equal(notices.length, 1);
-    assert.match(notices[0] ?? "", /已在 git 全局排除文件/);
+    assert.deepEqual(notices, []);
     rmSync(file);
     ensureGlobalIgnoreRulesOnce(root);
     assert.equal(existsSync(file), false, "记过一次：同一进程不再写");

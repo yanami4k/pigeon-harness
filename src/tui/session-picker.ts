@@ -36,7 +36,7 @@ const THEME: SelectListTheme = {
   noMatch: secondary,
 };
 
-const HEADER = "resume a session: up/down to move, enter to open, esc to cancel";
+const HEADER = "resume a session";
 
 export class SessionPicker {
   readonly view = new Container();

@@ -207,11 +207,11 @@ test("/resume 全流程：报告将还原的上下文与悬空的工具调用 �
       term.input("\r");
       await settle();
 
-      // 续跑报告渲染进消息区（cli 同口径措辞）：还原的消息条数、未收尾的 Run、悬空的工具调用
+      // 续跑报告只写悬空的工具调用（验收修改：还原条数与未收尾的 Run 不再写）
       const done = screenText(term);
-      assert.ok(done.includes("续跑：还原对话上下文 2 条消息"), done);
-      assert.ok(done.includes("1 个 Run 没有收尾记录"), done);
-      assert.ok(done.includes("1 个工具调用没有结果（edit_file）"), done);
+      assert.ok(!done.includes("续跑：还原对话上下文"), done);
+      assert.ok(!done.includes("没有收尾记录"), done);
+      assert.ok(done.includes("1 个工具调用中断、结果未知：edit_file"), done);
       assert.ok(!done.includes("请选择 [1/2/3]"), "不再有人工对账菜单");
 
       // 同 sessionId 换绑：rebind 收到目标会话；旧运行面退订；后续提交只走新运行面
@@ -365,7 +365,6 @@ test("/resume 会话不存在与空目录响亮报错；原运行面不受影响
       term.input("\r");
       await settle();
       assert.deepEqual(runtime.runs, ["还活着"]);
-      assert.ok(screenText(term).includes("state: idle"), screenText(term));
     } finally {
       shell.stop();
     }
@@ -388,7 +387,7 @@ test("/resume 会话不存在与空目录响亮报错；原运行面不受影响
         term2.input(`/resume ${`sess_${"Y".repeat(26)}`}`);
         term2.input("\r");
         await settle();
-        assert.ok(screenText(term2).includes("尚无会话记录"), screenText(term2));
+        assert.ok(screenText(term2).includes("会话不存在"), screenText(term2));
       } finally {
         shell2.stop();
       }

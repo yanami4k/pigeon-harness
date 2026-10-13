@@ -83,7 +83,7 @@ test("开沙箱缺省带入未提交的改动（含新建文件，不含被忽�
     const sandbox = await openSandbox(
       options(fake, repo, "sess_T1", { log: (line) => lines.push(line) })
     );
-    assert.ok(lines.includes("已带入 3 个未提交的文件（含新建文件）"), lines.join("｜"));
+    assert.ok(!lines.some((line) => line.startsWith("已带入")), lines.join("｜"));
     assert.ok(sandbox.startSnapshot !== undefined, "带了快照");
     assert.deepEqual(sandbox.startSnapshot.files, [".gitignore", "a.txt", "u.txt"]);
     assert.equal(sandbox.startCommit, sandbox.startSnapshot.commit);
@@ -124,8 +124,7 @@ test("开沙箱缺省带入未提交的改动（含新建文件，不含被忽�
     assert.equal(git(repo, "rev-parse", "pigeon/sandbox-sess_T1^^"), head);
     assert.equal(
       exportNotice(result),
-      `沙箱改动已交回到分支 pigeon/sandbox-sess_T1（${result.commit.slice(0, 12)}）；查看：git diff main..pigeon/sandbox-sess_T1。` +
-        `分支第一条提交（${sandbox.startCommit.slice(0, 12)}）是开箱时的未提交改动；合并前先把本地这份未提交改动收起（stash 或丢弃）`
+      `沙箱改动已交回到分支 pigeon/sandbox-sess_T1（${result.commit.slice(0, 12)}）；查看：git diff main..pigeon/sandbox-sess_T1`
     );
     assert.deepEqual(
       {

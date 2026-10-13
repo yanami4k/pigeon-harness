@@ -163,7 +163,6 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
     const sandbox = host.sandbox?.();
     if (sandbox !== undefined) {
       if (tokens[0] === "export") {
-        host.addSystem("交回中：把沙箱里的改动提交成分支取回宿主仓库");
         void sandbox.exportChanges().then(
           (text) => {
             host.addSystem(text);
@@ -196,7 +195,6 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
     const workers = host.workers();
     // M7（决策 079）：/fork 手动分叉——分支在独立工作树里续跑，跑完回报
     if (workers?.fork !== undefined && tokens[0] === "fork") {
-      host.addSystem("分叉中：分支在独立工作树里续跑，完成后回报");
       void workers.fork(value.trim().slice("/fork".length)).then(
         (text) => {
           host.addSystem(text);
@@ -383,7 +381,8 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
     // 决策 450、456：/rename <名字> 改当前会话的名字：记进会话记录（续接后还在），本机会话名录跟着改（别的会话按它找到本会话）
     if (tokens[0] === "rename" && host.renameSession !== undefined) {
       const name = value.trim().slice("/rename".length).trim();
-      host.addSystem(name === "" ? "用法：/rename <名字>" : host.renameSession(name));
+      const reply = name === "" ? "用法：/rename <名字>" : host.renameSession(name);
+      if (reply !== "") host.addSystem(reply);
       return;
     }
     // 决策 189：/compact [重点] 手动压缩（重点作为摘要的附加说明）

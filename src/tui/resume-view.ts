@@ -117,9 +117,8 @@ export function renderHistory<Binding>(
   try {
     const limit = host.historyLimit();
     const lines = loadSessionHistory(root, sessionId, limit !== undefined ? { limit } : {});
-    host.addSystem(`== 历史：会话 ${sessionId}（${lines.length} 行）==`);
     host.addHistoryLines(lines);
-    host.addSystem("== 历史结束，以下为续跑 ==");
+    host.addSystem("--- resumed ---");
   } catch (error) {
     host.addAlert(`历史渲染失败：${error instanceof Error ? error.message : String(error)}`);
   }

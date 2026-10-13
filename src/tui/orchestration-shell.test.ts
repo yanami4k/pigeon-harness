@@ -171,7 +171,7 @@ test("完成通知：空闲即叫醒跑一轮只带通知的运行；在跑时�
     await settle();
     assert.deepEqual(runtime.runs, ["notices:1"]);
     assert.ok(screenFlat(term).includes("[worker 通知] worker a（explorer）已完成。"));
-    assert.ok(screenFlat(term).includes("state: running"), screenFlat(term));
+    assert.ok(screenFlat(term).includes("running"), screenFlat(term));
     // 在跑：又来一条，不另起运行
     runtime.pending = 1;
     shell.runNotices();
@@ -188,7 +188,7 @@ test("完成通知：空闲即叫醒跑一轮只带通知的运行；在跑时�
     await new Promise((resolve) => setTimeout(resolve, 10));
     await settle();
     assert.equal(runtime.runs.length, 2);
-    assert.ok(screenFlat(term).includes("state: idle"), screenFlat(term));
+    assert.ok(!screenFlat(term).includes("running"), screenFlat(term));
     // 人提交输入：照常一轮（待递的通知由运行面连同输入带上）
     await submit(term, "继续");
     assert.deepEqual(runtime.runs.at(-1), "run:继续");
@@ -231,12 +231,17 @@ test("worker 的请示等满时限被撤回：审批面板撤下，按取消收�
       signal: controller.signal,
     });
     await settle();
-    assert.ok(screenFlat(term).includes("state: approval"), screenFlat(term));
+    assert.ok(screenFlat(term).includes("—— 人工审批 ——"), screenFlat(term));
     controller.abort();
     assert.deepEqual(await answer, { key: "cancel", reason: APPROVAL_WITHDRAWN });
     await settle();
-    assert.ok(screenFlat(term).includes(APPROVAL_WITHDRAWN), screenFlat(term));
-    assert.ok(screenFlat(term).includes("state: idle"), screenFlat(term));
+    // 验收修改：撤回也收成一行
+    const flat = screenFlat(term);
+    assert.ok(
+      flat.includes("[runner] ✗ approval timed out: run_command (worker runner stopped)"),
+      flat
+    );
+    assert.ok(!flat.includes("—— 人工审批 ——"), flat);
   } finally {
     shell.stop();
   }

@@ -56,7 +56,7 @@ test("进全屏：主视图没有标题行、状态栏在底；对话超过一�
       screen.join("\n")
     );
     assert.ok(!screen.some((line) => line.includes("> 第 0 条")), "最早的滚出视口");
-    assert.match(screen.join("\n"), /state: idle/);
+    assert.doesNotMatch(screen.join("\n"), /state:/, "空闲时状态行不写字");
     assert.match(screen.at(-1) ?? "", /cost \$0/);
   } finally {
     cleanup();
@@ -157,16 +157,16 @@ test("拖选出选区后 Ctrl+C 复制选区（写出 OSC 52），不清输入�
     await settle();
     term.input("draft");
     await settle();
-    // 在状态行（第 12 行）上按下、拖动（SGR 鼠标序列，1 起的列与行）
-    term.input("\x1b[<0;4;12M");
-    term.input("\x1b[<32;20;12M");
+    // 在最底下的状态栏（第 16 行，cost $0）上按下、拖动（SGR 鼠标序列，1 起的列与行）
+    term.input("\x1b[<0;2;16M");
+    term.input("\x1b[<32;8;16M");
     await settle();
     term.writes.length = 0;
     term.input("\x03");
     await settle();
     assert.ok(term.writes.join("").includes("\x1b]52;c;"), "复制走 OSC 52");
     assert.doesNotMatch(screenText(term), /\[cleared\]/);
-    term.input("\x1b[<0;20;12m");
+    term.input("\x1b[<0;8;16m");
     await settle();
   } finally {
     cleanup();
@@ -182,17 +182,19 @@ test("等模型时转圈（ASCII 帧）：一轮开始即出现，第一段输�
     term.input("问一句");
     term.input("\r");
     await settle(200);
-    assert.match(screenText(term), /waiting for model/);
-    assert.doesNotMatch(screenText(term), /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+    // 转圈只有 ASCII 帧，不带文字
+    const spinning = () => rows(term).some((line) => /^\s*[-\\|/]\s*$/.test(line));
+    assert.ok(spinning(), screenText(term));
+    assert.doesNotMatch(screenText(term), /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]|waiting for model/);
     runtime.emit(RuntimeEventKind.TurnStarted, {});
     await settle();
-    assert.match(screenText(term), /waiting for model/, "新的一轮开始仍在等");
+    assert.ok(spinning(), "新的一轮开始仍在等");
     runtime.emitDelta("text", "答");
     await settle();
-    assert.doesNotMatch(screenText(term), /waiting for model/);
+    assert.ok(!spinning(), screenText(term));
     runtime.finishAll();
     await settle();
-    assert.doesNotMatch(screenText(term), /waiting for model/);
+    assert.ok(!spinning(), screenText(term));
   } finally {
     cleanup();
   }
@@ -225,15 +227,20 @@ test("运行中打开搜索：Esc 关搜索框，不取消正在跑的这一轮"
 
 test("状态行紧贴在输入框上沿、上方隔一行空白；窗口很矮时照样紧贴（先让出的是那行空白）", async () => {
   for (const height of [20, 9]) {
-    const { shell, term, cleanup } = makeShell(80, height);
+    const { shell, term, runtime, cleanup } = makeShell(80, height);
     try {
       shell.start();
       await settle();
+      // 跑着时状态行写 running（空闲时不写字）；第一段输出到来、转圈收起
+      runtime.autoResolve = false;
       term.input("你好");
       term.input("\r");
       await settle();
+      runtime.emit(RuntimeEventKind.TurnStarted, {});
+      runtime.emitDelta("text", "答");
+      await settle();
       const screen = rows(term);
-      const state = screen.findIndex((line) => line.includes("state: idle"));
+      const state = screen.findIndex((line) => line.trim() === "running");
       assert.ok(state > 0, screen.join("\n"));
       assert.match(screen[state + 1] ?? "", /^-{20,}/, `${height} 行：状态行下面就是输入框上沿`);
       if (height === 20) assert.equal((screen[state - 1] ?? "").trim(), "", "上方隔一行空白");

@@ -13,6 +13,7 @@ import {
   type ApprovalPanelResult,
   approvalBlockText,
   PEER_HOLD_WITHDRAWN,
+  withdrawnLine,
 } from "./approval.ts";
 import { isKey } from "./keybindings.ts";
 
@@ -61,6 +62,10 @@ export interface ModalHost {
   idleEscape?(): boolean;
   // 决策 301：审批面板的各行（审批块、撤回、理由行提示）写到哪里——就地显示在当前视图；缺省即 addSystem
   addApprovalLine?(line: string): void;
+  // 挂着的审批块（答完由 settleApproval 收成一行）；缺省即 addApprovalLine
+  addApprovalBlock?(text: string): void;
+  // 把挂着的审批块收成一行结论
+  settleApproval?(line: string): void;
   // 决策 301：当前不在主会话视图（审批块里给主会话的请求写明来源）；缺省即在
   outsideMainView?(): boolean;
   // 决策 323、324：审批面板出现时的 Notification 钩子（只作副作用）——面板出现记
@@ -101,7 +106,8 @@ export function askApprovalPanel(
   // 请示汇到本会话（worker_approval，请求带来源会话与 worker 标签时另记一条）
   host.notifyApprovalHook?.("permission_prompt", panelText);
   if (request.worker !== undefined) host.notifyApprovalHook?.("worker_approval", panelText);
-  approvalLine(host, panelText);
+  if (host.addApprovalBlock !== undefined) host.addApprovalBlock(panelText);
+  else approvalLine(host, panelText);
   const { promise, resolve } = Promise.withResolvers<ApprovalPanelResult>();
   const pending: PendingApproval = {
     resolve,
@@ -131,10 +137,9 @@ export function askApprovalPanel(
       if (host.pendingApproval() !== pending) return;
       host.setPendingApproval(null);
       host.setReasonMode(false);
-      approvalLine(
-        host,
-        request.peerMessage !== undefined ? PEER_HOLD_WITHDRAWN : APPROVAL_WITHDRAWN
-      );
+      if (request.peerMessage !== undefined) approvalLine(host, PEER_HOLD_WITHDRAWN);
+      else if (host.settleApproval !== undefined) host.settleApproval(withdrawnLine(request));
+      else approvalLine(host, APPROVAL_WITHDRAWN);
       host.updateStatus();
       host.render();
       resolve({ key: "cancel", reason: APPROVAL_WITHDRAWN });
@@ -211,7 +216,6 @@ export function handleModalKey(host: ModalHost, data: string): { consume: true }
       if (data === "\x1b") {
         host.setReasonMode(false);
         host.clearInput();
-        approvalLine(host, "已取消拒绝理由，回到审批面板");
         host.updateStatus();
         host.render();
         return { consume: true };

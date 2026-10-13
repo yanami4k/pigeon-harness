@@ -126,10 +126,7 @@ test("/grants 空列表：如实说明无生效项（文案同 listGrants 口径
     assert.ok(flat.includes("> /grants"), `命令回显\n${flat}`);
     assert.ok(flat.includes("会话放权（0）："), flat);
     assert.ok(flat.includes("固化规则（0，三层设置的 permissions 一节）："), flat);
-    assert.ok(
-      flat.includes("（无——审批提示可用 [a]/[d] 创建会话放权，/grants save <id> 升格固化）"),
-      `空列表文案\n${flat}`
-    );
+    assert.ok(flat.includes("（无）") && !flat.includes("审批提示可用"), `空列表文案\n${flat}`);
   } finally {
     shell.stop();
     cleanup();
@@ -184,11 +181,7 @@ test("/revoke <id>：store 立即移除（停免审），回显同 cli 措辞；
     assert.equal(rules.length, 1, "项目个人设置应写入一条固化规则");
     assert.equal(rules[0]?.promotedFrom.grantId, grant.grantId);
     assert.equal(rules[0]?.promotedFrom.sessionId, SESSION_ID);
-    assert.ok(
-      screenFlat(term).includes(
-        `已升格 ${grant.grantId} → .pigeon/settings.local.json 的 permissions 一节`
-      )
-    );
+    assert.ok(screenFlat(term).includes(`已升格 ${grant.grantId} → .pigeon/settings.local.json`));
 
     // /revoke：会话 grant 立即停免审
     term.input(`/revoke ${grant.grantId}`);
@@ -196,7 +189,7 @@ test("/revoke <id>：store 立即移除（停免审），回显同 cli 措辞；
     await settle();
     assert.equal(store.list().length, 0, "revoke 后 store 应立即移除");
     const flat = screenFlat(term);
-    assert.ok(flat.includes(`已撤销会话放权 ${grant.grantId}：立即生效`), flat);
+    assert.ok(flat.includes(`已撤销 ${grant.grantId}`), flat);
   } finally {
     shell.stop();
     cleanup();

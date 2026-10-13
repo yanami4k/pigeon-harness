@@ -120,11 +120,10 @@ test("终端界面：提醒显示成系统消息；第 20 轮叫停并在消息�
     assert.deepEqual(runtime.inputs, ["修测试"]);
     runtime.rounds(6);
     await settle();
-    // 提醒进模型下一轮，同时显示在消息区：是系统消息，不带人输入的回显前缀
+    // 提醒进模型下一轮；是给模型的原文，不显示在消息区（验收修改）
     assert.equal(runtime.notes.length, 1);
     const screen = screenFlat(term);
-    assert.ok(screen.includes("[Loop reminder] In the last 5 consecutive rounds"), screen);
-    assert.ok(!screen.includes("> [Loop reminder]"), screen);
+    assert.ok(!screen.includes("[Loop reminder]"), screen);
     assert.ok(screen.includes("> 修测试"), screen);
     runtime.rounds(15);
     await settle();
@@ -133,16 +132,10 @@ test("终端界面：提醒显示成系统消息；第 20 轮叫停并在消息�
     const stopped = screenFlat(term);
     assert.ok(
       stopped.includes(
-        '[打转] 检测到打转：连续 20 轮重复同样的工具调用与结果，本轮已叫停。重复的调用：run_command {"command":"npm test"}。'
+        '[loop] stopped after 20 rounds of the same tool calls and results: run_command {"command":"npm test"}'
       ),
       stopped
     );
-    assert.ok(
-      stopped.includes("会话照常可用，可以给出下一步的指示；想让它接着做，直接说“继续”。"),
-      stopped
-    );
-    // 同 Esc：走的是同一条中断路径
-    assert.ok(stopped.includes("[cancel] interrupt requested"), stopped);
     // 会话照常可用：说"继续"即开下一次运行，重新计数
     await submit(term, "继续");
     assert.deepEqual(runtime.inputs, ["修测试", "继续"]);

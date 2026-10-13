@@ -77,7 +77,6 @@ export function handleSpawnCommand(
       host.addSystem("当前会话不支持并行同任务派发（worker 会话不能再派）");
       return;
     }
-    host.addSystem(`并行派出 ${request.attempts} 个尝试（${request.role}）：${request.task}`);
     workers.spawnAttempts({ role: request.role, task: request.task, count: request.attempts }).then(
       (result) => {
         if (!host.isStarted()) return;
@@ -97,14 +96,6 @@ export function handleSpawnCommand(
     return;
   }
   const sessionId = workers.spawn(request);
-  const spawned = workers.status().find((worker) => worker.sessionId === sessionId);
-  host.addSystem(
-    `已派出 worker ${spawned?.name ?? sessionId}（${request.role}）｜ 会话 ${sessionId} ｜ ` +
-      // 决策 377：只读的 explorer 不建工作树
-      (spawned?.workspace.kind === "shared"
-        ? `只读 ${spawned.workspace.path}，不建分支`
-        : `分支 ${spawned?.branch ?? "未知"}`)
-  );
   refreshWorkers(host);
   workers.awaitResult(sessionId).then(
     (outcome) => {
@@ -144,7 +135,6 @@ export function handleCancelCommand(
     host.addSystem(`worker ${target.name} 已收尾（${workerStateLabel(target.state)}），无需取消`);
     return;
   }
-  host.addSystem(`[cancel] worker ${target.name} interrupt requested`);
   workers.cancel(target.sessionId).then(
     () => {
       refreshWorkers(host);

@@ -145,11 +145,10 @@ test("parallel 为屏障：全部结束才返回；pipeline 每项各自走完�
   gate("s2 y").resolve();
   const text = await notice;
   assert.deepEqual(returned(text), { out: ["s2 x", "s2 y"] });
-  assert.equal(
-    harness.lines[0],
-    "[脚本] t（运行号 " +
-      text.match(/run ID (\w+)/)?.[1] +
-      "）开跑：阶段 并行 → 流水线；已知 2 项；额度 不限。"
+  // 开跑那一行不写（验收修改）
+  assert.ok(
+    !harness.lines.some((line) => line.startsWith("[脚本] t（运行号")),
+    harness.lines.join("\n")
   );
   // 树形视图：脚本与阶段两层，worker 按阶段列出
   const [node] = harness.runs.nodes();

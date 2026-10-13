@@ -184,10 +184,7 @@ test("读到旧格式的记忆文件（决策 431）：开工状态块里是新�
     assert.equal(readMemory(root, "user"), MEMORY_FILE_HEADERS.user + USER_ENTRY);
     assert.deepEqual(
       warnings.map((line) => line.replace(/备份在 .*$/, "备份在 …")),
-      [
-        "[记忆] .pigeon/state/memory.md 是旧格式，已一次性改写成新格式；原文件备份在 …",
-        "[记忆] ~/.pigeon/state/memory.md 是旧格式，已一次性改写成新格式；原文件备份在 …",
-      ]
+      []
     );
   }));
 

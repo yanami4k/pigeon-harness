@@ -71,7 +71,8 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   },
   {
     name: "search",
-    usage: "/search <关键词...> [--tool-output] [--role …] [--limit N]",
+    usage:
+      "/search <keywords...> [--conversation-only] [--role user|assistant|toolResult] [--limit N]",
     whileRunning: { allow: true },
     available: (host) => host.searchRoot() !== undefined,
   },

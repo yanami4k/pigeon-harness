@@ -119,14 +119,15 @@ test("取消键：运行中 Esc 触发 interrupt 且只一次；取消后收尾�
     term.input("\r");
     await settle();
     assert.deepEqual(runtime.runs, ["长任务"]);
-    assert.ok(screenText(term).includes("state: running"), "运行中状态行应可见");
+    assert.ok(screenText(term).includes("running"), "运行中状态行写 running");
 
     // Esc（裸 "\x1b"）：触发 interrupt，消息区留取消痕迹，状态行进 cancelling
     term.input("\x1b");
     assert.equal(runtime.interruptCalls, 1, "Esc 必须触发一次 interrupt()");
     await settle();
-    assert.ok(screenText(term).includes("[cancel]"), "取消请求必须在消息区留可见痕迹");
-    assert.ok(screenText(term).includes("state: cancelling"), "中断等待期间状态行应可见");
+    // 状态行写 cancelling 即是痕迹，消息区不另写一行
+    assert.ok(!screenText(term).includes("[cancel]"), "消息区不写取消那一行");
+    assert.ok(screenText(term).includes("cancelling"), "中断等待期间状态行写 cancelling");
 
     // 中断飞行中重复 Esc：不再触发（不 double-abort、不悬挂）
     term.input("\x1b");
@@ -140,7 +141,7 @@ test("取消键：运行中 Esc 触发 interrupt 且只一次；取消后收尾�
     const text = screenText(term);
     assert.match(text, /interrupted · \d+s/, "取消后应落 interrupted 收尾行");
     assert.doesNotMatch(text, /分类|== run/, "不再有终态摘要与分类");
-    assert.ok(text.includes("state: idle"), "run 收尾后状态行应回 idle");
+    assert.ok(!text.includes("running") && !text.includes("cancelling"), "run 收尾后状态行不写字");
   } finally {
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });
@@ -167,7 +168,7 @@ test("模态键控优先：审批面板挂起期间 Esc 吞掉不取消 Run；�
     // 审批面板挂起（Run 阻塞在 beforeToolCall 的人工决议上）
     const panel = shell.askApproval(request);
     await settle();
-    assert.ok(screenText(term).includes("state: approval"), "面板期间状态行应可见");
+    assert.ok(screenText(term).includes("—— 人工审批 ——"), "审批面板挂着");
 
     // Esc 与面板非决议键同待遇：吞掉——此时 interrupt 的 waitForIdle 会吊在挂起
     // Promise 上直到人按键，「取消」名不副实；模态先决议再 Esc 是唯一次序（裁决 032）
@@ -399,9 +400,8 @@ test("集成：真实 Adapter 取消链路不悬挂——Esc 触发 interrupt，
     await runEnded.promise;
     await settle();
     const text = screenText(term);
-    assert.ok(text.includes("[cancel]"), "取消请求应留可见痕迹");
     assert.match(text, /interrupted · \d+s/, "取消后应落 interrupted 收尾行");
-    assert.ok(text.includes("state: idle"), "run 收尾后状态行应回 idle");
+    assert.ok(!text.includes("cancelling"), "run 收尾后状态行不再写 cancelling");
     assert.equal(adapter.isRunning(), false, "interrupt 固定姿势收尾后不得悬挂");
     assert.equal(streamFn.calls.length, 1, "取消不得引发重试/二次调用");
   } finally {

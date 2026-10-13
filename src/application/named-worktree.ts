@@ -306,10 +306,9 @@ export async function closeNamedWorktree(
     );
     return "kept";
   };
-  const remove = (why: string): "removed" | "kept" => {
+  const remove = (): "removed" | "kept" => {
     try {
       removeNamedWorktree(worktree);
-      io.write(`${why}，已删除工作树 ${worktree.name} 与分支 ${worktree.branch}`);
       return "removed";
     } catch (error) {
       io.write(
@@ -318,7 +317,7 @@ export async function closeNamedWorktree(
       return kept();
     }
   };
-  if (namedWorktreeUnchanged(worktree)) return remove(`工作树 ${worktree.name} 没有改动`);
+  if (namedWorktreeUnchanged(worktree)) return remove();
   if (io.ask === undefined) return kept();
   for (;;) {
     const answer = await io.ask(
@@ -331,7 +330,7 @@ export async function closeNamedWorktree(
     if (answer === null) return kept();
     const choice = answer.trim().toLowerCase();
     if (choice === "k" || choice === "") return kept();
-    if (choice === "d") return remove("按要求");
+    if (choice === "d") return remove();
     io.write("请输入 k 或 d");
   }
 }

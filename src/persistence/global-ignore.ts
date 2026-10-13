@@ -162,11 +162,6 @@ export function ensureGlobalIgnoreRules(
       );
       return { file, added, error: "ineffective" };
     }
-    if (added.length > 0) {
-      options.notice?.(
-        `已在 git 全局排除文件 ${file} 加入 Pigeon 程序状态的忽略规则：${added.join("、")}（各仓库与工作树里的程序状态与个人设置不进 git status）`
-      );
-    }
     return { file, added };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

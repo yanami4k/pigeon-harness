@@ -96,6 +96,6 @@ function resumeTarget(governanceRoot: string, sessionId: string): StartTarget {
   return {
     kind: "resume",
     sessionId,
-    report: [...describeResume(governanceRoot, sessionId), "后续 Run 接着原对话继续写入本会话。"],
+    report: describeResume(governanceRoot, sessionId),
   };
 }

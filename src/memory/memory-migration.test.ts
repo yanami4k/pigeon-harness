@@ -172,16 +172,15 @@ test("读到旧格式：先备份原文（逐字节）、再改写成新格式�
       !existsSync(join(dirs.root, ".pigeon", "state", "migration-backup")),
       "仓库里不留备份"
     );
-    assert.deepEqual(dirs.reports, [
-      `[记忆] .pigeon/state/memory.md 是旧格式，已一次性改写成新格式；原文件备份在 ${dirs.backup}`,
-    ]);
+    // 改写成功不告知（文档写明）
+    assert.deepEqual(dirs.reports, []);
     const mtime = statSync(dirs.location.file).mtimeMs;
     const again = dirs.read();
     assert.equal(again.text, CONVERTED);
     assert.equal(again.hash, read.hash);
     assert.equal(statSync(dirs.location.file).mtimeMs, mtime, "不再改写");
     assert.deepEqual(readdirSync(dirname(dirs.backup)), ["memory.md"], "不再备份");
-    assert.equal(dirs.reports.length, 1);
+    assert.equal(dirs.reports.length, 0);
   }));
 
 test("用户级同样迁移，备份进 user/ 目录", () =>
@@ -221,7 +220,7 @@ test("备份位置已有别的内容：不覆盖，另取 memory.1.md；已有�
     writeFileSync(dirs.location.file, LEGACY);
     dirs.read();
     assert.deepEqual(readdirSync(dirname(dirs.backup)).sort(), ["memory.1.md", "memory.md"]);
-    assert.ok((dirs.reports[1] ?? "").endsWith(second), dirs.reports[1]);
+    assert.deepEqual(dirs.reports, []);
   }));
 
 test("拿不到锁：这一次在内存里转换后读出，不写文件、不备份，告警一行；之后拿得到锁即完成迁移", () =>
@@ -247,7 +246,7 @@ test("拿不到锁：这一次在内存里转换后读出，不写文件、不�
     assert.equal(done.hash, held.hash, "内存里转换的与落盘改写的逐字相同");
     assert.equal(readFileSync(dirs.location.file, "utf8"), CONVERTED);
     assert.equal(readFileSync(dirs.backup, "utf8"), LEGACY);
-    assert.equal(dirs.reports.length, 2);
+    assert.equal(dirs.reports.length, 1, "只有没能改写的那一次说");
   }));
 
 test("备份出错：这一次在内存里转换后读出，文件未动，告警带出错原因；锁已放开，下次再试", () =>

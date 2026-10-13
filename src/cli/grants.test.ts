@@ -107,10 +107,7 @@ test("/revoke config#N：移除配置规则并报告其出处 grant；其余规�
     assert.equal(before?.refId, second.grantId);
 
     assert.equal(runGrantCommand(["revoke", "config#0"], ctx), true);
-    assert.ok(
-      outputs.join("").includes("已移除固化规则 config#0（edit_file，出处 grant"),
-      outputs.join("")
-    );
+    assert.ok(outputs.join("").includes("已移除 config#0（edit_file）"), outputs.join(""));
 
     // 移除后：原第二条前移为 config#0，但回指逐字不变（P2-1 根因修复）
     const rules = loadGrantConfig(root);

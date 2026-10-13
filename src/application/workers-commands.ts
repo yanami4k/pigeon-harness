@@ -126,22 +126,17 @@ export function renderWorkerOutcome(outcome: WorkerOutcome): string {
         : "  只读审阅（无工作区、无改动）"
     );
     if (result.summary !== "") {
-      lines.push(
-        `  自述：${result.summary}${result.summaryTruncated ? "（已截断，全文见 worker 会话）" : ""}`
-      );
+      lines.push(`  自述：${result.summary}${result.summaryTruncated ? "（已截断）" : ""}`);
     }
   }
-  lines.push(
-    outcome.worktreeRemoved === "unchanged"
-      ? // 决策 448：收尾时没有改动，工作树与分支已自动删掉
-        `  没有改动，工作树与分支已删（trace ${outcome.sessionId} 查看证据链）`
-      : outcome.workspace.kind === "git-worktree"
-        ? `  工作树 ${outcome.workspace.path}：改动未提交，审阅与合并由人用 git 完成（trace ${outcome.sessionId} 查看证据链）`
-        : outcome.workspace.kind === "shared"
-          ? // 决策 377：只读的 explorer 不建工作树
-            `  不建工作树：只读了 ${outcome.workspace.path}，不产生文件改动（trace ${outcome.sessionId} 查看证据链）`
-          : `  无工作区：只读审阅不产生文件改动（trace ${outcome.sessionId} 查看证据链）`
-  );
+  // 只留事实：工作树在哪、没有改动时已删（决策 448）；只读的 explorer 不建工作树（决策 377）
+  if (outcome.worktreeRemoved === "unchanged") {
+    lines.push("  没有改动，工作树与分支已删");
+  } else if (outcome.workspace.kind === "git-worktree") {
+    lines.push(`  工作树 ${outcome.workspace.path}`);
+  } else if (outcome.workspace.kind === "shared") {
+    lines.push(`  只读 ${outcome.workspace.path}`);
+  }
   // 决策 381：worker 新建却因过大不会进交回的树的文件
   if (result?.skippedFiles !== undefined && result.skippedFiles.length > 0) {
     lines.push(
@@ -154,19 +149,18 @@ export function renderWorkerOutcome(outcome: WorkerOutcome): string {
     outcome.workspace.kind === "git-worktree" &&
     outcome.worktreeRemoved === undefined
   ) {
-    lines.push(`  ${workerStartLine(outcome.start, `用 /take ${outcome.name}`)}`);
+    lines.push(`  ${workerStartLine(outcome.start)}`);
   }
   return lines.join("\n");
 }
 
-// 决策 279：worker 起点与取用方式的一行——快照起点写明带入了几个未提交的文件，HEAD 起点写明派出时没有未提交的文件；
-// 取用方式由调用方给（agent 见 take_worker 工具，人见 /take）
-export function workerStartLine(start: WorkerStartPoint, takeHint: string): string {
+// 决策 279：worker 起点的一行——快照起点写明带入了几个未提交的文件，HEAD 起点写明派出时没有未提交的文件
+export function workerStartLine(start: WorkerStartPoint): string {
   const commit = start.commit.slice(0, 12);
   const origin = start.snapshot
     ? `起点：快照 ${commit}（含派出时 ${start.files.length} 个未提交的文件）`
     : `起点：提交 ${commit}（派出时没有未提交的文件）`;
-  return `${origin}；要把它的改动叠进你的工作目录，${takeHint}。`;
+  return origin;
 }
 
 // /cancel 的目标：按 worker 名或会话 id 定位

@@ -78,7 +78,7 @@ test("TUI 审批：worker 请求标明来源，排队一次只弹一个；[a] �
     assert.equal(storeA.list().length, 1);
     assert.equal(parentStore.list().length, 0);
     text = screenText(term);
-    assert.ok(text.includes("只在 worker fix-a 会话内生效"), text);
+    assert.ok(text.includes("(worker fix-a only)"), text);
     assert.ok(text.includes("来源：worker fix-b（implementer）"), text);
     assert.ok(text.includes("src/second.ts"), text);
 

@@ -22,7 +22,7 @@ import {
 } from "../persistence/grants-config.ts";
 import type { ConfigGrantRule } from "../state/grants.ts";
 import { asGrantId, type GrantId, type SessionId } from "../state/ids.ts";
-import { LOCAL_SETTINGS_FILE, pigeonRel, SETTINGS_FILE, userPigeonRel } from "../state/paths.ts";
+import { LOCAL_SETTINGS_FILE, pigeonRel } from "../state/paths.ts";
 import { type LayeredGrantRule, SETTINGS_LAYER_LABELS } from "../state/settings.ts";
 import { shortId, summarizeArgs } from "./format.ts";
 
@@ -135,13 +135,8 @@ function listGrants(ctx: GrantsCommandContext): void {
         `首调 ${rule.promotedFrom.firstCall.toolCallId}`
     );
   }
-  if (layered.some((entry) => entry.layer !== "local")) {
-    lines.push(
-      `  （项目共享与用户级的规则不能用 /revoke 移除，请手工编辑 ${pigeonRel(SETTINGS_FILE)} 或 ${userPigeonRel(SETTINGS_FILE)}）`
-    );
-  }
   if (sessionGrants.length === 0 && layered.length === 0) {
-    lines.push("  （无——审批提示可用 [a]/[d] 创建会话放权，/grants save <id> 升格固化）");
+    lines.push("  （无）");
   }
   ctx.write(`${lines.join("\n")}\n`);
 }
@@ -178,9 +173,7 @@ function promoteGrant(ctx: GrantsCommandContext, id: string): void {
       promotedAt,
     },
   });
-  ctx.write(
-    `已升格 ${grant.grantId} → ${pigeonRel(LOCAL_SETTINGS_FILE)} 的 permissions 一节（固化规则在下次会话启动或终端界面 /reload 之后生效，在此之前本会话按原规则求值）\n`
-  );
+  ctx.write(`已升格 ${grant.grantId} → ${pigeonRel(LOCAL_SETTINGS_FILE)}\n`);
 }
 
 // /revoke <id>：会话 grant 立即停免审（grant.revoked 事件留证）；配置规则从
@@ -188,17 +181,14 @@ function promoteGrant(ctx: GrantsCommandContext, id: string): void {
 function revokeGrant(ctx: GrantsCommandContext, id: string): void {
   if (id.startsWith("grant_")) {
     ctx.store.revoke(asGrantId(id));
-    ctx.write(`已撤销会话放权 ${id}：立即生效，后续调用重新弹人工审批\n`);
+    ctx.write(`已撤销 ${id}\n`);
     return;
   }
   const match = /^config#(\d+)$/.exec(id);
   if (match !== null) {
     const index = Number(match[1]);
     const removed = removeGrantConfigRule(ctx.root, index);
-    ctx.write(
-      `已移除固化规则 config#${match[1]}（${removed.tool}，出处 grant ${shortId(removed.promotedFrom.grantId)}）：` +
-        "在下次会话启动或终端界面 /reload 之前，本会话仍按原规则求值\n"
-    );
+    ctx.write(`已移除 config#${match[1]}（${removed.tool}）\n`);
     return;
   }
   throw new Error(`无法撤销：${id}（会话 grant 用 grant_ 前缀完整 id；配置规则用 config#序号）`);

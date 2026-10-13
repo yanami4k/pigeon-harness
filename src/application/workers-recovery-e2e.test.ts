@@ -184,9 +184,7 @@ test("worker 崩溃冷恢复：父会话标注未收尾，worker 会话留悬空
     });
     assert.equal(entered, true);
     const report = output.join("");
-    assert.ok(report.includes(`会话 ${workerId} 续跑：还原对话上下文 2 条消息。`), report);
-    assert.ok(report.includes("1 个 Run 没有收尾记录（进程死于中途）"), report);
-    assert.ok(report.includes("末条助手消息有 1 个工具调用没有结果（edit_file）"), report);
+    assert.ok(report.includes("1 个工具调用中断、结果未知：edit_file"), report);
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }

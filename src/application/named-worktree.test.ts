@@ -195,7 +195,7 @@ test("退出清理：没有改动即删并说明；有改动时问——k 保留
   const clean = openNamedWorktree({ cwd: repo, name: "c1" });
   assert.equal(await closeNamedWorktree(clean, { write }), "removed");
   assert.equal(existsSync(clean.path), false);
-  assert.match(lines.at(-1) ?? "", /没有改动，已删除工作树 c1/);
+  assert.equal(lines.length, 0, "没有改动即删，不说");
 
   const changed = openNamedWorktree({ cwd: repo, name: "c2" });
   writeFileSync(join(changed.path, "x.txt"), "x\n");

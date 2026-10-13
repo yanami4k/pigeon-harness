@@ -82,8 +82,10 @@ test("决策 444：终端界面里发第一条消息——先写输入历史、�
     assert.ok(existsSync(join(root, ".pigeon", "state", "sessions")), "会话文件建了");
     const after = readFileSync(file, "utf8");
     assert.notEqual(after, before);
+    // 验收修改：写进全局排除文件不再告知（文档写明）
     assert.ok(
-      warnings.some((line) => line.includes("已在 git 全局排除文件")),
+      !warnings.some((line) => line.includes("已在 git 全局排除文件")) &&
+        !screenText(term).includes("已在 git 全局排除文件"),
       `${warnings.join("\n")}\n${screenText(term)}`
     );
   } finally {

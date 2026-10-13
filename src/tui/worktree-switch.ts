@@ -70,7 +70,11 @@ export function createWorktreeSwitch(deps: WorktreeSwitchDeps): WorktreeSwitch {
       return;
     }
     deps.adopt(worktree);
-    deps.system(`会话已移进工作树 ${worktree.path}（分支 ${worktree.branch}）`);
+    deps.system(
+      `已移进工作树 ${worktree.path}（分支 ${worktree.branch}）${
+        target.uncommitted > 0 ? `；${target.uncommitted} 个未提交的改动留在主检出` : ""
+      }`
+    );
     deps.notify(deps.continueNotice(worktree, target.uncommitted));
   }
 
@@ -81,11 +85,6 @@ export function createWorktreeSwitch(deps: WorktreeSwitchDeps): WorktreeSwitch {
         : deps.workersBusy(),
     entered(worktree, uncommitted) {
       pending = { worktree, uncommitted };
-      deps.system(
-        `本轮结束后移进工作树 ${worktree.path}（分支 ${worktree.branch}，${worktree.created ? `起点 ${worktree.baseLabel}` : "打开已有的"}）${
-          uncommitted > 0 ? `；主检出里 ${uncommitted} 个未提交的改动没有带过去` : ""
-        }`
-      );
     },
     pending: () => pending !== undefined,
     afterTurn(info) {

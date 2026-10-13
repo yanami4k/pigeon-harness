@@ -25,10 +25,9 @@ import type { SessionId } from "../state/ids.ts";
 import { checkJsonSchema } from "../state/json-schema-check.ts";
 import type { ChildSettledStatus, WorkerRole } from "../state/session-payloads.ts";
 import type { ScriptKindRegistry } from "./script-approvals.ts";
-import { budgetText, type ScriptBudget } from "./script-naming.ts";
+import type { ScriptBudget } from "./script-naming.ts";
 import {
   logLine,
-  planLine,
   SCRIPT_BUDGET_NO_PRICE,
   SCRIPT_NOTICE_PREFIX,
   type ScriptEnding,
@@ -529,16 +528,6 @@ export class ScriptRuns implements ScriptKindRegistry {
     run.allowedKinds = new Set();
     run.exhausted = this.#overBudget(run);
     const post = this.#deps.announce();
-    const budget = budgetText(run.budget);
-    this.#deps.emit?.(
-      planLine({
-        name: run.spec.name,
-        runId: run.runId,
-        phases: run.spec.phases,
-        ...(Array.isArray(run.spec.args) ? { items: run.spec.args.length } : {}),
-        ...(budget !== undefined ? { budget } : {}),
-      })
-    );
     this.#deps.onChange?.();
     const finished = Promise.withResolvers<void>();
     run.done = finished.promise;

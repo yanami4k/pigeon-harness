@@ -260,7 +260,6 @@ test("树形视图：Ctrl+X 与 /agents 切换整屏；主 agent、嵌套 worker
     // Esc 回主会话；/agents 同样打开，Ctrl+X 关上
     await type(term, ESC);
     assert.equal(shell.currentView(), "main");
-    assert.ok(screenFlat(term).includes("state: idle"));
     await type(term, "/agents\r");
     assert.equal(shell.currentView(), "tree");
     await type(term, CTRL_X);
@@ -282,13 +281,12 @@ test("进入 worker 会话：从面板（输入框为空时按 ↓）选中进�
     await settle();
     await type(term, DOWN);
     assert.ok(panelRow(term, "look-a")?.startsWith(" > "), "进入面板，选中第一行");
-    assert.ok(screenFlat(term).includes("[up/down] select, [enter] open session"));
     await type(term, DOWN);
     assert.ok(panelRow(term, "fix-b")?.startsWith(" > "));
     await type(term, "\r");
     assert.equal(shell.currentView(), "worker");
     assert.ok(titleLine(term)?.includes("worker fix-b · esc to go back"), titleLine(term));
-    assert.ok(screenFlat(term).includes("worker: fix-b running | [enter] message, /stop"));
+    assert.ok(screenFlat(term).includes("worker: fix-b running"));
     // 实时：正文与工具调用
     const runtime = h.runtime("fix-b");
     runtime.turn("正在看 b.ts");
@@ -306,7 +304,7 @@ test("进入 worker 会话：从面板（输入框为空时按 ↓）选中进�
     // 发消息
     await type(term, "先看 c.ts\r");
     assert.deepEqual(runtime.notes, ["先看 c.ts"]);
-    assert.ok(screenFlat(term).includes("已把话递给 worker fix-b，它在下一轮看到"));
+    assert.ok(!screenFlat(term).includes("已把话递给"), "递到了不说");
     // worker 会话里不能用的命令说明原因，输入留在输入框
     await type(term, "/compact\r");
     assert.ok(screenFlat(term).includes("在 worker 会话里不能用 /compact"), screenFlat(term));
@@ -316,7 +314,6 @@ test("进入 worker 会话：从面板（输入框为空时按 ↓）选中进�
     await type(term, "/stop\r");
     await until(() => h.orchestrator.status()[1]?.state === "cancelled", "fix-b 取消");
     await settle();
-    assert.ok(screenFlat(term).includes("[cancel] worker fix-b interrupt requested"));
     assert.ok(
       screenFlat(term).includes("== worker fix-b（implementer）收尾：已取消"),
       screenFlat(term)
@@ -325,7 +322,6 @@ test("进入 worker 会话：从面板（输入框为空时按 ↓）选中进�
     await type(term, ESC);
     assert.equal(shell.currentView(), "main");
     assert.ok(!screenFlat(term).includes("esc to go back"), "回到主视图：没有特殊视图的那行说明");
-    assert.ok(screenFlat(term).includes("state: idle"));
     assert.ok(!screenFlat(term).includes("正在看 b.ts"), "主会话的消息区不含 worker 的对话");
   } finally {
     shell.stop();
@@ -353,11 +349,10 @@ test("进入 worker 会话：先显示它会话记录里已有的对话（与 /r
     h.runtime("look-a").turn("接着看 b.ts");
     await settle();
     const flat = screenFlat(term);
-    const historyAt = flat.indexOf(`== 历史：会话 ${id}`);
     const pastAt = flat.indexOf("a.ts 里有三个函数");
     const liveAt = flat.indexOf("接着看 b.ts");
-    assert.ok(historyAt >= 0 && pastAt > historyAt, flat);
-    assert.ok(liveAt > flat.indexOf("== 历史结束，以下为实时 =="), flat);
+    assert.ok(pastAt >= 0, flat);
+    assert.ok(liveAt > flat.indexOf("--- live ---") && flat.indexOf("--- live ---") > pastAt, flat);
   } finally {
     shell.stop();
     await h.stopAll();
@@ -439,11 +434,7 @@ test("补批续做：请示等满时限交回后，面板标 blocked 且不淡�
     assert.ok(panelRow(term, "ship") !== undefined, "停在等审批的不淡出");
     await type(term, DOWN);
     await type(term, "\r");
-    assert.ok(
-      screenFlat(term).includes(
-        "worker: ship blocked | read only, /approve to approve and continue"
-      )
-    );
+    assert.ok(screenFlat(term).includes("worker: ship waiting for approval"));
     // 停在等审批的：发话不续做，提示用 /approve
     await type(term, "直接接着做\r");
     assert.ok(
@@ -476,11 +467,7 @@ test("补批续做：请示等满时限交回后，面板标 blocked 且不淡�
     await until(() => h.orchestrator.status()[0]?.state === "completed", "续做完成");
     await settle();
     const flat = screenFlat(term);
-    assert.ok(
-      flat.includes("已补批 worker ship 的调用（run the command npm test），它接着做"),
-      flat
-    );
-    assert.ok(flat.includes("== 已补批，worker 接着做 =="), flat);
+    assert.ok(!flat.includes("已补批 worker ship 的调用") && !flat.includes("== 已补批"), flat);
     assert.ok(flat.includes("== worker ship（tester）收尾：完成"), flat);
     // 已收尾：/approve 说明不需要
     await type(term, "/approve\r");
@@ -505,7 +492,7 @@ test("已收尾的 worker 会话只读：发话不产生新的一轮，提示只
     await type(term, DOWN);
     await type(term, "\r");
     assert.equal(shell.currentView(), "worker");
-    assert.ok(screenFlat(term).includes("worker: look-a done | read only, [esc] back"));
+    assert.ok(screenFlat(term).includes("worker: look-a done"));
     await type(term, "再看看 b.ts\r");
     assert.ok(screenFlat(term).includes("这个 worker 已结束，只能查看"), screenFlat(term));
     assert.ok(!screenFlat(term).includes("> 再看看 b.ts"), "不回显为发出的消息");
@@ -547,13 +534,12 @@ test("进入 worker 会话期间：主 agent 照常运行（结果留在主会�
     assert.equal(shell.currentView(), "worker");
     let flat = screenFlat(term);
     assert.ok(flat.includes("—— 人工审批 ——来源：主会话工具：edit_file"), flat);
-    assert.ok(flat.includes("state: approval"), flat);
     await type(term, "y");
     assert.deepEqual(await answer, { key: "y" });
     await settle();
     assert.equal(shell.currentView(), "worker");
     flat = screenFlat(term);
-    assert.ok(flat.includes("worker: look-a running | [enter] message"), flat);
+    assert.ok(flat.includes("worker: look-a running"), flat);
     // 主会话的消息区照常留下审批记录与后台结束的这一轮
     await type(term, ESC);
     flat = screenFlat(term);

@@ -34,9 +34,6 @@ function formatGroup(group: SessionSearchGroup): string {
     lines.push(
       `  第 ${hit.runSeq} 条 ${hit.role}${tool}  ${hit.entryId}  命中：${hit.matchedKeywords.join("、")}`
     );
-    if (hit.role === "toolResult") {
-      lines.push("  以前的工具输出，可能已过时");
-    }
     lines.push(`  ${hit.snippet}`);
   }
   return lines.join("\n");

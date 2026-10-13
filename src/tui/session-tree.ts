@@ -7,8 +7,7 @@ import { familyTotal, flattenFamily } from "../application/session-family.ts";
 import { clipToWidth, formatCost } from "./status-bar.ts";
 import { TreeList } from "./tree-list.ts";
 
-export const SESSION_TREE_HEADER =
-  "== sessions tree | [tab] running | [up/down] move, [enter] view, [r] resume here, [esc] close ==";
+export const SESSION_TREE_HEADER = "== sessions tree ==";
 
 const REVIEW_TIMING: Readonly<Record<string, string>> = {
   closing: "收尾",
@@ -59,8 +58,6 @@ export function familyNodeText(node: FamilyNode, currentSessionId: string): stri
 export interface SessionTreeSource {
   // 视图可用的行数（终端高度减去标题与状态栏）
   height(): number;
-  // 决策 435：有会话回退时 Tab 去消息树（缺省回运行中）
-  tabToMessages?(): boolean;
 }
 
 export class SessionTree implements Component {
@@ -120,11 +117,7 @@ export class SessionTree implements Component {
   invalidate(): void {}
 
   render(width: number): string[] {
-    const header =
-      this.source.tabToMessages?.() === true
-        ? SESSION_TREE_HEADER.replace("[tab] running", "[tab] messages")
-        : SESSION_TREE_HEADER;
-    const lines = [clipToWidth(header, width)];
+    const lines = [clipToWidth(SESSION_TREE_HEADER, width)];
     // 这一家合计（各节点自己的花费相加，不重复）
     if (this.family !== undefined) {
       const total = familyTotal(this.family.root);

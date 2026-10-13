@@ -182,14 +182,13 @@ test("开跑的计划行、log 行与结束汇总进消息区；树形视图接�
     await until(() => harness.sink.spawned.length === 1, "派出第一个");
     await settle();
     const flat = screenFlat(term);
-    assert.ok(flat.includes(`[脚本] t（运行号 ${runId}）开跑：阶段 调查 → 修改；额度 ¥5。`), flat);
+    assert.ok(!flat.includes("[脚本] t（运行号"), "开跑那一行不写");
     assert.ok(flat.includes("[脚本 t] 开始了"), flat);
     assert.ok(flat.includes(`${runId}-1`), "面板照常列出脚本派出的 worker");
     await type(term, CTRL_X);
     const tree = screenFlat(term);
     assert.ok(tree.includes(`script t (${runId})  running`), tree);
     assert.ok(tree.includes("phase 调查  running"), tree);
-    assert.ok(tree.includes("[X] stop script"), tree);
     release.resolve();
     await within(done, "脚本的汇总");
     await settle(150);
@@ -271,7 +270,7 @@ test("审批：本次脚本内同类都允许只对本脚本内同类生效；�
     await untilScreen(term, "[s] 本次脚本内同类都允许");
     await type(term, "s");
     // 按 s 之后第一个 worker 随即收尾（同步 git），回显要等重绘：等它出现，不靠固定的 settle
-    await untilScreen(term, "已允许本次脚本内同类调用（跑命令 npm test），脚本结束即失效");
+    await untilScreen(term, "✓ allowed for this script: run_command (跑命令 npm test)");
     // 第二个 npm test 不再请示；rm 照常请示且不提供 [s]
     await until(() => asked.length === 2, "rm 的请示");
     assert.equal(asked[1]?.args && (asked[1].args as { command: string }).command, "rm -rf build");
@@ -280,7 +279,7 @@ test("审批：本次脚本内同类都允许只对本脚本内同类生效；�
     const rmBlock = screenFlat(term).split("—— 人工审批 ——").at(-1) ?? "";
     assert.ok(!rmBlock.includes("[s]"), rmBlock);
     await type(term, "s");
-    assert.ok(screenFlat(term).includes("state: approval"), "按 s 不起作用，仍在等审批");
+    assert.ok(screenFlat(term).includes("—— 人工审批 ——"), "按 s 不起作用，仍在等审批");
     await type(term, "y");
     await within(first, "第一个脚本的汇总");
     // 另一个脚本里照常请示

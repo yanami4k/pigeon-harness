@@ -82,16 +82,15 @@ export const LOOP_GUARD_TEXTS = {
     `${LOOP_REMINDER_PREFIX}This is the second reminder. ${repeatLead(stop)}\n${patternDetail(stop)}\n` +
     `${NO_NEW_INFORMATION} If they repeat for ${left} more rounds, this run will be stopped. ` +
     "Switch to a different approach now; if you really cannot make progress, stop and summarize what you know and where you are stuck.",
-  // 终端界面：消息区的叫停说明
+  // 终端界面：消息区的叫停说明（一行，怎么接着做写在文档里）
   tuiStopped: (stop: LoopStop) =>
-    `[打转] 检测到打转：连续 ${stop.count} 轮重复同样的工具调用与结果，本轮已叫停。重复的调用：${loopCallsSummary(stop)}。` +
-    "会话照常可用，可以给出下一步的指示；想让它接着做，直接说“继续”。",
+    `[loop] stopped after ${stop.count} rounds of the same tool calls and results: ${loopCallsSummary(stop, true)}`,
   // worker：交回与通知里的失败原因（套 271 定稿的失败文字："worker X（角色）失败：<原因>。分支 … 上可能有部分改动。"）
   workerReason: (stop: LoopStop) =>
     `stuck in a loop: the same tool calls and results repeated for ${stop.count} consecutive rounds, so it was stopped. Repeated calls: ${loopCallsSummary(stop, true)}`,
   // pigeon run：收尾说明（终态一行之后）
   runStopped: (stop: LoopStop) =>
-    `检测到打转：连续 ${stop.count} 轮重复同样的工具调用与结果，本次运行已叫停。重复的调用：${loopCallsSummary(stop)}`,
+    `stopped after ${stop.count} rounds of the same tool calls and results: ${loopCallsSummary(stop, true)}`,
 };
 
 // 挂打转检测的运行面：整轮观察口与通知队列

@@ -27,6 +27,7 @@ import {
   type TurnCompletedPayload,
 } from "../state/runtime-events.ts";
 import { MARKDOWN_OPTIONS, MARKDOWN_THEME } from "./markdown-theme.ts";
+import { clipToWidth } from "./status-bar.ts";
 import { secondary } from "./style.ts";
 import { diffOfDetails, type ToolResultView, toolResultBody } from "./tool-output.ts";
 
@@ -176,6 +177,15 @@ export class MessageFlow {
   // 要醒目的系统行：真正的报错（请求、写入、钩子出错等）、要人作答的审批块与运行期告警，照常显示
   addAlert(line: string): void {
     this.append(line);
+  }
+
+  // 挂着的审批块：照常醒目显示整块；返回的函数在答完时把整块原地换成一行结论（弱化、按宽度截断，不折行）
+  addApprovalBlock(text: string): (line: string) => void {
+    const block = this.append(text);
+    return (line) => {
+      const index = this.list.children.indexOf(block);
+      if (index >= 0) this.list.children[index] = new ConclusionLine(sanitizeTerminalText(line));
+    };
   }
 
   // turn.started：只重置流式状态，不 append——尾巴懒创建（决策 035：首个 text_delta 到达时
@@ -420,4 +430,20 @@ export function checkedImage(image: {
     return undefined;
   }
   return { data, mimeType };
+}
+
+// 答完的审批收成的一行：与其他系统行一样上下各留一行空白、左右各留一格，超宽截断，弱化显示
+class ConclusionLine implements Component {
+  private readonly line: string;
+
+  constructor(line: string) {
+    this.line = line;
+  }
+
+  invalidate(): void {}
+
+  render(width: number): string[] {
+    const blank = " ".repeat(width);
+    return [blank, secondary(` ${clipToWidth(this.line, Math.max(1, width - 2))}`), blank];
+  }
 }

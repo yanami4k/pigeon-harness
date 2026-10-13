@@ -21,16 +21,12 @@ const THEME: SettingsListTheme = {
   hint: (text) => secondary(text.replaceAll("·", "|")),
 };
 
-const HEADER = `settings (user level, ${userPigeonRel(SETTINGS_FILE)}): enter/space to change, esc to close`;
+const HEADER = `settings (user level, ${userPigeonRel(SETTINGS_FILE)})`;
 
 // 被 git 跟踪的 settings.local.json 已按共享层给出（config-options.ts）
 const LAYER_LABEL = { project: "项目共享设置", local: "项目个人设置" } as const;
 
 export function settingItemOf(view: ConfigItemView): SettingItem {
-  const overridden =
-    view.overriddenBy !== undefined
-      ? `；被${LAYER_LABEL[view.overriddenBy]}覆盖，改用户级不生效`
-      : "";
   return {
     id: view.option.id,
     // 标签只放中文名（pi-tui 的标签列最宽 36 列，长的会挤掉值列），选项名写在说明里；被别的层覆盖的在名字旁标注
@@ -38,7 +34,8 @@ export function settingItemOf(view: ConfigItemView): SettingItem {
       view.overriddenBy !== undefined
         ? `${view.option.label}（被${LAYER_LABEL[view.overriddenBy]}覆盖）`
         : view.option.label,
-    description: `${view.option.id}：${view.option.description}。生效值（不含启动参数）：${view.effective}${overridden}`,
+    // 每项一句说明；生效值与用户级写的不同（被别的层覆盖、或没写取缺省）时附上生效值
+    description: `${view.option.id}: ${view.option.description}${view.effective !== view.user ? ` (effective: ${view.effective})` : ""}`,
     currentValue: view.user,
     values: [...view.option.values],
   };
@@ -84,7 +81,9 @@ export class ConfigPanel {
   }
 
   // 面板里的一句说明（弱化样式）；空串即清掉
-  setNote(text: string): void {
+  // alert：报错（改不成、重读失败）照常醒目，其余弱化
+  setNote(text: string, alert = false): void {
+    this.note.setCustomBgFn(alert ? undefined : secondary);
     this.note.setText(text);
   }
 

@@ -9,9 +9,7 @@ import type { RewindMode } from "../state/session-entries.ts";
 import { clipToWidth } from "./status-bar.ts";
 import { TreeList } from "./tree-list.ts";
 
-export const MESSAGE_TREE_HEADER =
-  "== messages | [up/down] move, [enter] go back to here, [esc] close ==";
-const TAB_HINT = "[tab] running | ";
+export const MESSAGE_TREE_HEADER = "== messages ==";
 
 export type MessageTreeStage = "loading" | "tree" | "choose" | "conflicts" | "busy";
 
@@ -46,15 +44,12 @@ export function messageNodeText(node: RewindNode): string {
 
 export interface MessageTreeSource {
   height(): number;
-  // 有 worker 编排面时 Tab 回到运行中模式
-  tabToRunning(): boolean;
 }
 
 export class MessageTree implements Component {
   private readonly source: MessageTreeSource;
   private readonly list = new TreeList<RewindNode>();
   private current: MessageTreeStage = "loading";
-  private busyText = "";
   private target: RewindNode | undefined;
   private choices: RewindChoice[] = [];
   private chooseNote: string | undefined;
@@ -153,9 +148,8 @@ export class MessageTree implements Component {
     return new Set(this.conflictList.filter((item) => item.revert).map((item) => item.path));
   }
 
-  busy(text: string): void {
+  busy(): void {
     this.current = "busy";
-    this.busyText = text;
   }
 
   // 回到树（选择、冲突两步里 Esc）
@@ -168,17 +162,10 @@ export class MessageTree implements Component {
   invalidate(): void {}
 
   render(width: number): string[] {
-    const header = this.source.tabToRunning()
-      ? MESSAGE_TREE_HEADER.replace("== messages | ", `== messages | ${TAB_HINT}`)
-      : MESSAGE_TREE_HEADER;
-    const lines = [clipToWidth(header, width)];
+    const lines = [clipToWidth(MESSAGE_TREE_HEADER, width)];
     const room = this.source.height() - 1;
-    if (this.current === "loading") {
-      lines.push("  reading the session...");
-      return lines;
-    }
-    if (this.current === "busy") {
-      lines.push(clipToWidth(`  ${this.busyText}`, width));
+    if (this.current === "loading" || this.current === "busy") {
+      lines.push("  working...");
       return lines;
     }
     if (this.current === "tree") {
@@ -205,7 +192,6 @@ export class MessageTree implements Component {
       });
       if (this.chooseNote !== undefined)
         lines.push(clipToWidth(`  ${oneLine(this.chooseNote)}`, width));
-      lines.push(clipToWidth("  [up/down] move, [enter] confirm, [esc] back", width));
       return lines;
     }
     lines.push(clipToWidth("  这些文件拿不准（后面写着原因）：缺省保留，空格切换为退回", width));
@@ -217,9 +203,6 @@ export class MessageTree implements Component {
         )
       );
     });
-    lines.push(
-      clipToWidth("  [up/down] move, [space] toggle, [enter] confirm, [esc] cancel", width)
-    );
     return lines;
   }
 }

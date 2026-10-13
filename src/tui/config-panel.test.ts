@@ -13,7 +13,7 @@ import { ConfigPanel } from "./config-panel.ts";
 import { orchestrationHarness } from "./orchestration-fixtures.ts";
 import { ScriptedRuntime } from "./runtime-fixtures.ts";
 import { PigeonTuiShell, type TuiShellOptions } from "./shell.ts";
-import { MockTerminal, screenText, settle } from "./testing.ts";
+import { MockTerminal, screenFlat, screenText, settle } from "./testing.ts";
 
 interface Harness {
   user: Map<string, string>;
@@ -92,7 +92,7 @@ test("/config 打开面板：列出各项、生效值与覆盖说明，提示与
     const screen = screenText(term);
     assert.match(screen, /思考档位/);
     assert.match(screen, /联网工具/);
-    assert.match(screen, /thinking\.level：/);
+    assert.match(screen, /thinking\.level: /);
     assert.doesNotMatch(screen, /·|→/);
     // 移到"联网工具"，Enter 轮换到下一个值（default → true）
     term.input(DOWN);
@@ -101,10 +101,9 @@ test("/config 打开面板：列出各项、生效值与覆盖说明，提示与
     assert.deepEqual(writes, ["web.enabled=true"]);
     assert.deepEqual(reloads, [[]]);
     const after = screenText(term);
-    // 验收修改：面板里改设置不往消息区写行——那一项的生效值当场更新，面板自己的提示行写一句短话
-    assert.match(after, /已改，自下一轮起生效/);
-    assert.doesNotMatch(after, /已写进|已重读设置/);
-    assert.match(after, /生效值（不含启动参数）：true/);
+    // 验收修改：面板里改设置不往消息区写行，提示行也不写"已改"——那一项的值当场更新就是反馈
+    assert.doesNotMatch(after, /已改|已写进|已重读设置|written to/);
+    assert.match(after, /> 联网工具\s+true/);
     // Esc 关面板：消息区里没有留下改设置的行
     term.input("\x1b");
     await settle();
@@ -124,7 +123,7 @@ test("矮窗口里打开 /config：面板不被按比例压掉，提示行、选
     const screen = screenText(term);
     assert.match(screen, /settings \(user level/);
     assert.match(screen, /> 思考档位/);
-    assert.match(screen, /thinking\.level：/);
+    assert.match(screen, /thinking\.level: /);
     // 面板的末行（按键提示）也在——按比例压缩时最先被裁掉的就是它
     assert.match(screen, /Enter\/Space to change/);
     // 往下翻到最后一项：列表跟着滚，选中项与说明照样在
@@ -133,7 +132,7 @@ test("矮窗口里打开 /config：面板不被按比例压掉，提示行、选
     const last = CONFIG_OPTIONS.at(-1);
     assert.ok(last !== undefined);
     assert.ok(screenText(term).includes(`> ${last.label}`), screenText(term));
-    assert.ok(screenText(term).includes(`${last.id}：`), screenText(term));
+    assert.ok(screenText(term).includes(`${last.id}: `), screenText(term));
   } finally {
     cleanup();
   }
@@ -191,7 +190,7 @@ test("面板打开之后窗口变矮：行数按当前窗口高度现取，选�
     await settle();
     const screen = screenText(term);
     assert.ok(screen.includes(`> ${third.label}`), screen);
-    assert.ok(screen.includes(`${third.id}：`), screen);
+    assert.ok(screen.includes(`${third.id}: `), screen);
     assert.match(screen, /Enter\/Space to change/);
     const borders = term.screen.contentLines().filter((line) => /^-{20,}/.test(line));
     assert.equal(borders.length, 2, screen);
@@ -216,7 +215,7 @@ test("验收修改：面板里改被别的层覆盖的一项——名字旁标�
     await settle();
     assert.equal(writes.length, 1);
     screen = screenText(term);
-    assert.match(screen, /被项目共享设置覆盖，改用户级不生效/);
+    assert.match(screen, /模型请求重试次数（被项目共享设置覆盖）/);
     // 改不成（有 worker 在跑）：只在提示行说明
     harness.busy = "有 worker 在跑";
     term.input("\r");
@@ -239,13 +238,23 @@ test("/config 选项=值 直接改；被项目覆盖的另有提醒；值没变�
     term.input("\r");
     await settle();
     assert.deepEqual(writes, ["modelRequest.maxRetries=3"]);
-    assert.match(screenText(term), /被项目共享设置覆盖，改用户级不生效/);
+    // 合成一行：写进用户级，被项目共享设置覆盖时写明
+    assert.match(
+      screenFlat(term),
+      /modelRequest\.maxRetries = 3 \(written to user settings, but project settings override it\)/
+    );
+    assert.doesNotMatch(screenText(term), /已重读设置/);
     assert.equal(reloads.length, 1);
+    const before = screenText(term);
     term.input("/config modelRequest.maxRetries=3");
     term.input("\r");
     await settle();
-    assert.match(screenText(term), /已经是 3，没有改/);
+    // 值没变：不写、不重建、也不说
     assert.equal(reloads.length, 1);
+    assert.equal(
+      (screenText(term).match(/written to user settings/g) ?? []).length,
+      (before.match(/written to user settings/g) ?? []).length
+    );
     term.input("/config web.enabled=maybe");
     term.input("\r");
     await settle();

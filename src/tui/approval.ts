@@ -19,24 +19,17 @@
 // - [n] 单按即拒绝、不带理由：reason 缺省，由治理层落默认文案「人工拒绝」并记为系统默认。
 // - [r]（决策 066）：拒绝并说明——打开理由行（Esc 回面板不算拒绝，回车提交），理由逐字回模型
 //   并在决定记录里记为人写。
-import {
-  approvalSourceLine,
-  approvalVerdict,
-  workerGrantScopeNote,
-} from "../application/format.ts";
-import {
-  collectSourceLine,
-  SCRIPT_KIND_KEY_LABEL,
-  scriptKindAllowedLine,
-} from "../application/script-texts.ts";
+import { approvalSourceLine, summarizeArgs } from "../application/format.ts";
+import { collectSourceLine, SCRIPT_KIND_KEY_LABEL } from "../application/script-texts.ts";
 import type { SessionGrantStore } from "../approvals/grant-store.ts";
 import {
   type ApprovalDecision,
   type ApprovalHandler,
   type ApprovalRequest,
-  commandScopeNote,
   execCommandLine,
   execGrantKeyLabel,
+  extractCommandArg,
+  extractPathArg,
   grantScopeFor,
   hostGrantKeyLabel,
   offersDirectoryGrant,
@@ -89,6 +82,7 @@ export type ApprovalPanelResult =
 export interface TuiApprovalFace {
   // directoryGrant：审批块提供不提供 [d]（缺省按调用带不带 path 判定）
   askApproval(request: ApprovalRequest, directoryGrant?: boolean): Promise<ApprovalPanelResult>;
+  // 答完：把挂着的审批块收成这一行结论
   noteApproval(line: string): void;
 }
 
@@ -168,13 +162,48 @@ export function approvalBlockText(
   return lines.join("\n");
 }
 
-// 决议措辞复用 application/format.ts 的 approvalVerdict（通俗措辞单一约定，不造第二套）；
-// 它只读 approvedBy/outcome
-function verdictLine(
-  outcome: "approved" | "rejected",
-  approvedBy: "human" | "human:grant"
+// 答完的审批收成的一行（验收修改：整块不留）：结论、工具与关键参数、放权范围，拒绝写上理由；worker 与面板会话的请求
+// 前面标来源。完整内容在会话记录里，trace 与回看历史可查
+function subjectOf(request: ApprovalRequest): string {
+  const command =
+    request.tier === "exec" ? (request.command ?? extractCommandArg(request.args)) : undefined;
+  return (
+    command ?? request.host ?? extractPathArg(request.args) ?? summarizeArgs(request.args, true)
+  );
+}
+
+function sourceOf(request: ApprovalRequest): string {
+  const name = request.pooled?.name ?? request.worker?.name;
+  return name !== undefined ? `[${name}] ` : "";
+}
+
+export function approvedLine(request: ApprovalRequest, note = ""): string {
+  return `${sourceOf(request)}✓ approved ${request.toolName}: ${subjectOf(request)}${note}`;
+}
+
+export function rejectedLine(request: ApprovalRequest, reason?: string): string {
+  return `${sourceOf(request)}✗ rejected ${request.toolName}: ${subjectOf(request)}${
+    reason !== undefined && reason !== "" ? ` (${reason})` : ""
+  }`;
+}
+
+function grantedLine(
+  request: ApprovalRequest,
+  scope: { pathPrefix?: string; command?: string; host?: string }
 ): string {
-  return `审批结果：${approvalVerdict({ outcome, approvedBy })}`;
+  const what =
+    scope.command ??
+    scope.host ??
+    (scope.pathPrefix !== undefined ? `in ${scope.pathPrefix}` : undefined);
+  const only = request.worker !== undefined ? ` (worker ${request.worker.name} only)` : "";
+  return `${sourceOf(request)}✓ allowed for this session: ${request.toolName}${what !== undefined ? ` ${what}` : ""}${only}`;
+}
+
+// 决策 303：worker 的请求等满时限无人批、面板撤下时那一行
+export function withdrawnLine(request: ApprovalRequest): string {
+  return `${sourceOf(request)}✗ approval timed out: ${request.toolName}${
+    request.worker !== undefined ? ` (worker ${request.worker.name} stopped)` : ""
+  }`;
 }
 
 // 面板版 handler 工厂（决策 025 的注入形态：装配根先建 grantStore，[a]/[d] 放权键需要它）
@@ -196,7 +225,7 @@ export function createTuiApprovalHandler(
       return { approved: false, reason: APPROVAL_WITHDRAWN, reasonSource: "system-default" };
     }
     if (result.key === "cancel") {
-      panel.noteApproval(`审批结果：人工拒绝（${result.reason}）`);
+      panel.noteApproval(rejectedLine(request, result.reason));
       return { approved: false, reason: cancelReasonForModel(result.reason) };
     }
     // 受保护路径：面板不收放权键；万一收到按批准一次处理，不建放权
@@ -204,47 +233,44 @@ export function createTuiApprovalHandler(
       request.protectedPath !== undefined &&
       (result.key === "a" || result.key === "d" || result.key === "s")
     ) {
-      panel.noteApproval(verdictLine("approved", "human"));
+      panel.noteApproval(approvedLine(request));
       return { approved: true };
     }
     if (result.key === "a" || result.key === "d") {
       // 与 cli 版同一份放权作用域（approvals/handler.ts grantScopeFor）
       const scope = grantScopeFor(request, result.key, target);
       if (scope === null) {
-        panel.noteApproval(verdictLine("approved", "human"));
-        panel.noteApproval("定位不到命令串，未创建放权（按批准一次处理）");
+        panel.noteApproval(approvedLine(request, " (once: no command to grant)"));
         return { approved: true };
       }
       // 与 cli 版同一份放权语义：grant.created 事件先于运行态（store.create fail-closed）
-      const grant = target.create({
+      target.create({
         tool: request.toolName,
         ...scope,
         firstCall: { toolCallId: request.toolCallId, args: request.args },
         ...(request.runId !== undefined ? { runId: request.runId } : {}),
       });
-      panel.noteApproval(verdictLine("approved", "human:grant"));
-      panel.noteApproval(
-        `已创建会话放权 ${grant.grantId}（${grant.tool}${commandScopeNote(scope)}）${workerGrantScopeNote(request)}`
-      );
+      panel.noteApproval(grantedLine(request, scope));
       return { approved: true };
     }
     // 决策 303（脚本部分）：本次脚本内同类都允许——批准这一次，同一脚本里之后的同类由包装层放行
     if (result.key === "s" && request.script?.kind !== undefined) {
-      panel.noteApproval(verdictLine("approved", "human"));
-      panel.noteApproval(scriptKindAllowedLine(request.script.kind));
+      panel.noteApproval(
+        `${sourceOf(request)}✓ allowed for this script: ${request.toolName} (${request.script.kind})`
+      );
       return { approved: true, scope: "script-kind" };
     }
     if (result.key === "y") {
-      panel.noteApproval(verdictLine("approved", "human"));
+      panel.noteApproval(approvedLine(request));
       return { approved: true };
     }
     // [r]（决策 066）：拒绝并说明——理由逐字回模型，记为人写
     if (result.key === "r") {
-      panel.noteApproval(verdictLine("rejected", "human"));
+      panel.noteApproval(rejectedLine(request, result.reason));
       return { approved: false, reason: result.reason, reasonSource: "human" };
     }
     // [n]：单按即拒绝，不带理由；治理层落默认文案「人工拒绝」并记为系统默认
-    panel.noteApproval(verdictLine("rejected", "human"));
+    panel.noteApproval(rejectedLine(request));
     return { approved: false };
   };
 }

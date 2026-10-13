@@ -50,14 +50,22 @@ test("成功：先换工作区再重建（重建按工作树），之后记条�
   const h = harness();
   assert.equal(h.sw.afterTurn({ cancelled: false }), undefined);
   h.sw.entered(WT, 2);
-  assert.match(h.log.at(-1) ?? "", /2 个未提交的改动没有带过去/);
+  // 本轮当中不写（验收修改）；移进后那一行带上没带过去的改动数
+  assert.equal(h.log.length, 0);
   await h.sw.afterTurn({ cancelled: false });
-  const tail = h.log.slice(1);
+  const tail = h.log;
   assert.deepEqual(tail.slice(0, 3), [
     `workspace ${WT.path}`,
     `rebuild in ${WT.path}`,
     `adopt ${WT.path}`,
   ]);
+  assert.ok(
+    tail.some(
+      (line) =>
+        line.startsWith("system 已移进工作树") && line.includes("2 个未提交的改动留在主检出")
+    ),
+    tail.join("\n")
+  );
   assert.equal(tail.at(-1), `notify continue in ${WT.path}`);
   assert.equal(h.sw.pending(), false);
 });

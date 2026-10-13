@@ -159,20 +159,25 @@ test("次要信息统一弱化：状态栏、状态行与工作收尾行都包�
     writes.push(data);
     write(data);
   };
+  const runtime = new ScriptedRuntime(sessionId);
   const shell = new PigeonTuiShell({
     terminal: term,
-    runtime: new ScriptedRuntime(sessionId),
+    runtime,
     sessionId,
     logDir,
   });
   try {
     shell.start();
     await settle();
+    // 跑着时状态行写 running（空闲时不写字）
+    runtime.autoResolve = false;
     term.input("你好");
     term.input("\r");
     await settle();
+    assert.ok(writes.join("").includes(`${ESC}[2m running`), "状态行弱化");
+    runtime.finishAll();
+    await settle();
     const all = writes.join("");
-    assert.ok(all.includes(`${ESC}[2m state: idle | [enter] submit`), "状态行弱化");
     assert.match(all, new RegExp(`${ESC}\\[2m done · \\d+s`), "收尾行弱化");
   } finally {
     shell.stop();

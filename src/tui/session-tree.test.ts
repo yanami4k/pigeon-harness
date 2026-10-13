@@ -285,10 +285,10 @@ test("会话树：树形视图里 Tab 在运行中与会话树两种模式间切
     shell.start();
     await settle();
     await press(term, CTRL_X);
-    assert.ok(screenFlat(term).includes("== workers tree | [tab] sessions"), "Ctrl+X 进运行中模式");
+    assert.ok(screenFlat(term).includes("== workers tree =="), "Ctrl+X 进运行中模式");
     await press(term, TAB);
     const lines = term.screen.contentLines();
-    assert.ok(lines.some((line) => line.startsWith("== sessions tree | [tab] running")));
+    assert.ok(lines.some((line) => line.startsWith("== sessions tree ==")));
     assert.ok(
       lines.some((line) => /^ {2}这一家合计：8 个会话 {2}\d+t {2}\$0\.50/.test(line)),
       lines.join("\n")
@@ -313,7 +313,7 @@ test("会话树：树形视图里 Tab 在运行中与会话树两种模式间切
       lineOf(family.branchOfBranch).indexOf("分支") > lineOf(family.branch).indexOf("分支")
     );
     await press(term, TAB);
-    assert.ok(screenFlat(term).includes("== workers tree | [tab] sessions"));
+    assert.ok(screenFlat(term).includes("== workers tree =="));
     await press(term, ESC);
     assert.equal(shell.currentView(), "main");
   } finally {
@@ -361,7 +361,6 @@ test("会话树的动作：Enter 只读看历史、Esc 回树；当前会话、�
     let flat = screenFlat(term);
     assert.ok(flat.includes("history · read only · esc to go back"), flat);
     assert.ok(flat.includes("主会话的第二件事") && flat.includes("做完了"), flat);
-    assert.ok(flat.includes("history: read only | [esc] back to tree"), flat);
     await press(term, "x");
     assert.equal(shell.currentView(), "history", "只读：其余按键吞掉");
     await press(term, ESC);
@@ -407,7 +406,7 @@ test("会话树的动作：Enter 只读看历史、Esc 回树；当前会话、�
     await settle(200);
     assert.deepEqual(rebinds, [family.branch]);
     assert.equal(shell.currentView(), "main");
-    assert.ok(screenFlat(term).includes(`会话 ${family.branch} 续跑`), screenFlat(term));
+    assert.ok(screenFlat(term).includes("--- resumed ---"), screenFlat(term));
   } finally {
     shell.stop();
     await harness.stopAll();

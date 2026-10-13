@@ -188,7 +188,6 @@ test("空格偷看，偷看时输入发给选中的会话；空输入回车进�
     assert.doesNotMatch(screenText(term), /-- peek --/);
     term.input("\r");
     await settle();
-    assert.match(screenText(term), /== 会话 s1/);
     assert.match(screenText(term), /session: s1 running/);
     for (const listener of streams)
       listener({ runId: "run_x" as never, kind: "text", delta: "实时的正文" });
@@ -420,14 +419,13 @@ test("决策 458：当前会话是面板的第一张卡（标 current、状态�
     term.input("\r");
     await settle();
     assert.deepEqual(runtime.runs, ["先做一件", "再做一件"]);
-    assert.match(screenText(term), /已发给 demo-main/);
     assert.match(screenText(term), /demo-main current · 在跑/);
     // 在跑时再发：排队，这一轮跑完后发出
     term.input("排队的一条");
     term.input("\r");
     await settle();
     assert.deepEqual(runtime.runs, ["先做一件", "再做一件"]);
-    assert.match(screenText(term), /demo-main 正在跑：已排队/);
+    assert.match(screenText(term), / queued/);
     runtime.finishAll();
     await settle();
     assert.deepEqual(runtime.runs, ["先做一件", "再做一件", "排队的一条"]);
@@ -537,7 +535,6 @@ test("决策 458 复查：在面板里中断主会话时，排队的话不退进
     term.input(CTRL_X);
     await settle();
     assert.equal(runtime.interrupts, 1);
-    assert.match(screenText(term), /排队的 1 条回到主视图时放进输入框/);
     runtime.finishAll();
     await settle();
     // 面板的输入框是空的：回车不会把排队的话当新任务派出去

@@ -148,7 +148,7 @@ import {
 } from "./resume-view.ts";
 import { SessionPanel } from "./session-panel.ts";
 import { SessionPicker } from "./session-picker.ts";
-import { familyKindLabel, SessionTree } from "./session-tree.ts";
+import { SessionTree } from "./session-tree.ts";
 import { StatusBar } from "./status-bar.ts";
 import { secondary } from "./style.ts";
 import { WelcomeHeader, type WelcomeInfo } from "./welcome.ts";
@@ -336,7 +336,7 @@ export interface TuiPoolFace {
 // 决策 443：会话面板里连按两次 Ctrl+X 停止的间隔
 const PANEL_STOP_CONFIRM_MS = 1500;
 // 设置面板里"被哪一层覆盖"的说法（与面板上那一项旁的标注同一口径）
-const OVERRIDE_LAYER = { project: "项目共享设置", local: "项目个人设置" } as const;
+const OVERRIDE_LAYER = { project: "project settings", local: "project local settings" } as const;
 
 // 决策 304：树形视图的两种模式
 export type TreeMode = "running" | "sessions" | "messages";
@@ -407,6 +407,8 @@ export class PigeonTuiShell
   // 决策 301：树形视图里就地显示的审批面板（审批挂起期间）
   private readonly approvalBox = new Text("");
   private approvalBoxText = "";
+  // 挂着的审批块的收起函数（答完收成一行）
+  private approvalSettlers: Array<(line: string) => void> = [];
   // 进入的 worker 会话：它的会话号、消息区与活动订阅
   private workerSession:
     | { sessionId: SessionId; flow: MessageFlow; unsubscribe: () => void }
@@ -462,7 +464,7 @@ export class PigeonTuiShell
   private loader: Loader | undefined;
   private setWaiting(on: boolean): void {
     if (on && this.loader === undefined && this.started) {
-      this.loader = new Loader(this.tui, identity, identity, "waiting for model", {
+      this.loader = new Loader(this.tui, identity, identity, "", {
         frames: ["-", "\\", "|", "/"],
         intervalMs: 120,
       });
@@ -565,7 +567,6 @@ export class PigeonTuiShell
     });
     this.sessionTree = new SessionTree({
       height: () => Math.max(3, this.options.terminal.rows - 2),
-      tabToMessages: () => this.options.rewind !== undefined,
     });
     this.sessionPanel = new SessionPanel({
       // 标题、审批框、输入框（上下边框）与状态栏
@@ -578,7 +579,6 @@ export class PigeonTuiShell
     });
     this.messageTree = new MessageTree({
       height: () => Math.max(3, this.options.terminal.rows - 2),
-      tabToRunning: () => this.current.workers !== undefined,
     });
     // 决策 451：欢迎头放在对话流最上方
     if (options.welcome !== undefined) this.flow.setHeader(new WelcomeHeader(options.welcome));
@@ -746,7 +746,12 @@ export class PigeonTuiShell
     );
     // 决策 189：每次压缩（自动或手动）在消息区提示一行压缩前后的 token 数
     const unsubscribeCompaction = runtime.subscribeCompaction?.((notice) => {
-      this.flow.addSystem(`[compact] ${compactionNoticeText(notice)}`);
+      // 自动压缩压成了不说（状态栏的上下文用量随之下降）；手动 /compact 的结果照写，没压成的照报
+      if (notice.kind !== "compacted")
+        this.flow.addAlert(`[compact] ${compactionNoticeText(notice)}`);
+      else if (notice.trigger === "manual") {
+        this.flow.addSystem(`[compact] ${compactionNoticeText(notice)}`);
+      }
       // 压缩后上下文用量随之下降
       this.refreshContext();
       this.collectChildCosts();
@@ -809,7 +814,7 @@ export class PigeonTuiShell
       const cards = [this.mainCard(), ...(this.options.pool?.source.list() ?? [])];
       const waiting = cards.filter((card) => card.state === "waiting").length;
       this.statusLine.setText(
-        `panel: ${cards.length} sessions${waiting > 0 ? `, ${waiting} waiting` : ""} | [enter] spawn or enter, [space] peek, ctrl+x x2 stop, [esc] close`
+        `panel: ${cards.length} sessions${waiting > 0 ? `, ${waiting} waiting` : ""}`
       );
       return;
     }
@@ -821,17 +826,12 @@ export class PigeonTuiShell
     ) {
       const id = this.pooledSession.id;
       const card = this.options.pool?.source.list().find((item) => item.id === id);
-      this.statusLine.setText(
-        `session: ${card?.name ?? "?"} ${card?.state ?? "unknown"} | ${
-          card?.state === "idle" ? "[enter] message, " : ""
-        }[esc] back to panel`
-      );
+      this.statusLine.setText(`session: ${card?.name ?? "?"} ${card?.state ?? "unknown"}`);
       return;
     }
+    // 只读看历史：顶上那行已写明，状态行不再写
     if (this.view === "history" && this.pendingApprovalState === null) {
-      this.statusLine.setText(
-        `history: read only | [esc] back to ${this.returnTo.view === "tree" ? "tree" : "main"}`
-      );
+      this.statusLine.setText("");
       return;
     }
     if (
@@ -842,19 +842,20 @@ export class PigeonTuiShell
       this.statusLine.setText(this.workerSessionStatusText(this.workerSession.sessionId));
       return;
     }
-    // 状态行纯 ASCII；审批期间输入归模态键控，运行中与 resume 期间输入排队（决策 286）
+    // 状态行纯 ASCII，只写状态词（空闲与审批挂着时不写：审批框就在眼前）；审批期间输入归模态键控，运行中与 resume 期间
+    // 输入排队（决策 286）
     const base =
       this.pendingApprovalState !== null
         ? this.pendingApprovalState.peerMessage === true
           ? peerChoiceStatus(this.pendingApprovalState)
-          : "state: approval | decide in panel"
+          : ""
         : this.resuming
-          ? "state: resume | restoring session; input is queued"
+          ? "resuming"
           : this.interrupting
-            ? "state: cancelling | waiting for run to settle"
+            ? "cancelling"
             : this.running
-              ? "state: running | [enter] queue, [esc] interrupt"
-              : "state: idle | [enter] submit, [ctrl+j] newline";
+              ? "running"
+              : "";
     this.statusLine.setText(base);
   }
 
@@ -867,7 +868,6 @@ export class PigeonTuiShell
       this.reasonModeOn = false;
       const approval = this.pendingApprovalState;
       this.pendingApprovalState = null;
-      this.addApprovalLine(`拒绝理由：${reason}`);
       this.updateStatus();
       this.tui.requestRender();
       approval?.resolve({ key: "r", reason });
@@ -889,7 +889,8 @@ export class PigeonTuiShell
       return;
     }
     if (this.isBusy()) {
-      if (value.startsWith("/")) {
+      // /orchestrate 是交给模型的一条输入：运行中与普通输入一样排队，空闲后再派发
+      if (value.startsWith("/") && slashTokens(value)[0] !== "orchestrate") {
         // 运行中的斜杠命令不排队：放行的照常执行，改主会话状态或工作目录的拒绝并说明原因、输入留在输入框
         const rejection = rejectWhileRunning(value);
         if (rejection !== undefined) {
@@ -915,8 +916,8 @@ export class PigeonTuiShell
     return this.running || this.resuming || this.rewinding;
   }
 
-  // 立即提交一条输入（空闲时的回车，或空闲后从队列取出的一条）
-  private submitNow(value: string): void {
+  // 立即提交一条输入（空闲时的回车，或空闲后从队列取出的一条）；echo 为 false 时不回显（/orchestrate 交给模型的原文）
+  private submitNow(value: string, echo = true): void {
     // 决策 452：人的下一条输入或命令出现之前，先落上一次工作的收尾行（排队的输入在收尾时依次发出）
     this.renderWorkEnd();
     // S3 斜杠命令：grant 治理面投影（/grants /revoke /grants save）——命令层与
@@ -927,7 +928,7 @@ export class PigeonTuiShell
       this.tui.requestRender();
       return;
     }
-    this.flow.addUserEcho(value);
+    if (echo) this.flow.addUserEcho(value);
     this.running = true;
     this.runCancelled = false;
     this.beginWork();
@@ -955,7 +956,6 @@ export class PigeonTuiShell
             ? (report.continueFalse.stopReason ?? "钩子要求整个会话停止")
             : undefined);
         if (blocked !== undefined) {
-          this.flow.addSystem(`输入被钩子拦下：${blocked}`);
           this.finishRun();
           return;
         }
@@ -1102,9 +1102,10 @@ export class PigeonTuiShell
     // 验收修改：在面板里改的，所有说明只写在面板的提示行（弱化样式），不往消息区写——面板上那一项的取值与生效值当场
     // 更新就是反馈；/config 选项=值 直接改（没开面板）的照旧写消息区
     const inPanel = this.configPanel.isOpen();
+    // 这里说的都是改不成的原因（报错）
     const say = (line: string): void => {
-      if (inPanel) this.configPanel.setNote(line);
-      else this.flow.addSystem(line);
+      if (inPanel) this.configPanel.setNote(line, true);
+      else this.flow.addAlert(line);
     };
     if (this.isBusy()) {
       say("正在运行或重建运行面，等它结束再改设置");
@@ -1126,29 +1127,28 @@ export class PigeonTuiShell
       return;
     }
     if (file === undefined) {
-      say(`${id} 已经是 ${value}，没有改`);
       this.tui.requestRender();
       return;
     }
-    const view = this.configItems()?.find((item) => item.option.id === id);
-    const overridden =
-      view?.overriddenBy !== undefined
-        ? `被${OVERRIDE_LAYER[view.overriddenBy]}覆盖，改用户级不生效`
-        : undefined;
+    // /config 选项=值 直接改的写一行结果（面板里改的，那一项当场更新就是反馈）
     if (!inPanel) {
-      this.flow.addSystem(`已写进 ${file}：${id} = ${value}`);
-      if (overridden !== undefined) this.flow.addSystem(`注意：${id} ${overridden}`);
+      const view = this.configItems()?.find((item) => item.option.id === id);
+      this.flow.addSystem(
+        `${id} = ${value} (written to user settings${
+          view?.overriddenBy !== undefined
+            ? `, but ${OVERRIDE_LAYER[view.overriddenBy]} override it`
+            : ""
+        })`
+      );
     }
     const reload = this.options.reload;
     if (reload === undefined) {
-      if (inPanel) this.configPanel.setNote(overridden ?? "已改，下次启动时生效");
-      else this.flow.addSystem("下次启动时生效");
       this.refreshConfigPanel(id);
       this.tui.requestRender();
       return;
     }
     this.running = true;
-    if (inPanel) this.configPanel.setNote("已改，正在重读设置…");
+    if (inPanel) this.configPanel.setNote("");
     this.updateStatus();
     this.tui.requestRender();
     const finish = (lines: readonly string[], failed: boolean): void => {
@@ -1158,13 +1158,14 @@ export class PigeonTuiShell
         const extra = lines.filter(
           (line) => !line.startsWith("已重读设置") && line !== "设置没有变化"
         );
-        this.configPanel.setNote(
-          failed
-            ? (lines[0] ?? "重读设置失败")
-            : [overridden ?? "已改，自下一轮起生效", ...extra].join("；")
-        );
+        this.configPanel.setNote(failed ? (lines[0] ?? "重读设置失败") : extra.join("；"), failed);
+      } else if (failed) {
+        for (const line of lines) this.flow.addAlert(line);
       } else {
-        for (const line of lines) this.flow.addSystem(line);
+        // 重读设置的"已重读""没有变化"两句不写（上面那一行就是结果），别的提示照写
+        for (const line of lines) {
+          if (!line.startsWith("已重读设置") && line !== "设置没有变化") this.flow.addSystem(line);
+        }
       }
       this.refreshConfigPanel(id);
       this.updateStatus();
@@ -1325,20 +1326,10 @@ export class PigeonTuiShell
       this.lastPanelStop = undefined;
       if (main) {
         this.requestInterrupt();
-        const held = this.heldQueue.length;
-        this.sessionPanel.setNote(
-          held > 0
-            ? `已请求中断 ${card.name} 这一轮；排队的 ${held} 条回到主视图时放进输入框`
-            : `已请求中断 ${card.name} 这一轮`
-        );
         return;
       }
-      this.sessionPanel.setNote(`正在停 ${card.name}...`);
       pool.source.stop(card.id).then(
-        () => {
-          this.sessionPanel.setNote(`已停 ${card.name}`);
-          this.tui.requestRender();
-        },
+        () => this.tui.requestRender(),
         (error: unknown) => {
           this.sessionPanel.setNote(
             `停 ${card.name} 失败：${error instanceof Error ? error.message : String(error)}`
@@ -1387,29 +1378,25 @@ export class PigeonTuiShell
     ) {
       if (this.isBusy()) {
         this.queue.enqueue(value);
-        this.sessionPanel.setNote(`${selected.name} 正在跑：已排队，这一轮跑完后发出`);
+        this.sessionPanel.setNote("queued");
       } else {
         this.submitNow(value);
-        this.sessionPanel.setNote(`已发给 ${selected.name}`);
       }
       return;
     }
     if (this.sessionPanel.isPeeking() && selected !== undefined) {
       void pool.source.send(selected.id, value).then((refusal) => {
-        this.sessionPanel.setNote(refusal ?? `已发给 ${selected.name}`);
+        this.sessionPanel.setNote(refusal ?? "");
         if (refusal !== undefined && this.input.getText() === "") this.input.setText(value);
         this.refreshPeek();
         this.tui.requestRender();
       });
       return;
     }
-    this.sessionPanel.setNote("正在派新会话...");
     pool.source.spawn(value).then(
       (card) => {
         this.sessionPanel.selectName(card.name);
-        this.sessionPanel.setNote(
-          card.state === "failed" ? `没派成：${card.error ?? ""}` : `已派出 ${card.name}`
-        );
+        this.sessionPanel.setNote(card.state === "failed" ? `没派成：${card.error ?? ""}` : "");
         this.tui.requestRender();
       },
       (error: unknown) => {
@@ -1428,11 +1415,10 @@ export class PigeonTuiShell
     this.leavePooledSession();
     const flow = new MessageFlow();
     flow.setToolsExpanded(this.flow.toolsExpandedState());
-    flow.addSystem(`== 会话 ${card.name} | ${card.id} ==`);
     if (card.id.startsWith("pending:")) {
       flow.addSystem("会话还在开，稍后再进");
     } else {
-      this.renderHistoryInto(flow, card.id, "== 历史结束，以下为实时 ==");
+      this.renderHistoryInto(flow, card.id, "--- live ---");
     }
     const live = pool.live?.(card.id);
     const disposers: Array<() => void> = [];
@@ -1557,7 +1543,7 @@ export class PigeonTuiShell
     }
     // 拿不准的文件逐个选
     if (matchesKey(data, "escape")) {
-      tree.back("没有回退");
+      tree.back();
     } else if (matchesKey(data, "up")) {
       tree.move(-1);
     } else if (matchesKey(data, "down")) {
@@ -1581,7 +1567,7 @@ export class PigeonTuiShell
     const rewind = this.options.rewind;
     if (rewind === undefined) return;
     this.rewinding = true;
-    this.messageTree.busy("正在读会话与快照...");
+    this.messageTree.busy();
     rewind.prepare(node.target).then(
       (prepared) => {
         this.rewinding = false;
@@ -1605,7 +1591,7 @@ export class PigeonTuiShell
               ? plan.untouchable.length > 0
                 ? `过大没进快照的不碰：${plan.untouchable.join("、")}`
                 : undefined
-              : (plan.codeBlocked ?? "这一点之后没有要退的代码（或这个会话没有代码快照），只退对话")
+              : plan.codeBlocked
           );
         }
         this.tui.requestRender();
@@ -1619,7 +1605,7 @@ export class PigeonTuiShell
     const rewind = this.options.rewind;
     if (rewind === undefined) return;
     this.rewinding = true;
-    this.messageTree.busy("正在读会话与快照...");
+    this.messageTree.busy();
     rewind.prepareUndo().then(
       (prepared) => {
         this.rewinding = false;
@@ -1648,7 +1634,7 @@ export class PigeonTuiShell
       return;
     }
     this.rewinding = true;
-    this.messageTree.busy("正在给现状拍快照...");
+    this.messageTree.busy();
     rewind.check(prepared).then(
       (code) => {
         this.rewindCode = code;
@@ -1673,7 +1659,7 @@ export class PigeonTuiShell
     const node = this.messageTree.chosenNode();
     if (rewind === undefined || prepared === undefined || node === undefined) return;
     this.rewinding = true;
-    this.messageTree.busy(mode === "conversation" ? "正在退对话..." : "正在写回文件...");
+    this.messageTree.busy();
     const code = this.rewindCode;
     rewind
       .apply(prepared, {
@@ -1700,8 +1686,7 @@ export class PigeonTuiShell
       outcome.conversationSkipped === undefined;
     if (moved) {
       this.flow.clear();
-      this.flow.addSystem("== 回退之后的对话 ==");
-      this.renderHistoryInto(this.flow, this.current.sessionId, "== 以上为回退之后的对话 ==");
+      this.renderHistoryInto(this.flow, this.current.sessionId, "--- rewound ---");
     }
     const what =
       outcome.mode === "both" ? "代码与对话" : outcome.mode === "conversation" ? "对话" : "代码";
@@ -1741,22 +1726,11 @@ export class PigeonTuiShell
       this.flow.addAlert(
         `出错：${outcome.failed.path === "" ? "" : `${outcome.failed.path}：`}${outcome.failed.reason}`
       );
-      if ((restore?.written.length ?? 0) + (restore?.removed.length ?? 0) > 0) {
-        this.flow.addSystem("已写的可撤销：/rewind 里在当前位置回车，选撤销上次退代码");
-      }
     }
     if (outcome.conversationSkipped !== undefined) this.flow.addSystem(outcome.conversationSkipped);
     for (const problem of outcome.problems) this.flow.addSystem(`没做成：${problem}`);
     for (const path of outcome.untouchable) {
       this.flow.addSystem(`没动：${path}（过大没进快照）`);
-    }
-    if (outcome.kept.length > 0) {
-      this.flow.addSystem(`保留了拿不准的：${outcome.kept.join("、")}`);
-    }
-    if (outcome.grantsAdded + outcome.grantsRevoked > 0) {
-      this.flow.addSystem(
-        `授权沿用回退前的状态（补记 ${outcome.grantsAdded} 条授权、${outcome.grantsRevoked} 条撤销）`
-      );
     }
     if (moved && node.kind === "message" && node.prefill !== undefined) {
       this.input.setText(node.prefill);
@@ -1818,13 +1792,14 @@ export class PigeonTuiShell
   }
 
   // 以人的输入提交一条（/orchestrate 发起）：空闲即发，运行中排队
+  // 命令代人交给模型的一条输入（/orchestrate）：人已看到自己输的命令，这条不回显
   submitInput(text: string): void {
     if (this.isBusy()) {
       this.queue.enqueue(text);
       this.tui.requestRender();
       return;
     }
-    this.submitNow(text);
+    this.submitNow(text, false);
   }
 
   // ---- 决策 286：排队接口（编排一段在"下一轮发什么"处接入 worker 完成通知）----
@@ -1997,11 +1972,10 @@ export class PigeonTuiShell
       sessions,
       (picked) => {
         if (picked === undefined) {
-          this.flow.addSystem("已取消选择会话");
+          // 按 Esc 取消：不说
         } else if (picked.sandbox) {
           this.flow.addSystem(sandboxResumeHint(picked.sessionId));
         } else {
-          this.flow.addUserEcho(`/resume ${picked.sessionId}`);
           dispatchResumeCommand(this, picked.sessionId);
         }
         this.tui.requestRender();
@@ -2020,9 +1994,36 @@ export class PigeonTuiShell
     return askApprovalPanel(this, request, directoryGrant);
   }
 
-  // 审批结果回显（handler 在决议后调用：裁决行 / 已创建放权行）
+  // 审批答完（handler 在决议后调用）：挂着的审批块收成这一行结论
   noteApproval(line: string): void {
-    this.addApprovalLine(line);
+    this.settleApproval(line);
+  }
+
+  // 挂着的审批块：主会话的消息区照常显示整块（在 worker 会话里同时写进它的消息区，其他视图显示在审批框里），记下各处的
+  // 收起函数，答完一起收成一行
+  addApprovalBlock(text: string): void {
+    this.approvalSettlers = [this.flow.addApprovalBlock(text)];
+    if (this.view === "worker" && this.workerSession !== undefined) {
+      this.approvalSettlers.push(this.workerSession.flow.addApprovalBlock(text));
+    } else if (
+      this.view === "tree" ||
+      this.view === "history" ||
+      this.view === "panel" ||
+      this.view === "pooled"
+    ) {
+      this.approvalBoxText = text;
+      this.approvalBox.setText(text);
+      this.approvalSettlers.push((line) => {
+        this.approvalBoxText = line;
+        this.approvalBox.setText(secondary(line));
+      });
+    }
+  }
+
+  settleApproval(line: string): void {
+    const settlers = this.approvalSettlers.splice(0);
+    if (settlers.length === 0) this.addApprovalLine(line);
+    for (const settle of settlers) settle(line);
     this.tui.requestRender();
   }
 
@@ -2328,7 +2329,6 @@ export class PigeonTuiShell
     if (cause !== undefined) this.stopCause = cause;
     // 决策 323：被取消的一轮不跑 Stop 钩子（外部取消与打转叫停都算）
     this.runCancelled = true;
-    this.flow.addSystem("[cancel] interrupt requested; waiting for run to settle");
     // pi 惯例：中断时排队内容退回输入框，不在中断后自动发出。决策 458：在会话面板（或进入的面板会话）里中断主会话时，
     // 输入框不是主会话的，先拿出来留着，回到主视图时再放进输入框
     if (this.view === "panel" || this.view === "pooled") this.heldQueue.push(...this.queue.clear());
@@ -2380,9 +2380,6 @@ export class PigeonTuiShell
       const report = await hooks.runEvent("SessionStart", source, { source });
       for (const line of report.systemMessages) this.flow.addSystem(line);
       this.hookContexts = [...report.additionalContext];
-      if (this.hookContexts.length > 0) {
-        this.flow.addSystem("[hooks] SessionStart 补的上下文将在下一条输入带上");
-      }
     } catch (error) {
       this.flow.addAlert(
         `钩子出错（SessionStart）：${error instanceof Error ? error.message : String(error)}`
@@ -2530,15 +2527,14 @@ export class PigeonTuiShell
       this.openWorkerSession(node.sessionId as SessionId, this.returnTo);
       return;
     }
-    this.openHistory(node.sessionId, familyKindLabel(node));
+    this.openHistory(node.sessionId);
   }
 
   // 只读的历史查看（任意会话）：与进入 worker 会话同一份历史渲染，没有输入框，Esc 回到进入的地方
-  private openHistory(sessionId: string, label: string): void {
+  private openHistory(sessionId: string): void {
     const flow = new MessageFlow();
     flow.setToolsExpanded(this.flow.toolsExpandedState());
-    flow.addSystem(`== ${label} | 会话 ${sessionId} | 只读 ==`);
-    this.renderHistoryInto(flow, sessionId, "== 历史结束 ==");
+    this.renderHistoryInto(flow, sessionId, "--- end of history ---");
     this.historySession = { sessionId, flow };
     this.showView("history");
   }
@@ -2550,7 +2546,6 @@ export class PigeonTuiShell
     try {
       const limit = this.options.historyLimit;
       const lines = loadSessionHistory(root, sessionId, limit !== undefined ? { limit } : {});
-      flow.addSystem(`== 历史：会话 ${sessionId}（${lines.length} 行）==`);
       flow.addHistory(lines);
       flow.addSystem(endLine);
     } catch (error) {
@@ -2587,7 +2582,6 @@ export class PigeonTuiShell
     }
     this.returnTo = { view: "main" };
     this.showView("main");
-    this.flow.addUserEcho(`/resume ${node.sessionId}`);
     dispatchResumeCommand(this, node.sessionId);
   }
 
@@ -2600,11 +2594,7 @@ export class PigeonTuiShell
     this.returnTo = returnTo;
     const flow = new MessageFlow();
     flow.setToolsExpanded(this.flow.toolsExpandedState());
-    flow.addSystem(
-      `== worker ${status.name}（${status.role}）| 会话 ${status.sessionId}` +
-        `${status.label !== undefined ? ` | 标签 ${status.label}` : ""} ==`
-    );
-    this.renderHistoryInto(flow, sessionId, "== 历史结束，以下为实时 ==");
+    this.renderHistoryInto(flow, sessionId, "--- live ---");
     if (status.outcome !== undefined) flow.addSystem(renderWorkerOutcome(status.outcome));
     const unsubscribe = this.tracker.listen((activity) => {
       if (activity.worker.sessionId !== sessionId) return;
@@ -2629,13 +2619,8 @@ export class PigeonTuiShell
 
   private workerSessionStatusText(sessionId: SessionId): string {
     const status = this.workerStatuses().find((worker) => worker.sessionId === sessionId);
-    if (status === undefined) return "worker: unknown | [esc] back";
-    const actions = isActiveWorker(status)
-      ? "[enter] message, /stop, [esc] back"
-      : isBlockedWorker(status)
-        ? "read only, /approve to approve and continue, [esc] back"
-        : "read only, [esc] back";
-    return `worker: ${status.name} ${workerStateWord(status)} | ${actions}`;
+    if (status === undefined) return "worker: unknown";
+    return `worker: ${status.name} ${isBlockedWorker(status) ? "waiting for approval" : workerStateWord(status)}`;
   }
 
   // 生命周期：面板淡出与续做的记账；进入的 worker 会话里写上收尾摘要与续做
@@ -2649,10 +2634,6 @@ export class PigeonTuiShell
     if (session === undefined || session.sessionId !== event.worker.sessionId) return;
     if (event.kind === "worker.settled") {
       session.flow.addSystem(renderWorkerOutcome(event.outcome));
-    } else if (event.kind === "worker.resumed") {
-      session.flow.addSystem(
-        event.approved ? "== 已补批，worker 接着做 ==" : "== worker 接着做 =="
-      );
     } else if (event.kind === "worker.blocked") {
       session.flow.addSystem(`== worker 停在等审批：${event.action} ==`);
     }
@@ -2837,7 +2818,6 @@ export class PigeonTuiShell
       write(`worker ${status.name} 已收尾（${workerStateWord(status)}），无需停止`);
       return;
     }
-    write(`[cancel] worker ${status.name} interrupt requested`);
     workers.cancel(sessionId).then(
       () => {
         refreshWorkersView(this);
@@ -2915,11 +2895,9 @@ export class PigeonTuiShell
     }
     workers.send(sessionId, value).then(
       (result) => {
-        flow.addSystem(
-          result === "delivered"
-            ? `已把话递给 worker ${status.name}，它在下一轮看到`
-            : `未送达：worker ${status.name} 已结束或正在收尾`
-        );
+        if (result !== "delivered") {
+          flow.addAlert(`未送达：worker ${status.name} 已结束或正在收尾`);
+        }
         this.tui.requestRender();
       },
       (error: unknown) => {
@@ -2958,9 +2936,6 @@ export class PigeonTuiShell
     }
     try {
       workers.resume(status.sessionId, options);
-      flow.addSystem(
-        `已补批 worker ${status.name} 的调用（${status.outcome?.blocked?.action ?? ""}），它接着做`
-      );
     } catch (error) {
       flow.addAlert(`续做失败：${error instanceof Error ? error.message : String(error)}`);
     }
@@ -3091,9 +3066,6 @@ export class PigeonTuiShell
         blockedCount += 1;
         stopHookActive = true;
         const reason = report.blocked?.reason;
-        if (reason !== undefined) {
-          this.flow.addSystem(`[hooks] Stop 拦下，理由作为新一轮输入继续：${reason}`);
-        }
         const next = [...report.additionalContext, ...(reason !== undefined ? [reason] : [])].join(
           "\n\n"
         );

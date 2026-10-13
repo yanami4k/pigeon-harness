@@ -181,7 +181,7 @@ test("挑选：缺省只挑没有可丢东西且不在用的；--all 挑全部�
 test("终端界面 /worktrees：clean 先给清单并写明会丢的改动，confirm 才删；中间打别的 /worktrees 即作罢", () => {
   const f = fixture();
   const face = createTuiWorktreesFace({ workspaceRoot: f.repo, now: later });
-  assert.match(face.run([]), /删除：\/worktrees clean/);
+  assert.doesNotMatch(face.run([]), /删除：/, "列表后不附删除用法");
   const plan = face.run(["clean", "dirty"]);
   assert.match(plan, /dirty（pigeon\/[0-9a-z]{8}-dirty）——未取走的改动 1 个文件，删除后丢失/);
   assert.match(plan, /\/worktrees confirm/);
@@ -207,7 +207,7 @@ test("终端界面 /worktrees：clean 先给清单并写明会丢的改动，con
 test("命令行 pigeon worktrees：list 列出；clean 没有终端时不删、提示加 --yes；--yes 直接删；确认被拒即不删", async () => {
   const f = fixture();
   const scope = { workspaceRoot: f.repo, now: later };
-  assert.match(await runWorktreesCommand(["list"], scope), /pigeon worktrees clean/);
+  assert.doesNotMatch(await runWorktreesCommand(["list"], scope), /删除：/);
   assert.match(await runWorktreesCommand(["clean", "--all"], scope), /加 --yes/);
   assert.ok(existsSync(f.dirty.path));
   assert.match(

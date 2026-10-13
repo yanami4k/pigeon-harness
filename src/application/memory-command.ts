@@ -27,11 +27,7 @@ import {
   withMemoryLock,
   writeMemoryFile,
 } from "../memory/learned-store.ts";
-import {
-  memoryMigratedText,
-  migrateMemoryFileLocked,
-  readMemoryLayer,
-} from "../memory/memory-migration.ts";
+import { migrateMemoryFileLocked, readMemoryLayer } from "../memory/memory-migration.ts";
 import { ensureStateDirOf } from "../persistence/settings.ts";
 import type { MemoryLimits } from "../state/memory-config.ts";
 
@@ -53,8 +49,7 @@ function locationOf(ctx: MemoryCommandContext, layer: MemoryLayer): MemoryLocati
 }
 
 // 主目录下启动：项目级记忆与用户级是同一个文件，只有用户级一层
-const PROJECT_IS_USER_NOTE =
-  "在主目录下启动：项目级记忆就是用户级记忆（同一个文件），这里只有用户级一层；要改用 /memory edit user";
+const PROJECT_IS_USER_NOTE = "主目录下没有单独的项目级记忆，用 /memory edit user";
 
 // 回话末尾附上迁移的结果与告警（每条一行）
 function withNotes(text: string, notes: readonly string[]): string {
@@ -82,9 +77,8 @@ function layerView(ctx: MemoryCommandContext, layer: MemoryLayer, notes: string[
 export function memoryViewText(ctx: MemoryCommandContext): string {
   const notes: string[] = [];
   const view = [
-    "学到的记忆（改动从下一条消息起生效）",
+    "学到的记忆",
     ...availableMemoryLayers(ctx).map((layer) => layerView(ctx, layer, notes)),
-    ...(availableMemoryLayers(ctx).includes("project") ? [] : [PROJECT_IS_USER_NOTE]),
   ].join("\n\n");
   return notes.length === 0 ? view : `${view}\n\n${notes.join("\n")}`;
 }
@@ -206,7 +200,6 @@ export async function editMemoryLayer(
           return `${label}记忆没有保存：旧格式的原文件没能备份或改写（${detail}）；原内容未动，${keep}`;
         }
         if (current.backup !== undefined) {
-          notes.push(memoryMigratedText(location, current.backup));
         }
         // 编辑期间原文件被另一处（另一个会话的 update_memory）改过：不覆盖
         if (current.hash !== original.hash) {

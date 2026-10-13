@@ -118,7 +118,6 @@ test("TUI worker 命令：派出回显与状态行、清单、运行中拒绝恢
     assert.deepEqual(workers.spawned, [{ role: "implementer", task: "修复 a.ts", name: "fix-a" }]);
     const workerId = workers.entries[0]?.sessionId;
     assert.ok(workerId !== undefined);
-    assert.ok(screenFlat(term).includes("已派出 worker fix-a（implementer）"), screenFlat(term));
     assert.match(screenFlat(term), /fix-a\s+running\s+\S+\s+2t\s+\$0\s+starting/);
 
     await submit(term, "/workers");
@@ -134,10 +133,6 @@ test("TUI worker 命令：派出回显与状态行、清单、运行中拒绝恢
 
     await submit(term, "/cancel fix-a");
     assert.deepEqual(workers.cancelled, [workerId]);
-    assert.ok(
-      screenFlat(term).includes("[cancel] worker fix-a interrupt requested"),
-      screenFlat(term)
-    );
 
     workers.finish({
       sessionId: workerId,

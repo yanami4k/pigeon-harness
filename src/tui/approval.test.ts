@@ -120,13 +120,14 @@ test("审批块渲染工具名/参数/diff/四键提示；[y] resolve 批准一�
       ),
       `按键提示与 cli 版同口径，含 [r] 拒绝并说明（折行后拼接还原）\n${text}`
     );
-    assert.ok(text.includes("state: approval"), `审批期间状态栏\n${text}`);
-
     term.input("y");
     assert.deepEqual(await pending, { approved: true });
     await settle();
-    assert.ok(screenText(term).includes("审批结果：人工批准"));
-    assert.ok(screenText(term).includes("state: idle"), "决议后状态栏复原");
+    // 验收修改：答完整块收成一行结论（结论、工具与关键参数）
+    const after = screenText(term);
+    assert.ok(after.includes("✓ approved edit_file: src/a.ts"), after);
+    assert.ok(!after.includes("—— 人工审批 ——"), "整块不留");
+    assert.ok(!after.includes("批准执行？"), "按键提示不留");
   } finally {
     shell.stop();
     cleanup();
@@ -143,7 +144,7 @@ test("[n] resolve 拒绝且无理由（四键面板无理由输入通道，决�
     term.input("N");
     assert.deepEqual(await pending, { approved: false });
     await settle();
-    assert.ok(screenText(term).includes("审批结果：人工拒绝"));
+    assert.ok(screenText(term).includes("✗ rejected edit_file: src/a.ts"), screenText(term));
   } finally {
     shell.stop();
     cleanup();
@@ -167,8 +168,8 @@ test("[a] resolve 批准并创建工具级会话 grant（pathPrefix 缺省），
     assert.equal(grants[0]?.hitCount, 0);
     await settle();
     const text = screenText(term);
-    assert.ok(text.includes("审批结果：人工授权（会话 grant）"), text);
-    assert.ok(text.includes(`已创建会话放权 ${grants[0]?.grantId}（edit_file）`), text);
+    assert.ok(text.includes("✓ allowed for this session: edit_file"), text);
+    assert.ok(!text.includes("—— 人工审批 ——"), "整块不留");
   } finally {
     shell.stop();
     cleanup();
@@ -362,7 +363,7 @@ test("集成：真实 adapter 审批闸挂起等按键——[y] 批准后写副�
     }
     assert.equal(readFileSync(join(root, "a.ts"), "utf8"), "STEP1\n", "批准后写副作用真实发生");
     const finalText = screenText(term);
-    assert.ok(finalText.includes("审批结果：人工批准"), finalText);
+    assert.ok(finalText.includes("✓ approved edit_file: a.ts"), finalText);
     assert.ok(finalText.includes("done · "), finalText);
   } finally {
     shell.stop();

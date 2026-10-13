@@ -104,7 +104,10 @@ test("面板提示含 [r] 拒绝并说明；[r] 打开理由行，回车提交�
     });
     await settle();
     assert.equal(runtime.runs.length, 0, "理由行的回车不得当作任务提交");
-    assert.ok(screenText(term).includes("审批结果：人工拒绝"), screenText(term));
+    assert.ok(
+      screenFlat(term).includes("✗ rejected edit_file: src/a.ts (这个文件不该动)"),
+      screenText(term)
+    );
   } finally {
     shell.stop();
     cleanup();
@@ -123,7 +126,7 @@ test("理由行按 Esc 回到面板：不算拒绝，审批仍挂起，随后 [n
     term.input("\x1b");
     await settle();
     assert.ok(
-      screenText(term).includes("state: approval"),
+      screenText(term).includes("—— 人工审批 ——"),
       `Esc 后仍在审批面板\n${screenText(term)}`
     );
     let settled = false;

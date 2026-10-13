@@ -127,7 +127,7 @@ test("/compact 不带重点：不给附加说明", async () => {
   }
 });
 
-test("自动压缩：运行面发出压缩提示时，消息区同样提示一行（注明是 Run 内还是 Run 开始前）", async () => {
+test("验收修改：自动压缩压成了不在消息区写（状态栏的用量随之下降）；没压成照报", async () => {
   const { shell, runtime, term, logDir } = makeShell();
   try {
     shell.start();
@@ -148,8 +148,7 @@ test("自动压缩：运行面发出压缩提示时，消息区同样提示一�
     });
     await settle();
     const text = screenFlat(term);
-    assert.ok(text.includes("上下文已压缩（自动，轮间）：约 990000 → 21000 token"), text);
-    assert.ok(text.includes("上下文已压缩（自动，Run 开始前）：约 985000 → 20500 token"), text);
+    assert.ok(!text.includes("上下文已压缩"), text);
   } finally {
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });

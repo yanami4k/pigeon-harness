@@ -58,7 +58,6 @@ export class InputQueue {
         chars.length > QUEUE_LINE_CHARS ? `${chars.slice(0, QUEUE_LINE_CHARS).join("")}...` : first;
       return `queued: ${shown}${more}`;
     });
-    lines.push("(sent one by one when idle; alt+up to edit, esc restores on interrupt)");
     this.view.setText(sanitizeTerminalText(lines.join("\n")));
   }
 }

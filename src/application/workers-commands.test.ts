@@ -72,7 +72,7 @@ test("收尾摘要：状态、分支、改动文件、自述与工作树位置�
     text
   );
   assert.ok(text.includes("分支 pigeon/fix-a ｜ 改动 2 个文件：a.ts、b.ts\n"), text);
-  assert.ok(text.includes("自述：改好了（已截断，全文见 worker 会话）"), text);
+  assert.ok(text.includes("自述：改好了（已截断）"), text);
   assert.ok(text.includes("工作树 /repo/.pigeon/state/worktrees/x-fix-a"), text);
 
   const failed = renderWorkerOutcome({

@@ -169,7 +169,7 @@ test("决策 324：/hooks 在壳里可用（只读，命令表放行）并落消
   }
 });
 
-test("决策 323：SessionStart 补的上下文前缀给下一条输入（只一次），并在消息区提示一行", async () => {
+test("决策 323：SessionStart 补的上下文前缀给下一条输入（只一次）；消息区不另写一行", async () => {
   const hooks = new FakeHooks();
   hooks.script.set("SessionStart", [
     report({ additionalContext: ["开局上下文甲"], systemMessages: ["钩子系统提示"] }),
@@ -182,7 +182,7 @@ test("决策 323：SessionStart 补的上下文前缀给下一条输入（只一
     await settle();
     const screen = screenText(term);
     assert.ok(screen.includes("钩子系统提示"), screen);
-    assert.ok(screen.includes("SessionStart 补的上下文将在下一条输入带上"), screen);
+    assert.ok(!screen.includes("SessionStart 补的上下文"), screen);
     assert.equal(hooks.calls[0]?.event, "SessionStart");
     assert.equal(hooks.calls[0]?.target, "startup", "matcher 目标为 source");
 
@@ -216,7 +216,7 @@ test("决策 323：Stop 拦住把理由作为新一轮输入接着跑；撞上�
     await settle();
     assert.deepEqual(runtime.runs, ["干活", "再检查一遍"], "拦下的理由作为新一轮输入");
     const screen = screenText(term);
-    assert.ok(screen.includes("Stop 拦下，理由作为新一轮输入继续：再检查一遍"), screen);
+    assert.ok(!screen.includes("理由作为新一轮输入继续"), "钩子自己那一行之外不再重复");
     // stop_hook_active：首次 false，继续后 true
     const stops = hooks.calls.filter((call) => call.event === "Stop");
     assert.deepEqual(

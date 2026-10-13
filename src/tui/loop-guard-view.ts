@@ -33,10 +33,7 @@ export function guardTuiAgent(input: {
       shell.stopForLoop(LOOP_GUARD_TEXTS.tuiStopped(found));
       shell.render();
     },
-    (text) => {
-      const shell = input.shell();
-      shell?.addSystem(text);
-      shell?.render();
-    }
+    // 第 1、2 次提醒是给模型的原文，不落消息区
+    () => {}
   );
 }

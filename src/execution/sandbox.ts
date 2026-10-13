@@ -653,7 +653,6 @@ export async function openSandbox(options: OpenSandboxOptions): Promise<Sandbox>
       startRef = snap.ref;
       startCommit = snap.commit;
       startSnapshot = { commit: snap.commit, files: snap.files };
-      log(`已带入 ${snap.files.length} 个未提交的文件（含新建文件）`);
     } else {
       startRef = "HEAD";
       startCommit = head.stdout.trim();
@@ -765,14 +764,11 @@ export async function openSandbox(options: OpenSandboxOptions): Promise<Sandbox>
       throw new Error(`准备工作区与缓存目录失败：${prepared.stderr.trim()}`);
     }
     // 写不成只提示：pnpm 照常能用，只是 10 及以前的版本不走共用缓存（11 起另有环境变量兜底）
-    const pnpmConfig = await containerExec({
+    await containerExec({
       container,
       docker,
       command: ["sh", "-c", PNPM_CONFIG_SCRIPT, "sh", pnpmStoreDir(cacheRoot)],
     });
-    if (pnpmConfig.exitCode !== 0) {
-      log(`没能写 pnpm 的全局配置，pnpm 10 及以前不走共用缓存：${pnpmConfig.stderr.trim()}`);
-    }
     const cloned = await containerExec({
       container,
       docker,
@@ -934,12 +930,9 @@ async function imageRunsAsRoot(
   return user === "" || /^(root|0)(:(root|0))?$/.test(user);
 }
 
-// 交回后给人看的一行：分支名与查看命令。决策 278：分支第一条提交是开箱时的未提交改动时加一句，提醒合并前先收起本地的这份改动
+// 交回后给人看的一行：分支名与查看命令（决策 278 的"分支第一条提交是开箱时的未提交改动、合并前先收起"写在文档里）
 export function exportNotice(result: SandboxExport): string {
-  const main = result.changed
+  return result.changed
     ? `沙箱改动已交回到分支 ${result.branch}（${result.commit.slice(0, 12)}）；查看：${result.viewCommand}`
     : `沙箱里没有改动；分支 ${result.branch} 指向起点 ${result.commit.slice(0, 12)}`;
-  return result.snapshotCommit !== undefined
-    ? `${main}。分支第一条提交（${result.snapshotCommit.slice(0, 12)}）是开箱时的未提交改动；合并前先把本地这份未提交改动收起（stash 或丢弃）`
-    : main;
 }

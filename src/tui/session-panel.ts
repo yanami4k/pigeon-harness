@@ -10,8 +10,7 @@ import type { PooledSessionCard, PooledSessionState } from "../application/sessi
 import { clipToWidth } from "./status-bar.ts";
 import { secondary } from "./style.ts";
 
-export const SESSION_PANEL_HEADER =
-  "== sessions panel | [up/down] move, [space] peek, [enter] enter (empty input), [ctrl+x] x2 stop, [esc] close ==";
+export const SESSION_PANEL_HEADER = "== sessions panel ==";
 
 const GROUP_LABEL: Record<PooledSessionState, string> = {
   waiting: "等待回应",

@@ -13,8 +13,7 @@ import { columnsOf, workerRowText } from "./worker-panel.ts";
 // 展开时显示的最近工具调用条数
 export const TREE_RECENT_TOOLS = 5;
 
-export const TREE_HEADER =
-  "== workers tree | [tab] sessions | [up/down] move, [right/space] expand, [left] collapse, [enter] open session, [x] stop, [X] stop script, [esc] close ==";
+export const TREE_HEADER = "== workers tree ==";
 
 // 脚本编排的数据接口（决策 294 D、301）：一次脚本编排与其各阶段，阶段列出它派出的 worker
 export interface OrchestrationPhaseNode {

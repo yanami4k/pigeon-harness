@@ -243,17 +243,12 @@ test("读到旧格式的记忆文件：先一次性迁移（备份、改写）�
       LEGACY_PROJECT
     );
     assert.equal(readFileSync(join(user.backupDir, "state", "memory.md"), "utf8"), LEGACY_USER);
-    assert.equal(reports.length, 2);
-    assert.ok(
-      (reports[0] ?? "").startsWith(
-        "[记忆] .pigeon/state/memory.md 是旧格式，已一次性改写成新格式；原文件备份在 "
-      ),
-      reports[0]
-    );
-    // 第二次读：已是新格式，不再备份、不再说
+    // 改写成功不告知（文档写明）
+    assert.equal(reports.length, 0);
+    // 第二次读：已是新格式，不再备份
     const again = load();
     assert.equal(again.section, pushed.section);
-    assert.equal(reports.length, 2);
+    assert.equal(reports.length, 0);
   }));
 
 test("旧格式而这一次拿不到锁：推送内存里转换的新格式、文件不动，告警一行；下次拿得到锁即完成迁移", () =>
@@ -290,5 +285,5 @@ test("旧格式而这一次拿不到锁：推送内存里转换的新格式、�
       readFileSync(join(project.backupDir, "state", "memory.md"), "utf8"),
       LEGACY_PROJECT
     );
-    assert.equal(reports.length, 2);
+    assert.equal(reports.length, 1, "只有没能改写的那一次说");
   }));

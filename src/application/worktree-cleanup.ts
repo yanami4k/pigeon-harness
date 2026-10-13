@@ -538,9 +538,6 @@ export function formatCleanResult(result: {
 export const WORKTREES_COMMAND_USAGE =
   "用法：pigeon worktrees list | clean [编号、分支名或名字…] [--all] [--yes]（clean 不带编号只删没有未取走改动的；--all 连有改动的一起删；--yes 不再确认）";
 
-export const WORKTREES_CLEAN_HINT =
-  "删除：clean 不带编号只删没有未取走改动的；带编号或完整分支名删点名的；--all 连有改动的一起删";
-
 // pigeon worktrees list | clean：confirm 为终端里的确认（返回是否同意）；没有终端时须带 --yes。确认之后、删之前重新核一遍
 export async function runWorktreesCommand(
   argv: readonly string[],
@@ -549,8 +546,7 @@ export async function runWorktreesCommand(
 ): Promise<string> {
   const [sub, ...rest] = argv;
   if (sub === "list" && rest.length === 0) {
-    const items = listLeftoverWorktrees(scope);
-    return `${formatLeftoverList(items)}${items.length > 0 ? `\n${WORKTREES_CLEAN_HINT.replace("删除：clean", "删除：pigeon worktrees clean")}` : ""}\n`;
+    return `${formatLeftoverList(listLeftoverWorktrees(scope))}\n`;
   }
   if (sub === "clean") {
     const yes = rest.includes("--yes");
@@ -607,7 +603,7 @@ export function createTuiWorktreesFace(scope: WorktreeScope): TuiWorktreesFace {
         pending = undefined;
         if (sub === undefined || sub === "list") {
           const items = listLeftoverWorktrees(scope);
-          return `${formatLeftoverList(items)}${items.length > 0 ? `\n${WORKTREES_CLEAN_HINT.replace("删除：clean", "删除：/worktrees clean")}` : ""}`;
+          return formatLeftoverList(items);
         }
         if (sub === "clean") {
           const unknown = rest.find((arg) => arg.startsWith("-") && arg !== "--all");

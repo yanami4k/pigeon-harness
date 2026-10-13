@@ -167,16 +167,15 @@ test("编辑：格式不对、超出上限、编辑器出错、编辑期间原�
     assert.equal(readFileSync(file("project"), "utf8"), `${original}- [P2] 另一处写的\n`);
   }));
 
-test("查看读到旧格式：一次性改写成新格式并备份，列出的是新格式，末尾说一行备份位置；再看不再改写", () =>
+test("查看读到旧格式：一次性改写成新格式并备份，列出的是新格式（改写不再告知，文档写明）；再看不再改写", () =>
   withCtx((ctx, file) => {
     write(file("project"), LEGACY_PROJECT);
     const view = memoryViewText(ctx);
     assertInOrder(view, [
       `共 1 条，${[...PROJECT].length}/200 字符\n${PROJECT.trimEnd()}`,
       "用户级",
-      "[记忆] .pigeon/state/memory.md 是旧格式，已一次性改写成新格式；原文件备份在 ",
     ]);
-    assert.doesNotMatch(view, /〔/);
+    assert.doesNotMatch(view, /〔|已一次性改写/);
     assert.equal(readFileSync(file("project"), "utf8"), MEMORY_FILE_HEADERS.project + PROJECT);
     const backupDir = memoryLocation("project", ctx).backupDir;
     assert.equal(readFileSync(join(backupDir, "state", "memory.md"), "utf8"), LEGACY_PROJECT);
@@ -203,8 +202,8 @@ test("编辑打开旧格式而这一次拿不到锁：编辑稿是转换后的�
     assertInOrder(saved, [
       "已保存项目级记忆",
       "[记忆] .pigeon/state/memory.md 是旧格式，这次没能改写成新格式（另一处正在写这一层）",
-      "[记忆] .pigeon/state/memory.md 是旧格式，已一次性改写成新格式；原文件备份在 ",
     ]);
+    assert.doesNotMatch(saved, /已一次性改写/);
     assert.equal(readFileSync(file("project"), "utf8"), edited);
     assert.equal(
       readFileSync(join(location.backupDir, "state", "memory.md"), "utf8"),
@@ -284,7 +283,7 @@ test("验收修改：在主目录下启动——/memory 只列用户级一层并
     const view = memoryViewText(ctx);
     assert.match(view, /用户级/);
     assert.doesNotMatch(view, /^项目级（/m);
-    assert.match(view, /项目级记忆就是用户级记忆（同一个文件）/);
+    assert.doesNotMatch(view, /项目级记忆就是用户级记忆/, "查看时不另写说明（文档写明）");
     let opened = false;
     const text = await editMemoryLayer(ctx, "project", {
       editor: "true",
@@ -293,7 +292,7 @@ test("验收修改：在主目录下启动——/memory 只列用户级一层并
         return { ok: true };
       },
     });
-    assert.match(text, /要改用 \/memory edit user/);
+    assert.match(text, /用 \/memory edit user/);
     assert.equal(opened, false);
   } finally {
     rmSync(home, { recursive: true, force: true });

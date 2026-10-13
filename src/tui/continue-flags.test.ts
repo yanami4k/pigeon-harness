@@ -124,7 +124,8 @@ test("--continue 接本项目最近的主会话（本机启动不接沙箱会话
     const host = resolveStartTarget(project.root, { kind: "continue" }, false);
     assert.equal(host.kind, "resume");
     assert.equal(host.kind === "resume" ? host.sessionId : "", project.newest);
-    assert.ok(host.kind === "resume" && host.report[0]?.startsWith(`会话 ${project.newest} 续跑`));
+    // 续接报告只在有悬空的工具调用时写一行（这里没有）
+    assert.deepEqual(host.kind === "resume" ? host.report : undefined, []);
     const sandbox = resolveStartTarget(project.root, { kind: "continue" }, true);
     assert.equal(sandbox.kind === "resume" ? sandbox.sessionId : "", project.sandboxed);
 
@@ -238,7 +239,7 @@ test("矮窗口里 /resume 的列表不被布局按比例压掉：提示行与�
     term.input("\r");
     await settle();
     const listed = screenText(term);
-    assert.ok(listed.includes("resume a session: up/down to move"), listed);
+    assert.ok(listed.includes("resume a session"), listed);
     assert.ok(listed.includes("> "), listed);
     assert.ok(listed.includes("1 turns  最新的任务"), listed);
     assert.ok(listed.includes("3 turns  中间的任务"), listed);
@@ -315,7 +316,8 @@ test("/resume 不带 ID 弹出会话列表：↑↓ 选、回车进（照 /resum
     term.input("\r");
     await settle();
     const listed = screenText(term);
-    assert.ok(listed.includes("resume a session: up/down to move, enter to open, esc to cancel"));
+    assert.ok(listed.includes("resume a session"), listed);
+    assert.ok(!listed.includes("up/down"), "列表头不写按键");
     assert.ok(listed.includes("> "), listed);
     assert.ok(listed.includes("1 turns  最新的任务"), listed);
     assert.ok(listed.includes("1 turns [sandbox]  沙箱里的任务"), listed);
@@ -326,7 +328,7 @@ test("/resume 不带 ID 弹出会话列表：↑↓ 选、回车进（照 /resum
     // Esc 退出：不换绑
     term.input("\x1b");
     await settle();
-    assert.ok(screenFlat(term).includes("已取消选择会话"));
+    assert.ok(!screenFlat(term).includes("已取消选择会话"), "Esc 退出不说");
     assert.deepEqual(rebinds, []);
 
     // ↓ 两次到"中间的任务"，回车进
@@ -340,7 +342,7 @@ test("/resume 不带 ID 弹出会话列表：↑↓ 选、回车进（照 /resum
     term.input("\r");
     await settle();
     assert.deepEqual(rebinds, [project.middle]);
-    assert.ok(screenFlat(term).includes(`会话 ${project.middle} 续跑`), screenText(term));
+    assert.ok(screenFlat(term).includes("--- resumed ---"), screenText(term));
 
     // 选沙箱会话：给出用法，不换绑
     term.input("/resume");

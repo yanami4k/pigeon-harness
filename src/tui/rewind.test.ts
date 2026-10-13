@@ -294,7 +294,7 @@ test("退代码：手改过的文件逐个选（缺省保留，空格切换为�
     assert.deepEqual(calls.applied, [{ mode: "both", revert: ["c.txt"] }]);
     const after = screenText(term);
     assert.match(after, /写回：a\.txt/);
-    assert.match(after, /保留了拿不准的：b\.txt/);
+    assert.doesNotMatch(after, /保留了拿不准的/);
   } finally {
     cleanup();
   }
@@ -354,7 +354,7 @@ test("写回中途出错：如实列出写了哪些、哪个出错，对话没�
     assert.match(screen, /写回中途出错，停在出错的那个文件：对话没有退/);
     assert.match(screen, /写回：a\.txt/);
     assert.match(screen, /出错：b\.txt：EPERM/);
-    assert.match(screen, /撤销上次退代码/);
+    assert.doesNotMatch(screen, /已写的可撤销/);
     assert.doesNotMatch(screen, /second task/);
   } finally {
     cleanup();

@@ -298,7 +298,7 @@ test("空输入静默忽略；运行中提交进队列、结束后逐条自动�
     term.input("\r");
     await settle();
     assert.deepEqual(runtime.runs, ["任务一"]);
-    assert.ok(screenText(term).includes("state: running"), "运行中状态行应可见");
+    assert.ok(screenText(term).includes("running"), "运行中状态行写 running");
 
     // 运行中两次提交：进队列（不调 run），排队内容显示在输入框上方
     term.input("任务二");
@@ -322,7 +322,7 @@ test("空输入静默忽略；运行中提交进队列、结束后逐条自动�
     assert.ok(!screenText(term).includes("queued:"), "队列发空后不再显示");
     runtime.finishAll();
     await settle();
-    assert.ok(screenText(term).includes("state: idle"), "run 结束后状态行应回 idle");
+    assert.ok(!screenText(term).includes("running"), "run 结束后状态行不写字");
   } finally {
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });
@@ -450,7 +450,7 @@ test("渲染注入防御（决策 036）：流式文本与审批块 diff 的控�
     assert.ok(flat.includes("␛[2J"), `CSI 2J 应可见化为 ␛[2J，实际：\n${screenText(term)}`);
     // 对照组不受影响
     assert.ok(flat.includes("> 你好"), "user 回显行不受影响");
-    assert.ok(flat.includes("state:"), "状态栏不受影响");
+    assert.ok(flat.includes("cost $0"), "状态栏不受影响");
     assertWidthsWithin(term, WIDTH);
   } finally {
     shell.stop();

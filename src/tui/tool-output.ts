@@ -45,7 +45,7 @@ export function toolResultBody(result: ToolResultView, expanded: boolean): strin
       out.push(`${INDENT}${clip(line, PREVIEW_LINE_CHARS)}`);
     }
     const rest = lines.length - TOOL_PREVIEW_LINES;
-    if (rest > 0) out.push(`${INDENT}... +${rest} lines (ctrl+o to expand)`);
+    if (rest > 0) out.push(`${INDENT}... +${rest} lines`);
     return out.join("\n");
   }
   let chars = 0;
@@ -65,11 +65,7 @@ export function toolResultBody(result: ToolResultView, expanded: boolean): strin
     shown += 1;
   }
   if (shown < lines.length || clipped) {
-    out.push(
-      `${INDENT}... truncated: ${lines.length - shown} more lines not shown (limit ${TOOL_EXPANDED_LINES} lines / ${TOOL_EXPANDED_CHARS} chars)`
-    );
-  } else {
-    out.push(`${INDENT}(ctrl+o to collapse)`);
+    out.push(`${INDENT}... truncated, ${lines.length - shown} more lines`);
   }
   return out.join("\n");
 }

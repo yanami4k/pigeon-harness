@@ -160,7 +160,6 @@ export function readMemoryLayer(
   try {
     const { backup, ...read } = migrateMemoryFileLocked(location);
     if (backup !== undefined) {
-      report(memoryMigratedText(location, backup));
     }
     return read;
   } catch (error) {

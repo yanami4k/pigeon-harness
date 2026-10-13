@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
+import { runSearchCommand } from "../application/search.ts";
 import { newSessionId } from "../state/ids.ts";
 import { lookupSlashCommand, rejectWhileRunning, SLASH_COMMANDS } from "./command-table.ts";
 import { InputQueue } from "./input-queue.ts";
@@ -224,5 +225,20 @@ test("壳的排队接口：空闲时入队立即发出，运行中入队等空�
     assert.deepEqual(runtime.runs, ["外部一", "外部二"]);
   } finally {
     cleanup();
+  }
+});
+
+test("第 5 节 4：/search 的用法写的选项就是检索认的选项（不再写已不认的 --tool-output）", async () => {
+  const spec = SLASH_COMMANDS.find((entry) => entry.name === "search");
+  const flags = (spec?.usage.match(/--[a-z-]+/g) ?? []).sort();
+  assert.deepEqual(flags, ["--conversation-only", "--limit", "--role"]);
+  const root = mkdtempSync(join(tmpdir(), "pigeon-search-usage-"));
+  try {
+    for (const flag of ["--conversation-only", "--role user", "--limit 3"]) {
+      const text = await runSearchCommand({ root, args: ["词", ...flag.split(" ")] });
+      assert.doesNotMatch(text, /未知选项|unknown option/i, flag);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
