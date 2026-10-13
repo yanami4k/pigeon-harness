@@ -1,7 +1,7 @@
 // 模型自己建工作树的工具 enter_worktree（决策 446）：按 445 同一套建立（.pigeon/wt/<名字>、分支 pigeon-wt/<名字>、
 // 起点缺省为远端默认分支、.worktreeinclude 复制、全局排除规则），在会话里记一条 pigeon.worktree 条目，由终端界面在本轮结束后
 // 按 /reload 的先建后换把会话移进去，并自动递一条通知让 agent 接着做。普通会话只在使用者明确要求时用（工具说明写明）；
-// 只给终端界面的主会话注册（命令行对话、pigeon run、worker、沙箱都不注册）。写档：建目录与分支，按本会话的审批模式请示。
+// 只给终端界面的主会话注册（pigeon run、worker、沙箱都不注册）。写档：建目录与分支，按本会话的审批模式请示。
 // 工具说明、参数说明与返回文字面向模型，用英文（决策 428）。
 import { type Static, Type } from "typebox";
 import { pigeonRel } from "../state/paths.ts";

@@ -9,7 +9,6 @@ import { join } from "node:path";
 import { test } from "vitest";
 import type { ApprovalRequest } from "../approvals/handler.ts";
 import { createApprovalQueue } from "../approvals/queue.ts";
-import { createCliApprovalHandler } from "../cli/approval-ui.ts";
 import { WorkerOrchestrator } from "../orchestration/workers.ts";
 import { loadSessionView } from "../persistence/session-catalog.ts";
 import { acquireSessionFileLock } from "../persistence/session-lock.ts";
@@ -19,6 +18,7 @@ import { openSessionStoreWriter } from "../pi-runtime/session-store.ts";
 import { newSessionId } from "../state/ids.ts";
 import { type StoreMessage, toolResultMark } from "../state/session-judge.ts";
 import type { SessionView } from "../state/session-view.ts";
+import { scriptedApprovalHandler } from "../tui/approval-fixtures.ts";
 import { childFamilySink } from "./session-store.ts";
 import { createWorkerRuntimeFactory } from "./workers.ts";
 
@@ -77,7 +77,7 @@ test("审批汇聚：两个 worker 并发审批一次一个，决定与放权各
 
     // 人：看最近一个审批块的来源行作答——fix-a 给 [a]，fix-b 拒绝并给理由
     let screen = "";
-    const cli = createCliApprovalHandler(
+    const cli = scriptedApprovalHandler(
       async (prompt) => {
         if (prompt.startsWith("拒绝理由")) {
           return "fix-b 不准改";

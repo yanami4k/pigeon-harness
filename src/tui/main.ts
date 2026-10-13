@@ -13,7 +13,7 @@
 // 且其编排器按深度 1 拒绝再派。一个窗口一个进程：退出时先取消在跑的 worker 并等其收尾记录落盘。
 // 决策 264–268：主会话另给主 agent 注册 spawn_worker（--no-spawn-workers 关掉；沙箱里不派 worker），与 /spawn 共用同一个
 // 编排器——同时在跑的上限对人派的与 agent 派的一并计算；agent 派出的个数按每条输入（一次运行）计。
-// 决策 267：pigeon 不带子命令即启动本界面（命令行对话改由 pigeon --line 进入）。
+// 决策 267：pigeon 不带子命令即启动本界面（决策 461：命令行对话已去掉）。
 // 决策 286：pigeon --continue 接本项目最近的主会话、--resume <id> 接指定会话（启动时直接打开，不另建空会话），
 // --resume 不带会话号开壳后弹出会话选择器；运行期告警在壳接管终端期间落消息区（之前与之后照旧写标准错误输出）；
 // 输入历史按项目存在 .pigeon/state/tui-history.json。
@@ -150,7 +150,7 @@ const WORKER_SHUTDOWN_GRACE_MS = 5000;
 const USAGE =
   "用法：pigeon [--yolo] [--no-persist-thinking] [--no-pushed-memory] [--no-hooks] [--no-web] [--no-spawn-workers] [--worker-concurrency <n>] [--worker-limit <n>] [--history-limit <n>] [--root <dir>] --stream-fn <模块路径> " +
   "[--provider <名>] [--model <id>] [--thinking <档位>] [--max-output-tokens <n>] [--context-window <n>] [--compact-threshold <n>] [--compact-keep <n>] " +
-  "[--sandbox [--sandbox-network on|off] [--sandbox-approval yolo|prompt] [--sandbox-from-head]] [--continue | --resume [sessionId]]（命令行对话用 pigeon --line；其余子命令见 pigeon --help）";
+  "[--sandbox [--sandbox-network on|off] [--sandbox-approval yolo|prompt] [--sandbox-from-head]] [--continue | --resume [sessionId]]";
 
 // 决策 445：壳退出之后在标准错误输出上问一句（EOF 为 null）
 async function askOnStderr(prompt: string): Promise<string | null> {
@@ -618,7 +618,7 @@ export async function main(argv: string[]): Promise<void> {
     ...(sandbox !== undefined
       ? { sandbox: { exportChanges: () => exportSandbox(sandbox, slot.bundle.jobs) } }
       : {}),
-    // S4：/resume <sessionId> 的换绑工厂——与 cli resume 的 enterRepl 同一配方：
+    // S4：/resume <sessionId> 的换绑工厂——续会话入口同一配方：
     // restoredGrants 种子（决策 3b，还原目标会话的生效 grant，静默继续有效）+
     // buildRuntime + 旧运行面释放。先建后换：装配失败（如 grants.json 畸形）时
     // 旧运行面不受影响，壳继续留在原会话

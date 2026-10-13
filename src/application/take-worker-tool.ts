@@ -6,7 +6,7 @@
 // - 取用依赖 worker 的工作树还在。决策 448：收尾时没有改动的、完整取回（没有冲突、没有因过大留下的文件）之后的，工作树与分支
 //   自动删掉；其余留着，由 /worktrees 或 pigeon worktrees 列出删除（跑批器每次运行收尾自行清理）。工作树已删即返回明确的一句。
 // - 写工作目录，归写档、按写操作审批；与 spawn_worker 共用同一个工具槽（编排器与工作区根），注册范围相同（265–267：只给终端
-//   界面与 pigeon run 的主会话；命令行对话、worker 自己、沙箱会话与跑批器各条件都不注册）。
+//   界面与 pigeon run 的主会话；worker 自己、沙箱会话与跑批器各条件都不注册）。
 // - 工具说明、参数说明与各情形的返回文字为定稿原文。
 import { existsSync } from "node:fs";
 import { type Static, Type } from "typebox";

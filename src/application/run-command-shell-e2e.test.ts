@@ -7,13 +7,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { onTestFinished, test } from "vitest";
-import { createCliApprovalHandler } from "../cli/approval-ui.ts";
 import { loadStoreSession } from "../persistence/session-view.ts";
 import { loadSettings } from "../persistence/settings.ts";
 import { createFakeStreamFn } from "../pi-runtime/fixtures.ts";
 import { newGrantId, newSessionId } from "../state/ids.ts";
 import { type StoreMessage, toolResultMark } from "../state/session-judge.ts";
 import type { ExecEvidence } from "../tools/run-command.ts";
+import { scriptedApprovalHandler } from "../tui/approval-fixtures.ts";
 import { buildRuntime } from "./runtime.ts";
 
 // 用户级设置指到的空临时目录：这个测试结束后删掉
@@ -73,7 +73,7 @@ function makeRuntime(
     provider: "fake-provider",
     modelId: "fake-model-1",
     createApprovalHandler: (grants) =>
-      createCliApprovalHandler(
+      scriptedApprovalHandler(
         async (prompt) => {
           prompts.push(prompt);
           if (prompt.startsWith("拒绝理由")) {

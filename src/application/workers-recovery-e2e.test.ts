@@ -178,7 +178,7 @@ test("worker 崩溃冷恢复：父会话标注未收尾，worker 会话留悬空
       root: repo,
       sessionId: workerId,
       write: (text) => output.push(text),
-      enterRepl: async () => {
+      enter: async () => {
         entered = true;
       },
     });

@@ -1,26 +1,15 @@
-// Pigeon M3 极简 CLI 入口（决策 3：REPL 内联审批，单进程最小闭环，不依赖 M2 TUI）。
-// 决策 267：pigeon 不带子命令即启动终端界面（以子进程运行 tui 入口，Actor 之间不互相 import）；命令行对话留作后备，
-// 由 --line 进入，只保证不坏、不再加新功能（不注册 spawn_worker）。决策 286：顶层帮助补上终端界面的 --continue 与
-// --resume（参数由 tui 入口解析）；只改帮助文字，pigeon run 的行为不变。
-// M2 S1（决策 025）：装配根（buildRuntime）在 application/runtime.ts，审批 handler 由本入口
-// 注入 REPL 问答版；resume 对账流程在 application/resume.ts，本文件只做参数解析与 IO 接线。
-// 用法：node src/cli/index.ts [--yolo] [--root <工作区根>] --stream-fn <模块路径>
-//   --stream-fn / PIGEON_STREAM_FN：默认导出 StreamFn 的模块
-//   （形状 (model, context, options?) => AssistantMessageEventStream，与测试 fixtures 的 fake
-//   streamFn 同型；provider 密钥等由该模块自行从环境变量读取）。
-//   未配置时清晰报错退出，不静默失败。
+// Pigeon 命令行入口。决策 267：pigeon 不带子命令即启动终端界面（以子进程运行 tui 入口，Actor 之间不互相 import）；
+// 决策 461：命令行对话（pigeon --line 与它的 REPL）已去掉，交互一律用终端界面，无人值守用 pigeon run；pigeon resume 进终端
+// 界面续接（等同 pigeon --resume）。本文件只做子命令的参数解析与 IO 接线：run、trace、replay、session list、sandbox、
+// worktrees、migrate-config。
 
 import { spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { handbackJobsNotice } from "../application/background-jobs.ts";
-import { runForkCommand } from "../application/fork-command.ts";
 import { failureBadge } from "../application/format.ts";
-import type { GrantsCommandContext } from "../application/grants.ts";
 import { currentHarnessRef, describeHarness, pigeonVersion } from "../application/harness-ref.ts";
 import { HEADLESS_EXIT_CODES, runHeadless } from "../application/headless-core.ts";
 import {
-  type LaunchFlags,
   orchestrationSettingsOf,
   parseLaunchFlags,
   resolveStreamFnSpec,
@@ -29,53 +18,25 @@ import {
 } from "../application/launch-flags.ts";
 import { LOOP_GUARD_TEXTS } from "../application/loop-guard.ts";
 import { MIGRATE_CONFIG_USAGE, runMigrateConfig } from "../application/migrate-config.ts";
-import { CROSS_PROCESS_MESSAGING, openPeerInbox } from "../application/peer-session.ts";
-import { PeerSlot } from "../application/peer-tools.ts";
-import { runResumeFlow } from "../application/resume.ts";
-import {
-  disposeRuntime,
-  loadStreamFn,
-  type MemoryWriteConfig,
-  type RuntimeBundle,
-} from "../application/runtime.ts";
-import {
-  closeSandbox,
-  exportSandbox,
-  runHeadlessInSandbox,
-  runSandboxCommand,
-  SANDBOX_FORK_UNSUPPORTED,
-  type Sandbox,
-  sandboxStatusFacts,
-  startSandbox,
-} from "../application/sandbox-session.ts";
+import { CROSS_PROCESS_MESSAGING } from "../application/peer-session.ts";
+import { loadStreamFn } from "../application/runtime.ts";
+import { runHeadlessInSandbox, runSandboxCommand } from "../application/sandbox-session.ts";
 import { runSessionListCommand } from "../application/session-list.ts";
-import { openSessionRuntime, pushedMemoryRunOptions } from "../application/session-runtime.ts";
-import {
-  openSessionSettings,
-  parseTrustAnswer,
-  TRUST_CONFIG_FLAG,
-  type TrustChoice,
-  trustPromptText,
-} from "../application/session-settings.ts";
+import { openSessionSettings, TRUST_CONFIG_FLAG } from "../application/session-settings.ts";
 import { prepareWorkspace } from "../application/workspace.ts";
 import { runWorktreesCommand } from "../application/worktree-cleanup.ts";
-import { memoryWriteNoticeLine } from "../memory/update-memory-tool.ts";
-import { probeUpstreamVersions } from "../pi-runtime/upstream-version.ts";
-import type { TrustEntry } from "../state/config-trust.ts";
-import { asSessionId, newSessionId, type SessionId } from "../state/ids.ts";
+import { newSessionId } from "../state/ids.ts";
 import { BUNDLE_ROLE_ENV, FROM_BUNDLE } from "../state/package-paths.ts";
 import { pigeonRel } from "../state/paths.ts";
 import type { SessionListFilters } from "../state/session-summary.ts";
 import { loopGuardSettingsOf, withHooksDisabled } from "../state/settings.ts";
 import { EDIT_MODES, type EditMode, isEditMode } from "../tools/edit-mode.ts";
-import { createCliApprovalHandler } from "./approval-ui.ts";
-import { createAsker, runRepl, sanitizedWriter } from "./repl.ts";
+import { sanitizedWriter } from "./output.ts";
 import { runReplayCommand } from "./replay.ts";
 import { runTraceCommand } from "./trace.ts";
 
-// 决策 036：cli 唯一 stdout 出口——REPL 问答、审批交互、grant 命令与只读视图
-//（trace / replay / session list）全部经同一净化写；半信任内容（模型文本、审批块
-// 参数与 diff 预览、错误消息）携带的终端控制序列在边界可见化（M2 审计 P2-1）
+// 决策 036：cli 唯一 stdout 出口——帮助与只读视图（trace / replay / session list）等全部经同一净化写；半信任内容
+//（模型文本、参数、错误消息）携带的终端控制序列在边界可见化（M2 审计 P2-1）
 const writeOut = sanitizedWriter((text: string): void => {
   process.stdout.write(text);
 });
@@ -210,146 +171,9 @@ function sessionListMain(argv: string[]): void {
   writeOut(runSessionListCommand({ root: realpathSync(root), filters }));
 }
 
-// 模型接入 flags：解析在 application/launch-flags.ts（决策 067，与 tui、headless 同一份、
-// 同一批缺省；含 PIGEON_STREAM_FN 回退）。resume 的参数切分用其导出的 VALUELESS_FLAGS
-
-// REPL 的 grant 命令上下文（/grants 唯一展示入口 + /revoke + /grants save）
-function grantCommandsOf(
-  bundle: RuntimeBundle,
-  workspaceRoot: string,
-  sessionId: SessionId,
-  write: (text: string) => void
-): GrantsCommandContext {
-  return {
-    root: workspaceRoot,
-    store: bundle.grantStore,
-    configRules: bundle.configGrants,
-    layeredRules: bundle.settings.grants,
-    sessionId,
-    write,
-  };
-}
-
-// pigeon resume <sessionId> [--yolo] [--root <dir>] --stream-fn <模块路径> [--provider <p>]
-//   [--model <m>]：在同一会话下续跑 REPL（M4 S5；决策 183）——对话上下文由会话文件还原，悬空的工具调用
-// 补"结果未知、请自行核实"的工具结果由 agent 核对；后续 Run 接着写入本会话；系统永不自动重新执行（§3.2）
+// pigeon resume [sessionId] [参数]（决策 461）：在终端界面里续接，等同 pigeon --resume [sessionId]（不带会话号时弹出会话列表）
 async function resumeMain(argv: string[]): Promise<void> {
-  let sessionIdArg: string | undefined;
-  const modelArgv: string[] = [];
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === undefined) {
-      continue;
-    }
-    if (!arg.startsWith("--") && sessionIdArg === undefined) {
-      sessionIdArg = arg;
-      continue;
-    }
-    modelArgv.push(arg);
-    // 取值型 flag 的值也不以 -- 开头，一并带走（开关型 flag 无值）
-    const next = argv[i + 1];
-    if (!VALUELESS_FLAGS.has(arg) && next !== undefined && !next.startsWith("--")) {
-      modelArgv.push(next);
-      i++;
-    }
-  }
-  const usage =
-    "用法：pigeon resume <sessionId> [--yolo] [--root <dir>] --stream-fn <模块路径> [--provider <p>] [--model <m>] [--no-hooks] [--no-web]";
-  if (sessionIdArg === undefined) {
-    throw new Error(usage);
-  }
-  const sessionId = asSessionId(sessionIdArg);
-  const modelUsage = `支持 ${SESSION_FLAGS_HINT}`;
-  const flags = parseLaunchFlags(modelArgv, {
-    usage: modelUsage,
-    pushedMemory: true,
-    sessionSearch: true,
-    sandbox: true,
-  });
-  const streamFnSpec = resolveStreamFnSpec(flags, modelUsage);
-  // 工作区准备（决策 034）：realpath 规范化，与 tui 入口同一份
-  const workspaceRoot = prepareWorkspace(flags.root);
-  const write = writeOut;
-  const { ask, close } = createAsker(process.stdin, write);
-  try {
-    // 决策 325、326：旧布局检查、设置快照与会执行命令的条目的确认（行内问答）
-    let settings = await openSessionSettings(workspaceRoot, {
-      confirmation: { kind: "interactive", ask: lineTrustAsker(ask, write) },
-      notice: (line) => write(`${line}\n`),
-    });
-    // 决策 324：命令行对话（resume 进的 REPL 与 --line）不接钩子——无论旗标与否一律停用全部钩子
-    settings = withHooksDisabled(settings);
-    await runResumeFlow({
-      root: workspaceRoot,
-      sessionId: sessionIdArg,
-      write,
-      // 进入 REPL：同一 sessionId 续写会话；EOF/退出走正常 finally
-      enterRepl: async () => {
-        const streamFn = await loadStreamFn(streamFnSpec);
-        // 决策 237：沙箱会话从它交回过的分支新开容器接着干
-        const sandbox = await startSandbox({
-          flags,
-          governanceRoot: workspaceRoot,
-          settings,
-          sessionId,
-          resume: true,
-          log: sandboxLog(write),
-        });
-        // 作用域（worker 会话回到它自己的工作树与委派策略）、grant 冷恢复种子（决策 3b）、对话上下文还原（决策 183）、
-        // MCP 启动与装配都在 application/session-runtime.ts（决策 067，与 tui 的 /resume 换绑同一份）
-        const opened = await openSessionRuntime({
-          governanceRoot: workspaceRoot,
-          settings,
-          sessionId,
-          streamFn,
-          flags,
-          resume: true,
-          ...(sandbox !== undefined
-            ? { workspaceHost: sandbox.host, statusFacts: sandboxStatusFacts(sandbox) }
-            : {}),
-          // 决策 294 B1：任务清单按编排配置（缺省开），与 pigeon run、终端界面一致；清单从会话记录还原
-          taskList: orchestrationSettingsOf(flags, settings).taskList,
-          ...webToolsOptionOf(flags, settings),
-          // 决策 331：有人对话，带记忆工具；写入后打印一行记下的内容与层级
-          memoryWrite: lineMemoryWrite(write),
-          // 决策 025：审批 handler 由 Actor 注入——cli 传 REPL 问答版
-          createApprovalHandler: (grants) => createCliApprovalHandler(ask, write, { grants }),
-          onMcpNote: (note) => {
-            write(`[mcp] ${note}\n`);
-          },
-        }).catch(async (error: unknown) => {
-          await sandbox?.discard().catch(() => {});
-          throw error;
-        });
-        const { bundle } = opened;
-        // 决策 330：人写的说明超出上限被截断时提示一行
-        if (bundle.instructionsNotice !== undefined) write(`${bundle.instructionsNotice}\n`);
-        if (bundle.toolsNotice !== undefined) write(`${bundle.toolsNotice}\n`);
-        try {
-          await runRepl({
-            adapter: bundle.adapter,
-            ask,
-            write,
-            grants: grantCommandsOf(bundle, workspaceRoot, sessionId, write),
-            // M5 S2（决策 038）：/search 内容级检索
-            search: { root: workspaceRoot },
-            // M7（决策 079）：/fork 手动分叉（沙箱里不支持，说明原因）
-            fork:
-              sandbox !== undefined
-                ? async () => SANDBOX_FORK_UNSUPPORTED
-                : forkHandlerOf(opened, workspaceRoot, flags, streamFn),
-            ...sandboxReplOptions(sandbox, bundle),
-          });
-        } finally {
-          warnSandboxJobs(sandbox, bundle, write);
-          await disposeRuntime(bundle);
-          await finishSandbox(sandbox, write);
-        }
-      },
-    });
-  } finally {
-    close();
-  }
+  await launchTui(["--resume", ...argv]);
 }
 
 // pigeon run [任务描述] [--root <dir>] [--governance-root <dir>] --stream-fn <模块路径> [--yolo] [--thinking <档位>] [--provider <p>]
@@ -519,10 +343,6 @@ function parseEditMode(value: string | undefined, usage: string): EditMode {
 }
 
 export async function main(argv: string[]): Promise<void> {
-  // M7（ROADMAP §M7）：启动时探测上游版本，与已验证版本不一致时明确告警
-  for (const warning of probeUpstreamVersions().warnings) {
-    process.stderr.write(`${warning}\n`);
-  }
   const route = routeTopLevel(argv);
   if (route.kind === "help") {
     writeOut(`${TOP_LEVEL_HELP}\n`);
@@ -534,10 +354,6 @@ export async function main(argv: string[]): Promise<void> {
   }
   if (route.kind === "tui") {
     await launchTui(route.argv);
-    return;
-  }
-  if (route.kind === "line") {
-    await lineMain(route.argv);
     return;
   }
   if (argv[0] === "run") {
@@ -577,7 +393,7 @@ export async function main(argv: string[]): Promise<void> {
   throw new Error(`未知子命令：${argv[0]}（${TOP_LEVEL_HELP}）`);
 }
 
-// 顶层子命令：不带子命令即终端界面，--line 为命令行对话
+// 顶层子命令：不带子命令即终端界面
 const SUBCOMMANDS = new Set([
   "run",
   "trace",
@@ -626,10 +442,9 @@ export type TopLevelRoute =
   | { kind: "help" }
   | { kind: "version" }
   | { kind: "tui"; argv: string[] }
-  | { kind: "line"; argv: string[] }
   | { kind: "subcommand" };
 
-// 决策 267：pigeon 不带子命令即启动终端界面；带 --line 进命令行对话（--line 本身不交给参数解析）
+// 决策 267：pigeon 不带子命令即启动终端界面
 export function routeTopLevel(argv: readonly string[]): TopLevelRoute {
   const first = argv[0];
   if (first === "--help" || first === "-h" || first === "help") {
@@ -640,9 +455,6 @@ export function routeTopLevel(argv: readonly string[]): TopLevelRoute {
   }
   if (first !== undefined && SUBCOMMANDS.has(first)) {
     return { kind: "subcommand" };
-  }
-  if (argv.includes("--line")) {
-    return { kind: "line", argv: argv.filter((arg) => arg !== "--line") };
   }
   return { kind: "tui", argv: [...argv] };
 }
@@ -689,133 +501,14 @@ async function launchTui(argv: readonly string[]): Promise<void> {
   }
 }
 
-// pigeon --line [参数]：命令行对话（决策 267：后备入口，只保证不坏）
-async function lineMain(argv: string[]): Promise<void> {
-  const startUsage = `pigeon --line 支持 ${SESSION_FLAGS_HINT}`;
-  const flags = parseLaunchFlags(argv, {
-    usage: startUsage,
-    sessionSearch: true,
-    pushedMemory: true,
-    sandbox: true,
-  });
-  const streamFn = await loadStreamFn(resolveStreamFnSpec(flags, startUsage));
-  // 工作区准备（决策 034）：realpath 规范化（工具路径围栏以它为准）
-  const workspaceRoot = prepareWorkspace(flags.root);
-  const write = writeOut;
-  const { ask, close } = createAsker(process.stdin, write);
-  const sessionId = newSessionId();
-  // 决策 450：会话间通信的工具槽（收件口在运行面装好后打开并绑定）
-  const peerSlot = new PeerSlot();
-  // 决策 237：--sandbox 先开容器（与沙箱不相容的参数在起容器之前报错）
-  let sandbox: Sandbox | undefined;
-  let opened: Awaited<ReturnType<typeof openSessionRuntime>>;
-  try {
-    // 决策 325、326：旧布局检查、设置快照与会执行命令的条目的确认（行内问答）
-    const readSettings = await openSessionSettings(workspaceRoot, {
-      confirmation: { kind: "interactive", ask: lineTrustAsker(ask, write) },
-      notice: (line) => write(`${line}\n`),
-    });
-    // 决策 324：--line 不接钩子——无论旗标与否一律停用全部钩子
-    const settings = withHooksDisabled(readSettings);
-    sandbox = await startSandbox({
-      flags,
-      governanceRoot: workspaceRoot,
-      settings,
-      sessionId,
-      log: sandboxLog(write),
-    });
-    // 会话运行面装配（决策 067）：MCP 启动、作用域与装配失败收口都在 application/session-runtime.ts
-    opened = await openSessionRuntime({
-      governanceRoot: workspaceRoot,
-      settings,
-      sessionId,
-      streamFn,
-      flags,
-      // 决策 432：等第一次真要落盘时才建会话文件
-      deferSessionFile: true,
-      ...(sandbox !== undefined
-        ? { workspaceHost: sandbox.host, statusFacts: sandboxStatusFacts(sandbox) }
-        : CROSS_PROCESS_MESSAGING
-          ? { peers: peerSlot }
-          : {}),
-      // 决策 294 B1：任务清单按编排配置（缺省开），与 pigeon run、终端界面一致
-      taskList: orchestrationSettingsOf(flags, settings).taskList,
-      ...webToolsOptionOf(flags, settings),
-      // 决策 331：有人对话，带记忆工具；写入后打印一行记下的内容与层级
-      memoryWrite: lineMemoryWrite(write),
-      // 决策 025：审批 handler 由 Actor 注入——cli 传 REPL 问答版
-      createApprovalHandler: (grants) => createCliApprovalHandler(ask, write, { grants }),
-      onMcpNote: (note) => {
-        write(`[mcp] ${note}\n`);
-      },
-    });
-  } catch (error) {
-    close();
-    await sandbox?.discard().catch(() => {});
-    throw error;
-  }
-  const { bundle } = opened;
-  // 决策 330：人写的说明超出上限被截断时提示一行
-  if (bundle.instructionsNotice !== undefined) write(`${bundle.instructionsNotice}\n`);
-  if (bundle.toolsNotice !== undefined) write(`${bundle.toolsNotice}\n`);
-  // 决策 450：本机会话间通信的收件口（沙箱里不开）。命令行对话没有放行面板：扣住的消息到时限丢弃并回告发送方；
-  // 收到的消息进通知队列，下一条任务随之带上，空行回车即开一轮交给 agent
-  // 决策 450〔部分已改〕：跨进程的会话间通信先关闭（不开收件口、不写名录）
-  const peerMessaging =
-    sandbox === undefined && CROSS_PROCESS_MESSAGING
-      ? await openPeerInbox({
-          sessionId,
-          cwd: workspaceRoot,
-          // 决策 456：续跑的会话用它记过的名字
-          governanceRoot: workspaceRoot,
-          yolo: flags.yolo,
-          settings: bundle.settings,
-          deliver: (text) => {
-            bundle.adapter.notify(text);
-            write("\n[消息] 已到，空行回车交给 agent（或随下一条任务带上）\n");
-          },
-          pendingCount: () => bundle.adapter.pendingNotices(),
-          ui: (line) => write(`[消息] ${line}\n`),
-        })
-      : undefined;
-  if (peerMessaging !== undefined) {
-    peerSlot.bind(peerMessaging);
-    // 决策 456：开局不再写"本会话在名录里叫…"一行（与终端界面同一口径）
-  }
-  try {
-    await runRepl({
-      runPendingNotices: true,
-      adapter: bundle.adapter,
-      ask,
-      write,
-      grants: grantCommandsOf(bundle, workspaceRoot, sessionId, write),
-      // M5 S2（决策 038）：/search 内容级检索
-      search: { root: workspaceRoot },
-      // M7（决策 079）：/fork 手动分叉（沙箱里不支持，说明原因）
-      fork:
-        sandbox !== undefined
-          ? async () => SANDBOX_FORK_UNSUPPORTED
-          : forkHandlerOf(opened, workspaceRoot, flags, streamFn),
-      ...sandboxReplOptions(sandbox, bundle),
-    });
-  } finally {
-    close();
-    await peerMessaging?.close().catch(() => {});
-    warnSandboxJobs(sandbox, bundle, write);
-    await disposeRuntime(bundle);
-    await finishSandbox(sandbox, write);
-  }
-}
-
 // 顶层帮助（pigeon --help）与未知子命令提示
 export const TOP_LEVEL_HELP = [
   "用法：",
   "  pigeon [参数]                 启动终端界面（--no-spawn-workers 关掉主 agent 派 worker；--worker-concurrency、--worker-limit 调两个上限）",
   "  pigeon --continue [参数]      在终端界面里续接本项目最近的会话",
   "  pigeon --resume [sessionId]   在终端界面里续接指定会话（不带会话号时弹出会话列表）",
-  "  pigeon --line [参数]          命令行对话（后备入口）",
   "  pigeon run [任务描述] [参数]  无人值守运行一个任务",
-  "  pigeon resume <sessionId>     在命令行对话里续跑一个会话",
+  "  pigeon resume [sessionId]     same as pigeon --resume [sessionId]",
   "  pigeon trace <sessionId>      查看一个会话的关联视图",
   "  pigeon replay <runId>         回放一次运行",
   "  pigeon session list           列出本项目的会话",
@@ -825,62 +518,7 @@ export const TOP_LEVEL_HELP = [
   "  pigeon sandbox cache|clear-cache  查看或清空沙箱共用的下载缓存（npm、pnpm、yarn、pip、uv、cargo、go）",
 ].join("\n");
 
-// 命令行对话与续跑接受的启动参数
-const SESSION_FLAGS_HINT =
-  "--yolo / --no-persist-thinking / --no-pushed-memory / --no-hooks（本次运行不接钩子）/ --no-web（本次运行不给联网工具）/ --thinking / --max-output-tokens / --context-window / --compact-threshold / --compact-keep / --root / --stream-fn / --provider / --model / --sandbox / --sandbox-network on|off / --sandbox-approval yolo|prompt / --sandbox-from-head（只从最新提交开工，不带未提交的改动）";
-
-// 决策 237：沙箱的提示行
-// 决策 326 ③：命令行对话的行内问答确认会执行命令的配置（输入结束按退出处理）
-function lineTrustAsker(
-  ask: (prompt: string) => Promise<string | null>,
-  write: (text: string) => void
-): (entries: readonly TrustEntry[]) => Promise<TrustChoice> {
-  return async (entries) => {
-    for (;;) {
-      const answer = await ask(`${trustPromptText(entries)}\n> `);
-      if (answer === null) return "quit";
-      const choice = parseTrustAnswer(answer);
-      if (choice !== undefined) return choice;
-      write("请输入 a、s 或 q\n");
-    }
-  };
-}
-
-function sandboxLog(write: (text: string) => void): (line: string) => void {
-  return (line) => write(`[沙箱] ${line}\n`);
-}
-
-// 决策 245：沙箱里提供 /export 手动交回（决策 365：有后台作业在跑时先提示）
-function sandboxReplOptions(
-  sandbox: Sandbox | undefined,
-  bundle: RuntimeBundle
-): {
-  exportChanges?: () => Promise<string>;
-} {
-  return sandbox !== undefined ? { exportChanges: () => exportSandbox(sandbox, bundle.jobs) } : {};
-}
-
-// 决策 365：收尾交回沙箱前有后台作业在跑先提示（随后随运行面释放停掉）
-function warnSandboxJobs(
-  sandbox: Sandbox | undefined,
-  bundle: RuntimeBundle,
-  write: (text: string) => void
-): void {
-  const warning = sandbox !== undefined ? handbackJobsNotice(bundle.jobs, "close") : undefined;
-  if (warning !== undefined) write(`[沙箱] ${warning}\n`);
-}
-
-// 决策 245：会话结束时自动交回一次，交回后删除容器；写明分支名与查看命令
-async function finishSandbox(
-  sandbox: Sandbox | undefined,
-  write: (text: string) => void
-): Promise<void> {
-  if (sandbox !== undefined) {
-    write(`[沙箱] ${(await closeSandbox(sandbox)).notice}\n`);
-  }
-}
-
-// 仅作为入口直接运行时执行；被 import 时不启动 REPL。打包产物里由产物入口（src/bundle-entry.ts）分派，这里不判断
+// 仅作为入口直接运行时执行；被 import 时不启动。打包产物里由产物入口（src/bundle-entry.ts）分派，这里不判断
 if (
   !FROM_BUNDLE &&
   process.argv[1] !== undefined &&
@@ -890,37 +528,4 @@ if (
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   });
-}
-
-// 决策 331：命令行对话写记忆的入口——来源记"命令行对话"，写入后打印一行
-function lineMemoryWrite(write: (text: string) => void): MemoryWriteConfig {
-  return {
-    source: "line",
-    onWritten: (notice) => write(`${memoryWriteNoticeLine(notice)}\n`),
-  };
-}
-
-// M7（决策 079）：/fork 手动分叉——分支沿用本会话的模型接入与审批模式
-function forkHandlerOf(
-  opened: Awaited<ReturnType<typeof openSessionRuntime>>,
-  governanceRoot: string,
-  flags: LaunchFlags,
-  streamFn: Awaited<ReturnType<typeof loadStreamFn>>
-): (args: string) => Promise<string> {
-  return (args) =>
-    runForkCommand({
-      governanceRoot,
-      opened,
-      args,
-      run: {
-        streamFn,
-        provider: flags.provider,
-        modelId: flags.modelId,
-        yolo: flags.yolo,
-        persistThinking: flags.persistThinking,
-        ...(flags.thinkingLevel !== undefined ? { thinking: flags.thinkingLevel } : {}),
-        ...(flags.compaction !== undefined ? { compaction: flags.compaction } : {}),
-        ...pushedMemoryRunOptions(flags),
-      },
-    });
 }

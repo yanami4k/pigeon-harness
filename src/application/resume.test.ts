@@ -85,7 +85,7 @@ test("续跑：进程死在工具执行途中——还原上下文，悬空调�
       root: dir,
       sessionId,
       write: (text) => written.push(text),
-      enterRepl: async () => {
+      enter: async () => {
         opened = await openSessionRuntime({
           governanceRoot: dir,
           sessionId,
@@ -189,7 +189,7 @@ test("续跑：旧格式会话明确报错、不进入续会话；不存在的�
         root: dir,
         sessionId: legacyId,
         write: () => {},
-        enterRepl: async () => {
+        enter: async () => {
           entered = true;
         },
       }),

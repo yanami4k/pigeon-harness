@@ -1,4 +1,4 @@
-// 会话开始时的设置（决策 325、326）：各入口（终端界面、--line 与 pigeon resume、pigeon run）共用的一段——
+// 会话开始时的设置（决策 325、326）：各入口（终端界面、pigeon run）共用的一段——
 //   ① 旧布局检查：发现旧配置文件或旧位置的程序状态即报错，提示运行 pigeon migrate-config（不自动迁移）；
 //   ② 读三层设置与 .mcp.json，形成本会话的设置快照（本会话内各处都从快照取，中途改文件不生效）；
 //   ③ 第三道防线：会执行命令或放权的条目（命令短名、沙箱配置连同项目 Dockerfile、MCP 服务启动定义、项目共享层的
@@ -164,7 +164,7 @@ export async function openSessionSettings(
   return confirmSessionConfig(snapshot, options);
 }
 
-// 交互确认的问答文字（终端界面接管终端之前与 --line 共用）：列出条目，返回提示语
+// 交互确认的问答文字（终端界面接管终端之前）：列出条目，返回提示语
 export function trustPromptText(entries: readonly TrustEntry[]): string {
   return [
     "以下会执行命令或放权的配置首次出现或内容有变，请确认：",

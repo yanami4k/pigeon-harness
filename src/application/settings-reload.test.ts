@@ -366,14 +366,14 @@ test("有 worker 在跑等不能重载时如实拒绝；沙箱会话里 sandbox 
   write(projectSettingsPath(root), { sandbox: { image: "python:3.12" } });
   await reload([]);
   const lines = (await reload(["confirm"])).join("\n");
-  assert.match(lines, /pigeon resume sess_X --sandbox/);
+  assert.match(lines, /pigeon --sandbox --resume sess_X/);
   write(projectSettingsPath(root), { sandbox: { image: "python:3.12", memory: "4g" } });
   await reload([]);
   const limitLines = (await reload(["confirm"])).join("\n");
   assert.match(limitLines, /改了 sandbox 节/);
   assert.match(
     limitLines,
-    /沙箱配置已更新，退出后用 pigeon resume sess_X --sandbox 续跑才对本会话的容器生效/,
+    /沙箱配置已更新，退出后用 pigeon --sandbox --resume sess_X 续跑才对本会话的容器生效/,
     "只改上限也按 sandbox 一节有变化给出提示"
   );
   assert.deepEqual(await reload(["what"]), [

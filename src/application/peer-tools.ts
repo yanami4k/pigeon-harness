@@ -1,6 +1,6 @@
 // 本机会话间通信的两件工具（决策 450）：list_peers 列出本机可联系的 Pigeon 会话，send_message 给某个会话发纯文本消息（可同时
 // 订对方下次空闲或退出时的一次性通知 notify_when_idle）。会话检索已有 list_sessions，这里另取名字。只给开了收件口的主会话注册
-//（终端界面、命令行对话、pigeon run；worker 与沙箱不注册）。工具说明、参数与返回文字面向模型，用英文（决策 428）；说明里写清信任规则。
+//（终端界面、pigeon run；worker 与沙箱不注册）。工具说明、参数与返回文字面向模型，用英文（决策 428）；说明里写清信任规则。
 import { type Static, Type } from "typebox";
 import type { ToolRegistration } from "../tools/registry.ts";
 import type { PigeonAgentTool, PigeonToolResult } from "../tools/wrap.ts";

@@ -344,13 +344,6 @@ export function namedWorktreeRepoRoot(cwd: string): string {
   }
 }
 
-// 进入时的一行说明
-export function namedWorktreeOpenedLine(worktree: NamedWorktree): string {
-  return worktree.created
-    ? `新建工作树 ${worktree.path}（分支 ${worktree.branch}，起点 ${worktree.baseLabel}）`
-    : `打开已有的工作树 ${worktree.path}（分支 ${worktree.branch}）`;
-}
-
 // 路径在本仓库的独立工作树里（.pigeon/wt/<名字> 之下）
 export function insideNamedWorktree(repoRoot: string, path: string): boolean {
   const rel = relative(namedWorktreesDirOf(repoRoot), resolve(path));

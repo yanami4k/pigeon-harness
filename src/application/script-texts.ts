@@ -80,20 +80,6 @@ export function commandInputText(task: string): string {
   return `(The user started this with /${SCRIPT_COMMAND}, asking for it to be done with script orchestration, "${SCRIPT_KEYWORD}".)\n${task}`;
 }
 
-// 开跑计划行
-export function planLine(input: {
-  name: string;
-  runId: string;
-  phases: readonly string[];
-  items?: number;
-  budget?: string;
-}): string {
-  const phases = input.phases.length > 0 ? input.phases.join(" → ") : "（未列）";
-  return `[脚本] ${input.name}（运行号 ${input.runId}）开跑：阶段 ${phases}；${
-    input.items !== undefined ? `已知 ${input.items} 项；` : ""
-  }额度 ${input.budget ?? "不限"}。`;
-}
-
 export function logLine(name: string, text: string): string {
   return `[脚本 ${name}] ${text}`;
 }

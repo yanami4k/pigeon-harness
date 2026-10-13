@@ -79,7 +79,7 @@ export interface LaunchFlags {
   // 决策 237：--sandbox 及其参数；不开沙箱时缺省
   sandbox?: SandboxLaunch;
   // 决策 265–267：主 agent 派 worker——终端界面与 pigeon run 缺省开着，--no-spawn-workers 关掉（关掉即不注册 spawn_worker）；
-  // 沙箱会话与命令行对话不注册，不看这一项
+  // 沙箱会话不注册，不看这一项
   spawnWorkers: boolean;
   // 决策 268、300：--worker-concurrency <n> 同时在跑的 worker 上限（缺省取编排配置，配置缺省 8；人派的与 agent 派的一并计算）；
   // --worker-limit <n> 一次运行里 agent 最多派出的 worker 数（可选的上限，缺省不设）。与 --no-spawn-workers 同在能派 worker 的入口接受
@@ -107,7 +107,7 @@ export interface ParseLaunchFlagsOptions {
   pushedMemory?: boolean;
   // 是否接受 --no-session-search（决策 382；接受入口同 --no-pushed-memory）
   sessionSearch?: boolean;
-  // 是否接受 --sandbox 及其参数（终端界面、命令行对话与续跑、pigeon run）
+  // 是否接受 --sandbox 及其参数（终端界面、pigeon run）
   sandbox?: boolean;
   // 是否接受 --no-spawn-workers（能派 worker 的入口：终端界面与 pigeon run）
   spawnWorkers?: boolean;

@@ -1,4 +1,4 @@
-// 人工审批接口（ROADMAP §M3 + 决策 3：CLI REPL 内联审批，切片 4 实现 CLI）。
+// 人工审批接口（ROADMAP §M3 + 决策 3；决策 461 起只有终端界面的审批面板）。
 // Adapter 的 beforeToolCall 审批闸在策略判定为 prompt 时调用注入的 ApprovalHandler；
 // 本文件只定义注入点，不含任何交互实现。
 //
@@ -170,21 +170,6 @@ export function grantScopeFor(
   return key === "d" && pathArg !== undefined && offersDirectoryGrant(request, grants)
     ? { pathPrefix: dirname(pathArg) }
     : {};
-}
-
-// 放权提示里的作用域后缀（cli 与 tui 共用）
-export function commandScopeNote(scope: {
-  command?: string;
-  shell?: boolean;
-  host?: string;
-}): string {
-  if (scope.host !== undefined) {
-    return `，仅限网站 ${scope.host}`;
-  }
-  if (scope.command === undefined) {
-    return "";
-  }
-  return `，仅限命令 ${scope.command}${scope.shell === true ? "（经 shell）" : ""}`;
 }
 
 // 网络档 [a] 键的提示文案（cli 与 tui 共用，决策 290）：以后都允许访问这个网站

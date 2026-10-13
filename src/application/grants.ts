@@ -2,7 +2,7 @@
 // /grants 列表、/revoke <id> 撤销、/grants save <id> 升格（决策 325：写入项目个人设置 .pigeon/settings.local.json 的
 // permissions 一节；三层的放权规则并集生效，/grants 按层列出，/revoke config#N 只移除项目个人一层的规则）。cli REPL 与 tui 消息区两个
 // Actor 共用这同一份命令逻辑（025 的方向：共用逻辑住 Controller 层，Actor 互依别扭）；
-// 输出经注入的 write 回调投影到各自界面（REPL 终端 / TUI 消息区），命令层不关心落点。
+// 输出经注入的 write 回调投影到各自界面（终端界面的消息区），命令层不关心落点。
 // /grants 是 grant 的唯一展示入口（决策 3b：崩溃恢复不加特殊展示行，生效 grant 统一
 // 由本命令呈现）；升格与配置的正规写入方都是人的显式命令（约束 3：agent / 模型 /
 // 后台流程无写放权配置的代码路径）。

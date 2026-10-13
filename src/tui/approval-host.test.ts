@@ -44,3 +44,23 @@ test("[a] 建按网站的放权，结果行点名网站；[y] 只批准一次", 
   assert.deepEqual(await handler(request), { approved: true });
   assert.equal(store.list().length, 1);
 });
+
+// 自 cli/approval-ui.test.ts 移来（决策 461）：放权条目写盘失败 = 放权不生效
+test("授权建立条目写盘失败 = grant 不生效（fail-closed：免审授权必须留证后才存在）", async () => {
+  const store = new SessionGrantStore({
+    workspaceRoot: "/nonexistent",
+    sink: {
+      appendGrantCreated: () => {
+        throw new Error("磁盘故障");
+      },
+      appendGrantRevoked: () => {},
+    },
+  });
+  const face: TuiApprovalFace = {
+    askApproval: async () => ({ key: "a" }),
+    noteApproval: () => {},
+  };
+  const handler = createTuiApprovalHandler(store, () => face);
+  await assert.rejects(() => handler(request), /磁盘故障/);
+  assert.equal(store.list().length, 0, "未落盘的 grant 不得生效");
+});

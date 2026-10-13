@@ -4,7 +4,7 @@
 // - 新快照自下一轮起生效：此后派出的 worker、新开的脚本编排用新快照；运行面按新快照重建，MCP 只动有变化的服务（启动定义
 //   改了的重启、删掉的停止、新加的启动，结果行里分别列出；未变的沿用原连接），系统提示逐字节不变；人写的说明、推送的记忆、
 //   Skill 目录在开工状态块里，不靠重读设置，每个 Run 照常重读（决策 363）。正在跑的沙箱容器不重建，sandbox 一节有变化时另给一行提示。
-// - pigeon run 与 --line 不设重载。
+// - pigeon run 不设重载。
 // 本模块只算"读出什么、要问什么、改了哪些节"；问人与重建运行面在终端界面入口。
 import { homedir } from "node:os";
 import {
@@ -209,7 +209,7 @@ export function createSettingsReloader(
       ...result.lines,
       ...(result.sandboxChanged && sandboxSession !== undefined
         ? [
-            `沙箱配置已更新，退出后用 pigeon resume ${sandboxSession} --sandbox 续跑才对本会话的容器生效`,
+            `沙箱配置已更新，退出后用 pigeon --sandbox --resume ${sandboxSession} 续跑才对本会话的容器生效`,
           ]
         : []),
     ];

@@ -4,7 +4,6 @@ import { test } from "vitest";
 import { asRunId } from "../state/ids.ts";
 import {
   type ApprovalRequest,
-  commandScopeNote,
   grantScopeFor,
   hostGrantKeyLabel,
   offersDirectoryGrant,
@@ -24,6 +23,4 @@ test("带主机名的请求：[a] 与 [d] 都建按网站的放权；不提供�
   assert.deepEqual(grantScopeFor(request, "d"), { host: "docs.example" });
   assert.equal(offersDirectoryGrant(request, undefined), false);
   assert.equal(hostGrantKeyLabel(request), "[a] 以后都允许访问 docs.example");
-  assert.equal(commandScopeNote({ host: "docs.example" }), "，仅限网站 docs.example");
-  assert.equal(commandScopeNote({ command: "ls" }), "，仅限命令 ls");
 });

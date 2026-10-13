@@ -102,7 +102,7 @@ test("pigeon run --sandbox：agent 在容器里改文件；返回前交回成分
     assert.equal(existsSync(join(repo, "made.txt")), false, "宿主工作目录不变");
     assert.equal(git(repo, "symbolic-ref", "--short", "HEAD"), "main");
     assert.match(result.sandboxNotice ?? "", /git diff main\.\.pigeon\/sandbox-/);
-    assert.ok(logs.some((line) => line.includes("沙箱已就绪")));
+    assert.ok(!logs.some((line) => line.includes("沙箱已就绪")), "就绪那一行不写（文档写明）");
     // 决策 252：不启动 MCP 服务；开沙箱时列出已配置却不可用的服务名
     assert.equal(mcp.counter.calls, 0, "沙箱里不启动 MCP 服务");
     assert.ok(
@@ -117,7 +117,7 @@ test("pigeon run --sandbox：agent 在容器里改文件；返回前交回成分
   }
 });
 
-test("资源上限取自设置的 sandbox 一节（决策 333）：写 0 的项不带参数，给了的按设置；就绪提示写明上限", async () => {
+test("资源上限取自设置的 sandbox 一节（决策 333）：写 0 的项不带参数，给了的按设置", async () => {
   const repo = makeRepo();
   const home = mkdtempSync(join(tmpdir(), "pigeon-sandbox-home-"));
   const fake = fakeSandboxDocker();
@@ -149,10 +149,6 @@ test("资源上限取自设置的 sandbox 一节（决策 333）：写 0 的项�
       assert.equal(at("--memory-swap"), String(2 * 1024 ** 3));
       assert.equal(at("--pids-limit"), undefined, "写 0 为不限");
       assert.equal(at("--cpus"), "2");
-      assert.ok(
-        logs.some((line) => line.includes("内存上限 2 GiB、进程数上限 不限、CPU 上限 2 核")),
-        logs.join("｜")
-      );
     } finally {
       await sandbox.discard();
     }

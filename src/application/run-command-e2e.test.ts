@@ -7,13 +7,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { onTestFinished, test } from "vitest";
-import { createCliApprovalHandler } from "../cli/approval-ui.ts";
 import { loadStoreSession } from "../persistence/session-view.ts";
 import { loadSettings } from "../persistence/settings.ts";
 import { createFakeStreamFn } from "../pi-runtime/fixtures.ts";
 import { newSessionId } from "../state/ids.ts";
 import { type StoreMessage, toolResultMark } from "../state/session-judge.ts";
 import type { ExecEvidence } from "../tools/run-command.ts";
+import { scriptedApprovalHandler } from "../tui/approval-fixtures.ts";
 import { buildRuntime } from "./runtime.ts";
 
 // 用户级设置指到的空临时目录：这个测试结束后删掉
@@ -79,7 +79,7 @@ test("run_command：exec 每次都问且显示完整命令；[a] 精确命令放
       provider: "fake-provider",
       modelId: "fake-model-1",
       createApprovalHandler: (grants) =>
-        createCliApprovalHandler(
+        scriptedApprovalHandler(
           async (prompt) => {
             prompts.push(prompt);
             if (prompt.startsWith("拒绝理由")) {
@@ -109,7 +109,7 @@ test("run_command：exec 每次都问且显示完整命令；[a] 精确命令放
     assert.equal(asked, 2);
     assert.ok(prompts[0]?.includes("[a] 本会话允许这条命令（精确匹配）"), prompts[0]);
     assert.ok(screen.includes(`"command": ${JSON.stringify(COMMAND_A)}`), screen);
-    assert.ok(screen.includes(`仅限命令 ${COMMAND_A}`), screen);
+    assert.ok(screen.includes(`✓ allowed for this session: run_command ${COMMAND_A}`), screen);
     assert.deepEqual(
       executions.map((record) => record.decision?.approvedBy),
       ["human", "human:grant", "human"]

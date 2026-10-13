@@ -84,7 +84,7 @@ export interface OpenSessionRuntimeRequest {
   createApprovalHandler?: RuntimeDeps["createApprovalHandler"];
   // 续跑既有会话：以会话里的生效 grant 为种子（决策 3b，静默继续有效），并还原对话上下文（决策 183）
   resume?: boolean;
-  // 决策 432：新开的会话等第一次真要落盘时才建会话文件（终端界面与命令行对话新开会话时给）
+  // 决策 432：新开的会话等第一次真要落盘时才建会话文件（终端界面新开会话时给）
   deferSessionFile?: boolean;
   // 决策 445、446：主会话的工作区根（独立工作树）；缺省按会话推导（新会话即治理根）。worker 会话不受它影响
   workspaceRoot?: string;
@@ -111,7 +111,7 @@ export interface OpenSessionRuntimeRequest {
   workspaceHost?: WorkspaceHost;
   // 决策 354：入口给出的确知事实（沙箱档位、网络能否用），写进开工状态块的环境一节
   statusFacts?: StatusFacts;
-  // 决策 264–267：派 worker 的工具槽（终端界面给；命令行对话不给）。只给主会话注册：worker 会话（深度 1）与沙箱会话不注册
+  // 决策 264–267：派 worker 的工具槽（终端界面给）。只给主会话注册：worker 会话（深度 1）与沙箱会话不注册
   spawnWorker?: SpawnWorkerSlot;
   // 决策 309：提交编排脚本的工具槽（终端界面随派 worker 一并给）；只给主会话注册，worker 会话与沙箱会话不注册
   scriptOrchestration?: ScriptSlot;
@@ -119,7 +119,7 @@ export interface OpenSessionRuntimeRequest {
   taskList?: boolean;
   // 决策 287–291：联网工具的配置（在场即注册两件工具）；--sandbox-network off 时调用方不给
   webTools?: WebToolsConfig;
-  // 决策 331：写记忆的入口与写入后的提示（终端界面与 --line 给；推送记忆关着时不生效）
+  // 决策 331：写记忆的入口与写入后的提示（终端界面给；推送记忆关着时不生效）
   memoryWrite?: MemoryWriteConfig;
   // 决策 286：运行期告警的出口（会话存储、压缩前回调、工作区快照）；缺省写标准错误输出
   warn?: WarnSink;

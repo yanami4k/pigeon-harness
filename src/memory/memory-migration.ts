@@ -125,10 +125,6 @@ const stderrReport: MemoryMigrationReport = (line) => {
   process.stderr.write(`${line}\n`);
 };
 
-export function memoryMigratedText(location: MemoryLocation, backup: string): string {
-  return `[记忆] ${location.display} 是旧格式，已一次性改写成新格式；原文件备份在 ${backup}`;
-}
-
 export function memoryMigrationPendingText(location: MemoryLocation, reason: string): string {
   return `[记忆] ${location.display} 是旧格式，这次没能改写成新格式（${reason}）：本次在内存里按新格式读出，文件未动，下次读到时再试`;
 }

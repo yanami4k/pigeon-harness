@@ -1,4 +1,4 @@
-// 日常沙箱的会话接线（决策 237、245–248）：三个入口（终端界面、命令行对话与续跑、pigeon run）开沙箱、接执行端、
+// 日常沙箱的会话接线（决策 237、245–248）：两个入口（终端界面、pigeon run）开沙箱、接执行端、
 // 收尾交回都经这里；容器生命周期本身在 execution/sandbox.ts。Actor（cli / tui）不直连执行层，所需的符号从这里取。
 // 沙箱里暂不支持分叉（/fork、失败自动分叉重试）、派 worker 与终端界面的 /resume 换绑：它们作用在宿主的 git 工作区或
 // 工作树上，会越出容器。会话验证命令经执行端在容器里运行。MCP 服务不启动（决策 252）：它们在宿主上运行，开沙箱时
@@ -17,7 +17,6 @@ import {
   SANDBOX_CLEAR_CACHE_COMMAND,
   type Sandbox,
   type SandboxExport,
-  sandboxLimitsSummary,
 } from "../execution/sandbox.ts";
 import type { SessionId } from "../state/ids.ts";
 import { sandboxLimitSettingsOf } from "../state/sandbox-config.ts";
@@ -43,7 +42,7 @@ export const SANDBOX_FORK_UNSUPPORTED =
 export const SANDBOX_WORKERS_UNSUPPORTED =
   "沙箱里暂不支持派 worker（/spawn、/cancel、/workers、/take）：worker 在宿主的 git 工作树里干活，会越出沙箱";
 export const SANDBOX_RESUME_UNSUPPORTED =
-  "沙箱会话里暂不支持 /resume 换绑：换绑要另开容器。请退出后用 pigeon resume <会话号> --sandbox 续跑";
+  "沙箱会话里暂不支持 /resume 换绑：换绑要另开容器。请退出后用 pigeon --sandbox --resume <会话号> 续跑";
 
 // 测试注入：docker 调用前缀、镜像来源、容器内工作区根与缓存卷
 export type SandboxOverrides = Pick<
@@ -93,7 +92,6 @@ export async function startSandbox(input: StartSandboxInput): Promise<Sandbox | 
     ...(input.notice !== undefined ? { notice: input.notice } : {}),
     ...input.overrides,
   });
-  input.log(sandboxReadyNotice(sandbox));
   return sandbox;
 }
 
@@ -120,19 +118,6 @@ export function sandboxStatusFacts(
         network: "not available (the sandbox has no network)",
         ...skipped,
       };
-}
-
-export function sandboxReadyNotice(sandbox: Sandbox): string {
-  // 决策 278：带了快照时起点是快照提交，写明它是未提交改动的快照
-  const start =
-    sandbox.startSnapshot !== undefined
-      ? `从 ${sandbox.startLabel} 加未提交改动的快照 ${sandbox.startCommit.slice(0, 12)} 起步`
-      : `从 ${sandbox.startLabel} 的 ${sandbox.startCommit.slice(0, 12)} 起步`;
-  return (
-    `沙箱已就绪：容器 ${sandbox.container}（镜像 ${sandbox.image}，${sandbox.network === "on" ? "联网" : "断网"}，` +
-    `下载缓存共用卷 ${sandbox.cacheVolume}；${sandboxLimitsSummary(sandbox.limits)}），${start}；改动交回到分支 ${sandbox.branch}，` +
-    "会话结束时自动交回，会话中可用 /export 手动交回"
-  );
 }
 
 // 收尾交回：成功给出分支与查看命令，失败给出原因（容器保留）；两者都是给人看的一行

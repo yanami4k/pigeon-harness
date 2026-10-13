@@ -92,8 +92,8 @@ export function handleResumeCommand<Binding>(
       host.render();
     },
     // 续跑：换绑运行面（grant 种子、上下文还原与新运行面的装配在壳外的
-    // rebind 工厂，同 cli resume 的 enterRepl 配方）；壳已停止则换绑无意义
-    enterRepl: async () => {
+    // rebind 工厂，续会话入口）；壳已停止则换绑无意义
+    enter: async () => {
       if (!host.isStarted()) return;
       const sessionId = asSessionId(arg);
       const binding = await resume.rebind(sessionId);

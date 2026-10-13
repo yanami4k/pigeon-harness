@@ -1,5 +1,5 @@
 // 推送记忆的装配（决策 191、244、331、332、363）：推送段是开工状态块的"记忆"一节，排在人写的说明（AGENTS.md）与 Skill 目录之后；Run 开始条目记两层记忆的身份与
-// 文字版本；只有带写入配置的主会话（终端界面、--line）注册 update_memory、推送段带"被纠正时记下"的说明与交互版的冲突处理；
+// 文字版本；只有带写入配置的主会话（终端界面）注册 update_memory、推送段带"被纠正时记下"的说明与交互版的冲突处理；
 // pigeon run、worker 只推送；记忆工具免审批，写入后交出一行提示；两层上限取设置的 memory 一节；日常入口的启动参数缺省开着，
 // --no-pushed-memory 关掉。
 import assert from "node:assert/strict";
@@ -227,7 +227,7 @@ test("带写入配置：注册 update_memory、推送段带写入说明与交互
         yolo: false,
         streamFn: writer,
         learnedMemory: {
-          write: { source: "line", onWritten: (notice) => notices.push(notice), now: () => TODAY },
+          write: { source: "tui", onWritten: (notice) => notices.push(notice), now: () => TODAY },
         },
       })
     );
@@ -245,7 +245,7 @@ test("带写入配置：注册 update_memory、推送段带写入说明与交互
     }
     assert.equal(
       readMemory(root, "user"),
-      `${MEMORY_FILE_HEADERS.user}- [U1] 回复先给结论 (recorded 2026-10-01 · cli · session ${bundle.adapter.sessionId})\n`
+      `${MEMORY_FILE_HEADERS.user}- [U1] 回复先给结论 (recorded 2026-10-01 · tui · session ${bundle.adapter.sessionId})\n`
     );
     assert.deepEqual(notices, [
       { layer: "user", action: "add", id: "U1", content: "回复先给结论" },
@@ -297,7 +297,7 @@ test("两层上限取设置的 memory 一节：推送段与记忆工具都按它
     );
   }));
 
-test("入口：终端界面与 --line（openSessionRuntime 给写入配置）有 update_memory 与写入说明；pigeon run（headless）只推送", () =>
+test("入口：终端界面（openSessionRuntime 给写入配置）有 update_memory 与写入说明；pigeon run（headless）只推送", () =>
   withRoot("pigeon-pushed-entries-", async (root) => {
     seed(root);
     const flags = {
@@ -307,7 +307,7 @@ test("入口：终端界面与 --line（openSessionRuntime 给写入配置）有
       persistThinking: true,
       pushedMemory: true,
     };
-    for (const source of ["tui", "line"] as const) {
+    for (const source of ["tui"] as const) {
       const entryStream = createFakeStreamFn({ replies: [{ text: "好" }] });
       const opened = await openSessionRuntime({
         governanceRoot: root,
@@ -427,7 +427,7 @@ test("功能：记下纠正、下次照做——第一会话经 update_memory �
       persistThinking: true,
       pushedMemory: true,
     };
-    // 第一会话（--line 入口）：使用者给出纠正，模型调 update_memory 记下
+    // 第一会话：使用者给出纠正，模型调 update_memory 记下
     const first = await openSessionRuntime({
       governanceRoot: root,
       sessionId: newSessionId(),
@@ -447,7 +447,7 @@ test("功能：记下纠正、下次照做——第一会话经 update_memory �
       }),
       flags,
       homeDir: homeOf(root),
-      memoryWrite: { source: "line", now: () => TODAY },
+      memoryWrite: { source: "tui", now: () => TODAY },
       startMcp: async () => fakeMcp(),
     });
     const firstSessionId = first.bundle.adapter.sessionId;
@@ -456,7 +456,7 @@ test("功能：记下纠正、下次照做——第一会话经 update_memory �
     } finally {
       await disposeRuntime(first.bundle);
     }
-    const expected = `- [U2] 回复先给结论 (recorded 2026-10-01 · cli · session ${firstSessionId})`;
+    const expected = `- [U2] 回复先给结论 (recorded 2026-10-01 · tui · session ${firstSessionId})`;
     assert.ok(readMemory(root, "user").includes(expected), "落盘到用户级");
     // 第二会话：开工状态块里出现这一条
     const secondStream = createFakeStreamFn({ replies: [{ text: "好" }] });
@@ -466,7 +466,7 @@ test("功能：记下纠正、下次照做——第一会话经 update_memory �
       streamFn: secondStream,
       flags,
       homeDir: homeOf(root),
-      memoryWrite: { source: "line", now: () => TODAY },
+      memoryWrite: { source: "tui", now: () => TODAY },
       startMcp: async () => fakeMcp(),
     });
     try {

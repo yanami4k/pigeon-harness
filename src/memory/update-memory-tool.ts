@@ -1,6 +1,6 @@
 // 记忆工具 update_memory（决策 217、328、329、331、332）：在项目级或用户级新增、按编号替换、按编号删除学到的记忆，
 // 只写不读（两层记忆已在开工状态块的「记忆」一节里）。说明、参数说明与各情形的返回文字为记忆文字 v5（MEMORY_TEXT_VERSION）。
-// - 只给有人对话的入口（终端界面主会话含沙箱会话、--line 命令行对话）；pigeon run、worker 与跑批器只推送、不注册（331）。
+// - 只给有人对话的入口（终端界面主会话含沙箱会话）；pigeon run、worker 与跑批器只推送、不注册（331）。
 // - 写入不审批（331），写入后经 onWritten 交给入口在消息区显示一行（记下的内容与层级）。
 // - agent 只写内容；编号、日期、来源（入口的英文短名）与会话编号由工具补在行尾（332、431）。内容完全相同即不新增。
 // - 决策 431：锁内现读时遇到旧格式的记忆文件，先一次性迁移（备份、改写）再写；迁移出错即照常抛出，不在没有备份时覆盖旧文件。
@@ -19,7 +19,6 @@ import {
   localDate,
   MEMORY_DISPLAY_PATHS,
   MEMORY_FILE_HEADERS,
-  MEMORY_LAYER_LABELS,
   MEMORY_LAYER_PREFIX,
   MEMORY_LAYERS,
   type MemoryEntry,
@@ -42,11 +41,11 @@ import { migrateMemoryFileLocked } from "./memory-migration.ts";
 
 export const UPDATE_MEMORY_TOOL = "update_memory";
 
-// 写入的来源（哪个入口；沙箱会话按它所在的入口记）：以英文短名补在每条的尾巴里（决策 431）
-export type MemorySource = "tui" | "line";
+// 写入的来源（哪个入口；沙箱会话按它所在的入口记）：以英文短名补在每条的尾巴里（决策 431）。决策 461：命令行对话去掉之后
+// 只剩终端界面；旧条目尾巴里的 cli 照旧能读
+export type MemorySource = "tui";
 export const MEMORY_SOURCE_LABELS: Readonly<Record<MemorySource, string>> = {
   tui: "tui",
-  line: "cli",
 };
 
 // 工具说明（记忆文字 v5；决策 383 加的"新增前去重"与"纠正过时条目"两句不升 MEMORY_TEXT_VERSION：跑批不注册
@@ -174,12 +173,6 @@ export interface MemoryWriteNotice {
   id: string;
   // 新增与替换为写下的内容，删除为删掉的那条的内容
   content: string;
-}
-
-export function memoryWriteNoticeLine(notice: MemoryWriteNotice): string {
-  const verb =
-    notice.action === "add" ? "已记下" : notice.action === "replace" ? "已改写" : "已删除";
-  return `[记忆] ${verb}（${MEMORY_LAYER_LABELS[notice.layer]} ${notice.id}）：${notice.content}`;
 }
 
 export interface UpdateMemoryDetails {

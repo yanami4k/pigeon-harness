@@ -1,4 +1,4 @@
-// 入口打开会话间通信收件口的共用一段（决策 450）：终端界面、命令行对话与 pigeon run 都开（worker 不开，它们有父子通道）。
+// 入口打开会话间通信收件口的共用一段（决策 450）：终端界面与 pigeon run 都开（worker 不开，它们有父子通道）。
 // 审批模式类别：--yolo 为放权，其余为会审批。设置的 messaging 一节定放行规则与扣住时限。决策 456：名录里的名字取会话自己的
 // 名字（会话记录里记的，没改过名为工作目录名加会话号末 4 位），不由收件口持有。
 // 打不开（命名管道或 socket 建不起来）只提示一行，会话照常运行，只是收不到也发不出。
@@ -10,7 +10,7 @@ import { defaultPeerName, type HeldMessage, PeerMessaging } from "./peer-messagi
 import { sessionNameOf } from "./session-name.ts";
 
 // 决策 450〔部分已改〕：跨进程的会话间通信（收件口、本机会话名录、list_peers 与 send_message、系统提示里那句）先关闭，
-// 457 施工时删掉跨进程部分；现阶段通信与照看只在同一进程内。终端界面、命令行对话与 pigeon run 三个入口照这个常量决定开不开。
+// 457 施工时删掉跨进程部分；现阶段通信与照看只在同一进程内。终端界面与 pigeon run 三个入口照这个常量决定开不开。
 // 它不是设置项，使用者打不开；测试直接在各模块上打开（收件口、工具与无人值守运行的 peerInbox 参数），不经入口
 export const CROSS_PROCESS_MESSAGING = false;
 

@@ -1,5 +1,5 @@
 // 装配根（M2 S1，决策 025 从 cli/index.ts 抽到 Controller 层）：注册内置工具 + 构造适配器与
-// 会话存储写者 + grant 运行态。审批 handler 由调用方注入（cli 传 REPL 问答版，tui 传面板版）——
+// 会话存储写者 + grant 运行态。审批 handler 由调用方注入（tui 传面板版）——
 // 工厂形态而非成品：装配根先建 grantStore，审批提示的 [a]/[d] 放权键需要它，
 // 故调用方给一个"拿到 store 再造 handler"的工厂。
 // 会话存储（决策 176 / 210）：<governanceRoot>/.pigeon/state/sessions/<工作目录编码>/ 下的 pi 会话文件（M5.5 S1 治理根缺省
@@ -297,7 +297,7 @@ export interface RuntimeDeps {
   provider: string;
   modelId: string;
   // 审批 handler 由 Actor 注入（决策 025）：工厂收 grantStore——审批提示的 [a]/[d]
-  // 放权键需要它；cli 传 REPL 问答版，将来的 tui 传面板版。
+  // 放权键需要它；终端界面传面板版。
   // M6.5 S1（决策 056）：缺省 = 无审批通道，prompt 档一律 fail-closed 拒绝（006）——headless 运行如此
   createApprovalHandler?: (grants: SessionGrantStore) => ApprovalHandler;
   // 决策 325：本会话的设置快照（会话开始时读一次；worker 与沙箱会话用派出它的会话的快照）。放权规则（三层并集）与

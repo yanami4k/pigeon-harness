@@ -1,4 +1,4 @@
-// 日常沙箱（决策 237、245–248）：日常入口（终端界面、命令行对话、pigeon run）可选在一个一次性的 Docker 容器里工作。
+// 日常沙箱（决策 237、245–248）：日常入口（终端界面、pigeon run）可选在一个一次性的 Docker 容器里工作。
 // 本模块只管容器的生命周期与改动交回，工具经容器执行端（container-host.ts）读写与执行；会话文件、.pigeon/state/learned 等
 // 仍在宿主的治理根，不进容器。
 //   开工（278）：缺省把工作目录里未提交的改动（含未被 .gitignore 忽略的新文件）拍成以 HEAD 为父的快照提交（workdir-snapshot.ts，
@@ -184,15 +184,6 @@ export function formatBytes(bytes: number): string {
   }
   const text = Number.isInteger(value) ? String(value) : value.toFixed(1);
   return `${text} ${units[unit]}`;
-}
-
-// 给人看的上限摘要（就绪提示用）
-export function sandboxLimitsSummary(limits: SandboxLimits): string {
-  return [
-    `内存上限 ${limits.memoryBytes > 0 ? formatBytes(limits.memoryBytes) : "不限"}`,
-    `进程数上限 ${limits.pids > 0 ? limits.pids : "不限"}`,
-    `CPU ${limits.cpus > 0 ? `上限 ${limits.cpus} 核` : "不限"}`,
-  ].join("、");
 }
 
 export function sandboxBranch(sessionId: string): string {

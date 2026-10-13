@@ -36,13 +36,6 @@ export function approvalSourceLine(request: {
   );
 }
 
-// worker 放权的作用范围注记（[a]/[d] 在 worker 请求上创建的 grant 只在该 worker 会话内生效）
-export function workerGrantScopeNote(request: {
-  readonly worker?: { readonly name: string };
-}): string {
-  return request.worker !== undefined ? `，只在 worker ${request.worker.name} 会话内生效` : "";
-}
-
 // 稳定 id 短哈希：`exec_` 等前缀 + ULID 前 8 位 + 省略号；非稳定 id（toolCallId 等）原样
 // 撞上限续跑（决策 367）的一行（trace 与 replay 共用）
 export function continuationLine(data: ContinuationData): string {

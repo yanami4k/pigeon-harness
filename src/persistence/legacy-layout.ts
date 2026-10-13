@@ -1,7 +1,7 @@
 // 旧布局检查（决策 325）：并入 settings.json 的旧配置文件、.pigeon 根下旧位置的程序状态，以及已删除功能的遗留
 //（决策 330、331：复盘配置与补做复盘记录、旧学到的记忆新旧两处、旧人写说明 .pigeon/memory/、用户级旧偏好
 // ~/.pigeon/preferences.md；决策 322：验证门与 .pigeon/verify.json——迁移命令把它挪进备份目录并打印改写为
-// 收尾钩子的示例）。启动时（终端界面、pigeon run、--line、pigeon resume；worker 与沙箱会话随派出它的
+// 收尾钩子的示例）。启动时（终端界面、pigeon run；worker 与沙箱会话随派出它的
 // 会话）发现任一项即报错，提示运行 pigeon migrate-config，不自动迁移。
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
