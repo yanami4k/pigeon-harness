@@ -100,7 +100,7 @@ test("决策 444：只敲斜杠命令（不发消息）就退出，不建 .pigeo
   try {
     shell.start();
     await settle();
-    term.input("/sessions");
+    term.input("/search");
     term.input("\r");
     await settle(200);
   } finally {

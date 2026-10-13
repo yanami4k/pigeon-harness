@@ -30,6 +30,7 @@ import {
   usedChars,
 } from "./learned.ts";
 import {
+  availableMemoryLayers,
   type MemoryLocation,
   memoryLocation,
   readMemoryMaxId,
@@ -119,6 +120,9 @@ export const UPDATE_MEMORY_TEXTS = {
   missingId: (layer: string, id: string, ids: string) =>
     `The ${layer} memory has no ${id}; existing entry IDs: ${ids}.`,
   missingContent: "add and replace need content: one sentence stating what to remember.",
+  // 主目录下启动：项目级记忆与用户级是同一个文件，不单独提供
+  projectIsUser:
+    "Project memory is not available here: Pigeon is running in the home directory, where it would be the same file as user memory. Use user memory only for facts that apply to every project.",
   missingLayer:
     "layer is required: project (this project only) or user (all projects); if you are unsure, ask the user first.",
   broken: (path: string, line: number, layer: MemoryLayer) =>
@@ -194,7 +198,8 @@ export interface UpdateMemoryDetails {
     | "missing-content"
     | "missing-layer"
     | "broken"
-    | "busy";
+    | "busy"
+    | "project-is-user";
 }
 
 export interface UpdateMemoryOptions {
@@ -245,10 +250,17 @@ export async function applyMemoryUpdate(
       rejected: "missing-content",
     });
   }
-  const location: MemoryLocation = memoryLocation(layer, {
+  const where = {
     governanceRoot: options.governanceRoot,
     ...(options.homeDir !== undefined ? { homeDir: options.homeDir } : {}),
-  });
+  };
+  if (!availableMemoryLayers(where).includes(layer)) {
+    return reply(UPDATE_MEMORY_TEXTS.projectIsUser, {
+      written: false,
+      rejected: "project-is-user",
+    });
+  }
+  const location: MemoryLocation = memoryLocation(layer, where);
   const origin = {
     date: localDate((options.now ?? (() => new Date()))()),
     source: MEMORY_SOURCE_LABELS[options.source],
@@ -406,7 +418,7 @@ export function updateMemoryRegistration(input: {
     approvalFree: true,
     pathConfinement: {
       kind: "roots",
-      roots: MEMORY_LAYERS.map((layer) => memoryLocation(layer, input).file),
+      roots: [...new Set(MEMORY_LAYERS.map((layer) => memoryLocation(layer, input).file))],
     },
     executionMode: "sequential",
   };

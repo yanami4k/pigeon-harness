@@ -18,7 +18,7 @@ import {
   type MemoryLayer,
   memoryFactsOfText,
 } from "./learned.ts";
-import { memoryLocation } from "./learned-store.ts";
+import { availableMemoryLayers, memoryLocation } from "./learned-store.ts";
 import { type MemoryMigrationReport, readMemoryLayer } from "./memory-migration.ts";
 
 // 冲突处理的两种填法（记忆文字 v5）：可写入（有人对话）/ 只推送（无人值守）
@@ -101,7 +101,14 @@ export function loadPushedMemory(input: {
   // 旧格式迁移的结果与告警（给人看的一行）；缺省写标准错误输出
   report?: MemoryMigrationReport;
 }): PushedMemory {
-  const layers = MEMORY_LAYERS.filter((layer) => (input.layers ?? MEMORY_LAYERS).includes(layer));
+  // 主目录下启动时只有用户级这一层（项目级与它是同一个文件）
+  const available = availableMemoryLayers({
+    governanceRoot: input.governanceRoot,
+    ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+  });
+  const layers = MEMORY_LAYERS.filter(
+    (layer) => (input.layers ?? MEMORY_LAYERS).includes(layer) && available.includes(layer)
+  );
   const manifests: PushedMemoryLayerManifest[] = [];
   const parts: string[] = [];
   let anyEntries = false;

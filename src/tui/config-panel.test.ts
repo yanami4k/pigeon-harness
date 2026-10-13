@@ -101,13 +101,14 @@ test("/config 打开面板：列出各项、生效值与覆盖说明，提示与
     assert.deepEqual(writes, ["web.enabled=true"]);
     assert.deepEqual(reloads, [[]]);
     const after = screenText(term);
-    assert.match(after, /已写进 ~\/\.pigeon\/settings\.json：web\.enabled = true/);
-    assert.match(after, /已重读设置/);
+    // 验收修改：面板里改设置不往消息区写行——那一项的生效值当场更新，面板自己的提示行写一句短话
+    assert.match(after, /已改，自下一轮起生效/);
+    assert.doesNotMatch(after, /已写进|已重读设置/);
     assert.match(after, /生效值（不含启动参数）：true/);
-    // Esc 关面板
+    // Esc 关面板：消息区里没有留下改设置的行
     term.input("\x1b");
     await settle();
-    assert.doesNotMatch(screenText(term).split("已重读设置").at(-1) ?? "", /联网工具/);
+    assert.doesNotMatch(screenText(term), /联网工具|已写进|已重读设置|已改，/);
   } finally {
     cleanup();
   }
@@ -199,6 +200,37 @@ test("面板打开之后窗口变矮：行数按当前窗口高度现取，选�
   }
 });
 
+test("验收修改：面板里改被别的层覆盖的一项——名字旁标注、提示行写明改用户级不生效，消息区不写；改不成也只写在提示行", async () => {
+  const { term, writes, harness, cleanup } = makeShell();
+  try {
+    await settle();
+    term.input("/config");
+    term.input("\r");
+    await settle();
+    const retries = CONFIG_OPTIONS.findIndex((option) => option.id === "modelRequest.maxRetries");
+    assert.ok(retries > 0);
+    let screen = screenText(term);
+    assert.match(screen, /模型请求重试次数（被项目共享设置覆盖）/);
+    for (let i = 0; i < retries; i++) term.input(DOWN);
+    term.input("\r");
+    await settle();
+    assert.equal(writes.length, 1);
+    screen = screenText(term);
+    assert.match(screen, /被项目共享设置覆盖，改用户级不生效/);
+    // 改不成（有 worker 在跑）：只在提示行说明
+    harness.busy = "有 worker 在跑";
+    term.input("\r");
+    await settle();
+    assert.equal(writes.length, 1);
+    assert.match(screenText(term), /没有改：有 worker 在跑/);
+    term.input("\x1b");
+    await settle();
+    assert.doesNotMatch(screenText(term), /覆盖|没有改|已写进|已重读设置/);
+  } finally {
+    cleanup();
+  }
+});
+
 test("/config 选项=值 直接改；被项目覆盖的另有提醒；值没变不写；值不合法如实报错、不重建", async () => {
   const { term, writes, reloads, cleanup } = makeShell();
   try {
@@ -207,7 +239,7 @@ test("/config 选项=值 直接改；被项目覆盖的另有提醒；值没变�
     term.input("\r");
     await settle();
     assert.deepEqual(writes, ["modelRequest.maxRetries=3"]);
-    assert.match(screenText(term), /被项目设置覆盖，改用户级不生效/);
+    assert.match(screenText(term), /被项目共享设置覆盖，改用户级不生效/);
     assert.equal(reloads.length, 1);
     term.input("/config modelRequest.maxRetries=3");
     term.input("\r");

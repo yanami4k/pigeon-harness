@@ -10,6 +10,7 @@ import type { LaunchFlags } from "../application/launch-flags.ts";
 import { attachLoopGuard } from "../application/loop-guard.ts";
 import {
   closeNamedWorktree,
+  type NamedWorktree,
   openNamedWorktree,
   prefetchWorktreeBase,
   removeNamedWorktree,
@@ -25,6 +26,7 @@ import {
 import { openSessionRuntime } from "../application/session-runtime.ts";
 import type { WarnSink } from "../application/warnings.ts";
 import type { WebToolsConfig } from "../application/web-tools.ts";
+import { isGitWorkspace } from "../application/worktree-cleanup.ts";
 import type { SessionGrantStore } from "../approvals/grant-store.ts";
 import type { ApprovalHandler } from "../approvals/handler.ts";
 import { holdWorktreeInUse, worktreeInUseByOthers } from "../persistence/worktree-in-use.ts";
@@ -71,30 +73,38 @@ export function createSessionPool(context: SessionPoolContext): {
   pool: LocalSessionPool<PooledLive>;
   face: TuiPoolFace;
 } {
+  // 决策 459：不是 git 仓库时，面板派出的会话直接在当前目录里干活（不建工作树、与其他会话不隔离）
+  const sharedDir = (): boolean => !isGitWorkspace(context.governanceRoot);
   const pool = new LocalSessionPool<PooledLive>({
+    sharedDir,
     open: async ({ name, hooks }) => {
       const say = (line: string) => context.notice(`[${name}] ${line}`);
       const sessionId = newSessionId();
       const settings = context.settings();
-      let baseMode = worktreeBaseModeOf(worktreeSectionOf(settings));
-      // 取远端在后台进行（不卡界面）；取不到即从 HEAD 起
-      if (baseMode === "fresh" && !(await prefetchWorktreeBase(context.governanceRoot))) {
-        say("取远端默认分支失败，工作树从当前 HEAD 起");
-        baseMode = "head";
+      let worktree: NamedWorktree | undefined;
+      if (!sharedDir()) {
+        let baseMode = worktreeBaseModeOf(worktreeSectionOf(settings));
+        // 取远端在后台进行（不卡界面）；取不到即从 HEAD 起
+        if (baseMode === "fresh" && !(await prefetchWorktreeBase(context.governanceRoot))) {
+          say("取远端默认分支失败，工作树从当前 HEAD 起");
+          baseMode = "head";
+        }
+        worktree = openNamedWorktree({
+          cwd: context.governanceRoot,
+          name: `${name}-${sessionId.slice(-6).toLowerCase()}`,
+          baseMode,
+          notice: say,
+        });
       }
-      const worktree = openNamedWorktree({
-        cwd: context.governanceRoot,
-        name: `${name}-${sessionId.slice(-6).toLowerCase()}`,
-        baseMode,
-        notice: say,
-      });
-      // 开着期间持有在用锁（/worktrees 与退出清理据此不删开着的）
-      const releaseInUse = holdWorktreeInUse(worktree.path, context.homeDir);
+      // 开着期间持有工作树的在用锁（/worktrees 与退出清理据此不删开着的）；共用目录的没有工作树
+      const releaseInUse =
+        worktree !== undefined ? holdWorktreeInUse(worktree.path, context.homeDir) : () => {};
       let opened: Awaited<ReturnType<typeof openSessionRuntime>>;
       try {
         opened = await openSessionRuntime({
           governanceRoot: context.governanceRoot,
-          workspaceRoot: worktree.path,
+          // 共用目录的会话工作区就是当前目录（会话文件头记的工作目录即此，没有工作树）
+          workspaceRoot: worktree?.path ?? context.governanceRoot,
           sessionId,
           settings,
           streamFn: context.streamFn,
@@ -119,7 +129,9 @@ export function createSessionPool(context: SessionPoolContext): {
         });
       } catch (error) {
         releaseInUse();
-        await closeNamedWorktree(worktree, { write: say }).catch(() => "kept");
+        if (worktree !== undefined) {
+          await closeNamedWorktree(worktree, { write: say }).catch(() => "kept");
+        }
         throw error;
       }
       const bundle = opened.bundle;
@@ -149,11 +161,13 @@ export function createSessionPool(context: SessionPoolContext): {
           );
         }
       }
-      let base = worktree.base;
+      let base = worktree?.base;
       let removed = false;
       const runtime: PooledRuntime<PooledLive> = {
         sessionId,
-        worktree: { path: worktree.path, branch: worktree.branch },
+        ...(worktree !== undefined
+          ? { worktree: { path: worktree.path, branch: worktree.branch } }
+          : {}),
         // UserPromptSubmit：拦下即这一轮失败并写明原因；补的上下文作前缀
         run: async (text) => {
           let input = text;
@@ -193,7 +207,9 @@ export function createSessionPool(context: SessionPoolContext): {
           }
           await disposeRuntime(bundle).catch(() => {});
           releaseInUse();
-          if (!removed) await closeNamedWorktree(worktree, { write: say }).catch(() => "kept");
+          if (worktree !== undefined && !removed) {
+            await closeNamedWorktree(worktree, { write: say }).catch(() => "kept");
+          }
         },
         live: {
           subscribe: (listener) => adapter.subscribe(listener),
@@ -201,6 +217,8 @@ export function createSessionPool(context: SessionPoolContext): {
           subscribeToolResults: (listener) => adapter.subscribeToolResults(listener),
         },
         take: (state) => {
+          // 决策 459：共用目录的会话没有工作树，改动已直接在目录里
+          if (worktree === undefined) return `${name} 没有工作树（共用目录）`;
           if (removed) return `会话 ${name} 的工作树已删除，没有可取回的`;
           // 取回的落点就是这个工作树（主会话 /resume 过去、进了它的工作树）：自己叠自己，拒绝
           if (sameDir(context.mainWorkspace(), worktree.path)) {

@@ -18,12 +18,12 @@ function stubHost(memory: TuiMemoryFace | undefined) {
   const sessionId = newSessionId();
   const host: CommandsHost = {
     addSystem: (line) => lines.push(line),
+    addAlert: (line) => lines.push(line),
     render: () => {},
     requestExit: () => {},
     sessionId: () => sessionId,
     grants: () => undefined,
     workers: () => undefined,
-    sessionsRoot: () => undefined,
     searchRoot: () => undefined,
     resumeConfigured: () => false,
     spawnCommand: () => {},

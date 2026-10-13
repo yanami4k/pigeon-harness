@@ -272,3 +272,30 @@ test("保存时排队被取消：原文件不动，编辑稿保留改过的内�
     assert.equal(readFileSync(file("project"), "utf8"), MEMORY_FILE_HEADERS.project);
     assert.equal(readFileSync(memoryDraftPathOf(file("project")), "utf8"), edited);
   }));
+
+test("验收修改：在主目录下启动——/memory 只列用户级一层并说明；/memory edit project 说明改用 user，不打开编辑器", async () => {
+  const home = mkdtempSync(join(tmpdir(), "pigeon-memory-command-home-"));
+  try {
+    const ctx: MemoryCommandContext = {
+      governanceRoot: home,
+      homeDir: home,
+      limits: { project: 200, user: 100 },
+    };
+    const view = memoryViewText(ctx);
+    assert.match(view, /用户级/);
+    assert.doesNotMatch(view, /^项目级（/m);
+    assert.match(view, /项目级记忆就是用户级记忆（同一个文件）/);
+    let opened = false;
+    const text = await editMemoryLayer(ctx, "project", {
+      editor: "true",
+      run: () => {
+        opened = true;
+        return { ok: true };
+      },
+    });
+    assert.match(text, /要改用 \/memory edit user/);
+    assert.equal(opened, false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});

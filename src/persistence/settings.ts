@@ -35,6 +35,7 @@ import {
 import { ensureGlobalIgnoreRulesOnce, type GlobalIgnoreOptions } from "./global-ignore.ts";
 import { parseJsonText } from "./json-text.ts";
 import { readDotMcpJson } from "./mcp-config.ts";
+import { projectSharesUserPigeonDir } from "./pigeon-layers.ts";
 
 export class SettingsError extends Error {}
 
@@ -44,11 +45,24 @@ export interface SettingsLocation extends SettingsSource {
 
 // 三层文件的位置（按优先级从低到高）
 export function settingsLocations(root: string, homeDir: string = homedir()): SettingsLocation[] {
-  return [
-    { layer: "user", path: userSettingsPath(homeDir), file: userPigeonRel(SETTINGS_FILE) },
-    { layer: "project", path: projectSettingsPath(root), file: pigeonRel(SETTINGS_FILE) },
-    { layer: "local", path: projectLocalSettingsPath(root), file: pigeonRel(LOCAL_SETTINGS_FILE) },
-  ];
+  const user: SettingsLocation = {
+    layer: "user",
+    path: userSettingsPath(homeDir),
+    file: userPigeonRel(SETTINGS_FILE),
+  };
+  const project: SettingsLocation = {
+    layer: "project",
+    path: projectSettingsPath(root),
+    file: pigeonRel(SETTINGS_FILE),
+  };
+  const local: SettingsLocation = {
+    layer: "local",
+    path: projectLocalSettingsPath(root),
+    file: pigeonRel(LOCAL_SETTINGS_FILE),
+  };
+  // 主目录下启动：项目的 settings.json 就是用户级的那一份，按一层（用户级）读——不重复读、不报"被项目设置覆盖"、
+  // 只许写在用户级的项不被当成写在项目里。settings.local.json 只有项目个人这一层，照旧
+  return projectSharesUserPigeonDir(root, homeDir) ? [user, local] : [user, project, local];
 }
 
 // 读一层：缺失为 undefined；不是合法 JSON 或校验不过响亮失败
@@ -164,7 +178,7 @@ export function ensureStateDirOf(
     if (parent === current) return;
     if (path.basename(current) === STATE_DIR && path.basename(parent) === PIGEON_DIR) {
       const root = path.dirname(parent);
-      if (path.resolve(root) !== path.resolve(homeDir)) ensureProjectStateDir(root, notice);
+      if (!projectSharesUserPigeonDir(root, homeDir)) ensureProjectStateDir(root, notice);
       return;
     }
     current = parent;

@@ -5,7 +5,6 @@
 
 // 判断可用性需要的壳侧只读面（CommandsHost 的子集）
 export interface CommandAvailability {
-  sessionsRoot(): string | undefined;
   searchRoot(): string | undefined;
   resumeConfigured(): boolean;
   hasGrants(): boolean;
@@ -63,12 +62,6 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     usage: "/compact [重点]",
     whileRunning: { allow: false, reason: `${MAIN_STATE}（压缩对话上下文）` },
     available: () => true,
-  },
-  {
-    name: "sessions",
-    usage: "/sessions",
-    whileRunning: { allow: true },
-    available: (host) => host.sessionsRoot() !== undefined,
   },
   {
     name: "resume",

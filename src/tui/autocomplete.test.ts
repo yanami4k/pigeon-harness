@@ -24,6 +24,7 @@ function makeShell() {
     sessionId,
     logDir: root,
     autocomplete: { basePath: root, fdPath: null },
+    search: { root },
   });
   shell.start();
   return {
@@ -48,17 +49,17 @@ test('"/" 开头列出命令，选中前缀为 ASCII；回车套用并发出命�
   const { term, runtime, cleanup } = makeShell();
   try {
     await settle();
-    term.input("/sess");
+    term.input("/sear");
     await settle();
     const screen = screenText(term);
-    assert.match(screen, /sessions/);
+    assert.match(screen, /search/);
     assert.doesNotMatch(screen, /→/);
     term.input("\r");
     await settle();
     term.input("\r");
     await settle();
     assert.deepEqual(runtime.runs, [], "斜杠命令不交给模型");
-    assert.match(screenText(term), /会话|session/i);
+    assert.match(screenText(term), /search/);
   } finally {
     cleanup();
   }

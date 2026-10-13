@@ -123,8 +123,8 @@ test("拖选后 Ctrl+C 复制并清掉选区：下一次 Ctrl+C 照常清输入"
   try {
     await settle();
     term.input("draft");
-    term.input("\x1b[<0;4;2M");
-    term.input("\x1b[<32;20;2M");
+    term.input("\x1b[<0;4;12M");
+    term.input("\x1b[<32;20;12M");
     await settle();
     term.input("\x03");
     await settle(150);

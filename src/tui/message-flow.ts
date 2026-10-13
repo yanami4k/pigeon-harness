@@ -65,8 +65,8 @@ export class MessageFlow {
     this.view = new ScrollView(this.list, { follow: "end", primary: true });
   }
 
-  private append(text: string): Text {
-    const line = new Text(linkify(sanitizeTerminalText(text)));
+  private append(text: string, style?: (line: string) => string): Text {
+    const line = new Text(linkify(sanitizeTerminalText(text)), 1, 1, style);
     this.list.addChild(line);
     return line;
   }
@@ -153,7 +153,8 @@ export class MessageFlow {
         this.lastReply = line.text;
         this.remember(line.text);
       } else {
-        this.append(line.text);
+        // 回看历史里的说明行（更早未展开、旧格式会话等）是提示，弱化
+        this.append(line.text, line.kind === "notice" ? secondary : undefined);
         if (line.kind === "user") {
           this.rememberInput(line.text.startsWith("> ") ? line.text.slice(2) : line.text);
         }
@@ -167,8 +168,13 @@ export class MessageFlow {
     this.rememberInput(text);
   }
 
-  // 系统行：busy 提示、run 终态摘要等（chrome 之外的壳自体消息）
+  // 系统行：程序写的提示（命令结果、状态说明等），用次要信息的弱化样式（验收修改：提示一律灰色）
   addSystem(line: string): void {
+    this.append(line, secondary);
+  }
+
+  // 要醒目的系统行：真正的报错（请求、写入、钩子出错等）、要人作答的审批块与运行期告警，照常显示
+  addAlert(line: string): void {
     this.append(line);
   }
 
@@ -310,7 +316,7 @@ export function projectRuntimeEvent(
       // 没有收尾行的消息区（面板会话）：轮内出错写一行原因
       const message = (event.payload as TurnCompletedPayload).errorMessage?.split("\n")[0];
       if (options.turnErrors === true && message !== undefined && message !== "") {
-        flow.addSystem(`error · ${message}`);
+        flow.addAlert(`error · ${message}`);
       }
       break;
     }

@@ -122,3 +122,27 @@ test("无 Skill 时段落与清单为空", () => {
     cleanup();
   }
 });
+
+test("验收修改：主目录下项目级与用户级是同一个目录——只按用户级扫一次，不把同一批 Skill 记成同名冲突", () => {
+  const { home, cleanup } = makeDirs();
+  try {
+    writeFile(join(home, ".pigeon", "skills", "review", "SKILL.md"), skillMd("review", "用户版"));
+    const twice = loadSkillCatalog({ workspaceRoot: home, homeDir: home });
+    assert.ok(
+      twice.problems.some((problem) => problem.includes("冲突")),
+      "不标明时同一目录扫两遍"
+    );
+    const catalog = loadSkillCatalog({
+      workspaceRoot: home,
+      homeDir: home,
+      projectIsUserDir: true,
+    });
+    assert.deepEqual(
+      catalog.skills.map((skill) => [skill.name, skill.scope]),
+      [["review", "user"]]
+    );
+    assert.deepEqual(catalog.problems, []);
+  } finally {
+    cleanup();
+  }
+});

@@ -273,7 +273,7 @@ test("树形视图：Ctrl+X 与 /agents 切换整屏；主 agent、嵌套 worker
 
 test("进入 worker 会话：从面板（输入框为空时按 ↓）选中进入，实时看对话与工具调用，输入即发消息，/stop 停止，Esc 回主会话", async () => {
   const h = orchestrationHarness();
-  const { term, shell, sessionId } = shellWith({ workers: h.face });
+  const { term, shell } = shellWith({ workers: h.face });
   try {
     shell.start();
     await settle();
@@ -287,10 +287,7 @@ test("进入 worker 会话：从面板（输入框为空时按 ↓）选中进�
     assert.ok(panelRow(term, "fix-b")?.startsWith(" > "));
     await type(term, "\r");
     assert.equal(shell.currentView(), "worker");
-    assert.ok(
-      titleLine(term)?.includes("== worker fix-b | [esc] back to main =="),
-      titleLine(term)
-    );
+    assert.ok(titleLine(term)?.includes("worker fix-b · esc to go back"), titleLine(term));
     assert.ok(screenFlat(term).includes("worker: fix-b running | [enter] message, /stop"));
     // 实时：正文与工具调用
     const runtime = h.runtime("fix-b");
@@ -327,7 +324,7 @@ test("进入 worker 会话：从面板（输入框为空时按 ↓）选中进�
     // Esc 回主会话
     await type(term, ESC);
     assert.equal(shell.currentView(), "main");
-    assert.ok(titleLine(term)?.includes(`== ${sessionId} ==`), titleLine(term));
+    assert.ok(!screenFlat(term).includes("esc to go back"), "回到主视图：没有特殊视图的那行说明");
     assert.ok(screenFlat(term).includes("state: idle"));
     assert.ok(!screenFlat(term).includes("正在看 b.ts"), "主会话的消息区不含 worker 的对话");
   } finally {
@@ -382,10 +379,7 @@ test("进入 worker 会话：从树形视图选中进入；面板与树形视图
     await type(term, DOWN);
     await type(term, "\r");
     assert.equal(shell.currentView(), "worker");
-    assert.ok(
-      titleLine(term)?.includes("== worker look-b | [esc] back to tree =="),
-      titleLine(term)
-    );
+    assert.ok(titleLine(term)?.includes("worker look-b · esc to go back"), titleLine(term));
     h.runtime("look-b").turn("b 在干活");
     await settle();
     assert.ok(screenFlat(term).includes("b 在干活"));

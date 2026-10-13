@@ -450,7 +450,7 @@ test("渲染注入防御（决策 036）：流式文本与审批块 diff 的控�
     assert.ok(flat.includes("␛[2J"), `CSI 2J 应可见化为 ␛[2J，实际：\n${screenText(term)}`);
     // 对照组不受影响
     assert.ok(flat.includes("> 你好"), "user 回显行不受影响");
-    assert.ok(screenText(term).includes(`== ${SESSION_ID} ==`), "chrome 标题不受影响");
+    assert.ok(flat.includes("state:"), "状态栏不受影响");
     assertWidthsWithin(term, WIDTH);
   } finally {
     shell.stop();

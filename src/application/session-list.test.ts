@@ -1,13 +1,15 @@
 // M4 S5：session list 命令层测试（D5：列表默认安静）。M2 S4：命令层自 cli/session.ts 归位 application/session-list.ts。
-// 读新会话存储：覆盖安静行、从旧到新的顺序、过滤器（工具、Run 级失败分类、时间）、旧格式会话只给计数提示。
+// 读新会话存储：覆盖安静行、从旧到新的顺序、过滤器（工具、Run 级失败分类、时间）、旧格式会话只给计数提示；
+// 决策 456（验收修改）：每行带会话名，没改过名的显示缺省名。
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { test } from "vitest";
 import { LEGACY_READER_HINT } from "../persistence/session-catalog.ts";
 import { asSessionId, type SessionId } from "../state/ids.ts";
 import { sessionCreatedAt } from "../state/session-summary.ts";
+import { defaultPeerName } from "./peer-messaging.ts";
 import { runSessionListCommand } from "./session-list.ts";
 import { createFixtureSession, type FixtureSession } from "./session-store-fixtures.ts";
 
@@ -28,7 +30,11 @@ async function seed(
   sessionId: SessionId,
   write: (session: FixtureSession) => void
 ): Promise<void> {
-  const session = createFixtureSession({ sessionsDir, sessionId });
+  const session = createFixtureSession({
+    sessionsDir,
+    sessionId,
+    cwd: resolve(sessionsDir, "../../.."),
+  });
   write(session);
   await session.close();
 }
@@ -54,7 +60,7 @@ test("session list：一会话一行安静行（时间 + Run 数 + 会话 id）�
     });
     assert.equal(
       runSessionListCommand({ root }),
-      `${minute(FIRST)}  2 个 Run  ${FIRST}\n${minute(SECOND)}  1 个 Run  ${SECOND}\n`
+      `${minute(FIRST)}  ${defaultPeerName(root, FIRST)}  2 个 Run  ${FIRST}\n${minute(SECOND)}  ${defaultPeerName(root, SECOND)}  1 个 Run  ${SECOND}\n`
     );
   } finally {
     cleanup();
@@ -106,11 +112,30 @@ test("session list：旧格式会话（会话根下平铺的 sess_<ULID>.jsonl�
     const notice = `另有 1 个旧格式会话（迁移之前创建）未列出；${LEGACY_READER_HINT}`;
     assert.equal(
       runSessionListCommand({ root }),
-      `${minute(SECOND)}  1 个 Run  ${SECOND}\n${notice}\n`
+      `${minute(SECOND)}  ${defaultPeerName(root, SECOND)}  1 个 Run  ${SECOND}\n${notice}\n`
     );
     assert.equal(
       runSessionListCommand({ root, filters: { tool: "无此工具" } }),
       `尚无会话记录。\n${notice}\n`
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("决策 456（验收修改）：改过名的会话在列表里显示它的名字，没改过名的显示缺省名", async () => {
+  const { root, sessionsDir, cleanup } = makeRoot();
+  try {
+    await seed(sessionsDir, FIRST, (s) => {
+      s.writer.setName("api-fix");
+      s.startRun({ task: "a" });
+    });
+    await seed(sessionsDir, SECOND, (s) => s.startRun({ task: "b" }));
+    const lines = runSessionListCommand({ root }).trimEnd().split("\n");
+    assert.equal(lines[0], `${minute(FIRST)}  api-fix  1 个 Run  ${FIRST}`);
+    assert.equal(
+      lines[1],
+      `${minute(SECOND)}  ${defaultPeerName(root, SECOND)}  1 个 Run  ${SECOND}`
     );
   } finally {
     cleanup();

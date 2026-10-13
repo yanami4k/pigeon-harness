@@ -26,6 +26,8 @@ export interface ResumeOptions<Binding> {
 export interface ResumeViewHost<Binding> {
   isStarted(): boolean;
   addSystem(line: string): void;
+  // 要醒目的一行（真正的报错），不弱化
+  addAlert(line: string): void;
   addHistoryLines(lines: ReturnType<typeof loadSessionHistory>): void;
   render(): void;
   updateStatus(): void;
@@ -77,7 +79,7 @@ export function handleResumeCommand<Binding>(
   const finish = (error?: unknown): void => {
     host.setResuming(false);
     if (error !== undefined) {
-      host.addSystem(`恢复失败：${error instanceof Error ? error.message : String(error)}`);
+      host.addAlert(`恢复失败：${error instanceof Error ? error.message : String(error)}`);
     }
     host.updateStatus();
     host.render();
@@ -119,7 +121,7 @@ export function renderHistory<Binding>(
     host.addHistoryLines(lines);
     host.addSystem("== 历史结束，以下为续跑 ==");
   } catch (error) {
-    host.addSystem(`历史渲染失败：${error instanceof Error ? error.message : String(error)}`);
+    host.addAlert(`历史渲染失败：${error instanceof Error ? error.message : String(error)}`);
   }
   host.render();
 }

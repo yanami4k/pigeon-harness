@@ -51,6 +51,8 @@ export interface SkillCatalogOptions {
   roots?: readonly SkillRoot[];
   // 决策 340：已扫描好的本地 Skill（/reload 重建时沿用开局的扫描结果，不重读文件）；在场时不扫描
   local?: LocalSkillScan;
+  // 主目录下启动：项目的 .pigeon/skills 就是用户级的那个目录——只扫一份、按用户级登记（装配方判定后给出）
+  projectIsUserDir?: boolean;
 }
 
 // 本地 Skill 的扫描结果（项目级与用户级，或显式给定的根）：会话开始时冻结
@@ -247,7 +249,7 @@ export function skillTreeFingerprint(roots: readonly string[]): string {
 
 // 扫描本地 Skill 根
 export function scanLocalSkills(
-  options: Pick<SkillCatalogOptions, "workspaceRoot" | "homeDir" | "roots">
+  options: Pick<SkillCatalogOptions, "workspaceRoot" | "homeDir" | "roots" | "projectIsUserDir">
 ): LocalSkillScan {
   const projectRoot = projectSkillsDir(options.workspaceRoot);
   const userRoot = userSkillsDir(options.homeDir ?? homedir());
@@ -255,7 +257,9 @@ export function scanLocalSkills(
     options.roots !== undefined
       ? options.roots.map(scanConfiguredRoot)
       : [
-          scanRoot(projectRoot, "project", pigeonRel("skills")),
+          ...(options.projectIsUserDir === true
+            ? []
+            : [scanRoot(projectRoot, "project", pigeonRel("skills"))]),
           scanRoot(userRoot, "user", userPigeonRel("skills")),
         ];
   return {
@@ -264,7 +268,9 @@ export function scanLocalSkills(
     roots:
       options.roots !== undefined
         ? options.roots.map((root) => root.path)
-        : [projectRoot, userRoot],
+        : options.projectIsUserDir === true
+          ? [userRoot]
+          : [projectRoot, userRoot],
   };
 }
 

@@ -359,7 +359,7 @@ test("会话树的动作：Enter 只读看历史、Esc 回树；当前会话、�
     await press(term, "\r");
     assert.equal(shell.currentView(), "history");
     let flat = screenFlat(term);
-    assert.ok(flat.includes(`history | ${family.main} | read only`), flat);
+    assert.ok(flat.includes("history · read only · esc to go back"), flat);
     assert.ok(flat.includes("主会话的第二件事") && flat.includes("做完了"), flat);
     assert.ok(flat.includes("history: read only | [esc] back to tree"), flat);
     await press(term, "x");
@@ -392,7 +392,7 @@ test("会话树的动作：Enter 只读看历史、Esc 回树；当前会话、�
     await press(term, "\r");
     assert.equal(shell.currentView(), "worker");
     flat = screenFlat(term);
-    assert.ok(flat.includes("== worker live-a | ") && flat.includes("正在看"), flat);
+    assert.ok(flat.includes("worker live-a · esc to go back") && flat.includes("正在看"), flat);
     harness.runtime("live-a").turn("实时的一句");
     await settle();
     assert.ok(screenFlat(term).includes("实时的一句"));
@@ -407,7 +407,7 @@ test("会话树的动作：Enter 只读看历史、Esc 回树；当前会话、�
     await settle(200);
     assert.deepEqual(rebinds, [family.branch]);
     assert.equal(shell.currentView(), "main");
-    assert.ok(screenFlat(term).includes(`== ${family.branch} ==`), screenFlat(term));
+    assert.ok(screenFlat(term).includes(`会话 ${family.branch} 续跑`), screenFlat(term));
   } finally {
     shell.stop();
     await harness.stopAll();

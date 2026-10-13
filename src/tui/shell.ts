@@ -216,7 +216,7 @@ export interface TuiShellOptions {
   // S3：grant 治理面投影——/grants /revoke /grants save 的命令上下文（命令层在
   // application/grants.ts，与 cli REPL 同一份）；缺省 = 斜杠命令不可用
   grants?: TuiGrantsContext;
-  // S4：/sessions 会话列表入口（命令层在 application/session-list.ts，与 cli 同一份）
+  // 会话目录所在的根（续接时从会话记录累计已有花费、子会话的花费用）；终端界面不再有 /sessions（看会话、切会话用 /resume）
   sessions?: { root: string };
   // S4：/resume <sessionId> 恢复入口——对账流程在 application/resume.ts（写盘路径唯一）；
   // rebind 由装配方注入：对账收口后按目标 sessionId 重建运行面（restoredGrants 种子）
@@ -335,6 +335,8 @@ export interface TuiPoolFace {
 
 // 决策 443：会话面板里连按两次 Ctrl+X 停止的间隔
 const PANEL_STOP_CONFIRM_MS = 1500;
+// 设置面板里"被哪一层覆盖"的说法（与面板上那一项旁的标注同一口径）
+const OVERRIDE_LAYER = { project: "项目共享设置", local: "项目个人设置" } as const;
 
 // 决策 304：树形视图的两种模式
 export type TreeMode = "running" | "sessions" | "messages";
@@ -533,7 +535,8 @@ export class PigeonTuiShell
     });
     // chrome 除会话名外纯 ASCII（spike 纪律：歧义宽字符不进边框/标题/状态栏）；sessionId 全 ASCII ULID。决策 456：会话名
     // 按名字规则只含字母、数字与 _ . -（不含控制字符、零宽与可忽略字符），其他文字的宽度按 pi-tui 的算法
-    this.title = new Text("");
+    // 只在特殊视图里有一行，不带上下空行
+    this.title = new Text("", 1, 0);
     this.title.setText(this.titleText());
     this.tracker = new WorkerActivityTracker(
       options.provider !== undefined ? { provider: options.provider } : {}
@@ -593,7 +596,6 @@ export class PigeonTuiShell
     const children: StackChild[] =
       this.view === "tree"
         ? [
-            this.title,
             fill(
               this.treeMode === "sessions"
                 ? this.sessionTree
@@ -605,14 +607,7 @@ export class PigeonTuiShell
             this.statusBar,
           ]
         : this.view === "panel"
-          ? [
-              this.title,
-              fill(this.sessionPanel),
-              this.approvalBox,
-              ...status,
-              keep(this.input),
-              this.statusBar,
-            ]
+          ? [fill(this.sessionPanel), this.approvalBox, ...status, keep(this.input), this.statusBar]
           : this.view === "pooled" && this.pooledSession !== undefined
             ? [
                 this.title,
@@ -640,7 +635,6 @@ export class PigeonTuiShell
                     this.panel,
                   ]
                 : [
-                    this.title,
                     fill(this.flow.view),
                     ...(this.loader !== undefined ? [this.loader] : []),
                     this.queue.view,
@@ -802,7 +796,7 @@ export class PigeonTuiShell
     if (this.started) {
       this.started = false;
       // 决策 441：离开全屏时把对话（标题与主会话的消息区）完整打印到普通屏幕
-      this.tui.setLayoutRoot(new TrimmedTranscript(new VStack([this.title, this.flow.view])));
+      this.tui.setLayoutRoot(new TrimmedTranscript(new VStack([this.flow.view])));
       this.tui.stop();
     }
   }
@@ -969,7 +963,7 @@ export class PigeonTuiShell
         this.hookContexts = [];
         if (contexts.length > 0) input = `${contexts.join("\n\n")}\n\n${value}`;
       } catch (error) {
-        this.flow.addSystem(
+        this.flow.addAlert(
           `钩子出错（UserPromptSubmit）：${error instanceof Error ? error.message : String(error)}`
         );
       }
@@ -1083,7 +1077,7 @@ export class PigeonTuiShell
     try {
       return this.options.config?.view();
     } catch (error) {
-      this.flow.addSystem(`读不了设置：${error instanceof Error ? error.message : String(error)}`);
+      this.flow.addAlert(`读不了设置：${error instanceof Error ? error.message : String(error)}`);
       this.tui.requestRender();
       return undefined;
     }
@@ -1105,14 +1099,21 @@ export class PigeonTuiShell
   private applyConfig(id: string, value: string): void {
     const face = this.options.config;
     if (face === undefined) return;
+    // 验收修改：在面板里改的，所有说明只写在面板的提示行（弱化样式），不往消息区写——面板上那一项的取值与生效值当场
+    // 更新就是反馈；/config 选项=值 直接改（没开面板）的照旧写消息区
+    const inPanel = this.configPanel.isOpen();
+    const say = (line: string): void => {
+      if (inPanel) this.configPanel.setNote(line);
+      else this.flow.addSystem(line);
+    };
     if (this.isBusy()) {
-      this.flow.addSystem("正在运行或重建运行面，等它结束再改设置");
+      say("正在运行或重建运行面，等它结束再改设置");
       this.tui.requestRender();
       return;
     }
     const busy = face.busy?.();
     if (busy !== undefined) {
-      this.flow.addSystem(`没有改：${busy}`);
+      say(`没有改：${busy}`);
       this.tui.requestRender();
       return;
     }
@@ -1120,40 +1121,60 @@ export class PigeonTuiShell
     try {
       file = face.set(id, value);
     } catch (error) {
-      this.flow.addSystem(`没有改：${error instanceof Error ? error.message : String(error)}`);
+      say(`没有改：${error instanceof Error ? error.message : String(error)}`);
       this.tui.requestRender();
       return;
     }
     if (file === undefined) {
-      this.flow.addSystem(`${id} 已经是 ${value}，没有改`);
+      say(`${id} 已经是 ${value}，没有改`);
       this.tui.requestRender();
       return;
     }
-    this.flow.addSystem(`已写进 ${file}：${id} = ${value}`);
     const view = this.configItems()?.find((item) => item.option.id === id);
-    if (view?.overriddenBy !== undefined) {
-      this.flow.addSystem(`注意：${id} 被项目设置覆盖，改用户级不生效`);
+    const overridden =
+      view?.overriddenBy !== undefined
+        ? `被${OVERRIDE_LAYER[view.overriddenBy]}覆盖，改用户级不生效`
+        : undefined;
+    if (!inPanel) {
+      this.flow.addSystem(`已写进 ${file}：${id} = ${value}`);
+      if (overridden !== undefined) this.flow.addSystem(`注意：${id} ${overridden}`);
     }
     const reload = this.options.reload;
     if (reload === undefined) {
-      this.flow.addSystem("下次启动时生效");
+      if (inPanel) this.configPanel.setNote(overridden ?? "已改，下次启动时生效");
+      else this.flow.addSystem("下次启动时生效");
       this.refreshConfigPanel(id);
       this.tui.requestRender();
       return;
     }
     this.running = true;
+    if (inPanel) this.configPanel.setNote("已改，正在重读设置…");
     this.updateStatus();
     this.tui.requestRender();
-    const finish = (lines: readonly string[]): void => {
+    const finish = (lines: readonly string[], failed: boolean): void => {
       this.running = false;
-      for (const line of lines) this.flow.addSystem(line);
+      if (inPanel) {
+        // 由面板触发的重读不单独报"已重读设置"；别的提示（外部同时改了 MCP 等）并进这一句
+        const extra = lines.filter(
+          (line) => !line.startsWith("已重读设置") && line !== "设置没有变化"
+        );
+        this.configPanel.setNote(
+          failed
+            ? (lines[0] ?? "重读设置失败")
+            : [overridden ?? "已改，自下一轮起生效", ...extra].join("；")
+        );
+      } else {
+        for (const line of lines) this.flow.addSystem(line);
+      }
       this.refreshConfigPanel(id);
       this.updateStatus();
       this.tui.requestRender();
       this.drainQueue();
     };
-    reload([]).then(finish, (error: unknown) =>
-      finish([`重读设置失败：${error instanceof Error ? error.message : String(error)}`])
+    reload([]).then(
+      (lines) => finish(lines, false),
+      (error: unknown) =>
+        finish([`重读设置失败：${error instanceof Error ? error.message : String(error)}`], true)
     );
   }
 
@@ -1689,7 +1710,7 @@ export class PigeonTuiShell
         outcome.failed === undefined ? "已撤销上次退代码" : "撤销上次退代码没有做完"
       );
     } else if (outcome.failed !== undefined) {
-      this.flow.addSystem("写回中途出错，停在出错的那个文件：对话没有退");
+      this.flow.addAlert("写回中途出错，停在出错的那个文件：对话没有退");
     } else {
       this.flow.addSystem(
         node.kind === "message" ? `已退回（${what}）到这条消息之前` : `已切到这条分支（${what}）`
@@ -1717,7 +1738,7 @@ export class PigeonTuiShell
       }
     }
     if (outcome.failed !== undefined) {
-      this.flow.addSystem(
+      this.flow.addAlert(
         `出错：${outcome.failed.path === "" ? "" : `${outcome.failed.path}：`}${outcome.failed.reason}`
       );
       if ((restore?.written.length ?? 0) + (restore?.removed.length ?? 0) > 0) {
@@ -1755,31 +1776,23 @@ export class PigeonTuiShell
     return this.options.renameSession;
   }
 
-  // 决策 456：改名之后重画标题栏
-  refreshTitle(): void {
-    this.title.setText(this.titleText());
-    this.tui.requestRender();
-  }
-
-  // 决策 456：标题栏写会话名，会话号放在后面、用次要信息的弱化样式（只有会话号时不重复）
   private titleText(): string {
-    const named = (sessionId: string, head: (name: string) => string): string => {
-      const name = this.options.sessionName?.(sessionId);
-      return name === undefined ? head(sessionId) : `${head(name)} ${secondary(sessionId)}`;
-    };
-    const back = this.returnTo.view === "tree" ? "tree" : "main";
+    // 验收修改：主视图不显示标题行；worker、只读历史与面板会话里留一行很短的弱化说明——在哪、怎么回去（这里没有它会不知道
+    // 自己在哪、为什么没有输入框），不写会话号
     const session = this.workerSession;
     if (this.view === "worker" && session !== undefined) {
       const worker = this.workerStatuses().find((status) => status.sessionId === session.sessionId);
-      return `== worker ${worker?.name ?? session.sessionId} | [esc] back to ${back} == ${secondary(session.sessionId)}`;
+      return secondary(`worker ${worker?.name ?? "?"} · esc to go back`);
     }
     if (this.view === "history" && this.historySession !== undefined) {
-      return named(
-        this.historySession.sessionId,
-        (name) => `== history | ${name} | read only | [esc] back to ${back} ==`
-      );
+      return secondary("history · read only · esc to go back");
     }
-    return named(this.current.sessionId, (name) => `== ${name} ==`);
+    if (this.view === "pooled" && this.pooledSession !== undefined) {
+      const id = this.pooledSession.id;
+      const card = this.options.pool?.source.list().find((item) => item.id === id);
+      return secondary(`session ${card?.name ?? "?"} · esc to go back to the panel`);
+    }
+    return "";
   }
 
   // 接管 Esc（CommandsHost）：/memory edit 排队保存期间按 Esc 取消；后接管的优先，交还时只撤自己那一份
@@ -1939,7 +1952,7 @@ export class PigeonTuiShell
 
   // 运行期告警（压缩、会话存储、工作区快照等）：终端界面运行期间落消息区，文案与去重由告警方负责
   addWarning(line: string): void {
-    this.flow.addSystem(line);
+    this.flow.addAlert(line);
     this.tui.requestRender();
   }
 
@@ -1969,7 +1982,7 @@ export class PigeonTuiShell
           !pooled.has(session.sessionId)
       );
     } catch (error) {
-      this.flow.addSystem(
+      this.flow.addAlert(
         `读会话列表失败：${error instanceof Error ? error.message : String(error)}`
       );
       this.tui.requestRender();
@@ -2015,9 +2028,9 @@ export class PigeonTuiShell
 
   // 决策 301：审批面板的各行——主会话的消息区照常留下记录；在 worker 会话里同时写进它的消息区，在树形视图里显示在树下方
   addApprovalLine(line: string): void {
-    this.flow.addSystem(line);
+    this.flow.addAlert(line);
     if (this.view === "worker" && this.workerSession !== undefined) {
-      this.workerSession.flow.addSystem(line);
+      this.workerSession.flow.addAlert(line);
     } else if (
       this.view === "tree" ||
       this.view === "history" ||
@@ -2109,6 +2122,12 @@ export class PigeonTuiShell
     if (this.view === "panel") this.sessionPanel.setNote(line);
   }
 
+  // 要醒目的一行（真正的报错）：消息区照常显示，不弱化
+  addAlert(line: string): void {
+    this.flow.addAlert(line);
+    if (this.view === "panel") this.sessionPanel.setNote(line);
+  }
+
   addHistoryLines(lines: Parameters<MessageFlow["addHistory"]>[0]): void {
     this.flow.addHistory(lines);
   }
@@ -2131,10 +2150,6 @@ export class PigeonTuiShell
 
   workers(): TuiWorkersFace | undefined {
     return this.current.workers;
-  }
-
-  sessionsRoot(): string | undefined {
-    return this.options.sessions?.root;
   }
 
   searchRoot(): string | undefined {
@@ -2324,7 +2339,7 @@ export class PigeonTuiShell
       this.interrupting = false;
       if (error !== undefined) {
         // interrupt 自身抛异常（装配级故障）：如实呈现，不伪装成已取消
-        this.flow.addSystem(
+        this.flow.addAlert(
           `[cancel] interrupt failed: ${error instanceof Error ? error.message : String(error)}`
         );
       }
@@ -2348,7 +2363,7 @@ export class PigeonTuiShell
   private warnEvidenceGaps(): void {
     const count = this.current.runtime.listenerErrors().length;
     if (count > this.reportedListenerErrors) {
-      this.flow.addSystem(`警告：本会话有 ${count} 条会话记录写入失败，证据链不完整。`);
+      this.flow.addAlert(`警告：本会话有 ${count} 条会话记录写入失败，证据链不完整。`);
       this.reportedListenerErrors = count;
     }
   }
@@ -2369,7 +2384,7 @@ export class PigeonTuiShell
         this.flow.addSystem("[hooks] SessionStart 补的上下文将在下一条输入带上");
       }
     } catch (error) {
-      this.flow.addSystem(
+      this.flow.addAlert(
         `钩子出错（SessionStart）：${error instanceof Error ? error.message : String(error)}`
       );
     }
@@ -2418,7 +2433,7 @@ export class PigeonTuiShell
       ...(binding.workers !== undefined ? { workers: binding.workers } : {}),
       ...(binding.hooks !== undefined ? { hooks: binding.hooks } : {}),
     };
-    // 决策 456：先换会话面再切视图——标题按新会话取名，不去读旧会话的文件
+    // 先换会话面再切视图（切视图时按新会话重画）
     this.showView("main");
     // 决策 323、324：换到新会话——SessionStart（source "resume"）补的上下文归新会话；
     // 旧会话的 SessionEnd 由装配方在释放旧运行面前跑
@@ -2426,7 +2441,6 @@ export class PigeonTuiShell
     this.activeRunId = null;
     // S5：落盘失败警告计数随运行面一起换绑——新面的 listenerErrors 从零起算
     this.reportedListenerErrors = 0;
-    this.title.setText(this.titleText());
     this.bindRuntime(binding.runtime);
     this.resetCosts(sessionId, true);
     refreshWorkersView(this);
@@ -2540,7 +2554,7 @@ export class PigeonTuiShell
       flow.addHistory(lines);
       flow.addSystem(endLine);
     } catch (error) {
-      flow.addSystem(`历史渲染失败：${error instanceof Error ? error.message : String(error)}`);
+      flow.addAlert(`历史渲染失败：${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -2909,7 +2923,7 @@ export class PigeonTuiShell
         this.tui.requestRender();
       },
       (error: unknown) => {
-        flow.addSystem(`发消息失败：${error instanceof Error ? error.message : String(error)}`);
+        flow.addAlert(`发消息失败：${error instanceof Error ? error.message : String(error)}`);
         this.tui.requestRender();
       }
     );
@@ -2948,7 +2962,7 @@ export class PigeonTuiShell
         `已补批 worker ${status.name} 的调用（${status.outcome?.blocked?.action ?? ""}），它接着做`
       );
     } catch (error) {
-      flow.addSystem(`续做失败：${error instanceof Error ? error.message : String(error)}`);
+      flow.addAlert(`续做失败：${error instanceof Error ? error.message : String(error)}`);
     }
     refreshWorkersView(this);
   }
@@ -3012,7 +3026,7 @@ export class PigeonTuiShell
       void pending.then(
         () => this.finishRunNow(),
         (error: unknown) => {
-          this.flow.addSystem(
+          this.flow.addAlert(
             `收尾时出错：${error instanceof Error ? error.message : String(error)}`
           );
           this.finishRunNow();
@@ -3046,7 +3060,7 @@ export class PigeonTuiShell
         try {
           await hooks.runEvent("StopFailure", "", { error: result.errorMessage ?? "unknown" });
         } catch (error) {
-          this.flow.addSystem(
+          this.flow.addAlert(
             `钩子出错（StopFailure）：${error instanceof Error ? error.message : String(error)}`
           );
         }
@@ -3060,7 +3074,7 @@ export class PigeonTuiShell
         try {
           report = await hooks.runEvent("Stop", "", { stop_hook_active: stopHookActive });
         } catch (error) {
-          this.flow.addSystem(
+          this.flow.addAlert(
             `钩子出错（Stop）：${error instanceof Error ? error.message : String(error)}`
           );
           return;
@@ -3098,7 +3112,7 @@ export class PigeonTuiShell
               error: continued.errorMessage ?? "unknown",
             });
           } catch (error) {
-            this.flow.addSystem(
+            this.flow.addAlert(
               `钩子出错（StopFailure）：${error instanceof Error ? error.message : String(error)}`
             );
           }

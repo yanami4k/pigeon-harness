@@ -30,6 +30,8 @@ export interface PooledSessionCard {
   summary: string;
   error?: string;
   worktree?: { path: string; branch: string };
+  // 决策 459：不是 git 仓库时派出的会话与其他会话共用当前目录（没有工作树、不隔离）
+  sharedDir?: boolean;
   startedAt: number;
   updatedAt: number;
 }
@@ -78,6 +80,8 @@ export interface LocalSessionPoolOptions<Live> {
   now?: () => number;
   // 关掉时整体的时限（缺省 15 秒）
   closeTimeoutMs?: number;
+  // 决策 459：派出的会话共用当前目录（不是 git 仓库）；派出时判定，卡片上标明
+  sharedDir?: () => boolean;
 }
 
 const STATE_ORDER: Record<PooledSessionState, number> = {
@@ -214,6 +218,7 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
         state: "preparing",
         task: text,
         summary: "",
+        ...(this.#options.sharedDir?.() === true ? { sharedDir: true } : {}),
         startedAt: now,
         updatedAt: now,
       },

@@ -15,6 +15,7 @@ function stubHost(sandbox: { exportChanges(): Promise<string> } | undefined) {
   const sessionId = newSessionId();
   const host: CommandsHost = {
     addSystem: (line) => lines.push(line),
+    addAlert: (line) => lines.push(line),
     render: () => {
       rendered += 1;
     },
@@ -22,7 +23,6 @@ function stubHost(sandbox: { exportChanges(): Promise<string> } | undefined) {
     sessionId: () => sessionId,
     grants: () => undefined,
     workers: () => undefined,
-    sessionsRoot: () => undefined,
     searchRoot: () => undefined,
     resumeConfigured: () => false,
     spawnCommand: () => assert.fail("沙箱里不该派 worker"),

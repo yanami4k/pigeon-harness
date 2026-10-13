@@ -50,6 +50,8 @@ export interface TuiWorkersFace {
 export interface WorkersViewHost {
   isStarted(): boolean;
   addSystem(line: string): void;
+  // 要醒目的一行（真正的报错），不弱化
+  addAlert(line: string): void;
   render(): void;
   // 决策 301：worker 状态刷新后（面板重绘、收尾的花费计入）与是否要定时刷新（有在跑的或还有在淡出期内的）
   workersRefreshed(workers: readonly WorkerStatus[]): void;
@@ -85,7 +87,7 @@ export function handleSpawnCommand(
       },
       (error: unknown) => {
         if (!host.isStarted()) return;
-        host.addSystem(
+        host.addAlert(
           `并行尝试收尾异常：${error instanceof Error ? error.message : String(error)}`
         );
         host.render();
@@ -113,7 +115,7 @@ export function handleSpawnCommand(
     },
     (error: unknown) => {
       if (!host.isStarted()) return;
-      host.addSystem(
+      host.addAlert(
         `worker ${sessionId} 收尾异常：${error instanceof Error ? error.message : String(error)}`
       );
       refreshWorkers(host);
@@ -149,7 +151,7 @@ export function handleCancelCommand(
       host.render();
     },
     (error: unknown) => {
-      host.addSystem(
+      host.addAlert(
         `取消 worker ${target.name} 失败：${error instanceof Error ? error.message : String(error)}`
       );
       host.render();
@@ -179,7 +181,7 @@ export function handleTakeCommand(
     },
     (error: unknown) => {
       if (!host.isStarted()) return;
-      host.addSystem(
+      host.addAlert(
         `取用 worker ${name} 的改动失败：${error instanceof Error ? error.message : String(error)}`
       );
       host.render();

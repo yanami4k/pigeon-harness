@@ -15,6 +15,7 @@
 // 模型信息（决策 362）：接入模块可具名导出 modelInfo，加载时随 StreamFn 登记；装配时按设置 > 声明 > pi-ai 目录 > 未知逐项取值，
 // 写进每个 Run 的开始条目并放在运行面上供查询（state/model-info.ts 的 modelProfile）；压缩所用的窗口取自它（决策 422）
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { SessionGrantStore } from "../approvals/grant-store.ts";
@@ -38,6 +39,7 @@ import {
   UPDATE_MEMORY_TOOL,
   updateMemoryRegistration,
 } from "../memory/update-memory-tool.ts";
+import { projectSharesUserPigeonDir } from "../persistence/pigeon-layers.ts";
 import { ensureProjectStateDir } from "../persistence/settings.ts";
 import { PiRuntimeAdapter, type StatusChannel } from "../pi-runtime/adapter.ts";
 import {
@@ -997,6 +999,10 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
       workspaceRoot: governanceRoot,
       ...(deps.homeDir !== undefined ? { homeDir: deps.homeDir } : {}),
       ...(deps.skillRoots !== undefined ? { roots: deps.skillRoots } : {}),
+      // 主目录下启动：项目的 skills 目录就是用户级的，只扫一份
+      ...(projectSharesUserPigeonDir(governanceRoot, deps.homeDir ?? homedir())
+        ? { projectIsUserDir: true }
+        : {}),
     });
   const skillCatalog = loadSkillCatalog({
     workspaceRoot: governanceRoot,
@@ -1119,6 +1125,9 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
         workspaceRoot: governanceRoot,
         ...(deps.homeDir !== undefined ? { homeDir: deps.homeDir } : {}),
         ...(deps.skillRoots !== undefined ? { roots: deps.skillRoots } : {}),
+        ...(projectSharesUserPigeonDir(governanceRoot, deps.homeDir ?? homedir())
+          ? { projectIsUserDir: true }
+          : {}),
       }),
       ...(deps.mcp !== undefined && deps.mcp.prompts.length > 0
         ? { prompts: deps.mcp.prompts }

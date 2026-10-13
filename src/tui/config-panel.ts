@@ -33,8 +33,11 @@ export function settingItemOf(view: ConfigItemView): SettingItem {
       : "";
   return {
     id: view.option.id,
-    // 标签只放中文名（pi-tui 的标签列最宽 36 列，长的会挤掉值列），选项名写在说明里
-    label: view.option.label,
+    // 标签只放中文名（pi-tui 的标签列最宽 36 列，长的会挤掉值列），选项名写在说明里；被别的层覆盖的在名字旁标注
+    label:
+      view.overriddenBy !== undefined
+        ? `${view.option.label}（被${LAYER_LABEL[view.overriddenBy]}覆盖）`
+        : view.option.label,
     description: `${view.option.id}：${view.option.description}。生效值（不含启动参数）：${view.effective}${overridden}`,
     currentValue: view.user,
     values: [...view.option.values],
@@ -49,6 +52,8 @@ export class ConfigPanel {
   private items: readonly ConfigItemView[] = [];
   private maxRows: () => number = () => Number.MAX_SAFE_INTEGER;
   private visibleRows = 0;
+  // 验收修改：改动的反馈（写入失败、被覆盖、下一轮才生效等）写在面板自己的这一行，不往消息区写
+  private readonly note = new Text("", 1, 0, secondary);
 
   isOpen(): boolean {
     return this.list !== undefined;
@@ -74,6 +79,13 @@ export class ConfigPanel {
       render: (width) => this.renderList(width),
       invalidate: () => this.list?.invalidate(),
     });
+    this.note.setText("");
+    this.view.addChild(this.note);
+  }
+
+  // 面板里的一句说明（弱化样式）；空串即清掉
+  setNote(text: string): void {
+    this.note.setText(text);
   }
 
   // 改完之后按最新的读数重建各项（生效值与覆盖说明跟着变），选中项不变

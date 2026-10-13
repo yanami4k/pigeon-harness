@@ -14,13 +14,13 @@ import {
   entriesSection,
   MEMORY_FILE_HEADERS,
   MEMORY_LAYER_LABELS,
-  MEMORY_LAYERS,
   type MemoryLayer,
   memoryFactsOfText,
   parseMemory,
   usedChars,
 } from "../memory/learned.ts";
 import {
+  availableMemoryLayers,
   type MemoryLocation,
   MemoryLockAbortedError,
   memoryLocation,
@@ -52,6 +52,10 @@ function locationOf(ctx: MemoryCommandContext, layer: MemoryLayer): MemoryLocati
   });
 }
 
+// 主目录下启动：项目级记忆与用户级是同一个文件，只有用户级一层
+const PROJECT_IS_USER_NOTE =
+  "在主目录下启动：项目级记忆就是用户级记忆（同一个文件），这里只有用户级一层；要改用 /memory edit user";
+
 // 回话末尾附上迁移的结果与告警（每条一行）
 function withNotes(text: string, notes: readonly string[]): string {
   return notes.length === 0 ? text : `${text}\n${notes.join("\n")}`;
@@ -79,7 +83,8 @@ export function memoryViewText(ctx: MemoryCommandContext): string {
   const notes: string[] = [];
   const view = [
     "学到的记忆（改动从下一条消息起生效）",
-    ...MEMORY_LAYERS.map((layer) => layerView(ctx, layer, notes)),
+    ...availableMemoryLayers(ctx).map((layer) => layerView(ctx, layer, notes)),
+    ...(availableMemoryLayers(ctx).includes("project") ? [] : [PROJECT_IS_USER_NOTE]),
   ].join("\n\n");
   return notes.length === 0 ? view : `${view}\n\n${notes.join("\n")}`;
 }
@@ -146,6 +151,7 @@ export async function editMemoryLayer(
   layer: MemoryLayer,
   options: EditMemoryOptions = {}
 ): Promise<string> {
+  if (!availableMemoryLayers(ctx).includes(layer)) return PROJECT_IS_USER_NOTE;
   const location = locationOf(ctx, layer);
   const label = MEMORY_LAYER_LABELS[layer];
   const editor = options.editor;

@@ -617,7 +617,7 @@ export async function main(argv: string[]): Promise<void> {
     hooks: mainBundle.hooks,
     // 决策 323：收尾钩子的连续拦截上限取设置快照（/reload 后跟着变）
     stopHookCap: () => settings.merged.stopHookBlockCap,
-    // S4：/sessions 会话列表（命令层在 application/session-list.ts，与 cli 同一份）
+    // 会话目录所在的根（花费累计用）
     sessions: { root: governanceRoot },
     // M5 S2（决策 038 / 045）：/search 命令上下文与 /resume 历史渲染上限
     search: { root: governanceRoot },
@@ -688,10 +688,9 @@ export async function main(argv: string[]): Promise<void> {
       if (peerMessaging !== undefined && peerMessaging.sessionId === slot.sessionId) {
         peerMessaging.rename(name);
       }
-      shellHolder.current?.refreshTitle();
       return `本会话改名为 ${name}`;
     },
-    // 决策 456：标题栏与历史视图显示的会话名
+    // 决策 456：会话名（面板上当前会话的卡片、/take 的说明用）
     sessionName: (id: string) =>
       id === slot.sessionId ? sessionName : sessionNameOf(governanceRoot, id, workspaceRoot),
     // 决策 448：/worktrees 列出与删除留下的 worker 工作树（git 仓库、不在沙箱里才有）

@@ -601,6 +601,8 @@ export function summarizeSessionView(view: SessionView): SessionViewSummary {
     failureClasses,
     totalTokens,
     totalCost,
+    ...(view.name !== undefined ? { name: view.name } : {}),
+    ...(view.cwd !== undefined ? { cwd: view.cwd } : {}),
     ...(view.worker !== undefined && view.parentSessionId !== undefined
       ? {
           worker: {

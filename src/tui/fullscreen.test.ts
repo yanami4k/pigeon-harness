@@ -1,4 +1,4 @@
-// 决策 441：终端界面改用全屏（备用屏）。进全屏；标题在顶、输入框与状态栏固定在底，对话再长也不把它们挤走；退出时离开全屏
+// 决策 441：终端界面改用全屏（备用屏）。进全屏；主视图没有标题行（验收修改）、输入框与状态栏固定在底，对话再长也不把它们挤走；退出时离开全屏
 // 并把对话打印到普通屏幕；暂离全屏（外部编辑器）不打印；Home/End 留给输入框；F3 也能打开搜索（Windows Terminal 占用
 // Ctrl+Shift+F），搜索框开着时按键交给它；拖选出选区后 Ctrl+C 复制选区、不计退出布防。
 import assert from "node:assert/strict";
@@ -34,7 +34,7 @@ function rows(term: MockTerminal): string[] {
   return Array.from({ length: term.rows }, (_, row) => term.screen.rowText(row));
 }
 
-test("进全屏：标题在顶、状态栏在底；对话超过一屏时最新的在、输入框与状态栏不被挤走", async () => {
+test("进全屏：主视图没有标题行、状态栏在底；对话超过一屏时最新的在、输入框与状态栏不被挤走", async () => {
   const { shell, term, runtime, cleanup } = makeShell(80, 16);
   try {
     shell.start();
@@ -49,8 +49,8 @@ test("进全屏：标题在顶、状态栏在底；对话超过一屏时最新�
     await settle();
     assert.deepEqual(runtime.runs.length, 12);
     const screen = rows(term);
-    // 标题在最上面（Text 自带上下各一行留白）
-    assert.match(screen[1] ?? "", /== sess_\w+ ==/);
+    // 验收修改：主视图不显示标题行（会话名与会话号都不显示），消息区从最上面起
+    assert.ok(!screen.some((line) => /sess_\w+/.test(line)), screen.join("\n"));
     assert.ok(
       screen.some((line) => line.includes("> 第 11 条")),
       screen.join("\n")
@@ -77,7 +77,7 @@ test("退出：离开全屏，把对话完整打印到普通屏幕（含滚出�
     shell.stop();
     assert.equal(term.screen.alternate, false);
     const printed = term.screen.contentLines().join("\n");
-    assert.match(printed, /== sess_\w+ ==/);
+    assert.doesNotMatch(printed, /sess_\w+/, "退出打印不带标题行");
     assert.match(printed, /> 消息 0/);
     assert.match(printed, /> 消息 7/);
     assert.doesNotMatch(printed, /state: idle/);
@@ -157,16 +157,16 @@ test("拖选出选区后 Ctrl+C 复制选区（写出 OSC 52），不清输入�
     await settle();
     term.input("draft");
     await settle();
-    // 在标题行（第 2 行）上按下、拖动（SGR 鼠标序列，1 起的列与行）
-    term.input("\x1b[<0;4;2M");
-    term.input("\x1b[<32;20;2M");
+    // 在状态行（第 12 行）上按下、拖动（SGR 鼠标序列，1 起的列与行）
+    term.input("\x1b[<0;4;12M");
+    term.input("\x1b[<32;20;12M");
     await settle();
     term.writes.length = 0;
     term.input("\x03");
     await settle();
     assert.ok(term.writes.join("").includes("\x1b]52;c;"), "复制走 OSC 52");
     assert.doesNotMatch(screenText(term), /\[cleared\]/);
-    term.input("\x1b[<0;20;2m");
+    term.input("\x1b[<0;20;12m");
     await settle();
   } finally {
     cleanup();

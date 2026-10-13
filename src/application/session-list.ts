@@ -6,6 +6,7 @@ import { legacySessionsNote } from "../persistence/session-catalog.ts";
 import { listSessionSummaries } from "../persistence/session-list.ts";
 import { sessionsDirOf } from "../state/paths.ts";
 import type { SessionListFilters } from "../state/session-summary.ts";
+import { sessionDisplayName } from "./session-name.ts";
 
 export interface SessionListCommandOptions {
   // 工作区根（会话在 <root>/.pigeon/state/sessions/）
@@ -38,8 +39,10 @@ export function runSessionListCommand(options: SessionListCommandOptions): strin
       summary.children !== undefined
         ? `  派出 worker ${summary.children.count} 个${summary.children.unsettled > 0 ? `（${summary.children.unsettled} 个未收尾）` : ""}`
         : "";
+    // 决策 456：会话名（没改过名的显示缺省名：工作目录名加会话号末 4 位）
+    const name = sessionDisplayName(summary.name, summary.cwd ?? options.root, summary.sessionId);
     lines.push(
-      `${new Date(summary.createdAt).toISOString().slice(0, 16).replace("T", " ")}  ${summary.runCount} 个 Run  ${summary.sessionId}${usage}${lineage}${children}`
+      `${new Date(summary.createdAt).toISOString().slice(0, 16).replace("T", " ")}  ${name}  ${summary.runCount} 个 Run  ${summary.sessionId}${usage}${lineage}${children}`
     );
   }
   if (notice !== undefined) {

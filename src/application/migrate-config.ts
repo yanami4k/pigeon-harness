@@ -38,6 +38,7 @@ import {
   moveToMigrationBackup,
   writeRedactedMigrationBackup,
 } from "../persistence/migration-backup.ts";
+import { projectSharesUserPigeonDir } from "../persistence/pigeon-layers.ts";
 import { ensureLocalSettingsIgnored, ensureProjectStateDir } from "../persistence/settings.ts";
 import { canonicalJson } from "../state/hashing.ts";
 import {
@@ -106,6 +107,13 @@ function targetPathOf(root: string, layer: Exclude<SettingsLayer, "user">): stri
 
 function targetLabelOf(layer: Exclude<SettingsLayer, "user">): string {
   return pigeonRel(layer === "local" ? LOCAL_SETTINGS_FILE : SETTINGS_FILE);
+}
+
+// 在主目录下运行：项目共享设置就是用户级设置（同一个文件），写进去的对所有项目生效
+const HOME_IS_USER_NOTE = "（在主目录下：这就是用户级设置，对所有项目生效）";
+
+function targetNoteOf(layer: Exclude<SettingsLayer, "user">, homeIsUser: boolean): string {
+  return layer === "project" && homeIsUser ? HOME_IS_USER_NOTE : "";
 }
 
 interface ConvertedConfig {
@@ -201,9 +209,11 @@ function plannedConfigs(
   converted: ConvertedConfig[];
   targets: Map<Exclude<SettingsLayer, "user">, Record<string, unknown>>;
   blockers: string[];
+  homeIsUser: boolean;
 } {
   const converted: ConvertedConfig[] = [];
   const blockers: string[] = [];
+  const homeIsUser = projectSharesUserPigeonDir(root, homeDir);
   for (const legacy of LEGACY_CONFIG_FILES) {
     if (!existsSync(legacyConfigPath(root, legacy.file))) continue;
     const occupied = migrationBackupConflict(root, legacy.file, homeDir);
@@ -240,29 +250,33 @@ function plannedConfigs(
     target[item.section] = item.content;
   }
   for (const [layer, target] of targets) {
-    const checked = validateSettingsLayer(target, { layer, file: targetLabelOf(layer) });
+    // 主目录下项目共享设置就是用户级设置：按用户级校验（用户级才能设的项不算错）
+    const checked = validateSettingsLayer(target, {
+      layer: layer === "project" && homeIsUser ? "user" : layer,
+      file: targetLabelOf(layer),
+    });
     if ("problems" in checked) {
       blockers.push(...checked.problems.map((problem) => `迁移后的内容校验不过：${problem}`));
     }
   }
-  return { converted, targets, blockers };
+  return { converted, targets, blockers, homeIsUser };
 }
 
 export const legacyConfigStep: MigrationStep = {
   id: "legacy-config",
   title: "旧配置文件并入设置",
   plan(ctx) {
-    const { converted, blockers } = plannedConfigs(ctx.root, ctx.homeDir);
+    const { converted, blockers, homeIsUser } = plannedConfigs(ctx.root, ctx.homeDir);
     return {
       todo: converted.map(
         (item) =>
-          `${pigeonRel(item.file)} → ${targetLabelOf(item.layer)} 的 ${item.section} 一节（原文件挪进备份目录）`
+          `${pigeonRel(item.file)} → ${targetLabelOf(item.layer)}${targetNoteOf(item.layer, homeIsUser)} 的 ${item.section} 一节（原文件挪进备份目录）`
       ),
       blockers,
     };
   },
   apply(ctx) {
-    const { converted, targets, blockers } = plannedConfigs(ctx.root, ctx.homeDir);
+    const { converted, targets, blockers, homeIsUser } = plannedConfigs(ctx.root, ctx.homeDir);
     if (blockers.length > 0) {
       throw new MigrationError(blockers.join("\n"));
     }
@@ -281,7 +295,7 @@ export const legacyConfigStep: MigrationStep = {
           : moveToMigrationBackup(ctx.root, source, item.file, ctx.homeDir)
       );
       lines.push(
-        `已迁移 ${pigeonRel(item.file)} → ${targetLabelOf(item.layer)} 的 ${item.section} 一节；原文件已挪进备份目录` +
+        `已迁移 ${pigeonRel(item.file)} → ${targetLabelOf(item.layer)}${targetNoteOf(item.layer, homeIsUser)} 的 ${item.section} 一节；原文件已挪进备份目录` +
           (item.backupText !== undefined ? "（备份里 key 的值已去掉）" : "")
       );
       for (const env of item.keyEnvs) {

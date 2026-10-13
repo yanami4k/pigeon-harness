@@ -79,73 +79,39 @@ test("/rename：交给装配方并显示返回的一行；没给即命令不可�
   }
 });
 
-test("决策 456：标题栏写会话名，会话号在后面用弱化样式；改名之后标题栏跟着变；没给名字时只写会话号", async () => {
-  const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-peer-shell-"));
-  const sessionId = newSessionId();
-  const term = new MockTerminal(90, 30);
-  const writes: string[] = [];
-  const write = term.write.bind(term);
-  term.write = (data: string) => {
-    writes.push(data);
-    write(data);
-  };
-  let name = "demo-abcd";
-  const holder: { shell?: PigeonTuiShell } = {};
-  const shell = new PigeonTuiShell({
-    terminal: term,
-    runtime: new ScriptedRuntime(sessionId),
-    sessionId,
-    logDir,
-    sessionName: () => name,
-    renameSession: (next) => {
-      name = next;
-      holder.shell?.refreshTitle();
-      return `本会话改名为 ${next}`;
-    },
-  });
-  holder.shell = shell;
-  try {
-    shell.start();
-    await settle();
-    const title = term.screen.contentLines().find((line) => line.trim() !== "") ?? "";
-    assert.equal(title.trim(), `== demo-abcd == ${sessionId}`);
-    assert.ok(writes.join("").includes(`\u001b[2m${sessionId}\u001b[22m`), "会话号用弱化样式");
-    term.input("/rename api-fix");
-    term.input("\r");
-    await settle();
-    const renamed = term.screen.contentLines().find((line) => line.trim() !== "") ?? "";
-    assert.equal(renamed.trim(), `== api-fix == ${sessionId}`);
-  } finally {
-    shell.stop();
-    rmSync(logDir, { recursive: true, force: true });
-  }
-});
-
-test("决策 456：换绑到别的会话时标题按新会话取名，不去取旧会话的名字（取名可能要读整个会话文件）", async () => {
+test("验收修改（456 修订）：主视图不显示标题行——会话名与会话号都不在屏上；/rename 照常改名；换绑后同样不显示", async () => {
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-peer-shell-"));
   const sessionId = newSessionId();
   const target = newSessionId();
   const term = new MockTerminal(90, 30);
-  const asked: string[] = [];
+  let name = "demo-abcd";
   const shell = new PigeonTuiShell({
     terminal: term,
     runtime: new ScriptedRuntime(sessionId),
     sessionId,
     logDir,
-    sessionName: (id) => {
-      asked.push(id);
-      return id === target ? "target-name" : "old-name";
+    sessionName: (id) => (id === sessionId ? name : "target-name"),
+    renameSession: (next) => {
+      name = next;
+      return `本会话改名为 ${next}`;
     },
   });
   try {
     shell.start();
     await settle();
-    asked.length = 0;
+    const screen = () => term.screen.contentLines().join("\n");
+    assert.doesNotMatch(screen(), /demo-abcd/);
+    assert.ok(!screen().includes(sessionId), "不显示会话号");
+    term.input("/rename api-fix");
+    term.input("\r");
+    await settle();
+    assert.match(screen(), /本会话改名为 api-fix/);
+    assert.equal(shell.currentSessionName(), "api-fix");
+    assert.doesNotMatch(screen(), /== api-fix ==/);
     shell.rebindSession(target, { runtime: new ScriptedRuntime(target) });
     await settle();
-    assert.ok(asked.length > 0 && asked.every((id) => id === target), asked.join(", "));
-    const title = term.screen.contentLines().find((line) => line.trim() !== "") ?? "";
-    assert.equal(title.trim(), `== target-name == ${target}`);
+    assert.ok(!screen().includes(target), "换绑后同样不显示会话号");
+    assert.doesNotMatch(screen(), /target-name/);
   } finally {
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });

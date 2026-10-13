@@ -432,3 +432,16 @@ test("迁移备份位置已被占用：拦阻、不覆盖，仓库里的旧文�
     "已有备份不被覆盖"
   );
 });
+
+test("在主目录下运行：项目共享设置就是用户级设置（同一个文件）——按用户级校验（用户级才能设的项不算错），并说明对所有项目生效", () => {
+  const homeDir = home();
+  write(projectSettingsPath(homeDir), { trustedDirectories: [join(homeDir, "work")] });
+  write(join(homeDir, ".pigeon", "loop-guard.json"), { version: 1, stopAt: 30 });
+  const result = migrate(homeDir, homeDir);
+  assert.equal(result.changed, true);
+  assert.match(result.lines.join("\n"), /在主目录下：这就是用户级设置，对所有项目生效/);
+  assert.deepEqual(JSON.parse(readFileSync(projectSettingsPath(homeDir), "utf8")), {
+    trustedDirectories: [join(homeDir, "work")],
+    loopGuard: { stopAt: 30 },
+  });
+});

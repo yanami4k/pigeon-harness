@@ -240,3 +240,58 @@ test("/take：落点就是这个工作树时拒绝；已停但另有会话开着
   assert.match(taken, /另有会话开着，保留不删/);
   assert.ok(existsSync(worktree));
 });
+
+test("决策 459：不是 git 仓库时，派出的会话在当前目录里干活（不建工作树、不持有在用锁），卡片标共用目录；/take 说明不用取回；停下不涉及工作树", async () => {
+  const { root, cleanup } = tempRoot("pigeon-pool-plain-");
+  cleanups.push(cleanup);
+  const home = join(root, ".home");
+  mkdirSync(home);
+  writeFileSync(join(root, "a.txt"), "one\n");
+  const { streamFn } = routedModel({
+    main: [
+      {
+        text: "写",
+        toolCalls: [{ name: "write_file", args: { path: "made.txt", content: "made\n" } }],
+      },
+      { text: "写好了" },
+    ],
+  });
+  const { pool } = createSessionPool({
+    governanceRoot: root,
+    streamFn,
+    flags: { provider: "custom", modelId: "custom" } as never,
+    settings: () => loadSettings(root, { homeDir: home }),
+    warn: () => {},
+    homeDir: home,
+    createApprovalHandler: () => async () => ({ approved: true }),
+    mainWorkspace: () => root,
+    notice: () => {},
+  });
+  cleanups.push(() => pool.closeAll());
+  const card = await pool.spawn("建一个文件");
+  assert.equal(card.sharedDir, true);
+  await until(() => pool.list()[0]?.state === "idle", "跑完空闲");
+  const opened = pool.list()[0];
+  assert.equal(opened?.worktree, undefined, "没有工作树");
+  assert.equal(opened?.sharedDir, true);
+  assert.equal(readFileSync(join(root, "made.txt"), "utf8"), "made\n", "改动直接在当前目录里");
+  assert.equal(lockCount(home), 0, "不持有工作树的在用锁");
+  assert.equal(existsSync(join(root, ".pigeon", "wt")), false, "没有建独立工作树目录");
+  const id = opened?.id ?? "";
+  assert.match(await pool.take(id), /s1 没有工作树（共用目录）/);
+  await pool.stop(id);
+  assert.equal(pool.list()[0]?.state, "stopped");
+  assert.equal(readFileSync(join(root, "made.txt"), "utf8"), "made\n", "停下不动目录里的改动");
+  // 会话记录里如实记下它没有工作树：会话文件头的工作目录就是当前目录
+  const sessions = join(root, ".pigeon", "state", "sessions");
+  const files = readdirSync(sessions, { recursive: true })
+    .map(String)
+    .filter((name) => name.endsWith(".jsonl"));
+  assert.equal(files.length, 1);
+  const header = JSON.parse(
+    readFileSync(join(sessions, files[0] ?? ""), "utf8").split("\n")[0] ?? "{}"
+  ) as {
+    cwd?: string;
+  };
+  assert.equal(resolve(header.cwd ?? ""), resolve(root));
+});

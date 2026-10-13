@@ -42,7 +42,9 @@ export function sessionCardText(card: PooledSessionCard): string {
       : card.state === "failed" && card.error !== undefined
         ? `失败：${oneLine(card.error)}`
         : oneLine(card.summary);
-  return `${card.name}  ${oneLine(card.task)}${detail !== "" ? `  | ${detail}` : ""}`;
+  // 决策 459：共用目录的会话（不是 git 仓库）在名字后标明（状态信息，弱化样式）
+  const name = card.sharedDir === true ? `${card.name} ${secondary("共用目录")}` : card.name;
+  return `${name}  ${oneLine(card.task)}${detail !== "" ? `  | ${detail}` : ""}`;
 }
 
 export interface SessionPanelSourceView {

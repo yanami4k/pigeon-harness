@@ -1,5 +1,5 @@
 // 斜杠命令分发（决策 067 拆分自 shell.ts，零行为变化）：grant 命令层在 application/grants.ts
-//（决策 030）、会话列表在 application/session-list.ts、检索在 application/search.ts、恢复流程在
+//（决策 030）、检索在 application/search.ts、恢复流程在
 // application/resume.ts——全部与 cli 同一份逻辑；语法/语义错误响亮呈现（同 REPL 口径），
 // 未知命令如实说明。worker 与 resume 的具体动作由壳转交给对应视图模块。
 // 决策 286：未知命令列出的可用命令从命令表（command-table.ts）按当前会话生成，以后加命令不再漏。
@@ -14,7 +14,6 @@ import {
 import { SCRIPT_COMMAND_TEXTS, type ScriptCommands } from "../application/script-commands.ts";
 import { commandInputText } from "../application/script-texts.ts";
 import { runSearchCommand } from "../application/search.ts";
-import { runSessionListCommand } from "../application/session-list.ts";
 import type { TuiWorktreesFace } from "../application/worktree-cleanup.ts";
 import type { SessionGrantStore } from "../approvals/grant-store.ts";
 import type { ConfigGrantRule } from "../state/grants.ts";
@@ -55,12 +54,13 @@ export interface TuiGrantsContext {
 // 壳侧窄接口：命令分发需要的当前会话上下文与壳动作
 export interface CommandsHost {
   addSystem(line: string): void;
+  // 要醒目的一行（真正的报错），不弱化
+  addAlert(line: string): void;
   render(): void;
   requestExit(): void;
   sessionId(): SessionId;
   grants(): TuiGrantsContext | undefined;
   workers(): TuiWorkersFace | undefined;
-  sessionsRoot(): string | undefined;
   searchRoot(): string | undefined;
   resumeConfigured(): boolean;
   // 决策 237：沙箱会话在场；缺省 = 不在沙箱里
@@ -108,7 +108,6 @@ export interface CommandsHost {
 // 命令表判断可用性用的只读面
 export function commandAvailability(host: CommandsHost): CommandAvailability {
   return {
-    sessionsRoot: () => host.sessionsRoot(),
     searchRoot: () => host.searchRoot(),
     resumeConfigured: () => host.resumeConfigured(),
     hasGrants: () => host.grants() !== undefined,
@@ -145,13 +144,6 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
       host.requestExit();
       return;
     }
-    // S4：/sessions 会话列表——只读渲染，命令层与 cli 同一份（零新治理语义）
-    const sessionsRoot = host.sessionsRoot();
-    if (tokens[0] === "sessions" && sessionsRoot !== undefined) {
-      host.addSystem(runSessionListCommand({ root: sessionsRoot }).trimEnd());
-      host.render();
-      return;
-    }
     // M5 S2（决策 038）：/search 内容级检索——命令层与 cli 同一份；异步扫描完成后落消息区
     const searchRoot = host.searchRoot();
     if (tokens[0] === "search" && searchRoot !== undefined) {
@@ -161,7 +153,7 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
           host.render();
         },
         (error: unknown) => {
-          host.addSystem(`命令失败：${error instanceof Error ? error.message : String(error)}`);
+          host.addAlert(`命令失败：${error instanceof Error ? error.message : String(error)}`);
           host.render();
         }
       );
@@ -178,7 +170,7 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
             host.render();
           },
           (error: unknown) => {
-            host.addSystem(`交回失败：${error instanceof Error ? error.message : String(error)}`);
+            host.addAlert(`交回失败：${error instanceof Error ? error.message : String(error)}`);
             host.render();
           }
         );
@@ -211,7 +203,7 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
           host.render();
         },
         (error: unknown) => {
-          host.addSystem(`分叉失败：${error instanceof Error ? error.message : String(error)}`);
+          host.addAlert(`分叉失败：${error instanceof Error ? error.message : String(error)}`);
           host.render();
         }
       );
@@ -357,7 +349,7 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
               host.render();
             },
             (error: unknown) => {
-              host.addSystem(`命令失败：${error instanceof Error ? error.message : String(error)}`);
+              host.addAlert(`命令失败：${error instanceof Error ? error.message : String(error)}`);
               host.render();
             }
           )
@@ -433,6 +425,6 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
       host.addSystem(unknownCommandText(value, commandAvailability(host)));
     }
   } catch (error) {
-    host.addSystem(`命令失败：${error instanceof Error ? error.message : String(error)}`);
+    host.addAlert(`命令失败：${error instanceof Error ? error.message : String(error)}`);
   }
 }
