@@ -57,7 +57,9 @@ function presenterFor(shell: PigeonTuiShell) {
   return { presenter, decided };
 }
 
-test("扣住的消息弹到面板：写明来源与内容；放权键与 r 不起作用，y 放行、n 丢弃，多条逐条弹", async () => {
+const DOWN = "\x1b[B";
+
+test("扣住的消息弹到面板：写明来源与内容；二选一缺省丢弃，方向键选放行后回车才放行；字母键不作答；多条逐条弹", async () => {
   const { shell, term, cleanup } = makeShell();
   try {
     await settle();
@@ -69,17 +71,23 @@ test("扣住的消息弹到面板：写明来源与内容；放权键与 r 不�
     assert.match(screen, /别的会话发来的消息（扣住，等你放行）/);
     assert.match(screen, /来自：other（工作目录 \/work\/other）/);
     assert.match(screen, /please look at the failing test/);
-    assert.match(screen, /\[y\] 放行 \/ \[n\] 丢弃/);
+    assert.match(screen, /state: held message \| \[ drop \] {3}deliver/);
     await guard();
-    for (const key of ["a", "d", "r", "s"]) term.input(key);
+    for (const key of ["y", "a", "d", "r", "s", "n"]) term.input(key);
     await settle();
     assert.deepEqual(decided, []);
-    term.input("y");
+    term.input(DOWN);
+    await settle();
+    assert.match(screenText(term), /drop {3}\[ deliver \]/);
+    term.input("\r");
     await settle();
     assert.deepEqual(decided, ["approve m1"]);
     assert.match(screenText(term), /second/);
     await guard();
-    term.input("n");
+    // 选到放行再选回丢弃，回车即丢弃
+    term.input(DOWN);
+    term.input(DOWN);
+    term.input("\r");
     await settle();
     assert.deepEqual(decided, ["approve m1", "decline m2"]);
   } finally {
@@ -113,7 +121,8 @@ test("工具审批要上面板时扣住的消息让位，工具审批照常；�
     await settle();
     assert.match(screenText(term), /held text/);
     await guard();
-    term.input("y");
+    term.input(DOWN);
+    term.input("\r");
     await settle();
     assert.deepEqual(decided, ["approve m1"]);
   } finally {
@@ -159,19 +168,23 @@ test("面板让位时的取消理由是 APPROVAL_YIELDED（presenter 据此重�
   }
 });
 
-test("防误触：面板刚出现时的按键不作答（正在打字的 y 不会放行消息）", async () => {
+test("防误触：面板刚出现时的按键不作答；面板在时打 yes 加回车既不放行也不丢弃", async () => {
   const { shell, term, cleanup } = makeShell();
   try {
     await settle();
     const { presenter, decided } = presenterFor(shell);
     presenter.held(held("m1", "careful"));
     await settle();
-    term.input("y");
-    term.input("n");
+    term.input(DOWN);
+    term.input("\r");
     await settle();
     assert.deepEqual(decided, [], "出现后 600 毫秒内的按键吞掉");
     await guard();
-    term.input("y");
+    for (const key of ["y", "e", "s", "\r"]) term.input(key);
+    await settle();
+    assert.deepEqual(decided, [], "没用方向键选过：回车不作答");
+    term.input(DOWN);
+    term.input("\r");
     await settle();
     assert.deepEqual(decided, ["approve m1"]);
   } finally {

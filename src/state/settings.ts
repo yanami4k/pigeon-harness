@@ -340,7 +340,9 @@ export interface MergeResult {
 
 // 三层合并（层按优先级从低到高给）
 export function mergeSettingsLayers(
-  layers: ReadonlyArray<{ layer: SettingsLayer; file: SettingsFile }>
+  layers: ReadonlyArray<{ layer: SettingsLayer; file: SettingsFile }>,
+  // 决策 342：项目的 settings.local.json 被 git 跟踪（随仓库提交）时按共享层对待
+  options: { localLayerTracked?: boolean } = {}
 ): MergeResult {
   let merged: Record<string, unknown> = {};
   const grants: LayeredGrantRule[] = [];
@@ -378,7 +380,7 @@ export function mergeSettingsLayers(
   // 决策 450：收件规则只许个人层放宽，项目共享层只能收紧
   const inbound = layeredInbound(
     layers.map(({ layer, file }) => ({
-      layer,
+      layer: layer === "local" && options.localLayerTracked === true ? "project" : layer,
       ...(file.messaging?.inbound !== undefined ? { inbound: file.messaging.inbound } : {}),
     }))
   );

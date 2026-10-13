@@ -98,7 +98,7 @@ export function approvalBlockText(
       request.peerMessage.text.length > PEER_TEXT_SHOWN
         ? `${request.peerMessage.text.slice(0, PEER_TEXT_SHOWN)}…（共 ${request.peerMessage.text.length} 字，只显示开头）`
         : request.peerMessage.text,
-      "放行给 agent？[y] 放行 / [n] 丢弃（不算你的授权；agent 的审批照常）",
+      '用方向键在"丢弃"（缺省）与"放行"之间选、回车确认，选项在状态行；字母键不作答（放行不算你的授权，agent 的审批照常）',
     ].join("\n");
   }
   const lines = ["—— 人工审批 ——"];

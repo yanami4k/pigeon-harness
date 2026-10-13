@@ -3,7 +3,8 @@
 // - POSIX：目录须是本人所有、不是符号链接、权限 0700（不符即拒绝使用，收件口不开）；名录文件以 0600 创建。
 // - Windows：目录在用户目录下，依赖用户目录本身只给本人（Node 不能给文件或命名管道设访问控制表）。
 // 鉴权串只在这里，不上连接：双方用它对随机数做 HMAC 互相证明（application/peer-messaging.ts）。
-// 列出时清掉进程已不在的条目；进程号被别的进程复用时（Linux 上核对进程启动时刻）同样按不在处理。
+// 列出时清掉进程已不在的条目；进程号被别的进程复用时同样按不在处理：Linux 上核对进程启动时刻，各平台都看心跳
+//（收件口开着时每分钟刷新，5 分钟没刷新即陈旧）。
 import { randomBytes } from "node:crypto";
 import {
   chmodSync,
@@ -123,26 +124,32 @@ function isRecord(value: unknown): value is PeerRecord {
     typeof record.address === "string" &&
     typeof record.token === "string" &&
     (record.mode === "permissive" || record.mode === "approving") &&
-    typeof record.busy === "boolean"
+    typeof record.busy === "boolean" &&
+    typeof record.updatedAt === "number"
   );
 }
 
-// 信号 0 只探测不投递：ESRCH = 进程不在；EPERM = 在但属于别的用户——名录里只有本人的会话，按不在算
+// 收件口开着时每分钟刷新一次名录条目（心跳）；超过这么久没刷新的条目算陈旧（进程号可能已被复用）
+export const PEER_HEARTBEAT_MS = 60_000;
+export const PEER_STALE_MS = 5 * 60_000;
+
+// 信号 0 只探测不投递：ESRCH = 进程不在；EPERM = 在（Windows 上非提权进程探测同一用户的提权进程也是 EPERM）
 export function processAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
   }
 }
 
-// 条目对应的进程还在：进程号在，且（记了启动时刻时）启动时刻对得上
-function recordAlive(record: PeerRecord, alive: (pid: number) => boolean): boolean {
+// 条目还算数：进程号在、（记了启动时刻时）启动时刻对得上、心跳没过期。保密不靠这里，靠收发两边的双向证明
+function recordAlive(record: PeerRecord, alive: (pid: number) => boolean, now: number): boolean {
   if (!alive(record.pid)) return false;
+  if (now - record.updatedAt > PEER_STALE_MS) return false;
   if (record.procStart === undefined) return true;
-  const now = processStartOf(record.pid);
-  return now === undefined || now === record.procStart;
+  const start = processStartOf(record.pid);
+  return start === undefined || start === record.procStart;
 }
 
 export function readPeerRecord(sessionId: string, homeDir?: string): PeerRecord | undefined {
@@ -159,7 +166,7 @@ export function readPeerRecord(sessionId: string, homeDir?: string): PeerRecord 
 
 // 列出名录：进程已不在（或进程号已被复用）的条目顺手删掉；读不懂的条目跳过不删（可能是新版本写的）。alive 可注入，测试用
 export function listPeerRecords(
-  options: { homeDir?: string; alive?: (pid: number) => boolean } = {}
+  options: { homeDir?: string; alive?: (pid: number) => boolean; now?: number } = {}
 ): PeerRecord[] {
   const dir = peersDirOf(options.homeDir);
   if (!existsSync(dir)) return [];
@@ -175,7 +182,7 @@ export function listPeerRecords(
       continue;
     }
     if (!isRecord(value) || name !== `${value.sessionId}.json`) continue;
-    if (!recordAlive(value, alive)) {
+    if (!recordAlive(value, alive, options.now ?? Date.now())) {
       rmSync(file, { force: true });
       continue;
     }

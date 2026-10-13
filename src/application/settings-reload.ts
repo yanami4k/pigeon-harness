@@ -58,7 +58,10 @@ export function planSettingsReload(
   options: { homeDir?: string; hooksDisabled?: boolean } = {}
 ): SettingsReloadPlan {
   const homeDir = options.homeDir ?? homedir();
-  const loaded = loadSettings(current.root, { homeDir });
+  const loaded = loadSettings(current.root, {
+    homeDir,
+    ...(localSettingsTracked(current.root) ? { localLayerTracked: true } : {}),
+  });
   const next = options.hooksDisabled === true ? withHooksDisabled(loaded) : loaded;
   const before = new Map(entriesOf(current).map((entry) => [trustKeyOf(entry), entry.fingerprint]));
   const changed = new Set(

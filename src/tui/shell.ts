@@ -118,6 +118,7 @@ import {
   handleShellKey,
   type ModalHost,
   type PendingApproval,
+  peerChoiceStatus,
 } from "./modal.ts";
 import {
   handleResumeCommand as dispatchResumeCommand,
@@ -561,7 +562,9 @@ export class PigeonTuiShell
     // 状态行纯 ASCII；审批期间输入归模态键控，运行中与 resume 期间输入排队（决策 286）
     const base =
       this.pendingApprovalState !== null
-        ? "state: approval | decide in panel"
+        ? this.pendingApprovalState.peerMessage === true
+          ? peerChoiceStatus(this.pendingApprovalState)
+          : "state: approval | decide in panel"
         : this.resuming
           ? "state: resume | restoring session; input is queued"
           : this.interrupting

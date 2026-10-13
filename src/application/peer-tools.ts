@@ -76,7 +76,7 @@ export function sendResultText(to: string, result: SendResult): string {
       return `There is no live session named ${to}; use list_peers to see the sessions you can message.`;
     case "ambiguous":
       return `Several sessions are named ${to}: ${(result.candidates ?? [])
-        .map((peer) => `${peer.name} [${peer.sessionId.slice(-6)}] in ${peer.cwd}`)
+        .map((peer) => `${peer.name} [${peer.sessionId.slice(-6)}] in ${JSON.stringify(peer.cwd)}`)
         .join("; ")}. Address one as "name [short id]".`;
     case "unreachable":
       return `Not delivered: ${name} could not be reached (it may have just exited, or it could not prove it is the session in the directory).`;
@@ -109,7 +109,7 @@ export function createPeerTools(
       for (const peer of peers) counts.set(peer.name, (counts.get(peer.name) ?? 0) + 1);
       const rows = peers.map(
         (peer) =>
-          `- ${peer.name}${(counts.get(peer.name) ?? 0) > 1 ? ` [${peer.sessionId.slice(-6)}]` : ""} | ${peer.busy ? "busy" : "idle"} | ${peer.cwd} | short id ${peer.sessionId.slice(-6)}`
+          `- ${peer.name}${(counts.get(peer.name) ?? 0) > 1 ? ` [${peer.sessionId.slice(-6)}]` : ""} | ${peer.busy ? "busy" : "idle"} | ${JSON.stringify(peer.cwd)} | short id ${peer.sessionId.slice(-6)}`
       );
       return reply(
         [`This session is ${messaging.name}. Other sessions on this machine:`, ...rows].join("\n"),

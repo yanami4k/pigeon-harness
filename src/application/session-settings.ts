@@ -157,10 +157,10 @@ export async function openSessionSettings(
   options: OpenSessionSettingsOptions
 ): Promise<SettingsSnapshot> {
   assertNoLegacyLayout(root, options.homeDir !== undefined ? { homeDir: options.homeDir } : {});
-  const snapshot = loadSettings(
-    root,
-    options.homeDir !== undefined ? { homeDir: options.homeDir } : {}
-  );
+  const snapshot = loadSettings(root, {
+    ...(options.homeDir !== undefined ? { homeDir: options.homeDir } : {}),
+    ...(localSettingsTracked(root) ? { localLayerTracked: true } : {}),
+  });
   return confirmSessionConfig(snapshot, options);
 }
 

@@ -72,6 +72,8 @@ export function readSettingsLayer(location: SettingsLocation): SettingsFile | un
 export interface LoadSettingsOptions {
   // 用户主目录（缺省 os.homedir()；测试指到临时目录）
   homeDir?: string;
+  // 决策 342：项目的 settings.local.json 被 git 跟踪（按共享层对待；决策 450 的收件规则据此只许它收紧）
+  localLayerTracked?: boolean;
 }
 
 // 读三层与 .mcp.json，合并成本会话的设置快照
@@ -92,7 +94,10 @@ export function loadSettings(root: string, options: LoadSettingsOptions = {}): S
   } catch (error) {
     throw new SettingsError(error instanceof Error ? error.message : String(error));
   }
-  const result = mergeSettingsLayers(layers);
+  const result = mergeSettingsLayers(
+    layers,
+    options.localLayerTracked === true ? { localLayerTracked: true } : {}
+  );
   const problems = mergedSettingsProblems(result.merged, dotMcp);
   if (problems.length > 0) {
     throw new SettingsError(`设置合并后校验失败：${problems.join("；")}`);

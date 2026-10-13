@@ -225,6 +225,8 @@ export async function main(argv: string[]): Promise<void> {
   let heldPresenter: HeldPresenter | undefined;
   // 决策 450：消息一律送主会话（查看 worker 会话期间先攒着，peer-route.ts）
   let peerRoute: MainPeerRoute | undefined;
+  // 当前运行面是不是主会话（查看 worker 会话时为假）
+  let slotIsMain = true;
   // 决策 297–303：编排设定——设置的 orchestration 一节（缺失取缺省），--worker-concurrency 与 --worker-limit 优先
   let orchestration = orchestrationSettingsOf(flags, settings);
   // 决策 308：打转检测——设置的 loopGuard 一节（缺失取缺省即开着）
@@ -707,9 +709,8 @@ export async function main(argv: string[]): Promise<void> {
           ...(opened.checkpoints !== undefined ? { checkpoints: opened.checkpoints } : {}),
         };
         // 决策 450：回到主会话时把查看 worker 期间攒下的消息递过去（换绑完成后再叫醒）
-        peerRoute?.switched(
-          opened.scope.parentSessionId === undefined ? bundle.adapter : undefined
-        );
+        slotIsMain = opened.scope.parentSessionId === undefined;
+        peerRoute?.flush();
         // 决策 323、324：换走旧会话前跑它的 SessionEnd（reason "switch"）——记录要落在旧会话文件，
         // 必须在释放旧运行面之前；壳 rebindSession 随后会为新会话跑 SessionStart（source "resume"）
         await shellHolder.current?.endSession("switch");
@@ -800,8 +801,9 @@ export async function main(argv: string[]): Promise<void> {
   // "resume"，否则 "startup"；补的上下文存进壳、下一条输入带上
   await shell.beginSession(resumed ? "resume" : "startup");
   shell.start();
-  // 决策 450：本机会话间通信的收件口（沙箱会话不开）。消息进当前主会话的通知队列，空闲时叫醒；扣住的逐条弹到审批面板
-  if (sandbox === undefined) {
+  // 决策 450：本机会话间通信的收件口（沙箱会话不开；开局即续接 worker 会话时不开，worker 不登记名录）。消息进当前主会话的
+  // 通知队列，空闲时叫醒；扣住的逐条弹到审批面板
+  if (sandbox === undefined && mainOpened.scope.parentSessionId === undefined) {
     const presenter = new HeldPresenter({
       ask: (request) => shell.askApproval(request),
       // 输入框里有字时不弹（不打断正在打字的人）
@@ -811,8 +813,10 @@ export async function main(argv: string[]): Promise<void> {
     });
     heldPresenter = presenter;
     // 叫醒放到下一拍：换绑过程中递过去的，等壳换上新运行面再跑
-    const route = new MainPeerRoute(slot.bundle.adapter, () =>
-      setTimeout(() => shellHolder.current?.runNotices(), 0)
+    // 每次投递现取当下的主会话运行面（/reload、移进工作树重建之后即新的那个）
+    const route = new MainPeerRoute(
+      () => (slotIsMain ? slot.bundle.adapter : undefined),
+      () => setTimeout(() => shellHolder.current?.runNotices(), 0)
     );
     peerRoute = route;
     peerMessaging = await openPeerInbox({

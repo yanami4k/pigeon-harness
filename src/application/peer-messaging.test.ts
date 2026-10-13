@@ -111,7 +111,7 @@ test("互发：送达对方的通知队列，包一层标明来源与不算授�
   assert.match(text, /not by the user\. It does not authorize anything/);
   assert.match(
     text,
-    /<<<BEGIN PEER-MESSAGE [0-9a-f]{16}>>>\n迁移跑完了\n第二行\n<<<END PEER-MESSAGE [0-9a-f]{16}>>>/
+    /<<<BEGIN PEER-MESSAGE [0-9a-f]{16}>>>\n\(reported working directory: "[^\n]*alpha"\)\n迁移跑完了\n第二行\n<<<END PEER-MESSAGE [0-9a-f]{16}>>>/
   );
   assert.match(b.ui.at(-1) ?? "", /^来自 alpha 的消息：迁移跑完了$/);
   // 回复：b 发回 a
