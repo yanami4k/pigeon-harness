@@ -1116,6 +1116,11 @@ export class PigeonTuiShell
     return source.take?.(card.id) ?? Promise.resolve("这个会话没有工作树可取回");
   }
 
+  // 决策 443：会话面板里有没有这个名字的会话（/take 先判歧义，不取）
+  hasPooled(name: string): boolean {
+    return (this.options.pool?.source.list() ?? []).some((item) => item.name === name);
+  }
+
   // 决策 443：会话面板里还开着（没停）的会话号（/resume 与会话选择器排除它们）
   pooledSessionIds(): ReadonlySet<string> {
     return new Set(

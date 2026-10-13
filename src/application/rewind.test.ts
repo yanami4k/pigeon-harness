@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, test } from "vitest";
+import { SnapshotTrees } from "../orchestration/rewind-restore.ts";
 import type { SessionFileView } from "../persistence/session-reader.ts";
 import { pruneSeedFromEntries } from "../pi-runtime/context-prune.ts";
 import type { FakeReply } from "../pi-runtime/fixtures.ts";
@@ -17,6 +18,7 @@ import { noMcpSession } from "./mcp.ts";
 import {
   applyRewind,
   checkCode,
+  classifyPlan,
   loadRewindTree,
   planRewind,
   prepareRewind,
@@ -491,8 +493,8 @@ test("写回中途出错（只读文件）：停在出错处，已写的照实�
   } finally {
     chmodSync(join(root, "b.txt"), 0o644);
   }
-  // 模拟出错的文件已被截断（写到一半）：撤销照样把它恢复
-  writeFileSync(join(root, "b.txt"), "");
+  // 出错之后 b.txt 又被人改过（与出错当时记下的样子不同）：撤销时列为冲突、缺省保留
+  writeFileSync(join(root, "b.txt"), "edited after the failure\n");
   const undo = await prepareUndo(host);
   assert.ok(undo !== undefined);
   // 写到一半出错的那个也在撤销范围里
@@ -500,13 +502,19 @@ test("写回中途出错（只读文件）：停在出错处，已写的照实�
     undo.plan.files.map((file) => file.path),
     ["a.txt", "b.txt"]
   );
-  const undone = await applyRewind(host, undo, {
-    mode: "code",
-    code: await checkCode(host, undo),
-  });
+  const undoCode = await checkCode(host, undo);
+  assert.deepEqual(
+    undoCode.classified.conflicts.map((action) => action.path),
+    ["b.txt"]
+  );
+  const undone = await applyRewind(host, undo, { mode: "code", code: undoCode });
   assert.equal(undone.undo, true);
   assert.equal(readFileSync(join(root, "a.txt"), "utf8"), "agent a\n");
-  assert.equal(readFileSync(join(root, "b.txt"), "utf8"), "agent b\n", "被截断的也恢复");
+  assert.equal(
+    readFileSync(join(root, "b.txt"), "utf8"),
+    "edited after the failure\n",
+    "之后的改动保留"
+  );
   assert.equal(await prepareUndo(host), undefined, "撤销之后不再有可撤销的");
 });
 
@@ -845,4 +853,101 @@ test("退代码之后移进过独立工作树：不能撤销（不在同一个�
   const undo = await prepareUndo(host);
   assert.match(undo?.plan.codeBlocked ?? "", /不能撤销/);
   await assert.rejects(async () => checkCode(host, undo as never), /不能撤销/);
+});
+
+// ---- 终审 ----
+
+test("agent 在这段里改过 .gitattributes：没有原样字节的文件不写，列为无法保真", async () => {
+  const root = repo(false);
+  writeFileSync(join(root, "notes.txt"), "one\n");
+  git(root, ["add", "-A"]);
+  git(root, ["commit", "-q", "-m", "notes"]);
+  const { bundle, host } = await openSession(root, [
+    write(".gitattributes", "*.txt text eol=crlf\n"),
+    overwrite("notes.txt", "two\n"),
+    { text: "改完" },
+  ]);
+  await bundle.adapter.run("first");
+  await host.checkpoints?.settle();
+  const prepared = await prepareRewind(
+    host,
+    messageNode(await loadRewindTree(host), "first").target
+  );
+  assert.match(prepared.plan.attributesChanged ?? "", /\.gitattributes 变过/);
+  const outcome = await applyRewind(host, prepared, {
+    mode: "code",
+    code: await checkCode(host, prepared),
+  });
+  assert.deepEqual(outcome.restore?.written, []);
+  const skipped = new Map((outcome.restore?.skipped ?? []).map((item) => [item.path, item.reason]));
+  assert.match(skipped.get("notes.txt") ?? "", /无法保真还原/);
+  assert.equal(readFileSync(join(root, "notes.txt"), "utf8"), "two\n", "没有被写成 CRLF");
+});
+
+test(".git/info/attributes 在这段里变过：同样只写有原样字节的", async () => {
+  const root = repo(false);
+  const { bundle, host } = await openSession(root, [
+    overwrite("a.txt", "agent\n"),
+    { text: "改完" },
+  ]);
+  await bundle.adapter.run("first");
+  await host.checkpoints?.settle();
+  writeFileSync(join(root, ".git", "info", "attributes"), "a.txt filter=crypt\n");
+  const prepared = await prepareRewind(
+    host,
+    messageNode(await loadRewindTree(host), "first").target
+  );
+  assert.match(prepared.plan.attributesChanged ?? "", /info\/attributes/);
+});
+
+test("撤销时工作区与退代码时不同：不撤代码并说明", async () => {
+  const root = repo(false);
+  const { bundle, host } = await openSession(root, [
+    overwrite("a.txt", "agent\n"),
+    { text: "改完" },
+  ]);
+  await bundle.adapter.run("first");
+  await host.checkpoints?.settle();
+  const prepared = await prepareRewind(
+    host,
+    messageNode(await loadRewindTree(host), "first").target
+  );
+  await applyRewind(host, prepared, { mode: "code", code: await checkCode(host, prepared) });
+  const elsewhere = tempRoot("pigeon-rewind-elsewhere-");
+  cleanups.push(elsewhere.cleanup);
+  initRepo(elsewhere.root, { "a.txt": "x\n" });
+  const undo = await prepareUndo({ ...host, workspaceRoot: elsewhere.root });
+  assert.match(undo?.plan.codeBlocked ?? "", /工作区.*不同或已不在/);
+});
+
+test("撤销时写到一半出错的文件：现状与出错当时记下的一样即照退，不一样即列为冲突", () => {
+  const root = repo(false);
+  const commitWith = (content: string): string => {
+    writeFileSync(join(root, "b.txt"), content);
+    git(root, ["add", "-A"]);
+    git(root, ["commit", "-q", "-m", content.trim()]);
+    return git(root, ["rev-parse", "HEAD"]);
+  };
+  const truncated = commitWith("half");
+  const original = commitWith("original\n");
+  const edited = commitWith("edited later\n");
+  const trees = new SnapshotTrees(root);
+  const observed = trees.file(truncated, "b.txt")?.blob ?? "";
+  const target = trees.file(original, "b.txt");
+  assert.ok(target !== undefined);
+  const plan = {
+    from: null,
+    to: null,
+    files: [{ path: "b.txt", target, observed }],
+    untouchable: [],
+    createdAfter: new Map<string, number>(),
+  };
+  assert.deepEqual(
+    classifyPlan(plan, trees, truncated).actions.map((action) => action.path),
+    ["b.txt"]
+  );
+  assert.deepEqual(
+    classifyPlan(plan, trees, edited).conflicts.map((action) => action.path),
+    ["b.txt"]
+  );
 });

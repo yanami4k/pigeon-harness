@@ -3,8 +3,9 @@
 // 处理口、写明来源会话，挂着时卡片在"等待回应"；/take 把工作树里的改动取回主工作目录、完整取回后起点前移（再取不重复），
 // 停下之后完整取回即删工作树；钩子：SessionStart 与 SessionEnd 跑、UserPromptSubmit 拦下即这一轮失败并写明原因。
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, test } from "vitest";
 import { git, initRepo, routedModel, tempRoot } from "../application/tui-session-fixtures.ts";
 import type { ApprovalRequest } from "../approvals/handler.ts";
@@ -183,4 +184,59 @@ test("钩子：SessionStart 与 SessionEnd 跑；UserPromptSubmit 拦下即这�
   assert.ok(existsSync(join(scripts, "started")), "SessionStart 跑了");
   await pool.closeAll();
   assert.ok(existsSync(join(scripts, "ended")), "SessionEnd 跑了");
+});
+
+test("/take：落点就是这个工作树时拒绝；已停但另有会话开着这个工作树时不删", async () => {
+  const { root, cleanup } = tempRoot("pigeon-pool-take-");
+  cleanups.push(cleanup);
+  const home = join(root, ".home");
+  mkdirSync(home);
+  initRepo(root, { "a.txt": "one\n" });
+  writeFileSync(join(root, ".gitignore"), ".pigeon/\n.home/\n");
+  const { streamFn } = routedModel({
+    main: [
+      {
+        text: "写",
+        toolCalls: [{ name: "write_file", args: { path: "made.txt", content: "made\n" } }],
+      },
+      { text: "写好了" },
+    ],
+  });
+  let mainWorkspace = root;
+  const { pool } = createSessionPool({
+    governanceRoot: root,
+    streamFn,
+    flags: { yolo: true, provider: "custom", modelId: "custom" } as never,
+    settings: () => loadSettings(root, { homeDir: root }),
+    warn: () => {},
+    homeDir: home,
+    createApprovalHandler: () => async () => ({ approved: true }),
+    mainWorkspace: () => mainWorkspace,
+    notice: () => {},
+  });
+  cleanups.push(() => pool.closeAll());
+  await pool.spawn("建一个文件");
+  await until(() => pool.list()[0]?.state === "idle", "跑完空闲");
+  const card = pool.list()[0];
+  const worktree = card?.worktree?.path ?? "";
+  // 主会话 /resume 过去、进了这个工作树：落点与来源是同一处
+  mainWorkspace = worktree;
+  assert.match(await pool.take(card?.id ?? ""), /落点与来源是同一处/);
+  mainWorkspace = root;
+  await pool.stop(card?.id ?? "");
+  // 另一个进程开着这个工作树（父进程号代替）
+  const key = createHash("sha256")
+    .update(process.platform === "win32" ? resolve(worktree).toLowerCase() : resolve(worktree))
+    .digest("hex")
+    .slice(0, 24);
+  const lockDir = join(home, ".pigeon", "state", "worktree-use");
+  mkdirSync(lockDir, { recursive: true });
+  writeFileSync(
+    join(lockDir, `${key}-${process.ppid}.lock`),
+    `${JSON.stringify({ pid: process.ppid, path: resolve(worktree) })}\n`
+  );
+  const taken = await pool.take(card?.id ?? "");
+  assert.match(taken, /已取回 1 个文件/);
+  assert.match(taken, /另有会话开着，保留不删/);
+  assert.ok(existsSync(worktree));
 });

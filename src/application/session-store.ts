@@ -142,6 +142,7 @@ export function turnSnapshotEntry(
     commit: string;
     tree: string;
     untrackedSkipped?: Array<{ path: string; bytes: number }>;
+    infoAttributes?: string;
   }
 ): SessionCustomEntry {
   return {
@@ -149,6 +150,7 @@ export function turnSnapshotEntry(
     data: {
       version: SESSION_ENTRY_VERSION,
       runId,
+      ...(payload.infoAttributes !== undefined ? { infoAttributes: payload.infoAttributes } : {}),
       ref: payload.ref,
       commit: payload.commit,
       tree: payload.tree,

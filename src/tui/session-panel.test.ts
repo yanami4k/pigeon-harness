@@ -28,6 +28,7 @@ function makeShell(extra: Partial<TuiShellOptions> = {}) {
   const finishers: Array<(reply: string) => void> = [];
   const streams: Array<(delta: StreamTextDelta) => void> = [];
   const stopped: string[] = [];
+  const taken: string[] = [];
   let seq = 0;
   const pool = new LocalSessionPool<Live>({
     open: async ({ name }) => {
@@ -64,7 +65,10 @@ function makeShell(extra: Partial<TuiShellOptions> = {}) {
             };
           },
         },
-        take: () => `已取回 ${name} 的改动`,
+        take: () => {
+          taken.push(name);
+          return `已取回 ${name} 的改动`;
+        },
       };
       return handle;
     },
@@ -97,6 +101,7 @@ function makeShell(extra: Partial<TuiShellOptions> = {}) {
     finishers,
     streams,
     stopped,
+    taken,
     cleanup: () => {
       shell.stop();
       rmSync(logDir, { recursive: true, force: true });
@@ -295,7 +300,7 @@ test("/resume 不能换到面板里还开着的会话", async () => {
 
 test("/take：面板会话与 worker 同名时要写明是哪一个", async () => {
   const h = orchestrationHarness();
-  const { term, cleanup } = makeShell({ workers: h.face });
+  const { term, taken, finishers, cleanup } = makeShell({ workers: h.face });
   try {
     await settle();
     h.face.spawn({ role: "explorer", task: "看看", name: "s1" });
@@ -305,17 +310,22 @@ test("/take：面板会话与 worker 同名时要写明是哪一个", async () =
     term.input("一");
     term.input("\r");
     await settle();
+    // 面板会话跑完（空闲时取回才会真的动文件）
+    finishers[0]?.("做完了");
+    await settle();
     term.input(ESC);
     await settle();
     term.input("/take s1");
     term.input("\r");
     await settle();
     assert.match(screenText(term), /会话面板里的会话与 worker 都叫 s1/);
+    assert.deepEqual(taken, [], "有歧义时什么都不取");
     term.input("/take 会话:s1");
     term.input("\r");
     await settle();
-    // 写明之后归面板会话（它还在跑，照实说明）
-    assert.match(screenText(term), /会话 s1 正在跑，等它停下再取回/);
+    // 写明之后归面板会话
+    assert.match(screenText(term), /已取回 s1 的改动/);
+    assert.deepEqual(taken, ["s1"]);
   } finally {
     await h.stopAll();
     cleanup();

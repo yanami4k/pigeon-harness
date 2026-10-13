@@ -8,9 +8,11 @@
 //   （现状与 agent 最后一次改它之后的快照不同）列出来逐个选，缺省保留。还原前先拍现状快照（433）。写回的护栏见
 //   orchestration/rewind-restore.ts。没有快照的会话只退对话。
 import { randomBytes } from "node:crypto";
+import { existsSync, realpathSync } from "node:fs";
 import type { Checkpointer, CheckpointResult } from "../orchestration/checkpoint.ts";
 import {
   hasProgramSegment,
+  infoAttributesDigest,
   type RestoreAction,
   type RestoreResult,
   restoreFiles,
@@ -242,6 +244,7 @@ export function rewindTree(file: SessionFileView): RewindNode[] {
 // ---- 代码写回的规划 ----
 
 interface RunCode {
+  infoAttributes?: string;
   runId: string;
   index: number;
   // Run 开始的时刻（判断目录是不是这段时间里新建的）
@@ -253,7 +256,10 @@ interface RunCode {
 
 // 各 Run 的快照（按 Run 号，取自整个会话文件）：发消息时的、agent 改动后的第一份与最后一份（提交号）。快照在后台拍，
 // 一个 Run 最后那份的条目可能在下一个 Run 开始之后才写下，回退之后就落在旧分支上——所以不按路径收
-type RunSnapshots = Map<string, { start?: string; first?: string; last?: string }>;
+type RunSnapshots = Map<
+  string,
+  { start?: string; first?: string; last?: string; infoAttributes?: string }
+>;
 
 function snapshotsByRun(file: SessionFileView): RunSnapshots {
   const runs: RunSnapshots = new Map();
@@ -265,6 +271,7 @@ function snapshotsByRun(file: SessionFileView): RunSnapshots {
     const run = runs.get(data.runId) ?? {};
     if (turn) {
       run.start = data.commit;
+      if (typeof data.infoAttributes === "string") run.infoAttributes = data.infoAttributes;
     } else {
       run.first ??= data.commit;
       run.last = data.commit;
@@ -319,8 +326,8 @@ export interface PlannedFile {
   target?: TreeFile;
   // 拿不准（删掉的不确定是 agent 在两点之间新建的等）：列为手改冲突，缺省保留
   uncertain?: string;
-  // 撤销时上次写到一半出错的文件：现状是什么都照退（它本就在撤销范围里）
-  anyCurrent?: boolean;
+  // 撤销时上次写到一半出错的文件：出错之后它的样子（规范化对象号，"absent" 为不存在），现状与之不同即手改冲突
+  observed?: string;
 }
 
 export interface RewindPlan {
@@ -340,6 +347,8 @@ export interface RewindPlan {
   worktreeEntry?: { customType: string; data: unknown };
   // 不能退对话的原因（目标分支在独立工作树里、当前不在）
   conversationBlocked?: string;
+  // 属性在这段里变过（原因）：没有原样字节的文件不写
+  attributesChanged?: string;
   // 撤销上一次退代码（undoOf 为被撤销的那次的编号）
   undo?: boolean;
   undoOf?: string;
@@ -430,6 +439,25 @@ export function planRewind(input: {
   const ignoreRulesChanged =
     lastHere !== undefined &&
     trees.changed(atFork, lastHere).some((path) => /(^|\/)\.gitignore$/i.test(path));
+  // 属性在回退点与现在（或目标）之间变过：任何一级的 .gitattributes 变了，或 .git/info/attributes 与回退点记下的不同
+  //（没有记下的、取不到的按变过）——没有原样字节的文件一律不写
+  const attributePaths = (paths: string[]) =>
+    paths.some((path) => /(^|\/)\.gitattributes$/i.test(path));
+  const firstRun = currentRuns[0] ?? targetRuns[0];
+  const nowInfo = infoAttributesDigest(trees.top);
+  if (
+    (lastHere !== undefined && attributePaths(trees.changed(atFork, lastHere))) ||
+    attributePaths(trees.changed(atFork, targetCommit))
+  ) {
+    plan.attributesChanged = "这段里 .gitattributes 变过";
+  } else if (
+    nowInfo === undefined ||
+    (firstRun?.infoAttributes === undefined
+      ? nowInfo !== "none"
+      : firstRun.infoAttributes !== nowInfo)
+  ) {
+    plan.attributesChanged = "这段里 .git/info/attributes 变过或无从核对";
+  }
   // 两条消息之间的手改：上一个 Run 收尾时与下一个 Run 发消息时之间变过的路径（Run 进行中的手改分不出，见 436）
   const manual = new Set<string>();
   for (let index = 1; index < currentRuns.length; index += 1) {
@@ -501,7 +529,11 @@ export function classifyPlan(
     const reason =
       (counts.get(keyOf(file.path)) ?? 0) > 1
         ? "与另一个文件只差大小写"
-        : file.anyCurrent !== true && !sameFile(now, file.expected)
+        : !(file.observed !== undefined
+              ? file.observed === "absent"
+                ? now === undefined
+                : now?.blob === file.observed
+              : sameFile(now, file.expected))
           ? "agent 改过之后又被手改过"
           : file.uncertain;
     if (reason === undefined) result.actions.push(action);
@@ -540,8 +572,10 @@ interface CodeRewindRecord {
   rewindId: string;
   before: string;
   target: string;
-  // 写过、删过、写到一半出错的路径（出错的可能已被截断）
-  touched: Array<{ path: string; failed: boolean }>;
+  // 写过、删过、写到一半出错的路径（出错的可能已被截断；observed 为出错之后的样子，缺省即不明）
+  touched: Array<{ path: string; failed: boolean; observed?: string }>;
+  // 退代码时的工作区根（没有记下为 undefined）
+  workspace?: string;
   // 回退记录在主分支上的位置（之后移进过工作树即不能撤销）
   index: number;
 }
@@ -552,14 +586,26 @@ function lastCodeRewind(
   file: SessionFileView
 ): { record: CodeRewindRecord; main: StoredEntry[] } | undefined {
   const main = branchEntries(file, file.lanes.get("main") ?? null);
-  const steps = new Map<string, Array<{ path: string; failed: boolean }>>();
+  const steps = new Map<string, Array<{ path: string; failed: boolean; observed?: string }>>();
+  const workspaces = new Map<string, string>();
   for (const entry of file.entries) {
     if (!isCustom(entry, SessionEntryType.RewindStep)) continue;
     const data = dataOf(entry);
     if (typeof data.rewindId !== "string" || typeof data.path !== "string") continue;
     const list = steps.get(data.rewindId) ?? [];
-    list.push({ path: data.path, failed: data.done === "failed" });
+    list.push({
+      path: data.path,
+      failed: data.done === "failed",
+      ...(typeof data.observed === "string" ? { observed: data.observed } : {}),
+    });
     steps.set(data.rewindId, list);
+  }
+  for (const entry of file.entries) {
+    if (!isCustom(entry, SessionEntryType.Rewind)) continue;
+    const data = dataOf(entry);
+    if (typeof data.rewindId === "string" && typeof data.workspace === "string") {
+      workspaces.set(data.rewindId, data.workspace);
+    }
   }
   const undone = new Set<string>();
   for (let index = main.length - 1; index >= 0; index -= 1) {
@@ -594,7 +640,18 @@ function lastCodeRewind(
         first = earlier;
       }
     }
-    return { record: { rewindId, before, target: data.target, touched, index: first }, main };
+    const workspace = workspaces.get(rewindId);
+    return {
+      record: {
+        rewindId,
+        before,
+        target: data.target,
+        touched,
+        index: first,
+        ...(workspace !== undefined ? { workspace } : {}),
+      },
+      main,
+    };
   }
   return undefined;
 }
@@ -687,18 +744,40 @@ export async function prepareUndo(host: RewindHost): Promise<PreparedRewind | un
     plan.codeBlocked = "上次退代码之后移进过独立工作树，不在同一个工作区，不能撤销";
     return { file, trees, plan };
   }
-  const byPath = new Map<string, boolean>();
-  for (const step of record.touched)
-    byPath.set(step.path, (byPath.get(step.path) ?? false) || step.failed);
-  for (const [path, failed] of [...byPath].sort(([a], [b]) => a.localeCompare(b))) {
+  // 退代码时记下的工作区：不同或已不在即不撤（工作树被清理后续接回到主检出等）
+  const sameWorkspace = (() => {
+    if (record.workspace === undefined || !existsSync(record.workspace)) return false;
+    try {
+      return realpathSync(record.workspace) === realpathSync(host.workspaceRoot);
+    } catch {
+      return false;
+    }
+  })();
+  if (!sameWorkspace) {
+    plan.codeBlocked = `上次退代码时的工作区（${record.workspace ?? "没有记下"}）与现在不同或已不在，不能撤销`;
+    return { file, trees, plan };
+  }
+  const byPath = new Map<string, { failed: boolean; observed?: string }>();
+  for (const step of record.touched) {
+    const known = byPath.get(step.path);
+    byPath.set(step.path, {
+      failed: (known?.failed ?? false) || step.failed,
+      ...(step.observed !== undefined ? { observed: step.observed } : {}),
+    });
+  }
+  for (const [path, step] of [...byPath].sort(([a], [b]) => a.localeCompare(b))) {
     const expected = trees.file(record.target, path);
     const target = trees.file(record.before, path);
-    if (!failed && sameFile(expected, target)) continue;
+    if (!step.failed && sameFile(expected, target)) continue;
     plan.files.push({
       path,
       ...(expected !== undefined ? { expected } : {}),
       ...(target !== undefined ? { target } : {}),
-      ...(failed ? { anyCurrent: true } : {}),
+      // 写到一半出错的：按出错之后的样子核对；不明即拿不准
+      ...(step.failed && step.observed !== undefined ? { observed: step.observed } : {}),
+      ...(step.failed && step.observed === undefined
+        ? { uncertain: "上次写到一半出错，现状不明" }
+        : {}),
     });
   }
   return { file, trees, plan };
@@ -858,6 +937,7 @@ export async function applyRewind(
         before: { ref: code.before.ref, commit: code.before.commit },
         ...(targetCommit !== undefined ? { target: targetCommit } : {}),
         planned: actions.map((action) => action.path),
+        workspace: host.workspaceRoot,
         ...undoFields,
         rewoundAt: now,
       })
@@ -868,6 +948,7 @@ export async function applyRewind(
       trees,
       actions,
       saved: savedBlobsOf(file),
+      ...(plan.attributesChanged !== undefined ? { requireSaved: plan.attributesChanged } : {}),
       // 删空的目录：快照里那时这个目录下没有文件、且目录是在新建其中文件的那个 Run 开始之后建立的
       removableDir: (dir, bornAt) => {
         if (targetCommit === undefined || trees.hasDir(targetCommit, dir)) return false;
@@ -887,6 +968,7 @@ export async function applyRewind(
               ? { saved: { raw: step.saved.raw, normalized: step.saved.normalized } }
               : {}),
             ...(step.reason !== undefined ? { reason: step.reason } : {}),
+            ...(step.observed !== undefined ? { observed: step.observed } : {}),
           })
         );
         if (!ok) outcome.problems.push(`${step.path} 的写回结果没有记进会话`);

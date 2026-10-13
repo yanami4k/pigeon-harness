@@ -99,6 +99,8 @@ export interface CommandsHost {
   readonly panelCommand?: (() => void) | undefined;
   // 决策 443：/take <名字> 是会话面板里的会话时取回它工作树里的改动；不是即 undefined（照旧按 worker 处理）
   takePooled?(name: string): Promise<string> | undefined;
+  // 决策 443：会话面板里有没有这个名字的会话（只查不取）
+  hasPooled?(name: string): boolean;
 }
 
 // 命令表判断可用性用的只读面
@@ -244,14 +246,16 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
           ? "worker"
           : undefined;
       const name = forced !== undefined ? raw.slice(raw.indexOf(":") + 1) : raw;
-      const isWorker = workers?.status().some((status) => status.name === name);
-      const pooled = forced === "worker" ? undefined : host.takePooled?.(name);
-      if (pooled !== undefined && forced === undefined && isWorker) {
+      const isWorker = workers?.status().some((status) => status.name === name) === true;
+      // 先判歧义：同名时什么都不做，要求写明
+      const isPooled = host.hasPooled?.(name) === true;
+      if (forced === undefined && isPooled && isWorker) {
         host.addSystem(
           `会话面板里的会话与 worker 都叫 ${name}：写 /take 会话:${name} 或 /take worker:${name}`
         );
         return;
       }
+      const pooled = forced === "worker" || !isPooled ? undefined : host.takePooled?.(name);
       if (pooled !== undefined) {
         void pooled.then((text) => {
           host.addSystem(text);

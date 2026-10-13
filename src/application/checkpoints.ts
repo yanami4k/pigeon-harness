@@ -14,6 +14,7 @@ import {
   createCheckpointer,
   isGitWorkspace,
 } from "../orchestration/checkpoint.ts";
+import { infoAttributesDigest } from "../orchestration/rewind-restore.ts";
 import type { PiRuntimeAdapter, ToolResultNotice } from "../pi-runtime/adapter.ts";
 import type { RunId } from "../state/ids.ts";
 import type { CheckpointMarkState } from "../state/session-entries.ts";
@@ -270,10 +271,14 @@ export function attachCheckpoints(options: {
     options.turnSnapshots === true
       ? bundle.adapter.subscribeRunStart?.((runId) => {
           start(
-            (signal) => checkpointer.snapshotNow(signal),
-            (snapshot) => {
+            async (signal) => ({
+              snapshot: await checkpointer.snapshotNow(signal),
+              infoAttributes: infoAttributesDigest(workspaceRoot),
+            }),
+            ({ snapshot, infoAttributes }) => {
               bundle.sessionStore.append(
                 turnSnapshotEntry(runId, {
+                  ...(infoAttributes !== undefined ? { infoAttributes } : {}),
                   ref: snapshot.ref,
                   commit: snapshot.commit,
                   tree: snapshot.tree,

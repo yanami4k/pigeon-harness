@@ -4,6 +4,7 @@
 // 会话级钩子（SessionStart、UserPromptSubmit、SessionEnd）与 MCP 提示。停下即释放运行面，工作树没有改动即删、有改动保留
 //（不问）。/take 完整取回之后：已停的会话删工作树与分支（同 448），还开着的把起点前移到取回时的样子。会话面板派出的会话
 // 不带派 worker 的工具（worker 属于派出它的会话）。
+import { realpathSync } from "node:fs";
 import { summarizeArgs } from "../application/format.ts";
 import type { LaunchFlags } from "../application/launch-flags.ts";
 import { attachLoopGuard } from "../application/loop-guard.ts";
@@ -25,7 +26,7 @@ import type { WarnSink } from "../application/warnings.ts";
 import type { WebToolsConfig } from "../application/web-tools.ts";
 import type { SessionGrantStore } from "../approvals/grant-store.ts";
 import type { ApprovalHandler } from "../approvals/handler.ts";
-import { holdWorktreeInUse } from "../persistence/worktree-in-use.ts";
+import { holdWorktreeInUse, worktreeInUseByOthers } from "../persistence/worktree-in-use.ts";
 import type { StreamFn } from "../pi-runtime/index.ts";
 import { newSessionId } from "../state/ids.ts";
 import {
@@ -55,6 +56,15 @@ export interface SessionPoolContext {
 }
 
 type PooledLive = Pick<TuiRuntimeFace, "subscribe" | "subscribeStream" | "subscribeToolResults">;
+
+// 两个路径是不是同一个目录（实际位置；有一个不在即不是）
+function sameDir(left: string, right: string): boolean {
+  try {
+    return realpathSync(left) === realpathSync(right);
+  } catch {
+    return false;
+  }
+}
 
 export function createSessionPool(context: SessionPoolContext): {
   pool: LocalSessionPool<PooledLive>;
@@ -189,6 +199,10 @@ export function createSessionPool(context: SessionPoolContext): {
         },
         take: (state) => {
           if (removed) return `会话 ${name} 的工作树已删除，没有可取回的`;
+          // 取回的落点就是这个工作树（主会话 /resume 过去、进了它的工作树）：自己叠自己，拒绝
+          if (sameDir(context.mainWorkspace(), worktree.path)) {
+            return `主会话现在就在会话 ${name} 的工作树里，没有可取回的（落点与来源是同一处）`;
+          }
           const result = takePooledChanges({
             name,
             repoRoot: context.mainWorkspace(),
@@ -197,6 +211,15 @@ export function createSessionPool(context: SessionPoolContext): {
           });
           if (!result.complete) return result.text;
           if (state === "stopped") {
+            // 别的进程或本进程的主会话开着这个工作树：保留
+            if (
+              worktreeInUseByOthers(
+                worktree.path,
+                context.homeDir !== undefined ? { homeDir: context.homeDir } : {}
+              )
+            ) {
+              return `${result.text}\n工作树 ${worktree.name} 另有会话开着，保留不删`;
+            }
             // 已停的会话完整取回：同 448，删工作树与分支
             try {
               removeNamedWorktree(worktree);

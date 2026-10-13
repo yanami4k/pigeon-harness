@@ -254,6 +254,8 @@ export interface RestoreStep {
   // 动手之前存下的原样字节
   saved?: SavedBlob;
   reason?: string;
+  // 出错之后这个文件的样子（规范化后的对象号，"absent" 为不存在）；读不到即缺省（不明）
+  observed?: string;
 }
 
 export interface RestoreResult {
@@ -338,7 +340,8 @@ function contentFor(
   path: string,
   target: TreeFile,
   saved: readonly SavedBlob[],
-  existing: Buffer | undefined
+  existing: Buffer | undefined,
+  requireSaved: string | undefined
 ): Buffer | RestoreSkip {
   const raw = [...saved]
     .reverse()
@@ -350,6 +353,8 @@ function contentFor(
       return { path, reason: `${UNFAITHFUL}（存下的原样字节已被回收）` };
     }
   }
+  // 属性在这段里变过：快照里的形态与现在的属性对不上，没有原样字节即不写
+  if (requireSaved !== undefined) return { path, reason: `${UNFAITHFUL}（${requireSaved}）` };
   if (!trees.faithful) {
     return {
       path,
@@ -395,6 +400,8 @@ export async function restoreFiles(input: {
   removableDir?: (dir: string, bornAt: number) => boolean;
   // 每个文件动手之后当场交给调用方落盘（写了、删了、出错）；返回之后才做下一个
   onStep?: (step: RestoreStep) => Promise<void>;
+  // 给出即只写存下过原样字节的文件（属性在这段里变过等），值为原因
+  requireSaved?: string;
 }): Promise<RestoreResult> {
   const { trees } = input;
   const top = trees.top;
@@ -430,7 +437,14 @@ export async function restoreFiles(input: {
       const existing = stat?.isFile() === true ? readFileSync(absolute) : undefined;
       prepared.set(
         action.path,
-        contentFor(trees, action.path, action.target, input.saved ?? [], existing)
+        contentFor(
+          trees,
+          action.path,
+          action.target,
+          input.saved ?? [],
+          existing,
+          input.requireSaved
+        )
       );
     } catch (error) {
       prepared.set(action.path, {
@@ -543,11 +557,26 @@ export async function restoreFiles(input: {
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       result.failed = { path, reason };
+      // 出错之后它是什么样子（可能已被截断）：撤销时据此判断之后有没有再被改过
+      let observed: string | undefined;
+      try {
+        const absolute = join(top, ...path.split("/"));
+        const now = lstatOrUndefined(absolute);
+        observed =
+          now === undefined
+            ? "absent"
+            : now.isFile() && !now.isSymbolicLink()
+              ? trees.hash(path, readFileSync(absolute))
+              : undefined;
+      } catch {
+        observed = undefined;
+      }
       await input.onStep?.({
         path,
         done: "failed",
         reason,
         ...(saved !== undefined ? { saved } : {}),
+        ...(observed !== undefined ? { observed } : {}),
       });
       break;
     }
@@ -573,4 +602,21 @@ export async function restoreFiles(input: {
     }
   }
   return result;
+}
+
+// .git/info/attributes 现在内容的散列（"none" 为没有该文件）；发消息时的快照记下它，会话回退据此判断属性在这段里变没变。
+// 取不到（不是 git 工作区等）为 undefined
+export function infoAttributesDigest(workspaceRoot: string): string | undefined {
+  try {
+    const common = git(workspaceRoot, [
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-common-dir",
+    ]).trim();
+    const file = join(common, "info", "attributes");
+    const stat = lstatOrUndefined(file);
+    return stat === undefined ? "none" : sha1(readFileSync(file));
+  } catch {
+    return undefined;
+  }
 }

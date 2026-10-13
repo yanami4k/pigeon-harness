@@ -560,6 +560,8 @@ export type WorktreeData = Static<typeof WorktreeDataSchema>;
 export const TurnSnapshotDataSchema = Type.Object({
   version: VERSION,
   runId: RunIdSchema,
+  // .git/info/attributes 当时内容的散列（"none" 为没有该文件）：会话回退据此判断属性在这段里变没变
+  infoAttributes: Type.Optional(Type.String({ minLength: 1 })),
   ref: Type.String({ minLength: 1 }),
   commit: GitObjectIdSchema,
   tree: GitObjectIdSchema,
@@ -618,6 +620,8 @@ export const RewindDataSchema = Type.Object({
   rewindId: Type.Optional(Type.String({ minLength: 1 })),
   phase: Type.Optional(Type.Literal("intent")),
   planned: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+  // 退代码时的工作区根（撤销时工作区不同或已不在即不撤）
+  workspace: Type.Optional(Type.String({ minLength: 1 })),
   rewoundAt: Type.Integer({ minimum: 0 }),
 });
 export type RewindData = Static<typeof RewindDataSchema>;
@@ -630,6 +634,8 @@ export const RewindStepDataSchema = Type.Object({
   done: Type.Union([Type.Literal("written"), Type.Literal("removed"), Type.Literal("failed")]),
   saved: Type.Optional(Type.Object({ raw: GitObjectIdSchema, normalized: GitObjectIdSchema })),
   reason: Type.Optional(Type.String()),
+  // 出错之后这个文件当时的样子（规范化后的对象号；"absent" 为不存在）；读不到即缺省（不明）
+  observed: Type.Optional(Type.String({ minLength: 1 })),
 });
 export type RewindStepData = Static<typeof RewindStepDataSchema>;
 
