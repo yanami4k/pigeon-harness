@@ -81,3 +81,23 @@
 - 记忆写入的提示与 Notification 钩子没有标来源会话；卡片上不显示花费（面板会话的花费按会话文件统计，可在会话列表里看）。
 - 从子目录或链接工作树启动时，治理根不是主仓库根、起点 HEAD 取主检出、续接回不到工作树（`worker-scope.ts` 的取法），面板会话沿用这些既有行为。
 - 面板的观感与按键（需要人看）。
+
+## 七、终审修正（0c2ee28 之后）
+
+### 改了什么
+
+4. `/take` 同名：先判歧义（壳新加 `hasPooled`，只查不取），面板会话与 worker 同名而没写 `会话:`/`worker:` 时什么都不做，直接要求写明；写明或不同名才取。
+5. `/take` 的落点与在用：主会话当前的工作区就是这个会话的工作树（`/resume` 已停的会话、进了它的工作树）时拒绝，说明"落点与来源是同一处"；已停的会话完整取回后删工作树之前查在用锁（`worktreeInUseByOthers`，按会话池的家目录），另有会话开着即保留并说明。
+- 次要（只记审计）：完整取回后以工作树此刻的样子作新起点（`advanceTakeBase`），期间后台作业写进工作树的内容被算进起点，以后的 `/take` 不会再取回它们。
+
+### 测试
+
+- `src/tui/session-panel.test.ts`：同名那条改为面板会话先跑完（空闲时取回才会真的动文件），有歧义时取回一次都没发生，写明后才取（共 7 条）。
+- `src/tui/main-pool.test.ts` 加 1 条（共 4 条）：落点就是这个工作树时拒绝；已停但另有进程开着这个工作树时完整取回后不删、写明保留。
+
+### 验证
+
+- 变异核对（均已恢复）：9 处，首轮 8 处中 7 处变红；"出错文件按出错当时的样子核对"那处在原用例里与撤销目标恰好相同、结果一样，补了直接测分类的用例并把变异点改到分类的比较上，变红。变红的包括：不查 .gitattributes、不查 .git/info/attributes、属性变过也写、撤销不查工作区、/take 先取后问、落点与来源同一处照取、在用的工作树照删、出错文件不按出错当时的样子核对。
+- 回归（一个 vitest 进程）：src 根 3 条边界测试、src/tui、src/cli、src/state、src/persistence、src/pi-runtime、src/orchestration、src/approvals 全部与 session-pool、rewind、checkpoints、checkpoints-async、format、named-worktree、enter-worktree-tool、session-runtime、take-worker-tool、tui-exit、resume、session-cost、session-family，166 个文件 946 条通过、10 条跳过、1 条失败（`checkpoints-async.test.ts` 的"保留修改时间的同长度覆盖"，基线上同样失败）。整仓 `npx biome check .` 无问题、`tsc` 通过、`npm run deps` 无违规。
+- 真实运行（真实模型、临时 git 仓库、临时 HOME 等）：会话回退"改—退—切回"照常（`notes.txt` 回到 `alpha\n`、`src/extra.txt` 删掉、手改不动、切回逐字节一致、续跑答 2）；会话面板派出先"准备中"、工作树里建文件、主目录不动、审批来源 `s1` 在等待回应、`/take` 取回 1 个文件、关掉没有遗留。打包产物隐藏窗口起终端界面 10 秒仍在。全局 git 配置的哈希核对未变。
+- 本批全部尚待确认汇总在 `docs/audits/2026-10-12-product-ux-pending-9cff73b.md`。

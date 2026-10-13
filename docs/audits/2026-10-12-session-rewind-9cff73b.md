@@ -123,3 +123,23 @@
 
 - 收尾记录与快照器对齐出错的路径没有确定性的用例（要让会话存储或 git 在中途失败）。
 - 磁盘写满时的半截写没有用例（改为循环写满之后，出错即按写回失败停下并列入撤销范围）。
+
+## 八、终审修正（0c2ee28 之后）
+
+### 改了什么
+
+1. 撤销时写到一半出错的文件：出错之后读一次这个文件，把规范化后的对象号（不存在记 `absent`）写进 `pigeon.rewind-step` 的 `observed`；撤销时现状与它相同才照退，不同列为"agent 改过之后又被手改过"，没记下（读不到）列为"上次写到一半出错，现状不明"，都缺省保留。不再"不论现状照退"。
+2. 属性在这段里变过：回退点与现在（或目标）之间任何一级的 `.gitattributes` 变过，或 `.git/info/attributes` 与回退点记下的散列不同（发消息时的快照新记 `infoAttributes`；没记下的、取不到的按变过，现在没有该文件且没记下的不算），即只写存下过原样字节的文件，其余列为"无法保真还原（…变过）"。
+3. 撤销查工作区：意图记录写下当时的工作区根（`workspace`）；撤销时没有记下、目录已不在、或与现在的工作区（实际位置）不同即不撤代码并说明。
+- 次要（只记审计，见 S8 审计）：`/take` 完整取回后以工作树此刻的样子作新起点，期间后台作业写入的内容被算进起点。
+
+### 测试
+
+- `src/application/rewind.test.ts` 加 4 条、改 1 条（共 27 条，权限一条在 Windows 上跳过）：agent 改 `.gitattributes`（加 `*.txt text eol=crlf`）后退代码，`notes.txt` 不写、列为无法保真（不会被写成 CRLF）；`.git/info/attributes` 在这段里变过即只写有原样字节的；撤销时工作区不同不撤；分类时出错文件的现状与出错当时一样即照退、不一样即冲突。改的一条：写回中途出错之后 `b.txt` 又被人改过，撤销时它列为冲突、缺省保留（原来"照退"，属本次改定的语义）。
+
+### 验证
+
+- 变异核对（均已恢复）：9 处，首轮 8 处中 7 处变红；"出错文件按出错当时的样子核对"那处在原用例里与撤销目标恰好相同、结果一样，补了直接测分类的用例并把变异点改到分类的比较上，变红。变红的包括：不查 .gitattributes、不查 .git/info/attributes、属性变过也写、撤销不查工作区、/take 先取后问、落点与来源同一处照取、在用的工作树照删、出错文件不按出错当时的样子核对。
+- 回归（一个 vitest 进程）：src 根 3 条边界测试、src/tui、src/cli、src/state、src/persistence、src/pi-runtime、src/orchestration、src/approvals 全部与 session-pool、rewind、checkpoints、checkpoints-async、format、named-worktree、enter-worktree-tool、session-runtime、take-worker-tool、tui-exit、resume、session-cost、session-family，166 个文件 946 条通过、10 条跳过、1 条失败（`checkpoints-async.test.ts` 的"保留修改时间的同长度覆盖"，基线上同样失败）。整仓 `npx biome check .` 无问题、`tsc` 通过、`npm run deps` 无违规。
+- 真实运行（真实模型、临时 git 仓库、临时 HOME 等）：会话回退"改—退—切回"照常（`notes.txt` 回到 `alpha\n`、`src/extra.txt` 删掉、手改不动、切回逐字节一致、续跑答 2）；会话面板派出先"准备中"、工作树里建文件、主目录不动、审批来源 `s1` 在等待回应、`/take` 取回 1 个文件、关掉没有遗留。打包产物隐藏窗口起终端界面 10 秒仍在。全局 git 配置的哈希核对未变。
+- 本批全部尚待确认汇总在 `docs/audits/2026-10-12-product-ux-pending-9cff73b.md`。
