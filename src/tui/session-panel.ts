@@ -13,12 +13,20 @@ export const SESSION_PANEL_HEADER =
 const GROUP_LABEL: Record<PooledSessionState, string> = {
   waiting: "等待回应",
   running: "在跑",
+  preparing: "准备中",
   idle: "空闲",
   failed: "失败",
   stopped: "已停",
 };
 
-const GROUPS: PooledSessionState[] = ["waiting", "running", "idle", "failed", "stopped"];
+const GROUPS: PooledSessionState[] = [
+  "waiting",
+  "running",
+  "preparing",
+  "idle",
+  "failed",
+  "stopped",
+];
 
 function oneLine(text: string): string {
   return sanitizeTerminalText(text.replace(/\s+/g, " ").trim());
@@ -43,6 +51,8 @@ export interface SessionPanelSourceView {
 export class SessionPanel implements Component {
   private readonly source: SessionPanelSourceView;
   private selectedId: string | undefined;
+  // 刚派出的会话：会话号开好才定，先按名字选
+  private selectedName: string | undefined;
   private peeking = false;
   private note = "";
 
@@ -58,7 +68,11 @@ export class SessionPanel implements Component {
 
   selected(): PooledSessionCard | undefined {
     const cards = this.ordered();
-    return cards.find((card) => card.id === this.selectedId) ?? cards[0];
+    return (
+      cards.find((card) => card.id === this.selectedId) ??
+      cards.find((card) => card.name === this.selectedName) ??
+      cards[0]
+    );
   }
 
   move(delta: 1 | -1): void {
@@ -70,12 +84,14 @@ export class SessionPanel implements Component {
     );
     const next = cards[Math.max(0, Math.min(cards.length - 1, current + delta))];
     this.selectedId = next?.id;
+    this.selectedName = undefined;
     this.note = "";
   }
 
-  // 新派出的会话：光标落在它上面
-  select(id: string): void {
-    this.selectedId = id;
+  // 新派出的会话：光标落在它上面（按名字）
+  selectName(name: string): void {
+    this.selectedId = undefined;
+    this.selectedName = name;
   }
 
   togglePeek(): void {

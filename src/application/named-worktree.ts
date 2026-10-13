@@ -7,7 +7,7 @@
 //   文件里有 **/.pigeon/wt/（444、445）。
 // - 退出时：没有改动（没有未提交改动与未跟踪文件、HEAD 与分支仍指向起点）即删工作树与分支；有改动由调用方问保留还是删除。
 // 会话记录、设置与记忆仍在主仓库根的 .pigeon（治理根是主仓库），工作区是工作树。
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import {
@@ -367,4 +367,36 @@ export function reopenNamedWorktree(repoRoot: string, path: string): NamedWorktr
 // 独立工作树记下的起点（/worktrees 列出时按它算改动；取不到为 undefined）
 export function namedWorktreeBase(repoRoot: string, name: string): string | undefined {
   return recordedBase(repoRoot, namedWorktreeBranch(name));
+}
+
+// 决策 443：会话面板派出时先在后台取远端默认分支（与 resolveWorktreeBase 同一个判断：超过 24 小时没取过才取，限时、不许交互），
+// 界面不卡；取过之后 openNamedWorktree 不再同步 fetch。取不到返回 false（调用方改用 HEAD 起点，与取远端失败时一致）
+export async function prefetchWorktreeBase(
+  repoRoot: string,
+  options: { env?: NodeJS.ProcessEnv; now?: () => number; timeoutMs?: number } = {}
+): Promise<boolean> {
+  let branch: string;
+  try {
+    branch = git(repoRoot, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"])
+      .trim()
+      .replace(/^refs\/remotes\/origin\//, "");
+  } catch {
+    return true;
+  }
+  if (branch === "" || branch.startsWith("-")) return true;
+  const commonDir = resolve(
+    git(repoRoot, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).trim()
+  );
+  const fetchHead = join(commonDir, "FETCH_HEAD");
+  const now = options.now?.() ?? Date.now();
+  if (existsSync(fetchHead) && now - statSync(fetchHead).mtimeMs <= FETCH_STALE_MS) return true;
+  const env = nonInteractiveGitEnv(options.env, sshCommandConfigured(repoRoot, options.env));
+  return new Promise<boolean>((resolvePromise) => {
+    execFile(
+      "git",
+      [...GIT_HARDENING_CONFIG, "fetch", "--quiet", "--no-tags", "origin", branch],
+      { cwd: repoRoot, env, timeout: options.timeoutMs ?? FETCH_TIMEOUT_MS, windowsHide: true },
+      (error) => resolvePromise(error === null)
+    );
+  });
 }

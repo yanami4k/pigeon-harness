@@ -65,7 +65,7 @@ function messageText(message: unknown): string {
     .join("\n");
 }
 
-function isHumanInput(message: unknown): boolean {
+export function isHumanInput(message: unknown): boolean {
   if ((message as { role?: unknown }).role !== "user" || isStatusMessage(message)) return false;
   const text = messageText(message);
   return !(

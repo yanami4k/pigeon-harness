@@ -35,6 +35,8 @@ export interface ResumeViewHost<Binding> {
   resumeOptions(): ResumeOptions<Binding> | undefined;
   historyLimit(): number | undefined;
   rebindSession(sessionId: SessionId, binding: Binding): void;
+  // 决策 443：会话面板里还开着的会话（不能 /resume 过去）
+  pooledSessionIds?(): ReadonlySet<string>;
 }
 
 export function handleResumeCommand<Binding>(
@@ -54,6 +56,13 @@ export function handleResumeCommand<Binding>(
   // 恢复当前会话会让两个写者写同一个会话文件——且语义上无意义（人就活在该会话里）：响亮拒绝
   if (arg === host.sessionId()) {
     host.addSystem(`已在会话 ${arg} 中，无需恢复`);
+    return;
+  }
+  // 决策 443：会话面板里还开着的会话有自己的运行面在写会话文件与工作树，换过去会有两个运行面写同一处
+  if (host.pooledSessionIds?.().has(arg) === true) {
+    host.addSystem(
+      `会话 ${arg} 在会话面板里开着：先在面板里停下它（连按两次 Ctrl+X），或用 /panel 进入它`
+    );
     return;
   }
   // M5.5 S4（决策 040）：worker 的收尾记录写在当前会话文件里——有 worker 在跑时换绑会让它们

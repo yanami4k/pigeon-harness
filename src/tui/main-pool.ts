@@ -1,12 +1,21 @@
 // 会话面板的会话池（决策 443，进程内版）：派出的会话各开一个运行面（与主会话同一条装配路径），进自己的独立工作树（445、446：
-// 起点缺省远端默认分支，名字为"面板里的名字-会话号末六位"），审批汇到主会话的同一队列并写明来源会话；停下即释放运行面，
-// 工作树没有改动即删、有改动保留（不问）。会话面板派出的会话不带派 worker 的工具（worker 属于派出它的会话）。
-
+// 起点按设置的 worktree.baseRef，缺省远端默认分支，取远端在后台进行、不卡界面；名字为"面板里的名字-会话号末六位"；开着期间
+// 持有工作树的在用锁）。审批汇到主会话的同一队列并写明来源会话；与主会话一样挂打转检测、后台作业通知（空闲时叫醒）、
+// 会话级钩子（SessionStart、UserPromptSubmit、SessionEnd）与 MCP 提示。停下即释放运行面，工作树没有改动即删、有改动保留
+//（不问）。/take 完整取回之后：已停的会话删工作树与分支（同 448），还开着的把起点前移到取回时的样子。会话面板派出的会话
+// 不带派 worker 的工具（worker 属于派出它的会话）。
 import { summarizeArgs } from "../application/format.ts";
 import type { LaunchFlags } from "../application/launch-flags.ts";
-import { closeNamedWorktree, openNamedWorktree } from "../application/named-worktree.ts";
+import { attachLoopGuard } from "../application/loop-guard.ts";
+import {
+  closeNamedWorktree,
+  openNamedWorktree,
+  prefetchWorktreeBase,
+  removeNamedWorktree,
+} from "../application/named-worktree.ts";
 import { disposeRuntime, type MemoryWriteConfig } from "../application/runtime.ts";
 import {
+  advanceTakeBase,
   LocalSessionPool,
   type PooledRuntime,
   takePooledChanges,
@@ -16,9 +25,15 @@ import type { WarnSink } from "../application/warnings.ts";
 import type { WebToolsConfig } from "../application/web-tools.ts";
 import type { SessionGrantStore } from "../approvals/grant-store.ts";
 import type { ApprovalHandler } from "../approvals/handler.ts";
+import { holdWorktreeInUse } from "../persistence/worktree-in-use.ts";
 import type { StreamFn } from "../pi-runtime/index.ts";
 import { newSessionId } from "../state/ids.ts";
-import type { SettingsSnapshot } from "../state/settings.ts";
+import {
+  loopGuardSettingsOf,
+  type SettingsSnapshot,
+  worktreeSectionOf,
+} from "../state/settings.ts";
+import { worktreeBaseModeOf } from "../state/worktree-config.ts";
 import type { TuiPoolFace, TuiRuntimeFace } from "./shell.ts";
 
 export interface SessionPoolContext {
@@ -33,8 +48,10 @@ export interface SessionPoolContext {
   webToolsFor?: (snapshot: SettingsSnapshot) => { webTools?: WebToolsConfig };
   // /take 取回到哪（主会话当前的工作区）
   mainWorkspace(): string;
-  // 工作树建立与清理的说明
+  // 工作树建立与清理、钩子、MCP、打转与作业通知的说明（写明来源会话）
   notice(line: string): void;
+  // 测试用：在用锁的家目录（缺省用户家目录）
+  homeDir?: string;
 }
 
 type PooledLive = Pick<TuiRuntimeFace, "subscribe" | "subscribeStream" | "subscribeToolResults">;
@@ -45,13 +62,23 @@ export function createSessionPool(context: SessionPoolContext): {
 } {
   const pool = new LocalSessionPool<PooledLive>({
     open: async ({ name, hooks }) => {
+      const say = (line: string) => context.notice(`[${name}] ${line}`);
       const sessionId = newSessionId();
+      const settings = context.settings();
+      let baseMode = worktreeBaseModeOf(worktreeSectionOf(settings));
+      // 取远端在后台进行（不卡界面）；取不到即从 HEAD 起
+      if (baseMode === "fresh" && !(await prefetchWorktreeBase(context.governanceRoot))) {
+        say("取远端默认分支失败，工作树从当前 HEAD 起");
+        baseMode = "head";
+      }
       const worktree = openNamedWorktree({
         cwd: context.governanceRoot,
         name: `${name}-${sessionId.slice(-6).toLowerCase()}`,
-        notice: context.notice,
+        baseMode,
+        notice: say,
       });
-      const settings = context.settings();
+      // 开着期间持有在用锁（/worktrees 与退出清理据此不删开着的）
+      const releaseInUse = holdWorktreeInUse(worktree.path, context.homeDir);
       let opened: Awaited<ReturnType<typeof openSessionRuntime>>;
       try {
         opened = await openSessionRuntime({
@@ -64,6 +91,8 @@ export function createSessionPool(context: SessionPoolContext): {
           warn: context.warn,
           ...(context.memoryWrite !== undefined ? { memoryWrite: context.memoryWrite } : {}),
           ...(context.webToolsFor?.(settings) ?? {}),
+          hooksNotice: say,
+          onMcpNote: (note) => say(`[mcp] ${note}`),
           // 决策 443：审批汇到同一队列，写明来源会话；挂着时面板把它放进"等待回应"
           createApprovalHandler: (grants) => {
             const inner = context.createApprovalHandler(grants);
@@ -78,36 +107,113 @@ export function createSessionPool(context: SessionPoolContext): {
           },
         });
       } catch (error) {
-        await closeNamedWorktree(worktree, { write: context.notice }).catch(() => "kept");
+        releaseInUse();
+        await closeNamedWorktree(worktree, { write: say }).catch(() => "kept");
         throw error;
       }
       const bundle = opened.bundle;
       const adapter = bundle.adapter;
+      const sessionHooks = bundle.hooks;
+      // 打转检测（同主会话的设置）：叫停即中断这一轮
+      const detachLoopGuard = attachLoopGuard(adapter, loopGuardSettingsOf(settings), () => {
+        say("打转检测叫停了这一轮");
+        void adapter.interrupt("looping").catch(() => {});
+      });
+      // 后台作业结束：通知写明来源，空闲时叫醒它
+      bundle.jobNotices?.bind({ wake: () => hooks.wake(), onNotice: (text) => say(text) });
+      // SessionStart：补的上下文存起来当作第一条输入的前缀
+      let startContexts: string[] = [];
+      if (sessionHooks !== undefined && !sessionHooks.disabled) {
+        try {
+          const report = await sessionHooks.runEvent("SessionStart", "startup", {
+            source: "startup",
+          });
+          for (const line of report.systemMessages) say(line);
+          startContexts = [...report.additionalContext];
+        } catch (error) {
+          say(
+            `钩子出错（SessionStart）：${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      }
+      let base = worktree.base;
+      let removed = false;
       const runtime: PooledRuntime<PooledLive> = {
         sessionId,
         worktree: { path: worktree.path, branch: worktree.branch },
-        run: (text) => adapter.run(text),
+        // UserPromptSubmit：拦下即这一轮失败并写明原因；补的上下文作前缀
+        run: async (text) => {
+          let input = text;
+          if (sessionHooks !== undefined && !sessionHooks.disabled) {
+            try {
+              const report = await sessionHooks.runEvent("UserPromptSubmit", "", { prompt: text });
+              for (const line of report.systemMessages) say(line);
+              const blocked =
+                report.blocked?.reason ??
+                (report.continueFalse !== undefined
+                  ? (report.continueFalse.stopReason ?? "钩子要求整个会话停止")
+                  : undefined);
+              if (blocked !== undefined) {
+                return { status: "failed", errorMessage: `输入被钩子拦下：${blocked}` };
+              }
+              const contexts = [...startContexts, ...report.additionalContext];
+              startContexts = [];
+              if (contexts.length > 0) input = `${contexts.join("\n\n")}\n\n${text}`;
+            } catch (error) {
+              say(
+                `钩子出错（UserPromptSubmit）：${error instanceof Error ? error.message : String(error)}`
+              );
+            }
+          }
+          return adapter.run(input);
+        },
+        runNotices: () => adapter.runNotices(),
         interrupt: () => {
           void adapter.interrupt();
         },
         isRunning: () => adapter.isRunning(),
         transcript: () => adapter.transcript(),
         close: async () => {
+          detachLoopGuard();
+          if (sessionHooks !== undefined && !sessionHooks.disabled) {
+            await sessionHooks.runEvent("SessionEnd", "exit", { reason: "exit" }).catch(() => {});
+          }
           await disposeRuntime(bundle).catch(() => {});
-          await closeNamedWorktree(worktree, { write: context.notice }).catch(() => "kept");
+          releaseInUse();
+          if (!removed) await closeNamedWorktree(worktree, { write: say }).catch(() => "kept");
         },
         live: {
           subscribe: (listener) => adapter.subscribe(listener),
           subscribeStream: (listener) => adapter.subscribeStream(listener),
           subscribeToolResults: (listener) => adapter.subscribeToolResults(listener),
         },
-        take: () =>
-          takePooledChanges({
+        take: (state) => {
+          if (removed) return `会话 ${name} 的工作树已删除，没有可取回的`;
+          const result = takePooledChanges({
             name,
             repoRoot: context.mainWorkspace(),
-            base: worktree.base,
+            base,
             worktreePath: worktree.path,
-          }),
+          });
+          if (!result.complete) return result.text;
+          if (state === "stopped") {
+            // 已停的会话完整取回：同 448，删工作树与分支
+            try {
+              removeNamedWorktree(worktree);
+              removed = true;
+              return `${result.text}\n已删除工作树 ${worktree.name} 与分支 ${worktree.branch}`;
+            } catch (error) {
+              return `${result.text}\n删除工作树失败：${error instanceof Error ? error.message : String(error)}`;
+            }
+          }
+          // 还开着：起点前移到取回时的样子，下次只取之后的改动
+          try {
+            base = advanceTakeBase(worktree.path, worktree.name);
+          } catch (error) {
+            return `${result.text}\n起点没有前移（下次取回会与这次重复）：${error instanceof Error ? error.message : String(error)}`;
+          }
+          return result.text;
+        },
       };
       return runtime;
     },

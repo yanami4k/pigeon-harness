@@ -369,6 +369,8 @@ export class PigeonTuiShell
   private readonly sessionPanel: SessionPanel;
   private pooledSession: { id: string; flow: MessageFlow; unsubscribe: () => void } | undefined;
   private lastPanelStop: { id: string; at: number } | undefined;
+  // 偷看的内容（会话池的接口是异步的，取回来先存着再画）
+  private readonly peekCache = new Map<string, string[]>();
   private lastIdleEscapeAt: number | undefined;
   private historySession: { sessionId: string; flow: MessageFlow } | undefined;
   private returnTo: ReturnTo = { view: "main" };
@@ -531,7 +533,7 @@ export class PigeonTuiShell
       // 标题、审批框、输入框（上下边框）与状态栏
       height: () => Math.max(3, this.options.terminal.rows - 6),
       cards: () => this.options.pool?.source.list() ?? [],
-      peek: (id) => this.options.pool?.source.peek(id) ?? [],
+      peek: (id) => this.peekCache.get(id) ?? [],
     });
     this.messageTree = new MessageTree({
       height: () => Math.max(3, this.options.terminal.rows - 2),
@@ -561,7 +563,14 @@ export class PigeonTuiShell
             this.statusBar,
           ]
         : this.view === "panel"
-          ? [this.title, fill(this.sessionPanel), this.approvalBox, this.input, this.statusBar]
+          ? [
+              this.title,
+              fill(this.sessionPanel),
+              this.statusLine,
+              this.approvalBox,
+              this.input,
+              this.statusBar,
+            ]
           : this.view === "pooled" && this.pooledSession !== undefined
             ? [
                 this.title,
@@ -739,6 +748,7 @@ export class PigeonTuiShell
     // fail-closed（决策 029）：壳停止时挂起的审批按拒绝处理、恢复菜单按 EOF 语义回 null
     closePendingModals(this);
     this.workerSession?.unsubscribe();
+    this.leavePooledSession();
     for (const dispose of this.disposers.splice(0)) dispose();
     for (const dispose of this.runtimeDisposers.splice(0)) dispose();
     if (this.workerTimerHandle !== null) {
@@ -757,6 +767,15 @@ export class PigeonTuiShell
 
   updateStatus(): void {
     // 决策 301：worker 会话里状态行说明这个 worker 的状态与可用的动作
+    // 决策 443：面板上的状态行（审批挂着时照常说明审批）
+    if (this.view === "panel" && this.pendingApprovalState === null) {
+      const cards = this.options.pool?.source.list() ?? [];
+      const waiting = cards.filter((card) => card.state === "waiting").length;
+      this.statusLine.setText(
+        `panel: ${cards.length} sessions${waiting > 0 ? `, ${waiting} waiting` : ""} | [enter] spawn or enter, [space] peek, ctrl+x x2 stop, [esc] close`
+      );
+      return;
+    }
     // 决策 443：进入的会话里状态行写它的状态与可用的动作
     if (
       this.view === "pooled" &&
@@ -1089,12 +1108,32 @@ export class PigeonTuiShell
     );
   }
 
-  // 决策 443：/take <名字>——会话面板里有这个名字的会话即取回它工作树里的改动
-  takePooled(name: string): string | undefined {
+  // 决策 443：/take <名字>——会话面板里有这个名字的会话即取回它工作树里的改动（没有这个名字为 undefined）
+  takePooled(name: string): Promise<string> | undefined {
     const source = this.options.pool?.source;
     const card = source?.list().find((item) => item.name === name);
     if (source === undefined || card === undefined) return undefined;
-    return source.take?.(card.id) ?? "这个会话没有工作树可取回";
+    return source.take?.(card.id) ?? Promise.resolve("这个会话没有工作树可取回");
+  }
+
+  // 决策 443：会话面板里还开着（没停）的会话号（/resume 与会话选择器排除它们）
+  pooledSessionIds(): ReadonlySet<string> {
+    return new Set(
+      (this.options.pool?.source.list() ?? [])
+        .filter((card) => card.state !== "stopped")
+        .map((card) => card.id)
+    );
+  }
+
+  // 偷看开着时取一次选中会话的内容
+  private refreshPeek(): void {
+    const source = this.options.pool?.source;
+    const card = this.sessionPanel.selected();
+    if (source === undefined || card === undefined || !this.sessionPanel.isPeeking()) return;
+    void source.peek(card.id).then((lines) => {
+      this.peekCache.set(card.id, lines);
+      this.tui.requestRender();
+    });
   }
 
   // 决策 443：/panel
@@ -1124,10 +1163,13 @@ export class PigeonTuiShell
       }
     } else if (matchesKey(data, "up")) {
       panel.move(-1);
+      this.refreshPeek();
     } else if (matchesKey(data, "down")) {
       panel.move(1);
+      this.refreshPeek();
     } else if (empty && matchesKey(data, "space")) {
       panel.togglePeek();
+      this.refreshPeek();
     } else if (empty && matchesKey(data, "enter")) {
       const card = panel.selected();
       if (card !== undefined) this.openPooledSession(card);
@@ -1185,26 +1227,31 @@ export class PigeonTuiShell
       return;
     }
     if (pooled !== undefined) {
-      const refusal = pool.source.send(pooled.id, value);
-      if (refusal !== undefined) {
-        pooled.flow.addSystem(refusal);
-        this.input.setText(value);
-      } else {
-        pooled.flow.addUserEcho(value);
-      }
+      void pool.source.send(pooled.id, value).then((refusal) => {
+        if (refusal !== undefined) {
+          pooled.flow.addSystem(refusal);
+          if (this.input.getText() === "") this.input.setText(value);
+        } else {
+          pooled.flow.addUserEcho(value);
+        }
+        this.tui.requestRender();
+      });
       return;
     }
     const selected = this.sessionPanel.selected();
     if (this.sessionPanel.isPeeking() && selected !== undefined) {
-      const refusal = pool.source.send(selected.id, value);
-      this.sessionPanel.setNote(refusal ?? `已发给 ${selected.name}`);
-      if (refusal !== undefined) this.input.setText(value);
+      void pool.source.send(selected.id, value).then((refusal) => {
+        this.sessionPanel.setNote(refusal ?? `已发给 ${selected.name}`);
+        if (refusal !== undefined && this.input.getText() === "") this.input.setText(value);
+        this.refreshPeek();
+        this.tui.requestRender();
+      });
       return;
     }
     this.sessionPanel.setNote("正在派新会话...");
     pool.source.spawn(value).then(
       (card) => {
-        this.sessionPanel.select(card.id);
+        this.sessionPanel.selectName(card.name);
         this.sessionPanel.setNote(
           card.state === "failed" ? `没派成：${card.error ?? ""}` : `已派出 ${card.name}`
         );
@@ -1642,11 +1689,18 @@ export class PigeonTuiShell
       const expanded = !this.flow.toolsExpandedState();
       this.flow.setToolsExpanded(expanded);
       this.workerSession?.flow.setToolsExpanded(expanded);
+      this.pooledSession?.flow.setToolsExpanded(expanded);
       this.historySession?.flow.setToolsExpanded(expanded);
       this.tui.requestRender();
       return { consume: true };
     }
-    if (isKey(data, "pigeon.dequeue") && this.queue.size() > 0) {
+    // 决策 443：面板与进入的会话里不动主会话排队的内容
+    if (
+      isKey(data, "pigeon.dequeue") &&
+      this.queue.size() > 0 &&
+      this.view !== "panel" &&
+      this.view !== "pooled"
+    ) {
       this.restoreQueueToEditor();
       return { consume: true };
     }
@@ -1744,8 +1798,13 @@ export class PigeonTuiShell
     }
     let sessions: ReturnType<typeof listRecentMainSessions>;
     try {
+      // 决策 443：会话面板里还开着的会话不列（换过去会有两个运行面写同一个会话文件）
+      const pooled = this.pooledSessionIds();
       sessions = listRecentMainSessions(root).filter(
-        (session) => session.sessionId !== this.current.sessionId && session.turns > 0
+        (session) =>
+          session.sessionId !== this.current.sessionId &&
+          session.turns > 0 &&
+          !pooled.has(session.sessionId)
       );
     } catch (error) {
       this.flow.addSystem(
@@ -1793,7 +1852,13 @@ export class PigeonTuiShell
     this.flow.addSystem(line);
     if (this.view === "worker" && this.workerSession !== undefined) {
       this.workerSession.flow.addSystem(line);
-    } else if (this.view === "tree" || this.view === "history") {
+    } else if (
+      this.view === "tree" ||
+      this.view === "history" ||
+      this.view === "panel" ||
+      this.view === "pooled"
+    ) {
+      // 决策 443：面板与进入的会话里审批块同样显示（含来源）
       this.approvalBoxText =
         this.approvalBoxText === "" ? line : `${this.approvalBoxText}\n${line}`;
       this.approvalBox.setText(this.approvalBoxText);
@@ -1874,6 +1939,8 @@ export class PigeonTuiShell
 
   addSystem(line: string): void {
     this.flow.addSystem(line);
+    // 决策 443：面板上主消息区看不见，最新一行另写在面板的说明行
+    if (this.view === "panel") this.sessionPanel.setNote(line);
   }
 
   addHistoryLines(lines: Parameters<MessageFlow["addHistory"]>[0]): void {

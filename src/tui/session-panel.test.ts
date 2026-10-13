@@ -9,8 +9,9 @@ import { test } from "vitest";
 import { LocalSessionPool, type PooledRuntime } from "../application/session-pool.ts";
 import type { StreamTextDelta } from "../pi-runtime/adapter.ts";
 import { newSessionId } from "../state/ids.ts";
+import { orchestrationHarness } from "./orchestration-fixtures.ts";
 import { ScriptedRuntime } from "./runtime-fixtures.ts";
-import { PigeonTuiShell, type TuiPoolFace } from "./shell.ts";
+import { PigeonTuiShell, type TuiPoolFace, type TuiShellOptions } from "./shell.ts";
 import { MockTerminal, screenText, settle } from "./testing.ts";
 
 interface Live {
@@ -18,7 +19,7 @@ interface Live {
   subscribeStream(listener: (delta: StreamTextDelta) => void): () => void;
 }
 
-function makeShell() {
+function makeShell(extra: Partial<TuiShellOptions> = {}) {
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-panel-"));
   const sessionId = newSessionId();
   const term = new MockTerminal(110, 40);
@@ -72,7 +73,20 @@ function makeShell() {
     source: pool,
     live: (id) => pool.runtimeOf(id)?.live as ReturnType<NonNullable<TuiPoolFace["live"]>>,
   };
-  const shell = new PigeonTuiShell({ terminal: term, runtime, sessionId, logDir, pool: face });
+  const shell = new PigeonTuiShell({
+    terminal: term,
+    runtime,
+    sessionId,
+    logDir,
+    pool: face,
+    resume: {
+      root: logDir,
+      rebind: () => {
+        throw new Error("不该换过去");
+      },
+    },
+    ...extra,
+  });
   shell.start();
   return {
     shell,
@@ -195,6 +209,115 @@ test("连按两次 Ctrl+X 停止选中的会话（第一次只提示）；面板
     await settle();
     assert.match(screenText(term), /已取回 s1 的改动/);
   } finally {
+    cleanup();
+  }
+});
+
+test("面板里审批块照样显示并写明来源；审批挂着时按键归审批，字母不进输入框", async () => {
+  const { shell, term, cleanup } = makeShell();
+  try {
+    await settle();
+    term.input("/panel");
+    term.input("\r");
+    await settle();
+    let decided: unknown;
+    void shell
+      .askApproval({
+        toolName: "run_command",
+        toolCallId: "c1",
+        args: { command: "npm test" },
+        sessionId: "sess_pool9" as never,
+        pooled: { name: "s9" },
+      })
+      .then((result) => {
+        decided = result;
+      });
+    await settle();
+    const screen = screenText(term);
+    assert.match(screen, /== sessions panel/);
+    assert.match(screen, /来源：会话 s9/);
+    term.input("y");
+    await settle();
+    assert.deepEqual(decided, { key: "y" });
+    assert.doesNotMatch(screenText(term), /> y\b/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("面板里退回排队的键不动主会话排队的内容", async () => {
+  const { term, runtime, cleanup } = makeShell();
+  try {
+    await settle();
+    runtime.autoResolve = false;
+    term.input("跑");
+    term.input("\r");
+    await settle();
+    term.input("排队的一条");
+    term.input("\r");
+    await settle();
+    term.input("/panel");
+    term.input("\r");
+    await settle();
+    term.input("\x1bq");
+    await settle();
+    assert.doesNotMatch(screenText(term), /排队的一条/);
+    term.input(ESC);
+    await settle();
+    runtime.finishAll();
+    await settle();
+    assert.deepEqual(runtime.runs, ["跑", "排队的一条"]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("/resume 不能换到面板里还开着的会话", async () => {
+  const { term, cleanup } = makeShell();
+  try {
+    await settle();
+    term.input("/panel");
+    term.input("\r");
+    await settle();
+    term.input("一");
+    term.input("\r");
+    await settle();
+    term.input(ESC);
+    await settle();
+    term.input("/resume sess_pool1");
+    term.input("\r");
+    await settle();
+    assert.match(screenText(term), /会话 sess_pool1 在会话面板里开着/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("/take：面板会话与 worker 同名时要写明是哪一个", async () => {
+  const h = orchestrationHarness();
+  const { term, cleanup } = makeShell({ workers: h.face });
+  try {
+    await settle();
+    h.face.spawn({ role: "explorer", task: "看看", name: "s1" });
+    term.input("/panel");
+    term.input("\r");
+    await settle();
+    term.input("一");
+    term.input("\r");
+    await settle();
+    term.input(ESC);
+    await settle();
+    term.input("/take s1");
+    term.input("\r");
+    await settle();
+    assert.match(screenText(term), /会话面板里的会话与 worker 都叫 s1/);
+    term.input("/take 会话:s1");
+    term.input("\r");
+    await settle();
+    // 写明之后归面板会话（它还在跑，照实说明）
+    assert.match(screenText(term), /会话 s1 正在跑，等它停下再取回/);
+  } finally {
+    await h.stopAll();
     cleanup();
   }
 });

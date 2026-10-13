@@ -98,7 +98,7 @@ export interface CommandsHost {
   // 决策 443：/panel 打开会话面板（缺省 = 不可用）
   readonly panelCommand?: (() => void) | undefined;
   // 决策 443：/take <名字> 是会话面板里的会话时取回它工作树里的改动；不是即 undefined（照旧按 worker 处理）
-  takePooled?(name: string): string | undefined;
+  takePooled?(name: string): Promise<string> | undefined;
 }
 
 // 命令表判断可用性用的只读面
@@ -235,11 +235,36 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
       return;
     }
     // 决策 279：/take <worker 名> 把已收尾 worker 自己的改动叠进工作目录
-    // 决策 443：会话面板里的会话按名字取回
+    // 决策 443：会话面板里的会话按名字取回；与 worker 同名时要写明"会话:名字"或"worker:名字"
     if (tokens[0] === "take" && tokens[1] !== undefined) {
-      const pooled = host.takePooled?.(tokens[1]);
+      const raw = tokens[1];
+      const forced = /^(会话|session):/.test(raw)
+        ? "pooled"
+        : /^worker:/.test(raw)
+          ? "worker"
+          : undefined;
+      const name = forced !== undefined ? raw.slice(raw.indexOf(":") + 1) : raw;
+      const isWorker = workers?.status().some((status) => status.name === name);
+      const pooled = forced === "worker" ? undefined : host.takePooled?.(name);
+      if (pooled !== undefined && forced === undefined && isWorker) {
+        host.addSystem(
+          `会话面板里的会话与 worker 都叫 ${name}：写 /take 会话:${name} 或 /take worker:${name}`
+        );
+        return;
+      }
       if (pooled !== undefined) {
-        host.addSystem(pooled);
+        void pooled.then((text) => {
+          host.addSystem(text);
+          host.render();
+        });
+        return;
+      }
+      if (forced === "pooled") {
+        host.addSystem(`会话面板里没有叫 ${name} 的会话`);
+        return;
+      }
+      if (workers !== undefined) {
+        host.takeCommand(workers, name);
         return;
       }
     }

@@ -1,24 +1,42 @@
 // 决策 443：会话面板的会话池接上真实运行面（与终端界面同一条装配路径，假模型，临时 git 仓库）。派出的会话进自己的独立
-// 工作树、在那里改文件（主工作目录不动）；审批经同一个处理口、写明来源会话，挂着时卡片在"等待回应"；/take 把工作树里的
-// 改动取回主工作目录；停下释放运行面，有改动的工作树保留。
+// 工作树、在那里改文件（主工作目录不动），开着期间持有在用锁；起点按 worktree.baseRef（head 时不取远端）；审批经同一个
+// 处理口、写明来源会话，挂着时卡片在"等待回应"；/take 把工作树里的改动取回主工作目录、完整取回后起点前移（再取不重复），
+// 停下之后完整取回即删工作树；钩子：SessionStart 与 SessionEnd 跑、UserPromptSubmit 拦下即这一轮失败并写明原因。
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, test } from "vitest";
-import { initRepo, routedModel, tempRoot } from "../application/tui-session-fixtures.ts";
+import { git, initRepo, routedModel, tempRoot } from "../application/tui-session-fixtures.ts";
 import type { ApprovalRequest } from "../approvals/handler.ts";
 import { loadSettings } from "../persistence/settings.ts";
+import type { LayeredHook } from "../state/hooks.ts";
+import { emptySettingsSnapshot, type SettingsSnapshot } from "../state/settings.ts";
 import { createSessionPool } from "./main-pool.ts";
 
-const cleanups: Array<() => Promise<void> | void> = [];
+const cleanups: Array<() => Promise<unknown> | unknown> = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-test("派出的会话进自己的工作树改文件；审批写明来源、挂着时在等待回应；/take 取回；停下释放运行面", async () => {
+async function until(check: () => boolean, what: string): Promise<void> {
+  for (let i = 0; i < 400 && !check(); i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.ok(check(), what);
+}
+
+function lockCount(home: string): number {
+  const dir = join(home, ".pigeon", "state", "worktree-use");
+  return existsSync(dir) ? readdirSync(dir).length : 0;
+}
+
+test("派出的会话进自己的工作树改文件、持有在用锁；审批写明来源、挂着时在等待回应；/take 取回、起点前移；停下后完整取回即删工作树", async () => {
   const { root, cleanup } = tempRoot("pigeon-pool-");
   cleanups.push(cleanup);
+  const home = join(root, ".home");
+  mkdirSync(home);
   initRepo(root, { "a.txt": "one\n" });
+  writeFileSync(join(root, ".gitignore"), ".pigeon/\n.home/\n");
   const { streamFn } = routedModel({
     main: [
       {
@@ -38,6 +56,7 @@ test("派出的会话进自己的工作树改文件；审批写明来源、挂�
     flags: { provider: "custom", modelId: "custom" } as never,
     settings: () => loadSettings(root, { homeDir: root }),
     warn: () => {},
+    homeDir: home,
     createApprovalHandler: () => async (request) => {
       requests.push(request);
       states.push(pool.list()[0]?.state ?? "?");
@@ -51,31 +70,117 @@ test("派出的会话进自己的工作树改文件；审批写明来源、挂�
   });
   cleanups.push(() => pool.closeAll());
   const card = await pool.spawn("建一个文件");
-  assert.equal(card.error, undefined);
-  assert.match(card.worktree?.path ?? "", /s1-/);
-  for (let i = 0; i < 200 && release === undefined; i += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  assert.ok(release !== undefined, "审批到了");
+  assert.equal(card.state, "preparing");
+  await until(() => release !== undefined, "审批到了");
+  const opened = pool.list()[0];
+  assert.match(opened?.worktree?.path ?? "", /s1-/);
+  assert.equal(lockCount(home), 1, "开着期间持有在用锁");
   assert.equal(requests[0]?.pooled?.name, "s1");
-  assert.equal(requests[0]?.sessionId, card.id);
+  assert.equal(requests[0]?.sessionId, opened?.id);
   assert.deepEqual(states, ["waiting"]);
   assert.match(pool.list()[0]?.waiting ?? "", /^write_file/);
   release?.();
-  for (let i = 0; i < 200 && pool.list()[0]?.state !== "idle"; i += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  assert.equal(pool.list()[0]?.state, "idle");
+  await until(() => pool.list()[0]?.state === "idle", "跑完空闲");
   assert.equal(pool.list()[0]?.summary, "写好了");
-  const worktree = card.worktree?.path ?? "";
+  const id = opened?.id ?? "";
+  const worktree = opened?.worktree?.path ?? "";
   assert.equal(readFileSync(join(worktree, "made.txt"), "utf8"), "made\n");
   assert.equal(existsSync(join(root, "made.txt")), false, "主工作目录不动");
-  assert.ok(face.live?.(card.id) !== undefined);
-  assert.match(pool.take(card.id), /已取回 1 个文件：made\.txt/);
+  assert.ok(face.live?.(id) !== undefined);
+  assert.match(await pool.take(id), /已取回 1 个文件：made\.txt/);
   // 取回沿用 worker 的叠回（行尾按检出规则）
   assert.equal(readFileSync(join(root, "made.txt"), "utf8").replace(/\r\n/g, "\n"), "made\n");
-  await pool.stop(card.id);
+  // 起点已前移：主工作目录里那份之后又被手改，再取不重复、不冲突
+  writeFileSync(join(root, "made.txt"), "edited by hand\n");
+  assert.match(await pool.take(id), /没有要取回的改动/);
+  assert.equal(readFileSync(join(root, "made.txt"), "utf8"), "edited by hand\n");
+  await pool.stop(id);
   assert.equal(pool.list()[0]?.state, "stopped");
+  assert.equal(lockCount(home), 0, "停下即释放在用锁");
   assert.ok(existsSync(worktree), "有改动的工作树保留");
-  assert.ok(notices.some((line) => line.includes("保留")));
+  assert.match(await pool.take(id), /已删除工作树/);
+  assert.equal(existsSync(worktree), false);
+  assert.match(await pool.take(id), /工作树已删除/);
+});
+
+test("起点按 worktree.baseRef：fresh 时在后台取远端（取不到从 HEAD 起并说明），head 时不取", async () => {
+  const { root, cleanup } = tempRoot("pigeon-pool-base-");
+  cleanups.push(cleanup);
+  initRepo(root, { "a.txt": "one\n" });
+  git(root, ["remote", "add", "origin", join(root, "no-such-remote")]);
+  git(root, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+  const run = async (baseRef: "fresh" | "head") => {
+    const notices: string[] = [];
+    const settings: SettingsSnapshot = {
+      ...emptySettingsSnapshot(root),
+      merged: { ...emptySettingsSnapshot(root).merged, worktree: { baseRef } },
+    };
+    const { streamFn } = routedModel({ main: [{ text: "好" }] });
+    const { pool } = createSessionPool({
+      governanceRoot: root,
+      streamFn,
+      flags: { yolo: true, provider: "custom", modelId: "custom" } as never,
+      settings: () => settings,
+      warn: () => {},
+      homeDir: join(root, ".home"),
+      createApprovalHandler: () => async () => ({ approved: true }),
+      mainWorkspace: () => root,
+      notice: (line) => notices.push(line),
+    });
+    await pool.spawn("看看");
+    await until(() => pool.list()[0]?.state === "idle", "跑完");
+    await pool.closeAll();
+    return notices;
+  };
+  // head 先跑（取远端失败也会留下 FETCH_HEAD，让之后 24 小时内不再取）
+  assert.ok(!(await run("head")).some((line) => line.includes("取远端")));
+  assert.ok((await run("fresh")).some((line) => line.includes("取远端默认分支失败")));
+});
+
+test("钩子：SessionStart 与 SessionEnd 跑；UserPromptSubmit 拦下即这一轮失败并写明原因", async () => {
+  const { root, cleanup } = tempRoot("pigeon-pool-hooks-");
+  cleanups.push(cleanup);
+  initRepo(root, { "a.txt": "one\n" });
+  const scripts = join(root, ".hooks");
+  mkdirSync(scripts);
+  const mark = (name: string) =>
+    `process.stdin.resume();process.stdin.on("end",()=>{require("fs").writeFileSync(${JSON.stringify(join(scripts, name))},"x")});`;
+  writeFileSync(join(scripts, "start.cjs"), mark("started"));
+  writeFileSync(join(scripts, "end.cjs"), mark("ended"));
+  writeFileSync(
+    join(scripts, "block.cjs"),
+    'process.stdin.resume();process.stdin.on("end",()=>{process.stderr.write("不许这句");process.exit(2)});'
+  );
+  const hook = (event: LayeredHook["event"], file: string): LayeredHook => ({
+    event,
+    command: `node "${join(scripts, file)}"`,
+    host: false,
+    layer: "project",
+  });
+  const settings: SettingsSnapshot = {
+    ...emptySettingsSnapshot(root),
+    hooks: [
+      hook("SessionStart", "start.cjs"),
+      hook("SessionEnd", "end.cjs"),
+      hook("UserPromptSubmit", "block.cjs"),
+    ],
+  };
+  const { streamFn } = routedModel({ main: [{ text: "不会到这" }] });
+  const { pool } = createSessionPool({
+    governanceRoot: root,
+    streamFn,
+    flags: { yolo: true, provider: "custom", modelId: "custom" } as never,
+    settings: () => settings,
+    warn: () => {},
+    homeDir: join(root, ".home"),
+    createApprovalHandler: () => async () => ({ approved: true }),
+    mainWorkspace: () => root,
+    notice: () => {},
+  });
+  await pool.spawn("随便做点");
+  await until(() => pool.list()[0]?.state === "failed", "这一轮被拦下");
+  assert.match(pool.list()[0]?.error ?? "", /输入被钩子拦下：不许这句/);
+  assert.ok(existsSync(join(scripts, "started")), "SessionStart 跑了");
+  await pool.closeAll();
+  assert.ok(existsSync(join(scripts, "ended")), "SessionEnd 跑了");
 });

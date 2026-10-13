@@ -962,7 +962,8 @@ export async function main(argv: string[]): Promise<void> {
       await shellHolder.current?.endSession("exit");
       // 决策 443：关掉 Pigeon，会话面板里的会话全部停止（工作树没有改动即删，有改动保留）
       poolExiting = true;
-      await sessionPool?.pool.closeAll().catch(() => {});
+      const poolProblems = (await sessionPool?.pool.closeAll().catch(() => [])) ?? [];
+      for (const line of poolProblems) console.error(line);
       await closeTuiSession({
         governanceRoot: governanceRoot,
         sessionId: current.sessionId,

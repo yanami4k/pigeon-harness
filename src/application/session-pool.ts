@@ -2,12 +2,21 @@
 // git 工作树里（445、446）。面板只经 SessionPanelSource 取数与下指令——它不假设会话与面板同在一个进程：以后换成常驻托管
 // 进程、各会话独立进程时，实现同一个接口即可（卡片是纯数据，动作都是按会话号的异步调用）。进入会话（实时看它的对话）
 // 要直接订阅运行面，是进程内版独有的，单独由 LocalSessionPool.runtimeOf 给出。
-// 状态：等待回应（审批挂着）在前，其次在跑、空闲、失败、已停。摘要取最后一条助手回复的开头。关掉 Pigeon 即全部停止。
-
+// 状态：等待回应（审批挂着）在前，其次在跑、准备中、空闲、失败、已停。摘要取最后一条助手回复的开头。关掉 Pigeon 即全部停止
+//（先等还在开的开完，整体有时限）。
+import { existsSync } from "node:fs";
+import { SNAPSHOT_REF_ROOT, snapshotWorkdir } from "../execution/workdir-snapshot.ts";
 import { type OverlayResult, overlayWorkerChanges } from "../execution/worker-overlay.ts";
 import { isStatusMessage } from "../state/status-text.ts";
+import { isHumanInput } from "./rewind.ts";
 
-export type PooledSessionState = "waiting" | "running" | "idle" | "failed" | "stopped";
+export type PooledSessionState =
+  | "waiting"
+  | "running"
+  | "preparing"
+  | "idle"
+  | "failed"
+  | "stopped";
 
 export interface PooledSessionCard {
   id: string;
@@ -29,52 +38,59 @@ export interface PooledSessionCard {
 export interface SessionPanelSource {
   list(): PooledSessionCard[];
   subscribe(listener: () => void): () => void;
-  // 派一个新会话去做 task（进它自己的工作树）
+  // 派一个新会话去做 task（进它自己的工作树；建工作树与开运行面在后台，卡片先显示准备中）
   spawn(task: string): Promise<PooledSessionCard>;
   // 给空闲的会话发一句话（接着做）；不能发时返回原因
-  send(id: string, text: string): string | undefined;
-  // 停下（在跑的先中断），之后只读
+  send(id: string, text: string): Promise<string | undefined>;
+  // 停下（在跑的先中断；还在开的开完即释放），之后只读
   stop(id: string): Promise<void>;
-  // 偷看：等待中的问题，或最近的对话（几行）
-  peek(id: string): string[];
+  // 偷看：等待中的问题，或最近的几句（人说的与回复）
+  peek(id: string): Promise<string[]>;
   // 把它工作树里的改动取回主工作目录（/take）；返回说明
-  take?(id: string): string;
+  take?(id: string): Promise<string>;
 }
 
-// 会话池要的运行面（结构类型；tui/main.ts 按 openSessionRuntime 的结果拼）
 export interface PooledRuntime<Live = unknown> {
   sessionId: string;
   worktree?: { path: string; branch: string };
+  // 跑一轮；结果带 status（"failed" 即失败，errorMessage 为原因）
   run(text: string): Promise<unknown>;
+  // 空闲时只带待递的通知跑一轮（后台作业结束等）；不支持即 undefined
+  runNotices?(): Promise<unknown>;
   interrupt(): void;
   isRunning(): boolean;
   transcript(): readonly unknown[];
   close(): Promise<void>;
   // 进程内版：进入会话时订阅的运行面
   live?: Live;
-  // 把工作树里的改动取回主工作目录，返回说明
-  take?(): string;
+  // 把工作树里的改动取回主工作目录（state 为卡片当前的状态），返回说明
+  take?(state: PooledSessionState): string;
 }
 
-// 运行面的钩子：审批挂上与落定时告诉会话池（汇到同一审批队列的包装里调用）
+// 运行面的钩子：审批挂上与落定、后台作业结束要叫醒时告诉会话池
 export interface PooledHooks {
   waiting(text: string | undefined): void;
+  wake(): void;
 }
 
 export interface LocalSessionPoolOptions<Live> {
   open(input: { name: string; task: string; hooks: PooledHooks }): Promise<PooledRuntime<Live>>;
   now?: () => number;
+  // 关掉时整体的时限（缺省 15 秒）
+  closeTimeoutMs?: number;
 }
 
 const STATE_ORDER: Record<PooledSessionState, number> = {
   waiting: 0,
   running: 1,
-  idle: 2,
-  failed: 3,
-  stopped: 4,
+  preparing: 2,
+  idle: 3,
+  failed: 4,
+  stopped: 5,
 };
 
 const SUMMARY_CHARS = 120;
+const CLOSE_TIMEOUT_MS = 15_000;
 
 function textOf(message: unknown): string {
   const content = (message as { content?: unknown } | undefined)?.content;
@@ -109,9 +125,29 @@ export function replySummary(transcript: readonly unknown[]): string {
   return "";
 }
 
+// 运行面的 run 正常返回、但结局是失败（status "failed"）时的原因；不是失败为 undefined
+function failureOf(result: unknown): string | undefined {
+  if (typeof result !== "object" || result === null) return undefined;
+  const { status, errorMessage } = result as { status?: unknown; errorMessage?: unknown };
+  if (status !== "failed") return undefined;
+  return typeof errorMessage === "string" && errorMessage !== "" ? errorMessage : "这一轮失败了";
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | "timeout"> {
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([
+    promise.finally(() => clearTimeout(timer)),
+    new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), ms);
+    }),
+  ]);
+}
+
 interface Entry<Live> {
   card: PooledSessionCard;
   runtime?: PooledRuntime<Live>;
+  // 建工作树与开运行面（还没开完）
+  opening?: Promise<void> | undefined;
 }
 
 export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
@@ -129,6 +165,10 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
     return (this.#options.now ?? Date.now)();
   }
 
+  #notify(): void {
+    for (const listener of this.#listeners) listener();
+  }
+
   // 值为 undefined 的键即删掉
   #changed(
     entry: Entry<Live>,
@@ -137,7 +177,7 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
     const next: Record<string, unknown> = { ...entry.card, ...patch, updatedAt: this.#now() };
     for (const key of Object.keys(next)) if (next[key] === undefined) delete next[key];
     entry.card = next as unknown as PooledSessionCard;
-    for (const listener of this.#listeners) listener();
+    this.#notify();
   }
 
   list(): PooledSessionCard[] {
@@ -159,6 +199,7 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
     return this.#entries.get(id)?.runtime;
   }
 
+  // 派出：卡片先以"准备中"出现，建工作树与开运行面在后台进行；返回准备中的卡片
   async spawn(task: string): Promise<PooledSessionCard> {
     if (this.#closed) throw new Error("会话面板已关闭");
     const text = task.trim();
@@ -170,7 +211,7 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
       card: {
         id: `pending:${name}`,
         name,
-        state: "running",
+        state: "preparing",
         task: text,
         summary: "",
         startedAt: now,
@@ -178,54 +219,67 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
       },
     };
     this.#entries.set(entry.card.id, entry);
-    for (const listener of this.#listeners) listener();
+    this.#notify();
     const hooks: PooledHooks = {
       waiting: (line) => {
         if (entry.card.state === "stopped") return;
         this.#changed(entry, {
           state: line !== undefined ? "waiting" : "running",
-          ...(line !== undefined ? { waiting: line } : { waiting: undefined }),
+          waiting: line,
         });
       },
+      wake: () => this.#wake(entry),
     };
-    let runtime: PooledRuntime<Live>;
-    try {
-      runtime = await this.#options.open({ name, task: text, hooks });
-    } catch (error) {
-      this.#changed(entry, {
-        state: "failed",
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return entry.card;
-    }
-    // 会话号定了：卡片改用它
-    this.#entries.delete(entry.card.id);
-    entry.runtime = runtime;
-    entry.card = {
-      ...entry.card,
-      id: runtime.sessionId,
-      ...(runtime.worktree !== undefined ? { worktree: runtime.worktree } : {}),
-    };
-    this.#entries.set(runtime.sessionId, entry);
-    if (this.#closed) {
-      await runtime.close().catch(() => {});
-      this.#changed(entry, { state: "stopped" });
-      return entry.card;
-    }
-    this.#run(entry, text);
-    return entry.card;
+    entry.opening = (async () => {
+      let runtime: PooledRuntime<Live>;
+      try {
+        runtime = await this.#options.open({ name, task: text, hooks });
+      } catch (error) {
+        if (entry.card.state !== "stopped") {
+          this.#changed(entry, {
+            state: "failed",
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        return;
+      }
+      // 会话号定了：卡片改用它
+      this.#entries.delete(entry.card.id);
+      entry.runtime = runtime;
+      entry.card = {
+        ...entry.card,
+        id: runtime.sessionId,
+        ...(runtime.worktree !== undefined ? { worktree: runtime.worktree } : {}),
+      };
+      this.#entries.set(runtime.sessionId, entry);
+      // 开的期间被停（或面板已关）：释放，不开跑
+      if (entry.card.state === "stopped" || this.#closed) {
+        await runtime.close().catch(() => {});
+        this.#changed(entry, { state: "stopped" });
+        return;
+      }
+      this.#run(entry, () => runtime.run(text));
+    })().finally(() => {
+      entry.opening = undefined;
+    });
+    // 让出一轮：界面先画出"准备中"；返回派出时（准备中）的卡片
+    const preparing = entry.card;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    return preparing;
   }
 
-  #run(entry: Entry<Live>, text: string): void {
+  #run(entry: Entry<Live>, start: () => Promise<unknown>): void {
     const runtime = entry.runtime;
     if (runtime === undefined) return;
     this.#changed(entry, { state: "running", waiting: undefined, error: undefined });
-    runtime.run(text).then(
-      () => {
+    start().then(
+      (result) => {
         if (entry.card.state === "stopped") return;
+        const failure = failureOf(result);
         this.#changed(entry, {
-          state: "idle",
+          state: failure !== undefined ? "failed" : "idle",
           waiting: undefined,
+          error: failure,
           summary: replySummary(runtime.transcript()),
         });
       },
@@ -241,16 +295,29 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
     );
   }
 
-  send(id: string, text: string): string | undefined {
+  // 后台作业结束等要叫醒：空闲（或失败后）即只带通知跑一轮；在跑时通知照常在轮间递进去
+  #wake(entry: Entry<Live>): void {
+    const runtime = entry.runtime;
+    if (runtime?.runNotices === undefined) return;
+    const state = entry.card.state;
+    if ((state !== "idle" && state !== "failed") || runtime.isRunning()) return;
+    const runNotices = runtime.runNotices.bind(runtime);
+    this.#run(entry, runNotices);
+  }
+
+  async send(id: string, text: string): Promise<string | undefined> {
     const entry = this.#entries.get(id);
-    if (entry === undefined || entry.runtime === undefined) return "没有这个会话";
+    if (entry === undefined) return "没有这个会话";
+    if (entry.runtime === undefined) return `会话 ${entry.card.name} 还在准备，等它开好再发`;
     if (text.trim() === "") return "要发的话是空的";
     const state = entry.card.state;
     if (state === "stopped") return `会话 ${entry.card.name} 已停，不能再发`;
     if (state === "running" || state === "waiting" || entry.runtime.isRunning()) {
       return `会话 ${entry.card.name} 正在跑，等它停下再发`;
     }
-    this.#run(entry, text.trim());
+    const runtime = entry.runtime;
+    const message = text.trim();
+    this.#run(entry, () => runtime.run(message));
     return undefined;
   }
 
@@ -259,13 +326,17 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
     if (entry === undefined || entry.card.state === "stopped") return;
     const runtime = entry.runtime;
     this.#changed(entry, { state: "stopped", waiting: undefined });
-    if (runtime === undefined) return;
+    if (runtime === undefined) {
+      // 还在开：开完由开的那一段释放
+      await entry.opening;
+      return;
+    }
     if (runtime.isRunning()) runtime.interrupt();
     await runtime.close().catch(() => {});
     this.#changed(entry, { summary: replySummary(runtime.transcript()) || entry.card.summary });
   }
 
-  peek(id: string): string[] {
+  async peek(id: string): Promise<string[]> {
     const entry = this.#entries.get(id);
     if (entry === undefined) return [];
     const card = entry.card;
@@ -274,10 +345,10 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
     if (card.error !== undefined) lines.push(`失败：${card.error}`);
     const transcript = entry.runtime?.transcript() ?? [];
     const recent = transcript
-      // 开工状态块不是人说的话，不列
+      // 只列人说的话与回复：开工状态块、程序送进对话的通知、续跑提示都不是人说的
       .filter(
         (message) =>
-          (roleOf(message) === "user" && !isStatusMessage(message)) ||
+          (roleOf(message) === "user" && !isStatusMessage(message) && isHumanInput(message)) ||
           roleOf(message) === "assistant"
       )
       .slice(-4)
@@ -291,13 +362,14 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
     return lines;
   }
 
-  take(id: string): string {
+  async take(id: string): Promise<string> {
     const entry = this.#entries.get(id);
-    if (entry === undefined || entry.runtime === undefined) return "没有这个会话";
+    if (entry === undefined) return "没有这个会话";
+    if (entry.runtime === undefined) return `会话 ${entry.card.name} 还在准备，没有可取回的`;
     if (entry.card.state === "running" || entry.card.state === "waiting") {
       return `会话 ${entry.card.name} 正在跑，等它停下再取回`;
     }
-    return entry.runtime.take?.() ?? "这个会话没有工作树可取回";
+    return entry.runtime.take?.(entry.card.state) ?? "这个会话没有工作树可取回";
   }
 
   // 按名字找（/take 用）
@@ -305,21 +377,52 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
     return [...this.#entries.values()].find((entry) => entry.card.name === name)?.card;
   }
 
-  // 关掉 Pigeon：全部停止
-  async closeAll(): Promise<void> {
+  // 关掉 Pigeon：先等还在开的开完，再全部停止；整体有时限，没在时限内停下的如实返回
+  async closeAll(): Promise<string[]> {
     this.#closed = true;
-    await Promise.all([...this.#entries.keys()].map((id) => this.stop(id)));
+    const ms = this.#options.closeTimeoutMs ?? CLOSE_TIMEOUT_MS;
+    const problems: string[] = [];
+    const entries = [...this.#entries.values()];
+    const done = await withTimeout(
+      Promise.all(
+        entries.map(async (entry) => {
+          await entry.opening;
+          await this.stop(entry.card.id);
+        })
+      ),
+      ms
+    );
+    if (done === "timeout") {
+      for (const entry of entries) {
+        if (entry.opening !== undefined || entry.runtime?.isRunning() === true) {
+          problems.push(`会话 ${entry.card.name} 没有在 ${Math.round(ms / 1000)} 秒内停下`);
+        }
+      }
+      if (problems.length === 0) {
+        problems.push(`会话面板没有在 ${Math.round(ms / 1000)} 秒内全部停下`);
+      }
+    }
+    return problems;
   }
 }
 
-// /take：把会话工作树里相对起点的改动叠回主工作目录（与取回 worker 同一套叠回：叠不上的留在工作树、会话删的文件不删）
+// /take：把会话工作树里相对起点的改动叠回主工作目录（与取回 worker 同一套叠回：叠不上的留在工作树、会话删的文件不删）。
+// complete 为真表示完整取回（没有叠不上的、没有会话删掉的、没有过大没取回的）
 export function takePooledChanges(input: {
   name: string;
   repoRoot: string;
   base: string | undefined;
   worktreePath: string;
-}): string {
-  if (input.base === undefined) return `会话 ${input.name} 的工作树没有起点记录，取不回`;
+}): { text: string; complete: boolean } {
+  if (!existsSync(input.worktreePath)) {
+    return {
+      text: `会话 ${input.name} 的工作树已不在（${input.worktreePath}），没有可取回的`,
+      complete: false,
+    };
+  }
+  if (input.base === undefined) {
+    return { text: `会话 ${input.name} 的工作树没有起点记录，取不回`, complete: false };
+  }
   let result: OverlayResult;
   try {
     result = overlayWorkerChanges({
@@ -328,11 +431,15 @@ export function takePooledChanges(input: {
       worktreePath: input.worktreePath,
     });
   } catch (error) {
-    return `取回会话 ${input.name} 的改动失败：${error instanceof Error ? error.message : String(error)}`;
+    return {
+      text: `取回会话 ${input.name} 的改动失败：${error instanceof Error ? error.message : String(error)}`,
+      complete: false,
+    };
   }
   const lines: string[] = [];
-  if (result.applied.length > 0)
+  if (result.applied.length > 0) {
     lines.push(`已取回 ${result.applied.length} 个文件：${result.applied.join("、")}`);
+  }
   if (result.conflicts.length > 0) {
     lines.push(
       `叠不上、没写的：${result.conflicts.join("、")}（还在工作树 ${input.worktreePath} 里）`
@@ -344,5 +451,20 @@ export function takePooledChanges(input: {
   if ((result.skipped?.length ?? 0) > 0) {
     lines.push(`过大没取回：${(result.skipped ?? []).map((item) => item.path).join("、")}`);
   }
-  return lines.length > 0 ? lines.join("\n") : `会话 ${input.name} 没有要取回的改动`;
+  const complete =
+    result.conflicts.length === 0 &&
+    result.deletedByWorker.length === 0 &&
+    (result.skipped?.length ?? 0) === 0;
+  return {
+    text: lines.length > 0 ? lines.join("\n") : `会话 ${input.name} 没有要取回的改动`,
+    complete,
+  };
+}
+
+// /take 完整取回之后：起点前移到工作树此刻的样子（快照提交钉在 refs/pigeon/panel/<工作树名> 下），下次只取之后的改动
+export function advanceTakeBase(worktreePath: string, worktreeName: string): string {
+  return snapshotWorkdir({
+    repoRoot: worktreePath,
+    ref: `${SNAPSHOT_REF_ROOT}panel/${worktreeName}`,
+  }).commit;
 }
