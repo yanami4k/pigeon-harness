@@ -393,7 +393,10 @@ export class PigeonTuiShell
   // 决策 443：会话面板、进入的会话与连按两次 Ctrl+X 停止的上一下
   private readonly sessionPanel: SessionPanel;
   private pooledSession: { id: string; flow: MessageFlow; unsubscribe: () => void } | undefined;
-  private lastPanelStop: { id: string; at: number } | undefined;
+  // 决策 458：对当前会话的两次 Ctrl+X 须落在同一次工作上（work 为那次工作的开始时刻）
+  private lastPanelStop: { id: string; at: number; work?: number | null | undefined } | undefined;
+  // 决策 458：在面板里中断主会话时留着的排队内容（回到主视图时放进输入框）
+  private heldQueue: string[] = [];
   // 偷看的内容（会话池的接口是异步的，取回来先存着再画）
   private readonly peekCache = new Map<string, string[]>();
   private lastIdleEscapeAt: number | undefined;
@@ -1228,6 +1231,8 @@ export class PigeonTuiShell
     if (this.options.pool === undefined) return;
     this.panel.blur();
     this.returnTo = { view: "main" };
+    // 决策 458：打开时从不偷看开始（输入框里的话派新会话，不会悄悄发给上次偷看的会话）
+    this.sessionPanel.closePeek();
     this.showView("panel");
     this.tui.requestRender();
   }
@@ -1255,7 +1260,8 @@ export class PigeonTuiShell
     } else if (empty && matchesKey(data, "enter")) {
       const card = panel.selected();
       if (panel.isMain(card)) {
-        // 决策 458：进入当前会话即关面板回到主视图
+        // 决策 458：进入当前会话即关面板回到主视图（偷看一并关掉，再开面板时输入框里的话照常派新会话）
+        panel.closePeek();
         this.returnTo = { view: "main" };
         this.showView("main");
         this.drainQueue();
@@ -1288,11 +1294,22 @@ export class PigeonTuiShell
     }
     const now = Date.now();
     const last = this.lastPanelStop;
-    if (last !== undefined && last.id === card.id && now - last.at <= PANEL_STOP_CONFIRM_MS) {
+    const work = main ? this.workStartedAt : undefined;
+    if (
+      last !== undefined &&
+      last.id === card.id &&
+      now - last.at <= PANEL_STOP_CONFIRM_MS &&
+      last.work === work
+    ) {
       this.lastPanelStop = undefined;
       if (main) {
         this.requestInterrupt();
-        this.sessionPanel.setNote(`已请求中断 ${card.name} 这一轮`);
+        const held = this.heldQueue.length;
+        this.sessionPanel.setNote(
+          held > 0
+            ? `已请求中断 ${card.name} 这一轮；排队的 ${held} 条回到主视图时放进输入框`
+            : `已请求中断 ${card.name} 这一轮`
+        );
         return;
       }
       this.sessionPanel.setNote(`正在停 ${card.name}...`);
@@ -1310,7 +1327,7 @@ export class PigeonTuiShell
       );
       return;
     }
-    this.lastPanelStop = { id: card.id, at: now };
+    this.lastPanelStop = { id: card.id, at: now, work };
     this.sessionPanel.setNote(
       main ? `再按一次 Ctrl+X 中断 ${card.name} 这一轮` : `再按一次 Ctrl+X 停止 ${card.name}`
     );
@@ -2297,8 +2314,10 @@ export class PigeonTuiShell
     // 决策 323：被取消的一轮不跑 Stop 钩子（外部取消与打转叫停都算）
     this.runCancelled = true;
     this.flow.addSystem("[cancel] interrupt requested; waiting for run to settle");
-    // pi 惯例：中断时排队内容退回输入框，不在中断后自动发出
-    this.restoreQueueToEditor();
+    // pi 惯例：中断时排队内容退回输入框，不在中断后自动发出。决策 458：在会话面板（或进入的面板会话）里中断主会话时，
+    // 输入框不是主会话的，先拿出来留着，回到主视图时再放进输入框
+    if (this.view === "panel" || this.view === "pooled") this.heldQueue.push(...this.queue.clear());
+    else this.restoreQueueToEditor();
     this.updateStatus();
     this.tui.requestRender();
     const settle = (error?: unknown): void => {
@@ -2390,6 +2409,8 @@ export class PigeonTuiShell
     // 决策 301：换到另一个会话——worker 记录属于原会话的编排器，清掉并回到主会话视图
     this.leaveWorkerSession();
     this.tracker.clear();
+    // 决策 458：换到别的会话时当前会话卡的摘要（首条输入、最近回复、偷看）从新会话重新记（随后画的历史一并记下）
+    if (sessionId !== this.current.sessionId) this.flow.resetDigest();
     this.current = {
       sessionId,
       runtime: binding.runtime,
@@ -2427,6 +2448,14 @@ export class PigeonTuiShell
     if (view !== "worker") this.leaveWorkerSession();
     if (view !== "history") this.historySession = undefined;
     this.view = view;
+    // 决策 458：在面板里中断主会话时留着的排队内容，回到主视图时放进输入框（排队在前、草稿在后）
+    if (view === "main" && this.heldQueue.length > 0) {
+      this.input.setText(
+        [...this.heldQueue.splice(0), this.input.getText()]
+          .filter((text) => text.trim() !== "")
+          .join("\n\n")
+      );
+    }
     this.title.setText(this.titleText());
     this.layout();
     this.tui.setFocus(this.input);

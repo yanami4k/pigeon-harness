@@ -117,6 +117,13 @@ export class MessageFlow {
     this.remember(`> ${text}`);
   }
 
+  // 决策 458：换到别的会话（/resume）时清掉摘要，消息区内容不动
+  resetDigest(): void {
+    this.firstInput = undefined;
+    this.lastReply = "";
+    this.recent = [];
+  }
+
   // 决策 458：当前会话的摘要（会话面板里那张卡与偷看）
   digest(): { firstInput: string; lastReply: string; recent: readonly string[] } {
     return { firstInput: this.firstInput ?? "", lastReply: this.lastReply, recent: this.recent };

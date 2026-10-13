@@ -253,7 +253,7 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
       const isPooled = host.hasPooled?.(name) === true;
       // 决策 458：当前会话也在会话面板里列着，但它的改动就在本工作区里，没有可取回的
       if (
-        (forced === "pooled" || (forced === undefined && !isPooled && !isWorker)) &&
+        ((forced === "pooled" && !isPooled) || (forced === undefined && !isPooled && !isWorker)) &&
         host.currentSessionName?.() === name
       ) {
         host.addSystem(`${name} 是当前会话：它的改动就在本工作区里，不用取回`);

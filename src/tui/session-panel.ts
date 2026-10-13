@@ -92,7 +92,8 @@ export class SessionPanel implements Component {
     const cards = this.ordered();
     return (
       cards.find((card) => card.id === this.selectedId) ??
-      cards.find((card) => card.name === this.selectedName) ??
+      // 会话号变了（准备中的会话开好）按名字找回；当前会话那张卡不按名字认（它可能与面板会话同名）
+      cards.find((card) => card.name === this.selectedName && !this.isMain(card)) ??
       cards[0]
     );
   }
@@ -106,7 +107,7 @@ export class SessionPanel implements Component {
     );
     const next = cards[Math.max(0, Math.min(cards.length - 1, current + delta))];
     this.selectedId = next?.id;
-    this.selectedName = undefined;
+    this.selectedName = next !== undefined && !this.isMain(next) ? next.name : undefined;
     this.note = "";
   }
 

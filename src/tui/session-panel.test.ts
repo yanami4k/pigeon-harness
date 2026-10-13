@@ -14,6 +14,7 @@ import { RuntimeEventKind } from "../state/runtime-events.ts";
 import { MessageFlow, projectRuntimeEvent } from "./message-flow.ts";
 import { orchestrationHarness } from "./orchestration-fixtures.ts";
 import { ScriptedRuntime } from "./runtime-fixtures.ts";
+import { SessionPanel } from "./session-panel.ts";
 import { PigeonTuiShell, type TuiPoolFace, type TuiShellOptions } from "./shell.ts";
 import { MockTerminal, screenText, settle } from "./testing.ts";
 
@@ -492,4 +493,188 @@ test("决策 458：在面板里对当前会话按两次 Ctrl+X 是中断它这�
   } finally {
     cleanup();
   }
+});
+
+test("决策 458 复查：偷看当前会话后回车回主视图，再开面板时从不偷看开始，输入框里的话照常派新会话", async () => {
+  const { term, runtime, runs, cleanup } = makeShell({ sessionName: () => "demo-main" });
+  try {
+    await settle();
+    term.input("/panel");
+    term.input("\r");
+    await settle();
+    term.input(" ");
+    await settle();
+    term.input("\r");
+    await settle();
+    term.input("/panel");
+    term.input("\r");
+    await settle();
+    term.input("新的独立任务");
+    term.input("\r");
+    await settle();
+    assert.deepEqual(runtime.runs, []);
+    assert.deepEqual(runs, ["s1:新的独立任务"]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("决策 458 复查：在面板里中断主会话时，排队的话不退进面板的输入框，回到主视图时放进输入框", async () => {
+  const { term, runtime, runs, cleanup } = makeShell({ sessionName: () => "demo-main" });
+  try {
+    await settle();
+    runtime.autoResolve = false;
+    term.input("长任务");
+    term.input("\r");
+    await settle();
+    term.input("排队一条");
+    term.input("\r");
+    await settle();
+    term.input("/panel");
+    term.input("\r");
+    await settle();
+    term.input(CTRL_X);
+    term.input(CTRL_X);
+    await settle();
+    assert.equal(runtime.interrupts, 1);
+    assert.match(screenText(term), /排队的 1 条回到主视图时放进输入框/);
+    runtime.finishAll();
+    await settle();
+    // 面板的输入框是空的：回车不会把排队的话当新任务派出去
+    term.input("\r");
+    await settle();
+    assert.deepEqual(runs, []);
+    assert.deepEqual(runtime.runs, ["长任务"]);
+    term.input(ESC);
+    await settle();
+    assert.match(screenText(term), /排队一条/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("决策 458 复查：对当前会话的两次 Ctrl+X 须落在同一次工作上——中间换了一次工作即重新要求确认", async () => {
+  let clock = 1_000_000;
+  const { term, runtime, cleanup } = makeShell({
+    sessionName: () => "demo-main",
+    now: () => clock,
+  });
+  try {
+    await settle();
+    runtime.autoResolve = false;
+    term.input("第一件");
+    term.input("\r");
+    await settle();
+    term.input("/panel");
+    term.input("\r");
+    await settle();
+    term.input(CTRL_X);
+    await settle();
+    runtime.finishAll();
+    await settle();
+    // 偷看着发出下一件（新的一次工作），再按一次 Ctrl+X：不中断，重新要求确认
+    clock += 10;
+    term.input(" ");
+    term.input("第二件");
+    term.input("\r");
+    await settle();
+    term.input(CTRL_X);
+    await settle();
+    assert.equal(runtime.interrupts, 0);
+    assert.match(screenText(term), /再按一次 Ctrl\+X 中断 demo-main 这一轮/);
+    runtime.finishAll();
+    await settle();
+  } finally {
+    cleanup();
+  }
+});
+
+test("决策 458 复查：/resume 换到别的会话后，当前会话卡的首条输入与偷看从新会话重新记", async () => {
+  const { shell, term, cleanup } = makeShell({ sessionName: (id) => id.slice(-4) });
+  try {
+    await settle();
+    term.input("A 的第一句");
+    term.input("\r");
+    await settle();
+    shell.rebindSession(newSessionId(), { runtime: new ScriptedRuntime(newSessionId()) });
+    await settle();
+    term.input("/panel");
+    term.input("\r");
+    await settle();
+    const card = screenText(term)
+      .split("\n")
+      .find((line) => line.includes("current"));
+    assert.ok(card !== undefined && !card.includes("A 的第一句"), card);
+  } finally {
+    cleanup();
+  }
+});
+
+test("决策 458 复查：当前会话与面板会话同名时，派出的同名会话选中的是它自己；/take 会话:<名字> 取那个面板会话", async () => {
+  const { term, runtime, runs, finishers, taken, cleanup } = makeShell({
+    sessionName: () => "s1",
+  });
+  try {
+    await settle();
+    term.input("/panel");
+    term.input("\r");
+    await settle();
+    term.input("面板里的任务");
+    term.input("\r");
+    await settle();
+    // 面板会话跑完这一轮、空闲下来才收下一句
+    finishers[0]?.("做完了");
+    await settle();
+    term.input(" ");
+    term.input("给 s1 的回复");
+    term.input("\r");
+    await settle();
+    assert.deepEqual(runtime.runs, [], "没有发给同名的当前会话");
+    assert.deepEqual(runs, ["s1:面板里的任务", "s1:给 s1 的回复"]);
+    finishers[1]?.("也做完了");
+    await settle();
+    term.input(ESC);
+    await settle();
+    term.input(ESC);
+    await settle();
+    term.input("/take 会话:s1");
+    term.input("\r");
+    await settle();
+    assert.deepEqual(taken, ["s1"]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("决策 458 复查：准备中的会话开好、会话号换了之后，选中仍是它（按名字找回），不跳回当前会话", () => {
+  let cards = [
+    {
+      id: "pending:s1",
+      name: "s1",
+      state: "preparing" as const,
+      task: "t",
+      summary: "",
+      startedAt: 0,
+      updatedAt: 0,
+    },
+  ];
+  const main = {
+    id: "sess_main",
+    name: "demo-main",
+    state: "idle" as const,
+    task: "",
+    summary: "",
+    startedAt: 0,
+    updatedAt: 0,
+  };
+  const panel = new SessionPanel({
+    height: () => 20,
+    cards: () => cards,
+    peek: () => [],
+    main: () => main,
+  });
+  panel.move(1);
+  assert.equal(panel.selected()?.id, "pending:s1");
+  cards = [{ ...cards[0], id: "sess_real_s1", state: "running" as const } as never];
+  assert.equal(panel.selected()?.id, "sess_real_s1");
 });
