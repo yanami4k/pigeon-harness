@@ -120,3 +120,34 @@ test("决策 456：标题栏写会话名，会话号在后面用弱化样式；�
     rmSync(logDir, { recursive: true, force: true });
   }
 });
+
+test("决策 456：换绑到别的会话时标题按新会话取名，不去取旧会话的名字（取名可能要读整个会话文件）", async () => {
+  const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-peer-shell-"));
+  const sessionId = newSessionId();
+  const target = newSessionId();
+  const term = new MockTerminal(90, 30);
+  const asked: string[] = [];
+  const shell = new PigeonTuiShell({
+    terminal: term,
+    runtime: new ScriptedRuntime(sessionId),
+    sessionId,
+    logDir,
+    sessionName: (id) => {
+      asked.push(id);
+      return id === target ? "target-name" : "old-name";
+    },
+  });
+  try {
+    shell.start();
+    await settle();
+    asked.length = 0;
+    shell.rebindSession(target, { runtime: new ScriptedRuntime(target) });
+    await settle();
+    assert.ok(asked.length > 0 && asked.every((id) => id === target), asked.join(", "));
+    const title = term.screen.contentLines().find((line) => line.trim() !== "") ?? "";
+    assert.equal(title.trim(), `== target-name == ${target}`);
+  } finally {
+    shell.stop();
+    rmSync(logDir, { recursive: true, force: true });
+  }
+});

@@ -112,9 +112,10 @@ export interface HeldMessage {
   notice?: boolean;
 }
 
-// 会话名：字母、数字、下划线、连字符与点，1–40 个字符（单行）
+// 会话名：字母、数字、下划线、连字符与点，1–40 个字符（单行）。决策 456：排除默认可忽略的字符（韩文填充符一类，
+// 算 0 宽却画成空白，名字看着是空的、或与别的会话看着一样）
 export function validPeerName(name: string): boolean {
-  return /^[\p{L}\p{N}_.-]{1,40}$/u.test(name);
+  return /^(?:(?!\p{Default_Ignorable_Code_Point})[\p{L}\p{N}_.-]){1,40}$/u.test(name);
 }
 
 // 所在目录：不超过 512 个字符，不含控制字符、行分隔符（U+2028、U+2029）、零宽与双向控制字符

@@ -14,20 +14,25 @@ export function sessionDisplayName(
   return stored !== undefined && validPeerName(stored) ? stored : defaultPeerName(cwd, sessionId);
 }
 
-// 会话文件里记的名字（合规的）与文件头的工作目录；没有这个会话文件时为 undefined
+// 会话文件里记的名字（合规的）与文件头的工作目录；没有这个会话文件、或读不了（占用、权限、刚被删）时为 undefined——
+// 名字只是显示用，读不到按没改过名处理，不让启动、换会话与看历史因此出错
 export function storedSessionName(
   governanceRoot: string,
   sessionId: string
 ): { name?: string; cwd: string } | undefined {
-  const ref = locateSessionFile(sessionsDirOf(governanceRoot), sessionId);
-  if (ref === undefined) return undefined;
-  const file = readSessionFile(ref.path);
-  if (file === undefined) return undefined;
-  const name = file.name;
-  return {
-    ...(name !== undefined && validPeerName(name) ? { name } : {}),
-    cwd: file.header.cwd,
-  };
+  try {
+    const ref = locateSessionFile(sessionsDirOf(governanceRoot), sessionId);
+    if (ref === undefined) return undefined;
+    const file = readSessionFile(ref.path);
+    if (file === undefined) return undefined;
+    const name = file.name;
+    return {
+      ...(name !== undefined && validPeerName(name) ? { name } : {}),
+      cwd: file.header.cwd,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 // 按会话号取显示用的名字：记过的名字，否则按文件头的工作目录（没有文件时按 cwd）给缺省名

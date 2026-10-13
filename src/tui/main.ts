@@ -794,15 +794,7 @@ export async function main(argv: string[]): Promise<void> {
         const bundle = opened.bundle;
         // 决策 445、446：换到的会话开在独立工作树里时，工作区与退出清理跟着它
         adoptWorkspace(opened.scope.workspaceRoot);
-        // 决策 450、456：收件口跟着换到的主会话，名字用它自己的；查看 worker 会话期间名录里仍是原主会话
         const targetName = sessionNameOf(governanceRoot, targetId, opened.scope.workspaceRoot);
-        if (opened.scope.parentSessionId === undefined) {
-          peerMessaging?.moveTo({
-            sessionId: targetId,
-            cwd: opened.scope.workspaceRoot,
-            name: targetName,
-          });
-        }
         if (bundle.instructionsNotice !== undefined) {
           shellHolder.current?.addSystem(bundle.instructionsNotice);
         }
@@ -819,6 +811,14 @@ export async function main(argv: string[]): Promise<void> {
           ...(opened.checkpoints !== undefined ? { checkpoints: opened.checkpoints } : {}),
         };
         sessionName = targetName;
+        // 决策 450、456：换好之后收件口跟着换到的主会话，名字用它自己的；查看 worker 会话期间名录里仍是原主会话
+        if (opened.scope.parentSessionId === undefined) {
+          peerMessaging?.moveTo({
+            sessionId: targetId,
+            cwd: opened.scope.workspaceRoot,
+            name: targetName,
+          });
+        }
         // 决策 450：回到主会话时把查看 worker 期间攒下的消息递过去（换绑完成后再叫醒）
         slotIsMain = opened.scope.parentSessionId === undefined;
         peerRoute?.flush();
@@ -955,6 +955,10 @@ export async function main(argv: string[]): Promise<void> {
     });
     if (peerMessaging !== undefined) {
       peerSlot.bind(peerMessaging);
+      // 决策 456：收件口打开期间改了名（打开时取定的名字已旧）：补一次
+      if (peerMessaging.sessionId === slot.sessionId && peerMessaging.name !== sessionName) {
+        peerMessaging.rename(sessionName);
+      }
       shell.addSystem(`本会话在本机会话名录里叫 ${peerMessaging.name}（/rename 改名）`);
     }
   }

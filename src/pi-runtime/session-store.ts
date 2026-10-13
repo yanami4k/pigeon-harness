@@ -490,6 +490,8 @@ export async function forkSessionFile(input: {
         : {}),
     }
   );
+  // 决策 456：会话名是会话自己的——上游分叉会把来源的名字抄进分支，清掉，分支用自己的缺省名
+  if ((await session.getName()) !== undefined) await session.setName(undefined);
   return (await session.getMetadata()).path;
 }
 

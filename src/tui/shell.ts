@@ -521,7 +521,8 @@ export class PigeonTuiShell
       ...(options.model !== undefined ? { model: options.model } : {}),
       cost: emptyCostTally(),
     });
-    // chrome 纯 ASCII（spike 纪律：歧义宽字符不进边框/标题/状态栏）；sessionId 全 ASCII ULID
+    // chrome 除会话名外纯 ASCII（spike 纪律：歧义宽字符不进边框/标题/状态栏）；sessionId 全 ASCII ULID。决策 456：会话名
+    // 按名字规则只含字母、数字与 _ . -（不含控制字符、零宽与可忽略字符），其他文字的宽度按 pi-tui 的算法
     this.title = new Text("");
     this.title.setText(this.titleText());
     this.tracker = new WorkerActivityTracker(
@@ -2309,7 +2310,6 @@ export class PigeonTuiShell
   rebindSession(sessionId: SessionId, binding: TuiSessionBinding): void {
     // 决策 301：换到另一个会话——worker 记录属于原会话的编排器，清掉并回到主会话视图
     this.leaveWorkerSession();
-    this.showView("main");
     this.tracker.clear();
     this.current = {
       sessionId,
@@ -2318,6 +2318,8 @@ export class PigeonTuiShell
       ...(binding.workers !== undefined ? { workers: binding.workers } : {}),
       ...(binding.hooks !== undefined ? { hooks: binding.hooks } : {}),
     };
+    // 决策 456：先换会话面再切视图——标题按新会话取名，不去读旧会话的文件
+    this.showView("main");
     // 决策 323、324：换到新会话——SessionStart（source "resume"）补的上下文归新会话；
     // 旧会话的 SessionEnd 由装配方在释放旧运行面前跑
     void this.beginSession("resume");
