@@ -62,3 +62,39 @@
 - Markdown 表格框线是 pi-tui 写死的 `┌─┬┐`（歧义宽字符），在中文环境的终端里可能错位；没有主题钩子可换。
 - 能显示图片的终端（kitty、iTerm2 等）里图片的实际显示；Windows Terminal 下是文字占位。
 - 补全列表的观感与 `@` 在装了 fd 的机器上的表现。
+
+## 六、审查修正（f627543 之后）
+
+### 改了什么
+
+- 查找框开着时壳的按键监听一律让开，审批或消息面板挂着也让（之前挂着时不让，键入查找框的 d 被面板当成"本目录允许"）；Ctrl+C 例外。
+- kitty 键盘协议：`isKey` 先过滤松键与按住重复（`isKeyRelease`、`isKeyRepeat`），壳的三个按键监听也对松键直接让开（之前按一次 Ctrl+C 就退出、松开 Esc 又取消一轮）。
+- 复制后清选区：新文件 `src/tui/alt-screen.ts` 的 `PigeonAltScreen` 继承 `TuiAltScreen`，加 `clearSelection()`——pi-tui 0.84.4 没有公开的清除方法，照它松开鼠标时的做法复位几个选区字段（字段名随版本可能变，升级时核对；字段不在时什么都不做）。Ctrl+C 复制完即清。
+- 图片：`checkedImage` 只认 `image/png`、`image/jpeg`（含 `image/jpg`）、`image/gif`、`image/webp`，类型换成白名单里的写法，数据须是严格的 base64（长度为 4 的倍数、只含 base64 字符），不合格只显示固定占位"[image: 不能显示（类型或数据不认得）]"；pi-tui 的文字占位也再经 036 净化。模型不能看图时 MCP 结果不过图片关口是决策 417 的既有行为，这次没有改（终端界面这边不管来源一律校验）。
+- 键位只认个人层：`mergeSettingsLayers` 的 `keybindings` 只取用户级与未被 git 跟踪的 `settings.local.json`（与 450 的 `messaging.inbound` 同一做法），项目共享层与被跟踪的 local 层写了的记在 `keybindingsIgnored`，终端界面开局提示一行。审批面板的提示按实际生效的键位生成（`approvalKeyLabels` 把 `[y]` `[n]` `[r]` `[a]` `[d]` `[s]` 换成键位表里的键）。
+- 右键粘贴：PowerShell 命令先设 `[Console]::OutputEncoding = UTF8`，去掉可能的 UTF-8 前导；审批或消息面板挂着时不接受粘贴。
+- 崩溃复位：新文件 `src/tui/terminal-reset.ts`，`uncaughtException`、`unhandledRejection` 与进程退出时写一次复位序列（同步输出、鼠标上报与焦点、括号粘贴、kitty 键盘协议、样式、自动换行、光标、离开备用屏），异常的再按原样报错、退出码 1；正常收尾（`release`）先标为干净，之后的退出不再写（再写 `?1049l` 会把光标挪回进入全屏前的位置）。
+- 文档：`docs/configuration.md` 去掉重复的约 475 行——第一次插"终端界面"一节时，插入文字里的 `` $` ``（"`$…$`" 里）被 `String.replace` 当成"匹配之前的全部内容"展开，把文件开头到插入点又抄了一遍；改用函数式替换重建。
+- 点链接：`TuiAltScreen` 的 `openUrl` 接 `openExternalUrl`——只开 http、https 与 file，Windows 用 `rundll32 url.dll,FileProtocolHandler`、macOS `open`、其他 `xdg-open`，参数固定、不经 shell；点了才开。
+- Markdown 链接：`MARKDOWN_OPTIONS.transform` 用 `revealLinkTargets` 把文字与网址不同的 `[文字](网址)` 改成 `[文字](网址) (<网址>)`，网址以可见文字出现（代码块与行内代码里的不动）。
+- 链接扫描改为按空白切词逐个看（线性），路径须从词首开始、超过 4096 字的词不看；不再用会回溯的整段正则。
+- BOM：新文件 `src/persistence/json-text.ts` 的 `parseJsonText` 去掉开头的 BOM 再解析，用于设置三层、`.mcp.json`、放权配置文件、`/config` 的用户级读写与迁移命令读的旧配置。
+- 建议项：036 净化另把 C1 控制字符（0x80–0x9f）换成替换字符；退出打印每行去掉行尾补齐的空格（`TrimmedTranscript`）；`history.test.ts` 恢复原约束——清掉启动时写出的字节之后，模型内容到达后写往终端的字节里没有任何 `\x1b[2J`；会话选择器与文档不再说 PageUp/PageDown 翻页（全屏视口先吃这两个键）；补全会列出工作区外的路径、`@` 的搜索跟随链接、大目录慢——pi-tui 补全的行为，没有改，文档如实写。流式 Markdown 每帧整段重解析没有改（见尚待确认）。
+
+### 测试
+
+- 新文件 `src/tui/fullscreen-review.test.ts`（11 条）：审批挂着时打开查找框键入 "deploy" 不作答、关了再按 y 才批准；kitty 的 Ctrl+C 松键不算第二下、运行中关查找框的 Esc 松键与重复不取消；复制后清选区、下一次 Ctrl+C 清输入；审批挂着时右键粘贴不收；图片类型与 base64 校验、带控制序列的类型只显示固定占位且不写进终端；审批提示按改过的键位；行尾空格去掉、样式复位留着；5 万个 `+/` 与 2 万字的一段在 500 毫秒内；Markdown 链接显示网址（代码里的不动，渲染后去掉 OSC 8 网址仍可见）；点链接只开三种协议、参数固定；终端复位只写一次、异常时退出码 1、正常收尾后不写。
+- 新文件 `src/state/keybindings-layers.test.ts`（1 条）、`src/persistence/json-text.test.ts`（2 条：BOM 去掉、带 BOM 的用户级设置照常读出）、`src/tui/clipboard.test.ts`（1 条，只在 Windows 上跑：PowerShell 输出的中文按 UTF-8 不乱码，不碰真实剪贴板）；`src/application/format.test.ts` 加 C1 一条。
+- `src/tui/history.test.ts` 恢复原约束（见上）。
+
+### 验证
+
+- 变异核对（均已恢复，14 处里 13 处变红）：查找框开着时先看审批、`isKey` 算松键、不清选区、面板挂着也收粘贴、任意图片类型、审批提示写死键位、退出不去行尾空格、Markdown 链接不显示网址、点链接不查协议、复位不幂等、项目层键位也采用、不去 BOM、C1 不净化。保持绿的一处：壳的按键监听对松键直接让开——去掉后 `isKey` 的过滤仍把松键挡住，两层是叠加的防御。
+- 回归（一个 vitest 进程）：src 根 3 条边界测试、src/tui、src/cli、src/state、src/persistence、src/pi-runtime 全部与 format、config-options、migrate-config、session-settings、settings-reload、search，141 个文件 765 条通过、3 条跳过。整仓 `npx biome check .` 无问题、`tsc` 通过、`npm run deps` 无违规。
+- 真实运行（打包产物，临时 HOME 等）：用 PowerShell 5.1 的 `Set-Content -Encoding utf8` 写带 BOM 的用户级设置文件（首字节核对为 0xEF），隐藏窗口起终端界面 10 秒后仍在运行（修正前同样的文件让它报"不是合法 JSON"退出）。PowerShell 输出中文按 UTF-8 取得到"中文 ok"（`clipboard.test.ts`，不碰真实剪贴板）。
+
+### 尚待确认（补充）
+
+- 流式 Markdown 每帧整段重解析（审查实测 39 KB 约 53 毫秒一帧、100 KB 约 140 毫秒），没有节流。
+- 右键粘贴的用例只在 Windows 上有效（右键粘贴只在 Windows 上接）。
+- 点链接在真实终端里的行为（需要人点）。
