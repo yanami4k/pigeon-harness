@@ -90,3 +90,36 @@
 - git 不认 `--attr-source` 的旧版本上"不写并说明"的分支没有用例（本机 git 认）。
 - 权限一条只在 POSIX 上跑（验证机）。
 - 撤销只针对主分支上最后一次退代码；连续撤销多次、或撤销之后再撤销不提供。
+
+## 七、第二轮复查修正（ed78ada 之后）
+
+总原则：退代码拿不准就不写，列出来交给人，缺省保留。
+
+### 改了什么
+
+1. 过滤后形态：没有存下原样字节的路径，按工作区当前的属性（`git check-attr eol text filter working-tree-encoding`，不带空树属性来源，读 `.gitattributes`、`.git/info/attributes` 与全局属性，不执行驱动；读不到属性按有过滤处理）判断：有 `filter` 或 `working-tree-encoding` 的、快照内容是 LFS 指针的，列为"无法保真还原"、不写。
+2. `-text`（或 binary）而 `core.autocrlf` 为 true 或 input 的文本：快照时已被规范化，没有原样字节即不写，列出。二进制内容（含 NUL）不受影响。
+3. 两条消息之间的手改：回退范围内当前分支上相邻两个 Run，比较"上一个 Run 收尾（没有 agent 快照即开工）时的快照"与"下一个 Run 发消息时的快照"，其间变过的路径若在规划里即列为"两条消息之间被手改过"。Run 进行中的手改仍分不出（436 已写的盲区）。
+4. 硬链接：磁盘上的文件链接数大于 1 的不写不删，列出；写前的最后一次 lstat 同样核对。
+5. 中途出错的一致性：退代码动手之前先写一条意图记录（`pigeon.rewind` 带 `phase: "intent"`、`rewindId`、还原前快照、目标快照、计划写的路径）；每个文件动手之后当场追加一条 `pigeon.rewind-step`（写了、删了、出错，带动手前存下的原样字节），写入经 `rewindLane` 核对叶子，期间有别的写入即记下、对话不退；做完再写收尾记录。出错的文件计入撤销范围（撤销时不论现状照退）。整块写用 `writeFileSync(fd, …)`（循环写满）。快照器对齐（resync）出错、挂引用出错、收尾记录没写成都不再抛出，结果里如实列出（"没做成：…"）。撤销中途出错的不算撤销过，可以再撤；撤销查找按 `rewindId` 汇总逐个文件的结果（中途退出、没有收尾记录也能撤）。
+6. 撤销查工作区：那次退代码的记录之后，主分支上出现过 `pigeon.worktree` 即不能撤销，写明原因。
+7. 原样字节防回收：每次退代码后把存下的原样对象挂到 `refs/pigeon/rewind/<会话号>/<rewindId>`（指向一个只含这些对象的提交）。读不到（被回收）时只这一个文件列为无法保真，其余照写；取快照内容时某个文件出错同样只跳过它。
+8. 目录建立时刻：`birthtimeMs` 为 0 或与 `ctimeMs` 相同（老 Linux 上 libuv 以 ctime 充当）即按取不到处理，不删目录（`bornAtOf`）。
+9. 权限：恢复被删的文件（新建）一律 0600，快照里可执行的为 0700；覆盖已有文件仍不改权限位。文档写明可能比原来窄。
+- 残留风险（写进文档与本审计，没有改）：挪主分支与授权补记在同一个写入请求里，但落盘是先后两次追加，进程恰在两次之间被杀时撤过的授权会在续接后复活，窗口极小；`.git/info/attributes` 里配的过滤器在拍快照（checkpoint）时会执行，属快照的既有行为，另列给产品端。
+
+### 测试
+
+- `src/orchestration/rewind-restore.test.ts` 加 5 条（共 11 条，0600 一条只在 POSIX 上跑）：过滤器（含 `.git/info/attributes`）、`working-tree-encoding`、LFS 指针、`-text` 而 autocrlf 开着都不写、普通文件照写；有别的硬链接的不写、仓库外的文件不变；存下的原样对象读不到时只跳过这一个；目录建立时刻等于 ctime 或为 0 按取不到；恢复被删的文件 0600 与 0700。既有用例改为等待异步的写回。
+- `src/application/rewind.test.ts` 加 3 条（共 23 条）：两次 agent 改动中间夹的手改列为冲突、缺省保留；意图记录、逐个文件的结果与收尾记录的先后，原样字节的引用存在，撤销中途出错（只读）之后可以再撤并恢复原样；退代码之后移进过工作树不能撤销。既有用例的改动：写回中途出错那条的撤销范围现在含出错的文件（新定的语义）。
+
+### 验证
+
+- 变异核对（均已恢复）：12 处，首轮 11 处变红；"出错文件计入撤销范围"保持绿是用例里只读文件在打开时就失败、没被截断——在用例里把出错的文件清空模拟截断、并补上它被恢复的断言后重跑变红。变红的包括：不查过滤器、不查 working-tree-encoding、写出 LFS 指针、-text 照写、硬链接照写、原样对象读不到即整体失败、建立时刻等于 ctime 也算、两条消息之间的手改不报、出错的撤销也算撤销过、撤销不查工作区、不挂引用。
+- 回归（一个 vitest 进程）：src 根 3 条边界测试、src/tui、src/cli、src/state、src/persistence、src/pi-runtime、src/orchestration、src/approvals 全部与 rewind、session-pool、checkpoints、checkpoints-async、session-cost、session-family、session-runtime、format、named-worktree、enter-worktree-tool、resume，164 个文件 919 条通过、10 条跳过、1 条失败（`checkpoints-async.test.ts` 的"保留修改时间的同长度覆盖"，基线上同样失败）。整仓 `npx biome check .` 无问题（回归时报的一处用例写法已改）、`tsc` 通过、`npm run deps` 无违规。
+- 真实运行（真实模型、临时 git 仓库 `core.autocrlf=true`、临时 HOME 等，同第三节的脚本）：规划 `notes.txt`、`src/extra.txt`，没有冲突；退回后 `notes.txt` 为 `alpha\n`、`src/extra.txt` 删掉、手改的 `manual.txt` 不动；切回后两文件哈希与回退前一致；续跑答 2。全局 git 配置的哈希核对未变。
+
+### 尚待确认（补充）
+
+- 收尾记录与快照器对齐出错的路径没有确定性的用例（要让会话存储或 git 在中途失败）。
+- 磁盘写满时的半截写没有用例（改为循环写满之后，出错即按写回失败停下并列入撤销范围）。
