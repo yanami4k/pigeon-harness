@@ -481,11 +481,11 @@ config/secrets.json
 
 ### 设置面板 `/config`
 
-`/config` 在输入框上方打开设置面板（在布局里，不是浮层），列一小组常用的个人选项：思考档位 `thinking.level`、联网工具 `web.enabled`、打转检测 `loopGuard.enabled`、模型请求重试次数 `modelRequest.maxRetries`、上下文裁剪 `contextPrune.enabled`、撞上限续跑 `truncationContinuation.enabled`。每项显示用户级写的值（`default` 即没写、取缺省）与本会话的生效值；被项目共享设置（`.pigeon/settings.json`）或项目个人设置（`settings.local.json`）覆盖的，写明"改用户级不生效"。
+`/config` 在输入框上方打开设置面板（在布局里，不是浮层），列一小组常用的个人选项：思考档位 `thinking.level`、联网工具 `web.enabled`、打转检测 `loopGuard.enabled`、模型请求重试次数 `modelRequest.maxRetries`、上下文裁剪 `contextPrune.enabled`、撞上限续跑 `truncationContinuation.enabled`。每项显示用户级写的值（`default` 即没写、取缺省）与本会话设置里的生效值（启动参数如 `--thinking`、`--no-web` 不算在内）；被项目共享设置（`.pigeon/settings.json`）或项目个人设置（`settings.local.json`）覆盖的，写明"改用户级不生效"——`settings.local.json` 被 git 跟踪时按项目共享设置标。思考档位可选 `default`、`off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`。
 
-- 方向键选项，Enter 或空格在可选值间轮换；每改一次即写进用户级 `~/.pigeon/settings.json`（文件里的其余内容不动，`default` 即删掉这个键），随后按 `/reload` 的做法重建运行面当场生效。Esc 关面板。
-- `/config 选项=值` 直接改一项，例如 `/config web.enabled=false`、`/config modelRequest.maxRetries=2`（重试次数可写 0 到 999 的整数）。值不合法、用户级设置文件不是合法 JSON 时不写并说明。
-- 运行中不能用（它会重建运行面）；有 worker 在跑时重建同 `/reload` 一样被拒，设置已写进文件、下次 `/reload` 或启动时生效。
+- 方向键选项，Enter 或空格在可选值间轮换；每改一次即写进用户级 `~/.pigeon/settings.json`（文件里的其余内容不动，`default` 即删掉这个键；值没变不重写，文件不存在时设成 `default` 也不新建），随后按 `/reload` 的做法重建运行面当场生效。面板开着时方向键与 Enter 只归它（不进 worker 面板），审批挂着时按键归审批；切到树形视图等其他视图即关面板；面板开着期间排下的输入在关面板后发出。Esc 关面板。
+- `/config 选项=值` 直接改一项，例如 `/config web.enabled=false`、`/config modelRequest.maxRetries=2`（重试次数可写 0 到 999 的整数）。值不合法、用户级设置文件不是合法 JSON、是符号链接、是目录或只读时不写并说明（不把链接换成普通文件、不改权限）。读设置出错（某层文件坏了）时说明原因，面板不打开。
+- 运行中、上一次改动的重建还没完、或有 worker 在跑（含排队）时不改，说明原因、不写文件（改了也重建不了运行面）。
 
 键位可以在设置的 `keybindings` 一节里改：键是动作名，值是一个键或一组键（写法同 pi，例如 `"ctrl+t"`、`["alt+up", "alt+q"]`），空数组即取消。只认用户级与项目个人层（`settings.local.json`，被 git 跟踪时不算）——仓库提交的设置改不了键位（尤其是审批键），写了的话开局在消息区提示一行；两层按动作名逐个覆盖，项目个人层优先。审批面板的提示按实际生效的键位写。未知的动作名、以及两个 Pigeon 动作绑了同一个键，开局时在消息区提示一行。
 
