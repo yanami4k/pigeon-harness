@@ -120,6 +120,7 @@ import {
   spawnWorkerOption,
 } from "./main-reload.ts";
 import { HeldPresenter } from "./peer-inbox.ts";
+import { MainPeerRoute } from "./peer-route.ts";
 import { PigeonTuiShell, type TuiShellOptions, type TuiWorkersFace } from "./shell.ts";
 import { switchableWarn } from "./warn-sink.ts";
 import { takeWorktreeFlag } from "./worktree-flag.ts";
@@ -222,6 +223,8 @@ export async function main(argv: string[]): Promise<void> {
   const peerSlot = new PeerSlot();
   let peerMessaging: PeerMessaging | undefined;
   let heldPresenter: HeldPresenter | undefined;
+  // 决策 450：消息一律送主会话（查看 worker 会话期间先攒着，peer-route.ts）
+  let peerRoute: MainPeerRoute | undefined;
   // 决策 297–303：编排设定——设置的 orchestration 一节（缺失取缺省），--worker-concurrency 与 --worker-limit 优先
   let orchestration = orchestrationSettingsOf(flags, settings);
   // 决策 308：打转检测——设置的 loopGuard 一节（缺失取缺省即开着）
@@ -703,6 +706,10 @@ export async function main(argv: string[]): Promise<void> {
           workers,
           ...(opened.checkpoints !== undefined ? { checkpoints: opened.checkpoints } : {}),
         };
+        // 决策 450：回到主会话时把查看 worker 期间攒下的消息递过去（换绑完成后再叫醒）
+        peerRoute?.switched(
+          opened.scope.parentSessionId === undefined ? bundle.adapter : undefined
+        );
         // 决策 323、324：换走旧会话前跑它的 SessionEnd（reason "switch"）——记录要落在旧会话文件，
         // 必须在释放旧运行面之前；壳 rebindSession 随后会为新会话跑 SessionStart（source "resume"）
         await shellHolder.current?.endSession("switch");
@@ -797,20 +804,24 @@ export async function main(argv: string[]): Promise<void> {
   if (sandbox === undefined) {
     const presenter = new HeldPresenter({
       ask: (request) => shell.askApproval(request),
+      // 输入框里有字时不弹（不打断正在打字的人）
+      ready: () => shell.inputIsEmpty(),
       approve: (id) => peerMessaging?.approveHeld(id),
       decline: (id) => peerMessaging?.dropHeld(id, "declined"),
     });
     heldPresenter = presenter;
+    // 叫醒放到下一拍：换绑过程中递过去的，等壳换上新运行面再跑
+    const route = new MainPeerRoute(slot.bundle.adapter, () =>
+      setTimeout(() => shellHolder.current?.runNotices(), 0)
+    );
+    peerRoute = route;
     peerMessaging = await openPeerInbox({
       sessionId: slot.sessionId,
       cwd: workspaceRoot,
       yolo: flags.yolo,
       settings,
-      deliver: (text) => {
-        slot.bundle.adapter.notify(text);
-        shellHolder.current?.runNotices();
-      },
-      pendingCount: () => slot.bundle.adapter.pendingNotices(),
+      deliver: (text) => route.deliver(text),
+      pendingCount: () => route.pendingCount(),
       onHeld: (held) => presenter.held(held),
       onHeldGone: (id) => presenter.gone(id),
       ui: (line) => {

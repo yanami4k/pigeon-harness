@@ -32,3 +32,27 @@ export function messagingSettings(section: MessagingSection | undefined): {
     holdMs: Math.round((section?.holdMinutes ?? DEFAULT_HOLD_MINUTES) * 60_000),
   };
 }
+
+// 收件规则的宽严（宽到严）：全收、按审批模式、全扣、全拒
+const STRICTNESS: Readonly<Record<InboundPolicy, number>> = {
+  accept: 0,
+  auto: 1,
+  hold: 2,
+  refuse: 3,
+};
+
+// 决策 450（照 Claude Code）：inbound 只由用户级与项目个人层（settings.local.json）定，后者优先；仓库提交的项目共享层
+// 只能收紧（比个人层定下的、或缺省的 auto 更严时才生效），放宽一律不认
+export function layeredInbound(
+  layers: ReadonlyArray<{ layer: "user" | "project" | "local"; inbound?: InboundPolicy }>
+): InboundPolicy | undefined {
+  let personal: InboundPolicy | undefined;
+  let shared: InboundPolicy | undefined;
+  for (const { layer, inbound } of layers) {
+    if (inbound === undefined) continue;
+    if (layer === "project") shared = inbound;
+    else personal = inbound;
+  }
+  const base = personal ?? "auto";
+  return shared !== undefined && STRICTNESS[shared] > STRICTNESS[base] ? shared : personal;
+}

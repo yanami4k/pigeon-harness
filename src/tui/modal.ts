@@ -21,7 +21,12 @@ export interface PendingApproval {
   protectedPath?: boolean;
   // 决策 450：扣住待放行的消息——只收 [y]/[n]；有工具审批要上面板时让位
   peerMessage?: boolean;
+  // 决策 450：防误触——这一刻之前的按键不作答（扣住的消息面板出现时，以及工具审批顶替它时）
+  guardUntil?: number;
 }
+
+// 决策 450：扣住的消息面板出现、或工具审批顶替它之后，这么久之内的按键不作答
+export const PANEL_GUARD_MS = 600;
 
 // 壳侧窄接口：模态状态的读写与壳动作（状态本体在壳里）
 export interface ModalHost {
@@ -68,7 +73,9 @@ export function askApprovalPanel(
     return Promise.resolve({ key: "cancel", reason: APPROVAL_CANCEL_CLOSED });
   }
   const current = host.pendingApproval();
+  let displacedPeer = false;
   if (current?.peerMessage === true && request.peerMessage === undefined) {
+    displacedPeer = true;
     // 决策 450：扣住的消息让位给工具审批
     host.setPendingApproval(null);
     host.setReasonMode(false);
@@ -90,6 +97,9 @@ export function askApprovalPanel(
       : {}),
     ...(request.protectedPath !== undefined ? { protectedPath: true } : {}),
     ...(request.peerMessage !== undefined ? { peerMessage: true } : {}),
+    ...(request.peerMessage !== undefined || displacedPeer
+      ? { guardUntil: Date.now() + PANEL_GUARD_MS }
+      : {}),
   };
   host.setPendingApproval(pending);
   host.updateStatus();
@@ -168,6 +178,10 @@ export function handleCtrlC(host: ModalHost): void {
 export function handleModalKey(host: ModalHost, data: string): { consume: true } | undefined {
   const approval = host.pendingApproval();
   if (approval !== null) {
+    // 决策 450：面板刚出现（或刚被顶替）时的按键不作答，吞掉——正在打字的人不会误按出决定
+    if (approval.guardUntil !== undefined && Date.now() < approval.guardUntil) {
+      return { consume: true };
+    }
     // 理由行（决策 066）：按键交给输入区编辑（回车提交在壳的提交路径上决议），
     // 只有 Esc 归模态——回到面板、不算拒绝，审批仍挂起
     if (host.reasonMode()) {

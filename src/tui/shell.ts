@@ -734,6 +734,11 @@ export class PigeonTuiShell
     return this.options.worktrees;
   }
 
+  // 决策 450：输入框为空（扣住的消息面板等它为空再弹）
+  inputIsEmpty(): boolean {
+    return this.input.getText().trim() === "";
+  }
+
   // 决策 450：/rename（CommandsHost）
   get renamePeer(): ((name: string) => string) | undefined {
     return this.options.renamePeer;

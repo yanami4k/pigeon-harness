@@ -1,5 +1,6 @@
 // 决策 450：终端界面里扣住待放行的消息——逐条弹到审批面板（只收 [y] 放行、[n] 丢弃）。面板上已有工具审批时等一会再弹；
-// 弹着的时候有工具审批要上面板，它让位、稍后重弹；到时限被收件口丢弃的，撤下面板。
+// 弹着的时候有工具审批要上面板，它让位、稍后重弹；到时限被收件口丢弃的，撤下面板。输入框里有字时不弹，等清空再弹；
+// 面板出现后一小段时间内的按键不作答（modal.ts 的防误触）。
 
 import type { HeldMessage } from "../application/peer-messaging.ts";
 import type { ApprovalRequest } from "../approvals/handler.ts";
@@ -10,7 +11,9 @@ export interface HeldPresenterDeps {
   ask(request: ApprovalRequest): Promise<ApprovalPanelResult>;
   approve(id: string): void;
   decline(id: string): void;
-  // 面板被占或让位后多久再弹
+  // 现在能弹：输入框为空（正在打字时不打断，等打完或发出去）；不给即随时能弹
+  ready?: () => boolean;
+  // 面板被占、让位或还不能弹时多久再看
   retryMs?: number;
 }
 
@@ -57,7 +60,11 @@ export class HeldPresenter {
   }
 
   #next(): void {
-    if (this.#stopped || this.#current !== undefined) return;
+    if (this.#stopped || this.#current !== undefined || this.#queue.length === 0) return;
+    if (this.#deps.ready?.() === false) {
+      this.#later();
+      return;
+    }
     const message = this.#queue.shift();
     if (message === undefined) return;
     const abort = new AbortController();

@@ -52,6 +52,7 @@ function reply(
 
 const UNBOUND = "This session has no inbox for messaging other sessions.";
 
+// 只按本机这边定下的状态给固定说法：对方给的任何说明文字都不交给模型
 export function sendResultText(to: string, result: SendResult): string {
   const name = result.target?.name ?? to;
   switch (result.status) {
@@ -62,7 +63,7 @@ export function sendResultText(to: string, result: SendResult): string {
     case "subscribed":
       return `Subscribed: you will get one notice when ${name} next goes idle or exits.`;
     case "refused":
-      return `Not delivered: ${name} refused it${result.reason !== undefined ? ` (${result.reason})` : ""}.`;
+      return `Not delivered: ${name} refused it.`;
     case "rate-limited":
       return `Not delivered: too many messages to ${name} just now. Batch the rest into one message or wait.`;
     case "duplicate":
@@ -78,9 +79,9 @@ export function sendResultText(to: string, result: SendResult): string {
         .map((peer) => `${peer.name} [${peer.sessionId.slice(-6)}] in ${peer.cwd}`)
         .join("; ")}. Address one as "name [short id]".`;
     case "unreachable":
-      return `Not delivered: ${name} could not be reached (it may have just exited).`;
+      return `Not delivered: ${name} could not be reached (it may have just exited, or it could not prove it is the session in the directory).`;
     default:
-      return `Not delivered: ${result.reason ?? result.status}.`;
+      return `Not delivered: ${name} did not accept the request.`;
   }
 }
 

@@ -35,7 +35,11 @@ import {
 } from "./loop-guard-config.ts";
 import { type DotMcpJson, type McpConfig, McpSectionSchema, mergeMcpConfig } from "./mcp-config.ts";
 import { type MemoryLimits, MemorySectionSchema, memoryLimits } from "./memory-config.ts";
-import { type MessagingSection, MessagingSectionSchema } from "./messaging-config.ts";
+import {
+  layeredInbound,
+  type MessagingSection,
+  MessagingSectionSchema,
+} from "./messaging-config.ts";
 import { type ModelInfoSection, ModelInfoSectionSchema } from "./model-info.ts";
 import {
   type ModelRequestSection,
@@ -371,6 +375,18 @@ export function mergeSettingsLayers(
   // 并集按优先级从高到低排列（项目个人在前）
   grants.sort((a, b) => SETTINGS_LAYERS.indexOf(b.layer) - SETTINGS_LAYERS.indexOf(a.layer));
   const user = layers.find((entry) => entry.layer === "user")?.file;
+  // 决策 450：收件规则只许个人层放宽，项目共享层只能收紧
+  const inbound = layeredInbound(
+    layers.map(({ layer, file }) => ({
+      layer,
+      ...(file.messaging?.inbound !== undefined ? { inbound: file.messaging.inbound } : {}),
+    }))
+  );
+  const mergedMessaging = merged.messaging as MessagingSection | undefined;
+  if (mergedMessaging !== undefined) {
+    const { inbound: _merged, ...rest } = mergedMessaging;
+    merged = { ...merged, messaging: { ...rest, ...(inbound !== undefined ? { inbound } : {}) } };
+  }
   return {
     merged: {
       ...(merged as Omit<
