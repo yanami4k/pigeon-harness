@@ -38,7 +38,7 @@
 | `thinking` | 推理档位 `level`（不写即按模型信息定，写 `off` 关掉思考；见下文"推理档位（思考）"） | 新节 |
 | `modelRequest` | 模型请求失败时的重试次数 `maxRetries`（缺省 4，见下文"模型请求的失败重试"） | 新节 |
 | `worktree` | 独立工作树的起点 `baseRef`：`"fresh"`（缺省，远端默认分支的最新版）或 `"head"`（当前提交）；见下文"独立工作树" | 新节 |
-| `messaging` | 本机会话间通信的放行规则 `inbound`（`"auto"` 缺省、`"accept"`、`"hold"`、`"refuse"`）与扣住时限 `holdMinutes`（缺省 5）；见下文"本机会话间通信" | 新节 |
+| `messaging` | 本机会话间通信的放行规则 `inbound`（`"auto"` 缺省、`"accept"`、`"hold"`、`"refuse"`）与扣住时限 `holdMinutes`（缺省 5）；见下文"本机会话间通信"（现在不生效：跨窗口的会话间通信先关闭，见下文"本机会话间通信"） | 新节 |
 | `keybindings` | 终端界面的键位：动作名到键（一个或一组）；见下文"终端界面" | 新节 |
 
 各节字段与原文件相同，去掉了各文件自己的 `version`。项目根的 `.mcp.json` 留在原处，格式不变。`.pigeon/verify.json` 已随验证门退役（决策 322），`.pigeon/memory-review.json` 属已删除功能的遗留（决策 331）：启动时按旧配置报错，迁移命令把它们挪进备份目录（verify.json 另打印改写为收尾钩子的示例）。
