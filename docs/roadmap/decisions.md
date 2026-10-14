@@ -494,6 +494,7 @@
 | 478 | 已删的设置节写在任何一层设置文件里即开局报错，写明是哪个文件、哪一节已删、请删掉（不当成拼错的键）；先是 messaging，orchestration 与 commands.roles 随 worker 重度管理一起删除时加入 | 子 agent 与会话的统一改造 | 配置 |
 | 479 | worker 重度管理删除时的几处细化：启动参数 --no-spawn-workers 改名 --no-subagents（旧名不留）、--worker-concurrency 与 --worker-limit 删除；任务清单开关由 orchestration.taskList 改为 tools.taskList（缺省开）；/take 只取回会话面板里的会话；审批不再有等待时限与撤回；旧会话里 worker 子会话的用量不再计入本会话 | 子 agent 与会话的统一改造 | 运行时 / 终端界面 |
 | 480 | 子 agent 第一段施工的细化：四件工具 spawn_agent、send_message、list_agents、stop_agent；同时在跑的上限按所属会话连同下层计；子 agent 与派出方共用审批模式、派出时带上派出方的放权，之后给子 agent 的放权只对它自己有效；会话放在所属会话名下的 subagents 文件夹；传话一律在收件方记 pigeon.agent-message；临时工作树从派出方工作目录的快照起步、释放时没有改动即删；续接时认回子 agent，没干完的标已中断 | 子 agent 与会话的统一改造 | 运行时 / 终端界面 |
+| 481 | pigeon run 的子 agent：--no-subagents 关掉、沙箱不提供；无审批通道；主 agent 停下时等子 agent 干完并把结果交给它接着干，连续干等超过 agents.runWaitMinutes 即停掉剩下的并写一行；运行的上限照停；轮数、token 上限与结果指标只计主 agent | 子 agent 与会话的统一改造 | 运行时 |
 
 ## 条目
 
@@ -4293,3 +4294,8 @@
   - 花费：所属会话的花费连同子 agent 的会话（复制段不计）；运行中按条目计入新增的部分。
   - 其余：子 agent 沿用派出方的 MCP 连接（按引用计数）、联网工具配置与设置快照；不给记忆写入、`enter_worktree` 与任务清单；不跑 `SessionStart`、`SessionEnd`，`SubagentStart`、`SubagentStop` 的 matcher 匹配类型名、另给 `agent_name` 与 `agent_type`。当前会话有子 agent 在跑时 `/resume`、`/reload`、`/config` 改值与 `enter_worktree` 都不做；换会话、关掉面板里的会话时它派出的子 agent 停下并释放。沙箱会话第一段不提供子 agent。
 - 理由：照 Claude Code 的子代理做，少一层管理；放权只对子 agent 自己有效，免得替一个子 agent 批的事悄悄放到整个会话；会话记录放在所属会话名下，续接、花费与清理都能顺着它找到。
+
+### 481 pigeon run 等子 agent 的细化（设计）
+
+- 结论：`pigeon run` 里主 agent 能派子 agent，`--no-subagents` 关掉，`--sandbox` 第一段不提供（同 480 的沙箱口径）。没有审批通道：子 agent 与主 agent 一样，要人批的调用一律拒绝。主 agent 停下（一轮正常结束、后台作业也收完）时，还有子 agent 在跑或有它们交回的结果，就等着：有结果即只带通知让主 agent 再跑一轮，没有子 agent 在跑、也没有待递的结果才结束。连续干等的时长从主 agent 停下算起，超过 `agents.runWaitMinutes`（缺省 10，0 为不限）即停掉剩下的子 agent、丢下它们没交回的结果，标准错误输出写一行 `stopped <N> sub-agents after waiting <M> min`，运行照常收尾（终态按主 agent 最后一轮）。撞到本次运行的上限（轮数、墙钟、token、打转）或外部中止，照上限停，子 agent 一并停下。轮数与 token 上限只计主 agent 自己的，墙钟计入干等；结果里的轮数、工具调用、用量与失败分类也只取主 agent 的会话（子 agent 的会话在它名下的 subagents 文件夹，trace 可分别看）。运行结束时先停下并释放子 agent，再跑 SessionEnd、释放主运行面。
+- 理由：照 Claude Code 的 `-p`：子 agent 的结果是最终输出的一部分，不能主 agent 一停就结束；干等设上限，免得卡住的子 agent 拖住整个运行。上限只计主 agent 是因为子 agent 的用量不经主运行面的事件，要计全得另读子 agent 的会话，先按现有指标口径，需要时再加。

@@ -305,6 +305,8 @@ async function runMain(argv: string[]): Promise<void> {
     // 决策 287–291：联网工具缺省给出，--sandbox-network off 不给
     ...webToolsOptionOf(flags, settings),
     loopGuard,
+    // 决策 457、481：主 agent 能派子 agent（--no-subagents 关掉；沙箱里第一段不提供）
+    subagents: flags.subagents,
   };
   // 决策 237：--sandbox 在一次性容器里跑，返回前交回成分支并删除容器；提示行写标准错误，不混进 --json 的一行结果
   const result =

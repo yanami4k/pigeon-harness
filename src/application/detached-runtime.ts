@@ -24,6 +24,7 @@ import type { WorkspaceHost } from "../tools/workspace-host.ts";
 import { settleBackgroundJobs } from "./background-jobs.ts";
 import { type McpSession, startMcpSession } from "./mcp.ts";
 import {
+  type ApprovalModeCell,
   buildRuntime,
   disposeRuntime,
   type LearnedMemoryConfig,
@@ -32,6 +33,7 @@ import {
 } from "./runtime.ts";
 import type { StatusHashes } from "./status-block.ts";
 import type { StatusFacts } from "./status-sources.ts";
+import type { AgentToolsHost } from "./subagents.ts";
 import type { WallClockBudget } from "./wall-clock-status.ts";
 import type { WarnSink } from "./warnings.ts";
 import type { WebToolsConfig } from "./web-tools.ts";
@@ -119,6 +121,9 @@ export interface DetachedRuntimeRequest {
   statusSent?: StatusHashes;
   // 决策 361：分叉续跑时上下文裁剪的起点（取自分支会话记录）
   pruneSeed?: PruneSeed;
+  // 决策 457、481：子 agent 与通讯录的四件工具；与子 agent 共用的审批模式单元
+  agents?: AgentToolsHost;
+  approvalModeCell?: ApprovalModeCell;
 }
 
 export function createDetachedRuntime(request: DetachedRuntimeRequest): DetachedRuntimeHandle {
@@ -165,6 +170,10 @@ export function createDetachedRuntime(request: DetachedRuntimeRequest): Detached
       : {}),
     ...(request.statusSent !== undefined ? { statusSent: request.statusSent } : {}),
     ...(request.pruneSeed !== undefined ? { pruneSeed: request.pruneSeed } : {}),
+    ...(request.agents !== undefined ? { agents: request.agents } : {}),
+    ...(request.approvalModeCell !== undefined
+      ? { approvalModeCell: request.approvalModeCell }
+      : {}),
     // 分支会话的来历只在新建会话文件时写进文件头（177）
     ...(request.branchHeader !== undefined
       ? { storeLineage: { branch: request.branchHeader } }

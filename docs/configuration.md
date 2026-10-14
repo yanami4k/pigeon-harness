@@ -601,6 +601,10 @@ agent 之间的一切传话——派出时交代的任务、`send_message` 的�
 
 当前会话还有子 agent 在跑时，`/resume`、`/reload`、`/config` 改值与 `enter_worktree` 都不做，说明 `sub-agents are running`。换到别的会话、关掉面板里的会话时，它派出的子 agent 停下并释放。
 
+### `pigeon run`
+
+无人值守运行里主 agent 同样能派子 agent（`--no-subagents` 关掉；`--sandbox` 第一段不提供）。没有审批通道：子 agent 与主 agent 一样，要人批的调用一律拒绝。主 agent 停下时还有子 agent 在跑，照 Claude Code 的 `-p`，运行不结束：等它们干完、把结果交给主 agent 接着干，直到既没有子 agent 在跑、主 agent 也停下才结束。连续干等超过 `agents.runWaitMinutes`（缺省 10 分钟，0 为不限）即停掉剩下的、丢下它们没交回的结果，在标准错误输出写一行 `stopped <N> sub-agents after waiting <M> min`，运行照常收尾。撞到本次运行的上限（`--max-turns`、`--wall-clock`、token 上限、打转叫停）或被外部中止时照上限停，子 agent 一并停下；轮数与 token 上限只计主 agent 自己的，墙钟计入干等的时间。结果里的轮数、工具调用与用量也只计主 agent 的会话。
+
 ### 钩子
 
 `SubagentStart` 在子 agent 第一轮之前触发（matcher 匹配类型名，补的上下文作任务的前缀），`SubagentStop` 在它每次停下时触发（拦下或补上下文即再跑一轮，连续到 `stopHookBlockCap` 后不再理会）；两者都多给 `agent_name` 与 `agent_type`，`SubagentStop` 另有 `stop_hook_active` 与 `last_assistant_message`。子 agent 不跑 `SessionStart`、`SessionEnd`；它的工具类钩子照常触发，运行记录写在它自己的会话里。

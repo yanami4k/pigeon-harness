@@ -57,8 +57,8 @@ export interface SubagentOpenerBase {
   topSessionFile(): Promise<string | undefined>;
   // 所属会话本身的样子（它派出的子 agent 用）
   topContext(): SubagentParentContext;
-  // 审批经所属会话的队列；path 写明是哪个子 agent
-  createApprovalHandler(grants: SessionGrantStore, path: string): ApprovalHandler;
+  // 审批经所属会话的队列；path 写明是哪个子 agent。不给即没有审批通道（无人值守：要审批的一律拒绝，同所属会话）
+  createApprovalHandler?(grants: SessionGrantStore, path: string): ApprovalHandler;
   // 钩子拦下或出错、打转叫停等的一行（写明是哪个子 agent）
   notice(path: string, line: string): void;
   homeDir?: string;
@@ -172,7 +172,12 @@ export function createSubagentOpener(base: SubagentOpenerBase): SubagentOpener {
             config: mcpConfigOf(settings),
             ...(parent.mcp !== undefined ? { reuse: parent.mcp } : {}),
           }),
-        createApprovalHandler: (grants) => base.createApprovalHandler(grants, spec.path),
+        ...(base.createApprovalHandler !== undefined
+          ? {
+              createApprovalHandler: (grants: SessionGrantStore) =>
+                base.createApprovalHandler?.(grants, spec.path) as ApprovalHandler,
+            }
+          : {}),
         subagent: {
           storeSessionsDir: subagentSessionsDir(topFile, topSessionId),
           lineage: {

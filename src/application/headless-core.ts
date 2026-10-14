@@ -10,6 +10,10 @@
 // 推送记忆（决策 191、193、331、363）：开着时把两层记忆整份放进开工状态块；无人值守，只推送、不注册 update_memory；
 // 收尾复盘与压缩前复盘已随决策 331 删除
 // 任务清单（294 B1）：开着时给主 agent 注册两件清单工具
+// 决策 457、481：子 agent——开着时主 agent 能派子 agent（没有审批通道，与主 agent 一样要审批的一律拒绝）。主 agent 停下时
+// 还有子 agent 在跑，照 Claude Code 的 -p 等它们干完、把结果交给主 agent 接着干，直到既没有子 agent 在跑、主 agent 也停下才
+// 结束；连续干等超过上限（设置的 agents.runWaitMinutes，缺省 10 分钟，0 为不限）即停掉剩下的、丢下它们没交回的结果。撞到
+// 本次运行的上限（轮数、墙钟、token、打转）或外部中止照上限停，子 agent 一并停下
 
 import type { MemoryLayer } from "../memory/learned.ts";
 import { loadStoreSession } from "../persistence/session-view.ts";
@@ -31,10 +35,16 @@ import type {
 import type { ThinkingLevel, TurnUsage } from "../state/runtime-events.ts";
 import { storeAttemptLabel, storeRunMetrics } from "../state/session-judge.ts";
 import type { BranchHeaderInput } from "../state/session-payloads.ts";
-import type { SettingsSnapshot } from "../state/settings.ts";
+import {
+  agentLimitsOfSettings,
+  emptySettingsSnapshot,
+  type SettingsSnapshot,
+} from "../state/settings.ts";
 import type { KeptJob } from "../tools/background-jobs.ts";
 import type { EditMode } from "../tools/edit-mode.ts";
 import type { WorkspaceHost } from "../tools/workspace-host.ts";
+import { MailGate } from "./agent-mail.ts";
+import { loadAgentTypes } from "./agent-types.ts";
 import { settleBackgroundJobs } from "./background-jobs.ts";
 import { attachCheckpoints } from "./checkpoints.ts";
 import { compactionWarner } from "./compaction-text.ts";
@@ -42,9 +52,13 @@ import { createDetachedRuntime, type DetachedRuntimeRequest } from "./detached-r
 import { DEFAULT_MODEL_PLACEHOLDER } from "./launch-flags.ts";
 import { attachLoopGuard, type LoopStop } from "./loop-guard.ts";
 import type { McpSession } from "./mcp.ts";
-import type { LearnedMemoryConfig, RuntimeBundle } from "./runtime.ts";
+import type { ApprovalModeCell, LearnedMemoryConfig, RuntimeBundle } from "./runtime.ts";
+import { defaultSessionName } from "./session-name.ts";
+import { agentMessageEntry } from "./session-store.ts";
 import type { StatusHashes } from "./status-block.ts";
 import type { StatusFacts } from "./status-sources.ts";
+import { createSubagentOpener } from "./subagent-runtime.ts";
+import { AgentHub } from "./subagents.ts";
 import type { WarnSink } from "./warnings.ts";
 import type { WebToolsConfig } from "./web-tools.ts";
 
@@ -150,6 +164,10 @@ export interface HeadlessRunOptions {
   continueFromHistory?: boolean;
   // 运行面装起来后的回调（挂会话树写穿）
   onBundle?: (bundle: RuntimeBundle) => void;
+  // 决策 457、481：主 agent 能不能派子 agent；缺省不能（pigeon run 按 --no-subagents 缺省打开，沙箱与跑批器不给）
+  subagents?: boolean;
+  // 测试用：干等子 agent 的上限（毫秒）；缺省取设置的 agents.runWaitMinutes
+  subagentWaitMs?: number;
 }
 
 export interface HeadlessRunMetrics {
@@ -198,6 +216,85 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
   let liveBundle: RuntimeBundle | undefined;
   // 已注册工具的风险档位（需审批次数按它现算；运行面没装起来时为空）
   let toolTiers: ReadonlyMap<string, string> = new Map();
+  // 决策 457、481：通讯录与子 agent（开着时）；主 agent 与子 agent 共用的审批模式单元
+  const modeCell: ApprovalModeCell = { current: options.yolo ? "yolo" : "prompt" };
+  const settingsSnapshot = options.settings ?? emptySettingsSnapshot(options.governanceRoot);
+  const agentLimits = agentLimitsOfSettings(settingsSnapshot);
+  const subagentWaitMs = options.subagentWaitMs ?? agentLimits.runWaitMinutes * 60_000;
+  // 子 agent 交回、发来消息或状态有变时叫醒干等
+  let wakeWaiter: (() => void) | undefined;
+  const wakeUp = (): void => {
+    const resolve = wakeWaiter;
+    wakeWaiter = undefined;
+    resolve?.();
+  };
+  const warnLine = options.warn ?? ((line: string) => console.error(line));
+  const agentHub =
+    options.subagents === true
+      ? new AgentHub({ mail: new MailGate(), onChange: wakeUp })
+      : undefined;
+  const agentCatalog =
+    agentHub !== undefined
+      ? loadAgentTypes({
+          governanceRoot: options.governanceRoot,
+          ...(options.homeDir !== undefined ? { homeDir: options.homeDir } : {}),
+        })
+      : undefined;
+  for (const problem of agentCatalog?.problems ?? []) warnLine(`[agents] ${problem}`);
+  const mainBundle = (): RuntimeBundle => {
+    if (liveBundle === undefined) throw new Error("the session isn't open yet");
+    return liveBundle;
+  };
+  const agentRegistration =
+    agentHub !== undefined && agentCatalog !== undefined
+      ? agentHub.registerSession({
+          sessionId,
+          name: () => defaultSessionName(options.workspaceRoot, sessionId),
+          deliver: (text) => {
+            mainBundle().adapter.notify(text);
+            wakeUp();
+          },
+          pendingNotices: () => liveBundle?.adapter.pendingNotices() ?? 0,
+          record: (entry) => mainBundle().sessionStore.append(agentMessageEntry(entry)),
+          open: createSubagentOpener({
+            governanceRoot: options.governanceRoot,
+            streamFn: options.streamFn,
+            flags: {
+              yolo: options.yolo,
+              provider: options.provider ?? DEFAULT_MODEL_PLACEHOLDER.provider,
+              modelId: options.modelId ?? DEFAULT_MODEL_PLACEHOLDER.modelId,
+              persistThinking: options.persistThinking ?? true,
+              ...(options.thinking !== undefined ? { thinkingLevel: options.thinking } : {}),
+              ...(options.maxOutputTokens !== undefined
+                ? { maxOutputTokens: options.maxOutputTokens }
+                : {}),
+              ...(options.compaction !== undefined ? { compaction: options.compaction } : {}),
+              ...(pushed ? { pushedMemory: true } : {}),
+              ...(options.sessionSearch !== undefined
+                ? { sessionSearch: options.sessionSearch }
+                : {}),
+            },
+            warn: warnLine,
+            topSessionId: () => sessionId,
+            topSessionFile: () => mainBundle().sessionStore.filePath(),
+            topContext: () => ({
+              sessionId,
+              settings: settingsSnapshot,
+              approvalModeCell: modeCell,
+              workspaceRoot: options.workspaceRoot,
+              ...(mainBundle().mcp !== undefined ? { mcp: mainBundle().mcp } : {}),
+              ...(options.webTools !== undefined ? { webTools: options.webTools } : {}),
+              grants: mainBundle().grantStore.list(),
+              modelId: options.modelId ?? DEFAULT_MODEL_PLACEHOLDER.modelId,
+              transcript: () => mainBundle().adapter.transcript(),
+            }),
+            notice: (path, line) => warnLine(`[${path}] ${line}`),
+            ...(options.homeDir !== undefined ? { homeDir: options.homeDir } : {}),
+          }),
+          catalog: () => agentCatalog,
+          limits: () => agentLimits,
+        })
+      : undefined;
   // 本次运行的装配参数
   const surface: Omit<DetachedRuntimeRequest, "sessionId"> = {
     governanceRoot: options.governanceRoot,
@@ -253,6 +350,8 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
     ...(options.initialMessages !== undefined ? { initialMessages: options.initialMessages } : {}),
     ...(options.statusSent !== undefined ? { statusSent: options.statusSent } : {}),
     ...(options.pruneSeed !== undefined ? { pruneSeed: options.pruneSeed } : {}),
+    approvalModeCell: modeCell,
+    ...(agentRegistration !== undefined ? { agents: agentRegistration.host } : {}),
     onBundle: (bundle) => {
       liveBundle = bundle;
       // 决策 330：人写的说明超出上限被截断时提示一行（告警出口，缺省标准错误输出）
@@ -359,9 +458,46 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
           progressed = true;
         }
       }
+      // 决策 481：主 agent 停下了，还有子 agent 在跑或有它们交回的结果：等着、交给主 agent 接着干
+      const done = (latest as { status?: unknown } | undefined)?.status === "completed";
+      if (!progressed && done && agentHub !== undefined && !stopped()) {
+        const waited = await waitForAgents(bundle, stopped);
+        if (waited === "notice") {
+          latest = await target.runNotices();
+          progressed = true;
+        } else if (waited === "timeout") {
+          const left = agentHub.runningUnder(sessionId);
+          await agentRegistration?.unregister();
+          warnLine(
+            `stopped ${left} sub-agent${left === 1 ? "" : "s"} after waiting ${Math.round(subagentWaitMs / 60_000)} min`
+          );
+        }
+      }
       if (!progressed || stopped()) {
         return latest;
       }
+    }
+  };
+  // 决策 481：干等子 agent——有交回的通知即返回 notice，子 agent 都停下了返回 done，撞上限或外部中止返回 stopped，
+  // 连续干等超过上限返回 timeout
+  const waitForAgents = async (
+    bundle: RuntimeBundle,
+    stopped: () => boolean
+  ): Promise<"notice" | "done" | "stopped" | "timeout"> => {
+    const since = Date.now();
+    for (;;) {
+      if (stopped()) return "stopped";
+      if (bundle.adapter.pendingNotices() > 0) return "notice";
+      if (agentHub === undefined || agentHub.runningUnder(sessionId) === 0) return "done";
+      const left = subagentWaitMs > 0 ? subagentWaitMs - (Date.now() - since) : 1000;
+      if (left <= 0) return "timeout";
+      let poll: NodeJS.Timeout | undefined;
+      await new Promise<void>((resolve) => {
+        wakeWaiter = resolve;
+        // 兜底：撞上限的中止请求不经通讯录，隔一会儿再看一次
+        poll = setTimeout(resolve, Math.min(left, 1000));
+      });
+      clearTimeout(poll);
     }
   };
   try {
@@ -502,6 +638,8 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
     deadline = undefined;
     unsubscribe();
     options.abortSignal?.removeEventListener("abort", onAbort);
+    // 决策 481：还在跑的子 agent 停下并释放（它们与主 agent 共用 MCP 连接）
+    await agentRegistration?.unregister().catch(() => {});
     // 决策 323 / 324：SessionEnd——会话结束（只作副作用；缺省短时限 1.5 秒、单个钩子最长 60 秒）。
     // 在释放运行面之前跑：记录要落在本会话文件里
     if (liveBundle?.hooks !== undefined) {

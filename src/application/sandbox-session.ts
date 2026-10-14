@@ -165,6 +165,8 @@ export async function runHeadlessInSandbox(
     // 决策 252：不启动 MCP 服务
     result = await runHeadless({
       ...options,
+      // 决策 480：沙箱会话第一段不提供子 agent
+      subagents: false,
       workspaceHost: sandbox.host,
       statusFacts: sandboxStatusFacts(sandbox),
       startMcp: noMcpSession,
