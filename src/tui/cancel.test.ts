@@ -168,7 +168,7 @@ test("模态键控优先：审批面板挂起期间 Esc 吞掉不取消 Run；�
     // 审批面板挂起（Run 阻塞在 beforeToolCall 的人工决议上）
     const panel = shell.askApproval(request);
     await settle();
-    assert.ok(screenText(term).includes("-- approval --"), "审批面板挂着");
+    assert.ok(screenText(term).includes("╭"), "审批区（圆角框）挂着");
 
     // Esc 与面板非决议键同待遇：吞掉——此时 interrupt 的 waitForIdle 会吊在挂起
     // Promise 上直到人按键，「取消」名不副实；模态先决议再 Esc 是唯一次序（裁决 032）

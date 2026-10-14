@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
+import { orchestrationSettings } from "../state/orchestration-config.ts";
 import {
   projectLocalSettingsPath,
   projectPigeonGitignorePath,
@@ -87,6 +88,33 @@ test("出错响亮失败并指出文件与层：不是合法 JSON、未知键、
       () => loadSettings(root, { homeDir: home }),
       /references unknown short name: nope/
     );
+  } finally {
+    cleanup();
+  }
+});
+
+test("脚本的缺省额度（决策 475）：orchestration.script.budget 只收 token；旧的金额写法开局即报错说明", () => {
+  const { root, home, cleanup } = dirs();
+  try {
+    write(projectSettingsPath(root), { orchestration: { script: { budget: "¥20" } } });
+    assert.throws(
+      () => loadSettings(root, { homeDir: home }),
+      (error: unknown) =>
+        error instanceof SettingsError &&
+        error.message ===
+          'merged settings invalid: orchestration: script.budget "¥20" is not a token count; write tokens like "300k" or "2m" (money amounts are no longer supported)'
+    );
+    write(userSettingsPath(home), { orchestration: { script: { budget: "$5" } } });
+    write(projectSettingsPath(root), {});
+    assert.throws(
+      () => loadSettings(root, { homeDir: home }),
+      /orchestration: script\.budget "\$5" is not a token count/
+    );
+    for (const budget of ["300k", "2m", "1.5M", "50000"]) {
+      write(userSettingsPath(home), { orchestration: { script: { budget } } });
+      const snapshot = loadSettings(root, { homeDir: home });
+      assert.equal(orchestrationSettings(snapshot.merged.orchestration).scriptBudget, budget);
+    }
   } finally {
     cleanup();
   }

@@ -9,8 +9,10 @@ import {
   APPROVAL_CANCEL_CLOSED,
   APPROVAL_WITHDRAWN,
   APPROVAL_YIELDED,
+  type ApprovalBlockLine,
   type ApprovalPanelKey,
   type ApprovalPanelResult,
+  approvalBlockLines,
   approvalBlockText,
   PEER_HOLD_WITHDRAWN,
   withdrawnLine,
@@ -68,7 +70,7 @@ export interface ModalHost {
   // 决策 301：审批面板的各行（审批块、撤回、理由行提示）写到哪里——就地显示在当前视图；缺省即 addSystem
   addApprovalLine?(line: string): void;
   // 挂着的审批块（答完由 settleApproval 收成一行）；缺省即 addApprovalLine
-  addApprovalBlock?(text: string): void;
+  addApprovalBlock?(text: string, lines?: readonly ApprovalBlockLine[]): void;
   // 把挂着的审批块收成一行结论
   settleApproval?(line: string): void;
   // 决策 301：当前不在主会话视图（审批块里给主会话的请求写明来源）；缺省即在
@@ -111,8 +113,13 @@ export function askApprovalPanel(
   // 请示汇到本会话（worker_approval，请求带来源会话与 worker 标签时另记一条）
   host.notifyApprovalHook?.("permission_prompt", panelText);
   if (request.worker !== undefined) host.notifyApprovalHook?.("worker_approval", panelText);
-  if (host.addApprovalBlock !== undefined) host.addApprovalBlock(panelText);
-  else approvalLine(host, panelText);
+  if (host.addApprovalBlock !== undefined) {
+    // 决策 472：审批区按行上色画框，另给分好类的各行
+    host.addApprovalBlock(
+      panelText,
+      approvalBlockLines(request, directoryGrant, host.outsideMainView?.() === true)
+    );
+  } else approvalLine(host, panelText);
   const { promise, resolve } = Promise.withResolvers<ApprovalPanelResult>();
   const pending: PendingApproval = {
     resolve,

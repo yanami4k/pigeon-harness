@@ -316,7 +316,8 @@ test("等审批超时单独标出（补批后可续跑）", async () => {
   assert.ok(!/Failed: /.test(notice));
 });
 
-test("花费上限：到限即不再派、在跑的做完、汇总写明做完与未做；无价格的模型按 token", async () => {
+// 决策 475：额度只有 token——有价格的模型同样按 token 计到限，汇总照写花的钱
+test("花费上限：到限即不再派、在跑的做完、汇总写明做完与未做；有无价格都按 token", async () => {
   const harness = scriptHarness({ planner: () => ({ cost: 0.1, tokens: 1000 }) });
   const { notice } = await runToEnd(
     harness,
@@ -326,7 +327,7 @@ test("花费上限：到限即不再派、在跑的做完、汇总写明做完�
       'const four = await agent("四");',
       "return { r: [...both, three, four].map((x) => x.ok) };",
     ].join("\n"),
-    { budget: { unit: "usd", amount: 0.15 } }
+    { budget: { unit: "tokens", amount: 1500 } }
   );
   // 两个并行的都做完（到限时它们已在跑），之后的不再派
   assert.deepEqual(returned(notice), { r: [true, true, false, false] });

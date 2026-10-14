@@ -57,6 +57,7 @@ const ITEM_TYPE: Record<ViewItem["kind"], string> = {
   "background-job": "pigeon.background-job",
   "request-retry": "pigeon.request-retry",
   "approval-mode": "pigeon.approval-mode",
+  "git-head": "pigeon.git-head",
 };
 
 // 单条条目的关键字段摘要（各类型的要点，通俗措辞）
@@ -172,6 +173,11 @@ function itemDetail(item: ViewItem): string {
     case "request-retry":
       return requestRetryLine(item.data);
     // 决策 469：会话中途切换审批模式
+    // 决策 473：工作区的 git 分支
+    case "git-head":
+      return item.data.branch !== undefined
+        ? `branch ${item.data.branch}`
+        : `detached at ${item.data.commit ?? "?"}`;
     case "approval-mode":
       return `approval mode ${item.data.from === "yolo" ? "yolo" : "ask"} -> ${item.data.to === "yolo" ? "yolo" : "ask"}`;
     case "background-job": {

@@ -94,10 +94,12 @@ test("答完的审批收成一行：多行命令只取首行（不把换行带�
     );
     const pending = handler(MULTILINE);
     await settle();
-    assert.match(screenText(term), /-- approval --/);
+    // 挂着时审批区里命令逐行显示
+    assert.match(screenText(term), /│ cat <<EOF +│\n +│ hello there +│\n +│ EOF +│/);
     term.input("y");
     assert.deepEqual(await pending, { approved: true });
     await settle();
+    assert.doesNotMatch(screenText(term), /╭/, "答完审批区收起");
     const rows = screenText(term).split("\n");
     assert.ok(
       rows.some((row) => row.includes("✓ approved run_command: cat <<EOF …")),
@@ -165,7 +167,7 @@ test("另有审批挂着（BUSY）时被拒的请求不去收起挂着的那一�
     } as unknown as ApprovalRequest);
     assert.equal(second.approved, false);
     await settle();
-    assert.match(screenText(term), /-- approval --/, "挂着的块还在");
+    assert.match(screenText(term), /│ src\/first\.ts +│/, "挂着的那一块还在审批区里");
     assert.doesNotMatch(screenFlat(term), /second\.ts/);
     term.input("y");
     assert.deepEqual(await first, { approved: true });

@@ -231,7 +231,7 @@ test("worker 的请示等满时限被撤回：审批面板撤下，按取消收�
       signal: controller.signal,
     });
     await settle();
-    assert.ok(screenFlat(term).includes("-- approval --"), screenFlat(term));
+    assert.ok(screenFlat(term).includes("╭"), `审批区（圆角框）挂着\n${screenFlat(term)}`);
     controller.abort();
     assert.deepEqual(await answer, { key: "cancel", reason: APPROVAL_WITHDRAWN });
     await settle();
@@ -241,7 +241,7 @@ test("worker 的请示等满时限被撤回：审批面板撤下，按取消收�
       flat.includes("[runner] ✗ approval timed out: run_command (worker runner stopped)"),
       flat
     );
-    assert.ok(!flat.includes("-- approval --"), flat);
+    assert.ok(!flat.includes("╭"), `审批区收起\n${flat}`);
   } finally {
     shell.stop();
   }

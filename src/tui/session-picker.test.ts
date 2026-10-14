@@ -5,6 +5,7 @@ import { test } from "vitest";
 import type { RecentSession } from "../application/recent-sessions.ts";
 import type { SessionFilterHit } from "../application/search.ts";
 import type { SessionId } from "../state/ids.ts";
+import { installKeybindings } from "./keybindings.ts";
 import { PICKER_FILTER_DELAY_MS, SessionPicker } from "./session-picker.ts";
 import { settle, withoutStyles } from "./testing.ts";
 
@@ -133,4 +134,75 @@ test("片段与筛选词里的控制序列可见化，不写进终端", async ()
   const raw = p.picker.view.render(100).join("\n");
   assert.ok(!raw.includes("\x1b[2J"), raw);
   assert.ok(!raw.includes("\u009b"), raw);
+});
+
+const CTRL_R = "\x12";
+
+function renamePicker(rename: (id: string, name: string) => Promise<string | undefined>) {
+  // 改名键从键位表取（壳启动时才装；这里直接装缺省的）
+  installKeybindings(undefined);
+  const picker = new SessionPicker();
+  const sessions = [
+    { ...session("s1", "alpha", "部署网关"), branch: "feature/login" },
+    session("s2", "beta", "写文档"),
+  ];
+  const calls: string[] = [];
+  picker.open(
+    sessions,
+    () => {},
+    () => 10,
+    {
+      search: async () => [],
+      updated: () => {},
+      rename: (id, name) => {
+        calls.push(`${id}=${name}`);
+        return rename(id, name);
+      },
+    }
+  );
+  return { picker, sessions, calls, lines: () => picker.view.render(100).map(withoutStyles) };
+}
+
+test("决策 474：Ctrl+R 就地改名——名字那一栏变输入框、预填现名；非法时写明原因、留在输入里；Enter 保存；Esc 取消", async () => {
+  const r = renamePicker(async (_id, name) =>
+    name.includes("/") ? "invalid name: use letters, digits, _, - and . (max 40)" : undefined
+  );
+  r.picker.handleInput(CTRL_R);
+  let lines = r.lines();
+  assert.match(lines[1] ?? "", /new name: enter to save, esc to cancel/);
+  assert.match(lines.join("\n"), /\[alpha_\]/);
+  // 打的字进名字，不进筛选词
+  for (const char of "/x") r.picker.handleInput(char);
+  assert.equal(r.picker.filterText(), "");
+  r.picker.handleInput("\r");
+  await settle(10);
+  lines = r.lines();
+  assert.deepEqual(r.calls, ["s1=alpha/x"]);
+  assert.match(lines[1] ?? "", /invalid name/);
+  assert.match(lines.join("\n"), /\[alpha\/x_\]/, "改不成留在输入里");
+  r.picker.handleInput("\x7f");
+  r.picker.handleInput("\x7f");
+  for (const char of "-fix") r.picker.handleInput(char);
+  r.picker.handleInput("\r");
+  await settle(10);
+  lines = r.lines();
+  assert.deepEqual(r.calls, ["s1=alpha/x", "s1=alpha-fix"]);
+  assert.match(lines.join("\n"), /alpha-fix {2}feature\/login/);
+  assert.doesNotMatch(lines.join("\n"), /new name|_\]/);
+  // Esc 取消：不改
+  r.picker.handleInput(CTRL_R);
+  for (const char of "zzz") r.picker.handleInput(char);
+  r.picker.handleInput("\x1b");
+  assert.equal(r.picker.isOpen(), true, "Esc 只取消改名");
+  assert.deepEqual(r.calls.length, 2);
+  assert.match(r.lines().join("\n"), /alpha-fix /);
+});
+
+test("决策 473：窄窗口里先截首条输入，留不下了再省掉分支", () => {
+  const r = renamePicker(async () => undefined);
+  const wide = r.picker.view.render(120).map(withoutStyles).join("\n");
+  assert.match(wide, /alpha {2}feature\/login {2}2 turns {2}部署网关/);
+  const narrow = r.picker.view.render(44).map(withoutStyles).join("\n");
+  assert.doesNotMatch(narrow, /feature\/login/);
+  assert.match(narrow, /alpha {2}2 turns/);
 });

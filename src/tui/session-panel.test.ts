@@ -620,7 +620,7 @@ test("决策 458 复查：/resume 换到别的会话后，当前会话卡的首�
   }
 });
 
-test("决策 458 复查：当前会话与面板会话同名时，派出的同名会话选中的是它自己；/take 会话:<名字> 取那个面板会话", async () => {
+test("决策 458 复查：当前会话与面板会话同名时，派出的同名会话选中的是它自己；/take session:<名字> 取那个面板会话", async () => {
   const { term, runtime, runs, finishers, taken, cleanup } = makeShell({
     sessionName: () => "s1",
   });
@@ -647,7 +647,7 @@ test("决策 458 复查：当前会话与面板会话同名时，派出的同名
     await settle();
     term.input(ESC);
     await settle();
-    term.input("/take 会话:s1");
+    term.input("/take session:s1");
     term.input("\r");
     await settle();
     assert.deepEqual(taken, ["s1"]);

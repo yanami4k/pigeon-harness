@@ -22,7 +22,7 @@ import { PROGRAM_NOTE_PREFIX } from "./enter-worktree-tool.ts";
 import { plural, summarizeArgs, workEndLine } from "./format.ts";
 import { LEGACY_LOOP_REMINDER_PREFIX, LOOP_REMINDER_PREFIX } from "./loop-guard.ts";
 import { PEER_NOTICE_PREFIXES } from "./peer-messaging.ts";
-import { SCRIPT_COMMAND, SCRIPT_KEYWORD } from "./script-naming.ts";
+import { LEGACY_SCRIPT_KEYWORD, SCRIPT_COMMAND } from "./script-naming.ts";
 import {
   commandInputText,
   LEGACY_SCRIPT_NOTICE_PREFIX,
@@ -95,7 +95,9 @@ export function isContinuationPrompt(text: string): boolean {
 // 给空任务时的输出）；旧会话里是决策 428 之前的中文原文。回看与回退时还原成人敲的命令
 const ORCHESTRATE_LEADS: readonly string[] = [
   commandInputText(""),
-  `（人用 /${SCRIPT_COMMAND} 点名用${SCRIPT_KEYWORD}做这件事）\n`,
+  // 决策 475 之前（关键词还是中文）的英文开头与决策 428 之前的中文原文
+  commandInputText("", LEGACY_SCRIPT_KEYWORD),
+  `（人用 /${SCRIPT_COMMAND} 点名用${LEGACY_SCRIPT_KEYWORD}做这件事）\n`,
 ];
 
 export interface UserTextParts {

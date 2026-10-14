@@ -17,6 +17,7 @@ import {
   type CheckpointMarkData,
   type ContinuationData,
   type ForkData,
+  type GitHeadData,
   type GrantData,
   HEADER_METADATA_KEY,
   type HookRunData,
@@ -132,7 +133,9 @@ export type ViewItem =
   // 决策 420：模型请求的一次失败重试
   | { kind: "request-retry"; entryId: string; timestamp: number; data: RequestRetryData }
   // 决策 469：会话中途切换审批模式
-  | { kind: "approval-mode"; entryId: string; timestamp: number; data: ApprovalModeData };
+  | { kind: "approval-mode"; entryId: string; timestamp: number; data: ApprovalModeData }
+  // 决策 473：工作区的 git 分支（变了才记）
+  | { kind: "git-head"; entryId: string; timestamp: number; data: GitHeadData };
 
 // 一次工具调用：助手消息里的调用块与对应的工具结果消息（按工具调用号在同一 Run 内配对）
 export interface ViewToolCall {
@@ -342,6 +345,7 @@ const CUSTOM_KINDS = {
   [SessionEntryType.BackgroundJob]: "background-job",
   [SessionEntryType.RequestRetry]: "request-retry",
   [SessionEntryType.ApprovalMode]: "approval-mode",
+  [SessionEntryType.GitHead]: "git-head",
 } as const;
 
 // 自定义条目 → 时间线条目；不是 Pigeon 的条目返回 undefined，数据不合 schema 记告警

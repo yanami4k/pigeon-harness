@@ -8,9 +8,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, test } from "vitest";
 import { wrapScriptApprovals } from "../application/script-approvals.ts";
-import { scriptCommands } from "../application/script-commands.ts";
+import { SCRIPT_COMMAND_TEXTS, scriptCommands } from "../application/script-commands.ts";
 import { type PlanInput, scriptHarness, type WorkerPlan } from "../application/script-fixtures.ts";
-import { ScriptGate } from "../application/script-naming.ts";
+import { BUDGET_TOKENS_ONLY, ScriptGate } from "../application/script-naming.ts";
 import { commandInputText } from "../application/script-texts.ts";
 import { SessionGrantStore } from "../approvals/grant-store.ts";
 import type { ApprovalRequest } from "../approvals/handler.ts";
@@ -177,13 +177,13 @@ test("开跑的计划行、log 行与结束汇总进消息区；树形视图接�
         "调查",
         "修改",
       ]),
-      { unit: "cny", amount: 5 }
+      { unit: "tokens", amount: 300_000 }
     );
     await until(() => harness.sink.spawned.length === 1, "派出第一个");
     await settle();
     const flat = screenFlat(term);
-    // 开跑那一行不写：原先是"[脚本] t（运行号 …）开跑：阶段 调查 → 修改；额度 ¥5"，改英文即"[script] t (run …) started:
-    // phases 调查 → 修改; budget ¥5"——两种写法与阶段连写都不出现
+    // 开跑那一行不写：原先是"[脚本] t（运行号 …）开跑：阶段 调查 → 修改；额度 …"，改英文即"[script] t (run …) started:
+    // phases 调查 → 修改; budget 300k"——两种写法与阶段连写都不出现
     assert.ok(
       !flat.includes("[script] t") && !flat.includes("[脚本] t") && !flat.includes("调查 → 修改"),
       flat
@@ -247,14 +247,55 @@ test("/orchestrate 发起：以人的输入提交，交给模型的文字带关�
   const { shell, term, runtime, gate, close } = scriptShell(() => ({}));
   shell.start();
   try {
-    await type(term, "/orchestrate 给各模块补测试 额度 ¥5\r");
-    assert.deepEqual(runtime.runs, [commandInputText("给各模块补测试 额度 ¥5")]);
+    await type(term, "/orchestrate 给各模块补测试 budget 300k\r");
+    assert.deepEqual(runtime.runs, [commandInputText("给各模块补测试 budget 300k")]);
     assert.ok(gate.allowed());
-    assert.deepEqual(gate.budget(), { unit: "cny", amount: 5 });
+    assert.deepEqual(gate.budget(), { unit: "tokens", amount: 300_000 });
     await type(term, "谢谢\r");
     assert.ok(!gate.allowed());
     await type(term, "/orchestrate\r");
-    assert.ok(screenFlat(term).includes("usage: /orchestrate <task>"));
+    const usage = screenFlat(term);
+    assert.ok(usage.includes("usage: /orchestrate <task> [budget 300k]"), usage);
+    assert.ok(usage.includes("/orchestrate resume <run ID> [budget 300k]"), usage);
+    assert.ok(!/[¥￥$]|额度/.test(SCRIPT_COMMAND_TEXTS.usage), SCRIPT_COMMAND_TEXTS.usage);
+  } finally {
+    await close();
+  }
+});
+
+test("/orchestrate 写金额额度（决策 475）：不发起、醒目说明额度只收 token；没有点名", async () => {
+  const { shell, term, runtime, gate, close } = scriptShell(() => ({}));
+  shell.start();
+  try {
+    await type(term, "/orchestrate 给各模块补测试 budget $2\r");
+    assert.deepEqual(runtime.runs, [], "没有交给模型");
+    assert.ok(!gate.allowed());
+    await untilScreen(term, BUDGET_TOKENS_ONLY);
+    await type(term, "/orchestrate 给各模块补测试 budget ¥5\r");
+    await type(term, "/orchestrate 给各模块补测试 budget 3万\r");
+    assert.deepEqual(runtime.runs, []);
+    assert.equal(screenFlat(term).split(BUDGET_TOKENS_ONLY).length - 1, 3);
+    // 改成 token 写法即照常发起
+    await type(term, "/orchestrate 给各模块补测试 budget 2m\r");
+    assert.deepEqual(runtime.runs, [commandInputText("给各模块补测试 budget 2m")]);
+    assert.deepEqual(gate.budget(), { unit: "tokens", amount: 2_000_000 });
+  } finally {
+    await close();
+  }
+});
+
+test("/orchestrate resume 写金额额度（决策 475）：显示说明、不续跑", async () => {
+  const { harness, shell, term, close } = scriptShell(() => ({}));
+  shell.start();
+  try {
+    const done = harness.nextNotice();
+    const runId = await harness.runs.start(script('await agent("一"); return 1;'), undefined);
+    await within(done, "脚本的汇总");
+    await harness.runs.settled(runId);
+    await type(term, `/orchestrate resume ${runId} budget $2\r`);
+    await untilScreen(term, BUDGET_TOKENS_ONLY);
+    assert.equal(harness.sink.spawned.length, 1, "没有续跑");
+    assert.equal(harness.runs.budget(runId), undefined, "额度没换");
   } finally {
     await close();
   }
@@ -280,11 +321,12 @@ test("审批：本次脚本内同类都允许只对本脚本内同类生效；�
     await until(() => asked.length === 2, "rm 的请示");
     assert.equal(asked[1]?.args && (asked[1].args as { command: string }).command, "rm -rf build");
     assert.equal(asked[1]?.script?.kind, undefined);
-    await untilScreen(term, "command: rm -rf build");
-    const rmBlock = screenFlat(term).split("-- approval --").at(-1) ?? "";
+    // 审批区框内命令本身单独一行（不带 command: 前缀）
+    await untilScreen(term, "│ rm -rf build ");
+    const rmBlock = screenFlat(term).split("╭").at(-1) ?? "";
     assert.ok(!rmBlock.includes("[s]"), rmBlock);
     await type(term, "s");
-    assert.ok(screenFlat(term).includes("-- approval --"), "按 s 不起作用，仍在等审批");
+    assert.ok(screenFlat(term).includes("│ rm -rf build "), "按 s 不起作用，审批区仍挂着等审批");
     await type(term, "y");
     await within(first, "第一个脚本的汇总");
     // 另一个脚本里照常请示

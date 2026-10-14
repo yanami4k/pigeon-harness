@@ -269,7 +269,13 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
           )
         )
       : undefined;
-  scriptSlot?.gate.runTask(options.task);
+  // 决策 475：任务描述里的额度写成了金额：整次运行不算点名，说明原因
+  const budgetProblem = scriptSlot?.gate.runTask(options.task);
+  if (budgetProblem !== undefined) {
+    (options.warn ?? ((line: string) => console.error(line)))(
+      `script orchestration not enabled: ${budgetProblem}`
+    );
+  }
   let scripts: ScriptRuns | undefined;
   let workers: WorkerOrchestrator | undefined;
   let spawnBudget: SpawnWorkerBudget | undefined;

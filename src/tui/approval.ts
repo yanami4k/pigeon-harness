@@ -165,6 +165,132 @@ export function approvalBlockText(
   return lines.join("\n");
 }
 
+// 决策 472：审批区里的审批块按行分类，由审批区上色并画框：第一行工具名（加粗），接着是要批的那件事本身（命令、路径、网站，
+// 正常色）与警示（受保护路径、工作区外，正常色）；来源、其余参数与细节一律暗色；改动预览的增删行红绿；按键行的字母正常色、
+// 说明暗色。已专门显示过的字段不在参数里重复（命令、路径），没覆盖的照旧显示，不藏东西；文字的净化由审批区统一做（036）
+export type ApprovalLineKind =
+  | "title"
+  | "subject"
+  | "warning"
+  | "detail"
+  | "added"
+  | "removed"
+  | "keys";
+
+export interface ApprovalBlockLine {
+  kind: ApprovalLineKind;
+  text: string;
+}
+
+function keysLabel(request: ApprovalRequest, directoryGrant: boolean): string {
+  const scriptKey =
+    request.script?.kind !== undefined && request.protectedPath === undefined
+      ? ` / ${SCRIPT_KIND_KEY_LABEL}`
+      : "";
+  return approvalKeyLabels(
+    (request.protectedPath !== undefined
+      ? APPROVAL_KEYS_BASE
+      : request.host !== undefined
+        ? `${APPROVAL_KEYS_BASE} / ${hostGrantKeyLabel(request)}`
+        : request.tier === "exec"
+          ? `${APPROVAL_KEYS_BASE} / ${execGrantKeyLabel(request)}`
+          : directoryGrant
+            ? `${APPROVAL_KEYS_BASE} / [a] allow for this session / [d] allow for this session (this directory)`
+            : `${APPROVAL_KEYS_BASE} / [a] allow for this session`) + scriptKey
+  );
+}
+
+// 改动预览的一行：增删行（不含文件头 +++ / ---）分出来上色，其余为细节
+function previewLine(line: string): ApprovalBlockLine {
+  if (line.startsWith("+") && !line.startsWith("+++")) return { kind: "added", text: line };
+  if (line.startsWith("-") && !line.startsWith("---")) return { kind: "removed", text: line };
+  return { kind: "detail", text: line };
+}
+
+export function approvalBlockLines(
+  request: ApprovalRequest,
+  directoryGrant: boolean = offersDirectoryGrant(request, undefined),
+  labelMainSource = false
+): ApprovalBlockLine[] {
+  if (request.peerMessage !== undefined) {
+    const text =
+      request.peerMessage.text.length > PEER_TEXT_SHOWN
+        ? `${request.peerMessage.text.slice(0, PEER_TEXT_SHOWN)}... (${request.peerMessage.text.length} chars, truncated)`
+        : request.peerMessage.text;
+    return [
+      { kind: "title", text: "held message from another session" },
+      {
+        kind: "detail",
+        text: `from: ${request.peerMessage.from} (cwd ${request.peerMessage.cwd})`,
+      },
+      ...text.split("\n").map((line) => ({ kind: "subject" as const, text: line })),
+    ];
+  }
+  const lines: ApprovalBlockLine[] = [{ kind: "title", text: request.toolName }];
+  // 要批的那件事本身；参数里与它重复的字段不再列
+  const shown = new Set<string>();
+  const command =
+    request.tier === "exec" ? (request.command ?? extractCommandArg(request.args)) : undefined;
+  const path = extractPathArg(request.args);
+  if (command !== undefined) {
+    lines.push(...command.split("\n").map((line) => ({ kind: "subject" as const, text: line })));
+    if (request.needsShell === true) lines.push({ kind: "detail", text: "runs in a shell" });
+    if (extractCommandArg(request.args) === command) shown.add("command");
+  } else if (request.host !== undefined) {
+    lines.push({ kind: "subject", text: request.host });
+  } else if (path !== undefined) {
+    lines.push({ kind: "subject", text: path });
+    shown.add("path");
+  }
+  const protectedLine = protectedPathLine(request);
+  if (protectedLine !== undefined) lines.push({ kind: "warning", text: protectedLine });
+  const outsideLine = outsidePathLine(request);
+  if (outsideLine !== undefined) lines.push({ kind: "warning", text: outsideLine });
+  const source =
+    approvalSourceLine(request) ??
+    (request.script !== undefined
+      ? collectSourceLine(request.script.title ?? "", request.script.runId)
+      : labelMainSource
+        ? MAIN_SOURCE_LINE
+        : undefined);
+  if (source !== undefined) lines.push({ kind: "detail", text: source });
+  // 其余参数：专门显示过的字段去掉，剩下的照旧列出（不是对象的参数原样列）
+  const rest =
+    typeof request.args === "object" && request.args !== null && !Array.isArray(request.args)
+      ? Object.fromEntries(
+          Object.entries(request.args as Record<string, unknown>).filter(([key]) => !shown.has(key))
+        )
+      : request.args;
+  const restText =
+    typeof rest === "object" &&
+    rest !== null &&
+    !Array.isArray(rest) &&
+    Object.keys(rest).length === 0
+      ? undefined
+      : (JSON.stringify(rest, null, 2) ?? "undefined");
+  if (restText !== undefined) {
+    lines.push(
+      ...`args: ${restText}`.split("\n").map((line) => ({ kind: "detail" as const, text: line }))
+    );
+  }
+  if (request.diffPreview !== undefined) {
+    const preview = request.diffPreview.replace(/\r\n/g, "\n").replace(/\n+$/, "").split("\n");
+    // run_command 的预览第一行又写一遍命令（"command: …"，可能带 alias）：命令已在上面，只留 alias 之类的附注
+    const first = preview[0];
+    if (command !== undefined && first !== undefined) {
+      const head = `command${request.needsShell === true ? " (shell)" : ""}: ${command}`;
+      if (first.startsWith(head)) {
+        preview.shift();
+        const note = first.slice(head.length).trim();
+        if (note !== "") preview.unshift(note);
+      }
+    }
+    lines.push(...preview.map(previewLine));
+  }
+  lines.push({ kind: "keys", text: keysLabel(request, directoryGrant) });
+  return lines;
+}
+
 // 答完的审批收成的一行（验收修改：整块不留）：结论、工具与关键参数、放权范围，拒绝写上理由；worker 与面板会话的请求
 // 前面标来源。完整内容在会话记录里，trace 与回看历史可查
 function subjectOf(request: ApprovalRequest): string {

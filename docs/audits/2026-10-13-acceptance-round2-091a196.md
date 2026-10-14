@@ -288,3 +288,49 @@
 - `tsc --noEmit`、biome、dependency-cruiser 干净。
 - 本机分批跑了全部测试（内存不够一次跑完；每批两个并行进程）：`src/tui` 54 个文件全部通过（全屏用例里状态栏的断言跟着改了，重跑通过）；`src/application` 124 个文件，失败 2 条；其余目录 172 个文件，失败 2 条。这 4 条都是本机已知失败（`checkpoints-async` 保留修改时间的同长度覆盖、`spawn-worker-headless` 撞上时间上限、`container-host` 与 `container-round-trips` 本机没有建符号链接的权限），与本批改动无关。
 - 整套一次跑与打包冒烟交给 pigeon-verify。
+
+## 十一、续验修改第三批（决策 471–475）
+
+### 五件修改
+
+- 续接视图（471）：/resume 与启动时不带会话号的续接选择打开整屏视图（`resume` 视图，布局同设置视图），列表与打字即筛选沿用；选中或退出先回主视图再续接；切到别的视图即关掉列表；列表行数按整屏取。
+- 审批区的框（472）：`approvalBlockLines` 按行分类（工具名、要批的事、警示、细节、增删行、按键），`ApprovalArea` 净化后上色并画圆角边框；参数 JSON 去掉已显示的 command、path，run_command 预览里重复命令的那行去掉（别名附注留着）；纯文本的 `approvalBlockText` 照旧给钩子通知。依赖旧样子（`-- approval --`、`tool: …`）的 13 条用例按新样子改了断言。
+- 分支与相对时间（473）：新条目 `pigeon.git-head`，运行面在开工状态块重读 git 状态时顺带记（不额外调 git），变了才记，会话文件没建时留在内存；续接列表取会话最后记的那条；行宽不够时先截首条输入、再省分支。
+- 就地改名（474）：`renameStoredSession` 先看会话锁——别的进程持有即报错不改，本进程持有的也拒绝（当前会话与面板里开着的本来不在列表里），否则加锁打开会话文件记会话名；选择器里 Ctrl+R（`pigeon.resume.rename`）进输入，Enter 保存、Esc 取消，改不成留在输入里并写明原因。
+- 额度与英文写法（475）：见下。
+
+### 人输入里认的中文与给人看的中文（475）
+
+扫了 src 下非测试源码里所有含中日韩字符的字符串、模板串与正则（注释不算）：
+
+| 位置 | 原文 | 用途 | 处理 |
+|---|---|---|---|
+| `application/script-naming.ts` | 点名关键词 `脚本编排` | 人输入里认的关键词，也进给模型的文字 | 改成 `script orchestration`（大小写不论）；中文原文留作 `LEGACY_SCRIPT_KEYWORD`，只认旧会话的包装 |
+| `application/script-naming.ts` | 额度正则 `额度 … [¥￥$] … [kKmM万]` | 人输入的额度写法 | 改成 `budget 300k`，只收 token；另有一个正则认出金额写法以便拒绝并说明 |
+| `application/script-commands.ts` | 用法串 `[额度 ¥5\|$2\|300k]`、`[额度 …]` | 用法串 | 改成 `[budget 300k]` |
+| `tui/commands.ts` | `/take` 的前缀 `会话:` | 人输入里认的前缀 | 只认 `session:` |
+| `application/history.ts` | 决策 428 之前的 /orchestrate 包装开头 | 认旧记录 | 保留（改用 `LEGACY_SCRIPT_KEYWORD`），另加认 428–475 之间嵌中文关键词的英文开头 |
+| `application/warnings.ts` | 按 `：` 或 `: ` 切故障类别 | 内部解析，不显示 | 保留 |
+| `tui/message-flow.ts` | 加链接前剥掉词两头的全角标点 | 内部解析（模型输出可能是中文） | 保留 |
+
+只为认旧记录、旧文件格式保留的中文（照旧）：旧通知前缀（后台作业、打转提醒、脚本通知、worker 通知）、旧的 worker 会话标记、旧开工状态块的权威句、旧文件变化标记、旧的续跑提示、旧的拒绝理由、旧记忆文件的文件头与条目尾巴。开发用的基准测试、只给测试用的夹具、缓存规则表里给人工复核的引文不算界面文字。
+
+### 别处按金额算的限额与计费（只列，没改）
+
+| 位置 | 是什么 | 单位 |
+|---|---|---|
+| `application/script-runner.ts` 的 `#checkBudget`、`spentIn`、`spentText`；`script-host.ts` 的 `modelPricing` | 脚本额度的判定、记账与结束汇总里的 Spent | 这之前记下的 cny、usd 额度续跑时照旧按金额判；汇总显示 $ 与 ¥ |
+| `application/session-cost.ts`、`state/model-pricing.ts`、`pi-runtime/deepseek-model.ts` | 会话花费统计（含 DeepSeek 人民币价目、高峰加倍） | $、¥ |
+| `tui/status-bar.ts` 的 `formatCost`（树形视图、编排面板仍在用） | 显示 | $、¥ |
+| `cli/trace.ts`、`application/session-list.ts` | `pigeon trace` 与 `pigeon session list` 的花费 | 写死 $，只加回复自带的价格 |
+| `state/model-info.ts` 与接入声明的价格 | 每百万 token 价格与币种 | 只用来算上下文裁剪的价格比，不进花费 |
+
+不按金额的（对照）：pigeon run 的 `--max-turns`、`--wall-clock`、`--worker-concurrency`、`--worker-limit`；回炉的轮数、时长与 token 预算；派 worker 的个数上限；编排的 worker 轮数与时长。命令行参数里没有金额。
+
+另外：直接输入点名或 pigeon run 的任务描述里写金额额度，原先会被当成点名而额度解析不出（甚至 `budget 3万` 被当成 3 个 token），现在这条（pigeon run 为整次运行）不算点名并说明原因；旧的金额额度续跑时只看模型有没有价格、不看币种，币种对不上时永远判不到用完（只影响续跑这之前记下的运行）。脚本编排整体随 457 删除，这次不扩大。
+
+### 验证
+
+- `tsc --noEmit`、biome、dependency-cruiser 干净。
+- 本机分批跑了全部测试（每批两个并行进程）：`src/tui` 54 个文件全部通过；`src/application` 126 个文件，失败 2 条；其余目录 172 个文件，失败 2 条。这 4 条都是本机已知失败（`checkpoints-async` 保留修改时间的同长度覆盖、`spawn-worker-headless` 撞上时间上限、`container-host` 与 `container-round-trips` 本机没有建符号链接的权限），与本批改动无关。
+- 整套一次跑与打包冒烟交给 pigeon-verify。

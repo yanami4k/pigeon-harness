@@ -77,8 +77,9 @@ export function schemaCorrection(problems: readonly string[], schema: unknown): 
 }
 
 // /orchestrate 发起时交给模型的文字：带着点名关键词（点名判定看人的输入里有没有它，见 script-naming.ts）
-export function commandInputText(task: string): string {
-  return `(The user started this with /${SCRIPT_COMMAND}, asking for it to be done with script orchestration, "${SCRIPT_KEYWORD}".)\n${task}`;
+// keyword：决策 475 之前的关键词（只给回看历史认旧记录用）
+export function commandInputText(task: string, keyword: string = SCRIPT_KEYWORD): string {
+  return `(The user started this with /${SCRIPT_COMMAND}, asking for it to be done with script orchestration, "${keyword}".)\n${task}`;
 }
 
 export function logLine(name: string, text: string): string {

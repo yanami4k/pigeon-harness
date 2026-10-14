@@ -68,9 +68,12 @@ test("扣住的消息弹到面板：写明来源与内容；二选一缺省丢�
     presenter.held(held("m2", "second"));
     await settle();
     const screen = screenText(term);
-    assert.match(screen, /-- held message from another session --/);
-    assert.match(screen, /from: other \(cwd \/work\/other\)/);
-    assert.match(screen, /please look at the failing test/);
+    // 审批区框内：第一行写明是扣住的别的会话的消息，接着来源，再接正文（不再有 text: 行）
+    assert.match(
+      screen,
+      /│ held message from another session +│\n +│ from: other \(cwd \/work\/other\) +│\n +│ please look at the failing test +│/
+    );
+    assert.doesNotMatch(screen, /-- held message from another session --|text: /);
     assert.match(screen, /state: held message \| \[ drop \] {3}deliver/);
     await guard();
     for (const key of ["y", "a", "d", "r", "s", "n"]) term.input(key);
@@ -110,7 +113,9 @@ test("工具审批要上面板时扣住的消息让位，工具审批照常；�
       command: "npm test",
     });
     await settle();
-    assert.match(screenText(term), /tool: run_command/);
+    // 审批区换成工具审批：第一行工具名，消息不在框里
+    assert.match(screenText(term), /│ run_command +│/);
+    assert.doesNotMatch(screenText(term), /held message from another session/);
     // 顶替消息面板的工具审批同样有防误触
     term.input("y");
     await settle();

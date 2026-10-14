@@ -31,6 +31,7 @@ export const OrchestrationSectionSchema = Type.Object(
       Type.Object(
         {
           modelDecides: Type.Optional(Type.Boolean()),
+          // 决策 475：只收 token（如 300k、2m）；旧的金额写法（¥、$）在合并检查里报错说明
           budget: Type.Optional(Type.String({ minLength: 1 })),
           stallMinutes: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
         },
@@ -99,4 +100,22 @@ export function orchestrationSettings(
         ? Math.round(file.script.stallMinutes * 60_000)
         : base.scriptStallMs,
   };
+}
+
+// 决策 475：脚本的额度只收 token：整数或小数，可带 k（千）、m（百万）。金额写法（¥、$）与"万"不再收
+export const SCRIPT_BUDGET_TOKENS = /^(\d+(?:\.\d+)?)\s*([kKmM])?$/;
+
+export function scriptBudgetTokens(text: string): number | undefined {
+  const match = SCRIPT_BUDGET_TOKENS.exec(text.trim());
+  if (match === null) return undefined;
+  const scale = match[2] === undefined ? 1 : /[kK]/.test(match[2]) ? 1_000 : 1_000_000;
+  const tokens = Math.round(Number(match[1]) * scale);
+  return Number.isFinite(tokens) && tokens > 0 ? tokens : undefined;
+}
+
+// 设置里缺省额度的问题（没有为 undefined）
+export function scriptBudgetSettingProblem(text: string): string | undefined {
+  return scriptBudgetTokens(text) === undefined
+    ? `script.budget ${JSON.stringify(text)} is not a token count; write tokens like "300k" or "2m" (money amounts are no longer supported)`
+    : undefined;
 }

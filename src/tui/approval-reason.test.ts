@@ -132,8 +132,8 @@ test("理由行按 Esc 回到面板：不算拒绝，审批仍挂起，随后 [n
     term.input("\x1b");
     await settle();
     assert.ok(
-      screenText(term).includes("-- approval --"),
-      `Esc 后仍在审批面板\n${screenText(term)}`
+      screenText(term).includes("[y] approve once"),
+      `Esc 后审批区仍挂着（按键行还在）\n${screenText(term)}`
     );
     let settled = false;
     void pending.then(() => {

@@ -171,20 +171,20 @@ test("接力上游重做时下游随之重做", async () => {
 });
 
 test("调高额度后续跑：复用已做完的，接着派没做的", async () => {
-  const harness = scriptHarness({ planner: () => ({ cost: 0.1 }) });
+  const harness = scriptHarness({ planner: () => ({ tokens: 1000 }) });
   const spec: ScriptSpec = {
     name: "t",
     phases: [],
     script: 'await agent("一"); await agent("二"); await agent("三"); await agent("四"); return 1;',
   };
-  const { runId, notice } = await start(harness, spec, { unit: "usd", amount: 0.15 });
+  const { runId, notice } = await start(harness, spec, { unit: "tokens", amount: 1500 });
   assert.match(notice, /ran out of budget/);
   assert.equal(harness.sink.spawned.length, 2);
-  const again = await resume(harness, runId, { budget: { unit: "usd", amount: 1 } });
+  const again = await resume(harness, runId, { budget: { unit: "tokens", amount: 300_000 } });
   assert.deepEqual(tasks(harness), ["一", "二", "三", "四"]);
   assert.match(
     again,
-    /completed\. Workers: 4; succeeded 4, failed 0, of which 2 reused results from the last run\. Spent \$0\.40/
+    /completed\. Workers: 4; succeeded 4, failed 0, of which 2 reused results from the last run\. Spent 4000 tokens/
   );
 });
 

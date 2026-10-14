@@ -1,19 +1,22 @@
-// 脚本编排验收后的三处（决策 313、314）：模型没有价格却给了金额额度即开跑拒绝（token 额度照常）；额度用完、被停或卡住时不自动
+// 脚本编排验收后的三处（决策 313、314）：模型没有价格却给了金额额度即开跑拒绝（token 额度照常；决策 475 起金额额度只来自之前
+// 记下的运行，人写金额即说明只收 token）；额度用完、被停或卡住时不自动
 // 收回，汇总列出已做完的 worker 与分支并写明取用与续跑的办法；脚本卡住监控——没有 worker 在跑或排队、脚本又没结束，持续到
 // 判定时长即停掉容器、以"卡住"结束（脚本自身死循环同样停得掉），等 worker 的脚本不被误停。
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { orchestrationSettings } from "../state/orchestration-config.ts";
+import { SCRIPT_COMMAND_TEXTS, SCRIPT_COMMAND_USAGE, scriptCommands } from "./script-commands.ts";
 import { scriptHarness } from "./script-fixtures.ts";
 import { modelPricing } from "./script-host.ts";
-import { ScriptGate } from "./script-naming.ts";
+import { BUDGET_TOKENS_ONLY, ScriptGate } from "./script-naming.ts";
 import { ScriptBudgetError, type ScriptRuns } from "./script-runner.ts";
 import { SCRIPT_BUDGET_NO_PRICE } from "./script-texts.ts";
 import { createOrchestrateTool, ScriptSlot } from "./script-tool.ts";
 
 const spec = (script: string) => ({ name: "t", phases: [], script });
 
-test("模型没有价格：金额额度开跑即拒绝，token 额度与不设额度照常；续跑换成金额额度同样拒绝", async () => {
+// 决策 475 起人与设置都只能写 token 额度；金额额度（cny、usd）只出现在这之前记下的脚本运行里，运行器照旧认、照旧把关
+test("模型没有价格：（之前记下的）金额额度开跑即拒绝，token 额度与不设额度照常；续跑换成金额额度同样拒绝", async () => {
   const harness = scriptHarness({ planner: () => ({ tokens: 100 }), pricing: () => "none" });
   await assert.rejects(
     harness.runs.start(spec('await agent("一");'), { unit: "usd", amount: 1 }),
@@ -43,6 +46,38 @@ test("模型没有价格：金额额度开跑即拒绝，token 额度与不设�
   assert.match(await pricedNotice, /\) completed\./);
 });
 
+test("/orchestrate resume 写金额额度（决策 475）：说明只收 token、不续跑；写 token 额度即换成它续跑", async () => {
+  const harness = scriptHarness({ planner: () => ({ tokens: 100 }) });
+  const commands = scriptCommands(harness.runs, harness.orchestrator);
+  const first = harness.nextNotice();
+  const runId = await harness.runs.start(spec('await agent("一");'), {
+    unit: "tokens",
+    amount: 10_000,
+  });
+  assert.match(await first, /\) completed\./);
+  await harness.runs.settled(runId);
+  for (const rest of ["budget $2", "budget ¥5", "budget 3万"]) {
+    assert.equal(await commands.resume(runId, rest), BUDGET_TOKENS_ONLY, rest);
+  }
+  assert.equal(harness.sink.spawned.length, 1, "没有续跑");
+  assert.deepEqual(harness.runs.budget(runId), { unit: "tokens", amount: 10_000 });
+  const again = harness.nextNotice();
+  assert.equal(
+    await commands.resume(runId, "budget 300k"),
+    SCRIPT_COMMAND_TEXTS.resumed("t", runId)
+  );
+  assert.deepEqual(harness.runs.budget(runId), { unit: "tokens", amount: 300_000 });
+  assert.match(await again, /\) completed\./);
+});
+
+test('用法串（决策 475）：额度写 [budget 300k]，不再有 ¥、$ 与"额度"', () => {
+  assert.equal(SCRIPT_COMMAND_USAGE, "/orchestrate <task> [budget 300k]");
+  assert.match(SCRIPT_COMMAND_TEXTS.usage, /\/orchestrate resume <run ID> \[budget 300k\]/);
+  for (const text of [SCRIPT_COMMAND_USAGE, SCRIPT_COMMAND_TEXTS.usage]) {
+    assert.doesNotMatch(text, /[¥￥$]|额度|万/, text);
+  }
+});
+
 test("工具把拒绝原样交回；计价口径：DeepSeek 按人民币、回复自带价格按美元、价格为 0 即没有价格、还没有回复即看不出来", async () => {
   const slot = new ScriptSlot(new ScriptGate({ modelDecides: true }));
   slot.bind({
@@ -70,7 +105,7 @@ test("工具把拒绝原样交回；计价口径：DeepSeek 按人民币、回�
 
 test("额度用完不自动收回：汇总列出已做完的 worker 与分支，写明用 /take 取用或调高额度续跑", async () => {
   const harness = scriptHarness({
-    planner: () => ({ cost: 0.1, files: { "x.txt": "x" } }),
+    planner: () => ({ tokens: 1000, files: { "x.txt": "x" } }),
     runIds: ["s9"],
   });
   const notice = harness.nextNotice();
@@ -78,7 +113,7 @@ test("额度用完不自动收回：汇总列出已做完的 worker 与分支，
     spec(
       'const a = await agent("一"); await agent("二"); await agent("三"); return { collect: [a] };'
     ),
-    { unit: "usd", amount: 0.15 }
+    { unit: "tokens", amount: 1500 }
   );
   const text = await notice;
   assert.match(

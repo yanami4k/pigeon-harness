@@ -51,6 +51,7 @@ import {
   OrchestrationSectionSchema,
   type OrchestrationSettings,
   orchestrationSettings,
+  scriptBudgetSettingProblem,
 } from "./orchestration-config.ts";
 import { type ContextPruneSection, ContextPruneSectionSchema } from "./prune-config.ts";
 import {
@@ -481,6 +482,11 @@ export function mergedSettingsProblems(merged: MergedSettings, dotMcp?: DotMcpJs
   for (const problem of sandboxConfigProblems(merged.sandbox ?? {})) {
     problems.push(`sandbox: ${problem}`);
   }
+  // 决策 475：脚本的缺省额度只收 token
+  const scriptBudget = merged.orchestration?.script?.budget;
+  const budgetProblem =
+    scriptBudget !== undefined ? scriptBudgetSettingProblem(scriptBudget) : undefined;
+  if (budgetProblem !== undefined) problems.push(`orchestration: ${budgetProblem}`);
   problems.push(...mergeMcpConfig(dotMcp, merged.mcp).problems.map((p) => `mcp: ${p}`));
   return problems;
 }

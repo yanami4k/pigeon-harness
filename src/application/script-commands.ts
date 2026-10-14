@@ -1,17 +1,17 @@
-// 脚本编排的斜杠命令（决策 309、312、314、301）：/orchestrate <任务> [额度 …] 以人的输入点名发起（交给模型的文字带关键词，
-// 见 script-texts.ts 的 commandInputText，由壳按人的输入提交）；/orchestrate resume <运行号> [额度 …] 由程序直接续跑（沿用该次
-// 的脚本与快照，给了额度即换成它）；/orchestrate stop [运行号] 停止整个脚本（不给运行号即停在跑的全部）；/orchestrate drop
+// 脚本编排的斜杠命令（决策 309、312、314、301）：/orchestrate <任务> [budget 300k] 以人的输入点名发起（交给模型的文字带关键词，
+// 见 script-texts.ts 的 commandInputText，由壳按人的输入提交）；/orchestrate resume <运行号> [budget 300k] 由程序直接续跑（沿用
+// 该次的脚本与快照，给了额度即换成它）；/orchestrate stop [运行号] 停止整个脚本（不给运行号即停在跑的全部）；/orchestrate drop
 // <运行号> 放弃，删掉它的快照引用。终端界面与命令行共用这里的文字。
 import type { WorkerOrchestrator } from "../orchestration/workers.ts";
 import type { SessionId } from "../state/ids.ts";
-import { parseScriptBudget, SCRIPT_COMMAND } from "./script-naming.ts";
+import { parseScriptBudget, SCRIPT_COMMAND, scriptBudgetProblem } from "./script-naming.ts";
 import { ScriptBudgetError, type ScriptRuns } from "./script-runner.ts";
 
-// "额度"是人输入里认的关键词（script-naming.ts），照原样写进用法
-export const SCRIPT_COMMAND_USAGE = `/${SCRIPT_COMMAND} <task> [额度 ¥5|$2|300k]`;
+// "budget" 是人输入里认的写法（script-naming.ts，决策 475：只收 token），照原样写进用法
+export const SCRIPT_COMMAND_USAGE = `/${SCRIPT_COMMAND} <task> [budget 300k]`;
 
 export const SCRIPT_COMMAND_TEXTS = {
-  usage: `usage: ${SCRIPT_COMMAND_USAGE} | /${SCRIPT_COMMAND} resume <run ID> [额度 …] | /${SCRIPT_COMMAND} stop [run ID] | /${SCRIPT_COMMAND} drop <run ID>`,
+  usage: `usage: ${SCRIPT_COMMAND_USAGE} | /${SCRIPT_COMMAND} resume <run ID> [budget 300k] | /${SCRIPT_COMMAND} stop [run ID] | /${SCRIPT_COMMAND} drop <run ID>`,
   stopped: (runIds: readonly string[]) => `stopped script ${runIds.join(", ")}`,
   noneRunning: "no scripts running",
   dropped: (runId: string) => `dropped script ${runId}`,
@@ -46,6 +46,8 @@ export function scriptCommands(
   };
   return {
     resume: async (runId, rest) => {
+      const problem = scriptBudgetProblem(rest);
+      if (problem !== undefined) return problem;
       const budget = parseScriptBudget(rest);
       let result: Awaited<ReturnType<ScriptRuns["resume"]>>;
       try {

@@ -201,13 +201,22 @@ test("回看历史：后台作业通知、跨会话消息与回告、[Pigeon] �
     assert.ok(isProgramNotice(text) || text.startsWith(PROGRAM_NOTE_PREFIX), text);
     assert.deepEqual(messageLines(message(text)), [{ kind: "notice", text }]);
   }
-  // /orchestrate 发起：交给模型的是英文的一句开头加任务，回看显示人敲的命令；决策 428 之前的中文开头照样认
-  assert.deepEqual(messageLines(message(commandInputText("给各模块补测试 额度 300k"))), [
-    { kind: "user", text: "> /orchestrate 给各模块补测试 额度 300k" },
+  // /orchestrate 发起：交给模型的是英文的一句开头加任务，回看显示人敲的命令；旧会话里的两种开头照样认——决策 428 之前的
+  // 中文原文，与决策 475 之前嵌着中文关键词的英文句子（回退时放回输入框的同样是还原后的命令，同走 userTextParts）
+  assert.deepEqual(messageLines(message(commandInputText("给各模块补测试 budget 300k"))), [
+    { kind: "user", text: "> /orchestrate 给各模块补测试 budget 300k" },
   ]);
-  assert.deepEqual(messageLines(message("（人用 /orchestrate 点名用脚本编排做这件事）\n修 bug")), [
-    { kind: "user", text: "> /orchestrate 修 bug" },
-  ]);
+  assert.match(commandInputText("x"), /"script orchestration"\.\)\nx$/);
+  const legacyLeads = [
+    "（人用 /orchestrate 点名用脚本编排做这件事）\n",
+    '(The user started this with /orchestrate, asking for it to be done with script orchestration, "脚本编排".)\n',
+  ];
+  for (const lead of legacyLeads) {
+    assert.deepEqual(messageLines(message(`${lead}修 bug 额度 300k`)), [
+      { kind: "user", text: "> /orchestrate 修 bug 额度 300k" },
+    ]);
+    assert.deepEqual(userTextParts(`${lead}修 bug`), { notices: [], human: "/orchestrate 修 bug" });
+  }
   // 随人的下一条输入前缀给模型的附注（没移进工作树的说明）：附注是系统行，人的话照旧带 > 前缀；人敲的是 /orchestrate 时同样还原
   const note = `${PROGRAM_NOTE_PREFIX}The session did not move into the worktree /repo/.pigeon/wt/wt: the turn was interrupted.`;
   assert.deepEqual(messageLines(message(`${note}\n\n接着改`)), [

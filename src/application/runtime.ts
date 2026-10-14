@@ -249,6 +249,7 @@ import {
 import {
   dateText,
   environmentText,
+  type GitWorkspaceState,
   gitText,
   hostStatusProbe,
   localStatusProbe,
@@ -1122,12 +1123,33 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
           report: memoryReport,
         }).section
       : "";
+  // 决策 473：开工状态块重读 git 状态时（Run 开始、写档与命令档工具之后）顺带记下分支，变了才记一条（分离头指针记短提交号；
+  // 非 git 目录与取不到时不记）。/resume 列表取会话最后记的那条
+  let lastGitHead: string | undefined;
+  const noteGitHead = (git: GitWorkspaceState): void => {
+    if (git.kind !== "repo") return;
+    const head =
+      git.branch !== undefined
+        ? { branch: git.branch }
+        : git.commit !== undefined
+          ? { commit: git.commit.slice(0, 7) }
+          : undefined;
+    if (head === undefined) return;
+    const key = JSON.stringify(head);
+    if (key === lastGitHead) return;
+    lastGitHead = key;
+    sessionStore.append({
+      customType: SessionEntryType.GitHead,
+      data: { version: SESSION_ENTRY_VERSION, ...head, recordedAt: Date.now() },
+    });
+  };
   // Skill 根的变动指纹：每次请求之前比一次（只 stat），变了才重取文件类各节、重新登记（load_skill 拒绝时说的"下一次请求之前
   // 会重新登记"即靠它）
   let skillPrint: string | undefined;
   const readSlowSections = async (): Promise<Map<StatusSectionName, string>> => {
     skillPrint = skillTreeFingerprint(localSkills.roots);
     const [git, entries] = await Promise.all([statusProbe.gitState(), statusProbe.rootEntries()]);
+    noteGitHead(git);
     const agents =
       deps.agentsMd === false
         ? ""

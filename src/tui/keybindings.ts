@@ -22,6 +22,7 @@ declare module "@earendil-works/pi-tui" {
     "pigeon.tree": true;
     "pigeon.toggleMode": true;
     "pigeon.openPanel": true;
+    "pigeon.resume.rename": true;
     "pigeon.dequeue": true;
     "pigeon.approval.approve": true;
     "pigeon.approval.reject": true;
@@ -44,6 +45,11 @@ export const PIGEON_KEYBINDINGS = {
   "pigeon.openPanel": {
     defaultKeys: "left",
     description: "Open the session panel (empty input; press twice)",
+  },
+  // 决策 474：续接视图里给选中的会话改名
+  "pigeon.resume.rename": {
+    defaultKeys: "ctrl+r",
+    description: "Rename the selected session (resume list)",
   },
   // 决策 469：在询问与放手两种审批模式之间切换（只对当前会话）
   "pigeon.toggleMode": {

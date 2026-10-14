@@ -1,7 +1,8 @@
 // 可续接的主会话（决策 286 第 5 项）：pigeon --continue 取本项目最近的一个，/resume 与 pigeon --resume 不带会话号时
 // 列出来选。主会话 = 文件头没有父会话的会话：worker 会话、/fork 分支与复盘会话都有父会话，不列。
-// 每行给最近活动时间、会话名（决策 456：会话记录里记的，没改过名为缺省名）、首条输入摘要、轮数（一条输入一轮）与沙箱标记；
-// 按最近活动从新到旧。只读，不写任何记录。
+// 每行给最近活动时间（决策 473：相对时间，超过约一个月写日期）、会话名（决策 456：会话记录里记的，没改过名为缺省名）、
+// git 分支（决策 473：会话最后记的那条；旧会话没记即不写）、首条输入摘要、轮数（一条输入一轮）与沙箱标记；按最近活动从新到旧。
+// 只读，不写任何记录。
 import { execFileSync } from "node:child_process";
 import { SANDBOX_START_REF_PREFIX, sandboxBranch } from "../execution/sandbox.ts";
 import { listSessionRefs, readSessionView } from "../persistence/session-catalog.ts";
@@ -25,6 +26,8 @@ export interface RecentSession {
   // 轮数：输入的条数（一条输入一个 Run）
   turns: number;
   sandbox: boolean;
+  // 决策 473：会话最后记的 git 分支（分离头指针为短提交号）；没记即缺省
+  branch?: string;
 }
 
 const FIRST_INPUT_CHARS = 60;
@@ -76,6 +79,17 @@ function sandboxSessionIds(governanceRoot: string): Set<string> {
   return ids;
 }
 
+// 会话最后记的 git 分支（分离头指针为短提交号）
+function gitHeadOf(view: SessionView): { branch?: string } {
+  for (let index = view.items.length - 1; index >= 0; index -= 1) {
+    const item = view.items[index];
+    if (item?.kind !== "git-head") continue;
+    const label = item.data.branch ?? item.data.commit;
+    return label !== undefined ? { branch: label } : {};
+  }
+  return {};
+}
+
 export function listRecentMainSessions(governanceRoot: string): RecentSession[] {
   const sandboxIds = sandboxSessionIds(governanceRoot);
   const sessions: RecentSession[] = [];
@@ -92,6 +106,7 @@ export function listRecentMainSessions(governanceRoot: string): RecentSession[] 
       firstInput: firstInputOf(view),
       turns: view.runs.length,
       sandbox: sandboxIds.has(view.sessionId),
+      ...gitHeadOf(view),
     });
   }
   return sessions.sort(
@@ -112,12 +127,30 @@ export function mostRecentMainSession(
   );
 }
 
-// 选择器的一行（纯 ASCII 之外只有首条输入本身；时间用本地时间，便于人辨认）
-export function recentSessionLine(session: RecentSession): string {
-  const at = new Date(session.lastActiveAt);
+// 决策 473：相对时间——just now、5m ago、3h ago、2d ago；超过约一个月写日期（本地时间）
+export function relativeTime(at: number, now: number = Date.now()): string {
+  const seconds = Math.max(0, Math.floor((now - at) / 1000));
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  const date = new Date(at);
   const pad = (n: number) => String(n).padStart(2, "0");
-  const time = `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+// 选择器的一行（纯 ASCII 之外只有分支名与首条输入本身）：时间、名字、分支、轮数与沙箱标记、首条输入。branch 为 false 时
+// 不写分支（窄窗口里先截首条输入，再省分支）
+export function recentSessionLine(
+  session: RecentSession,
+  options: { now?: number; branch?: boolean } = {}
+): string {
   const mark = session.sandbox ? " [sandbox]" : "";
   const input = session.firstInput !== "" ? session.firstInput : "(no input)";
-  return `${time}  ${session.name}  ${session.turns} turns${mark}  ${input}`;
+  const branch =
+    options.branch !== false && session.branch !== undefined ? `  ${session.branch}` : "";
+  return `${relativeTime(session.lastActiveAt, options.now)}  ${session.name}${branch}  ${session.turns} turns${mark}  ${input}`;
 }

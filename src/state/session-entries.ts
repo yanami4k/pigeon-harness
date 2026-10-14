@@ -59,6 +59,7 @@ export const SessionEntryType = {
   Rewind: "pigeon.rewind",
   RewindStep: "pigeon.rewind-step",
   ApprovalMode: "pigeon.approval-mode",
+  GitHead: "pigeon.git-head",
 } as const;
 export type SessionEntryTypeName = (typeof SessionEntryType)[keyof typeof SessionEntryType];
 
@@ -649,6 +650,15 @@ export const ApprovalModeDataSchema = Type.Object({
 });
 export type ApprovalModeData = Static<typeof ApprovalModeDataSchema>;
 
+// 决策 473：工作区当前的 git 分支（分离头指针时为短提交号），变了才记一条；/resume 列表取会话最后记的那条。非 git 目录不记
+export const GitHeadDataSchema = Type.Object({
+  version: VERSION,
+  branch: Type.Optional(Type.String({ minLength: 1 })),
+  commit: Type.Optional(Type.String({ minLength: 1 })),
+  recordedAt: Type.Integer({ minimum: 0 }),
+});
+export type GitHeadData = Static<typeof GitHeadDataSchema>;
+
 // 一条待写的自定义条目：customType 与数据成对
 export type SessionCustomEntry =
   | { customType: typeof SessionEntryType.RunStart; data: RunStartData }
@@ -671,7 +681,8 @@ export type SessionCustomEntry =
   | { customType: typeof SessionEntryType.TurnSnapshot; data: TurnSnapshotData }
   | { customType: typeof SessionEntryType.Rewind; data: RewindData }
   | { customType: typeof SessionEntryType.RewindStep; data: RewindStepData }
-  | { customType: typeof SessionEntryType.ApprovalMode; data: ApprovalModeData };
+  | { customType: typeof SessionEntryType.ApprovalMode; data: ApprovalModeData }
+  | { customType: typeof SessionEntryType.GitHead; data: GitHeadData };
 
 // 各 customType 的数据 schema（读者校验用）
 export const SESSION_ENTRY_SCHEMAS = {
@@ -696,6 +707,7 @@ export const SESSION_ENTRY_SCHEMAS = {
   [SessionEntryType.Rewind]: RewindDataSchema,
   [SessionEntryType.RewindStep]: RewindStepDataSchema,
   [SessionEntryType.ApprovalMode]: ApprovalModeDataSchema,
+  [SessionEntryType.GitHead]: GitHeadDataSchema,
 } as const;
 
 // 自定义条目的写入面：写者自身从不抛，写失败按内部故障处理（向标准错误输出去重告警），不中断运行。

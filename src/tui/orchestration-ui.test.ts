@@ -533,13 +533,14 @@ test("进入 worker 会话期间：主 agent 照常运行（结果留在主会�
     const answer = shell.askApproval(request);
     await settle();
     assert.equal(shell.currentView(), "worker");
-    let flat = screenFlat(term);
-    assert.ok(flat.includes("-- approval --source: main sessiontool: edit_file"), flat);
+    // 审批区框内：工具名、路径，随后来源行写明是主会话的请求
+    const boxed = lines(term).join("\n");
+    assert.match(boxed, /│ edit_file +│\n +│ src\/a\.ts +│\n +│ source: main session +│/, boxed);
     await type(term, "y");
     assert.deepEqual(await answer, { key: "y" });
     await settle();
     assert.equal(shell.currentView(), "worker");
-    flat = screenFlat(term);
+    let flat = screenFlat(term);
     assert.ok(flat.includes("worker: look-a running"), flat);
     // 主会话的消息区照常留下后台结束的这一轮；审批块不进消息流（决策 467：结论行由 handler 答完时写）
     await type(term, ESC);
@@ -574,8 +575,9 @@ test("树形视图里审批就地弹出：显示在树下方并写明来源（wo
     await settle();
     assert.equal(shell.currentView(), "tree");
     let text = lines(term).join("\n");
-    assert.ok(text.includes("-- approval --"), text);
-    assert.ok(text.includes("source: worker ship (tester)"), text);
+    // 审批区在树下方（框在树之后），框内写明来源
+    assert.ok(text.indexOf("╭") > text.indexOf("== workers tree"), text);
+    assert.match(text, /│ source: worker ship \(tester\)/, text);
     await type(term, "n");
     assert.equal((await answer).key, "n");
     // handler 答完写结论（决策 467）：审批区收起，结论行只进主会话的消息流
@@ -583,14 +585,14 @@ test("树形视图里审批就地弹出：显示在树下方并写明来源（wo
     await settle();
     assert.equal(shell.currentView(), "tree");
     text = lines(term).join("\n");
-    assert.ok(!text.includes("-- approval --"), "答完审批区收起");
+    assert.ok(!text.includes("╭"), "答完审批区收起");
     assert.ok(!text.includes("[ship] ✗ rejected"), text);
     assert.ok(text.includes("== workers tree"), text);
     await type(term, CTRL_X);
     assert.equal(shell.currentView(), "main");
     text = lines(term).join("\n");
     assert.ok(text.includes("[ship] ✗ rejected run_command: npm test"), text);
-    assert.ok(!text.includes("-- approval --"), "主会话消息区里的块同样收起");
+    assert.ok(!text.includes("╭"), "主会话里审批区同样收起，消息流里不留整块");
   } finally {
     shell.stop();
     await h.stopAll();

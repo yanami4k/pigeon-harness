@@ -84,6 +84,7 @@ import type {
   PooledSessionState,
   SessionPanelSource,
 } from "../application/session-pool.ts";
+import { renameStoredSession } from "../application/session-rename.ts";
 import { SETTINGS_RELOADED_PREFIX, SETTINGS_UNCHANGED } from "../application/settings-reload.ts";
 import type { TaskItem } from "../application/task-list-tool.ts";
 import {
@@ -113,7 +114,7 @@ import { RuntimeEventKind } from "../state/runtime-events.ts";
 import type { RewindMode, RunStopCause } from "../state/session-entries.ts";
 import { toolResultModelUsage } from "../state/tool-usage.ts";
 import { openExternalUrl, PigeonAltScreen, TrimmedTranscript } from "./alt-screen.ts";
-import type { ApprovalPanelResult, TuiApprovalFace } from "./approval.ts";
+import type { ApprovalBlockLine, ApprovalPanelResult, TuiApprovalFace } from "./approval.ts";
 import { ApprovalArea } from "./approval-area.ts";
 import {
   lookupSlashCommand,
@@ -268,7 +269,8 @@ export interface TuiShellOptions {
   // 决策 301：树形视图的脚本与阶段两层（脚本编排接上）；缺省没有这两层
   scripts?: () => readonly OrchestrationScriptNode[];
   // 决策 309：人的一条输入交给运行面之前（点名判定只挂在这里：提交与排队输入，模型读到的内容不经这里）
-  onHumanInput?: (text: string) => void;
+  // 决策 475：返回给人看的说明（点名时额度写成了金额，这条不算点名），醒目显示
+  onHumanInput?: (text: string) => string | undefined;
   // 决策 309、312、301：/orchestrate 的命令面（跟着当前会话）；缺省 = 命令不可用
   scriptCommands?: () => ScriptCommands | undefined;
   // 决策 323、324：当前会话的钩子面（会话级事件与 /hooks）；缺省 = 本会话不接钩子
@@ -326,13 +328,21 @@ function keep(component: Component): StackChild {
   return { component, shrink: 0 };
 }
 
-// 矮窗口里列表最多显示几行：窗口高度减去输入框（含上下边框）、消息区至少一行、提示行、滚动标记与状态行、状态栏
-const LIST_CHROME_ROWS = 8;
 // 整屏的设置视图：窗口高度减去状态行（含上方空行）与状态栏
 const CONFIG_CHROME_ROWS = 4;
+// 决策 471：整屏的续接视图：再减去列表的标题行与滚动提示
+const RESUME_CHROME_ROWS = 6;
 
 // 决策 301：界面所处的视图——主会话、整屏的树形视图、进入的 worker 会话
-export type ShellView = "main" | "tree" | "worker" | "history" | "panel" | "pooled" | "config";
+export type ShellView =
+  | "main"
+  | "tree"
+  | "worker"
+  | "history"
+  | "panel"
+  | "pooled"
+  | "config"
+  | "resume";
 
 // 决策 469：一个会话的审批模式——取当前模式、切换（切换写一条会话记录，之后的工具调用按新模式判定）
 export interface ApprovalModeControl {
@@ -655,52 +665,53 @@ export class PigeonTuiShell
           ]
         : this.view === "config"
           ? [fill(this.configPanel.view), keep(this.approvalBox), ...status, this.statusBar]
-          : this.view === "panel"
-            ? [
-                fill(this.sessionPanel),
-                keep(this.approvalBox),
-                ...status,
-                keep(this.input),
-                this.statusBar,
-              ]
-            : this.view === "pooled" && this.pooledSession !== undefined
+          : this.view === "resume"
+            ? [fill(this.picker.view), keep(this.approvalBox), ...status, this.statusBar]
+            : this.view === "panel"
               ? [
-                  this.title,
-                  fill(this.pooledSession.flow.view),
+                  fill(this.sessionPanel),
                   keep(this.approvalBox),
                   ...status,
                   keep(this.input),
                   this.statusBar,
                 ]
-              : this.view === "history" && this.historySession !== undefined
+              : this.view === "pooled" && this.pooledSession !== undefined
                 ? [
                     this.title,
-                    fill(this.historySession.flow.view),
+                    fill(this.pooledSession.flow.view),
                     keep(this.approvalBox),
                     ...status,
+                    keep(this.input),
                     this.statusBar,
                   ]
-                : this.view === "worker" && this.workerSession !== undefined
+                : this.view === "history" && this.historySession !== undefined
                   ? [
                       this.title,
-                      fill(this.workerSession.flow.view),
+                      fill(this.historySession.flow.view),
                       keep(this.approvalBox),
                       ...status,
-                      keep(this.input),
                       this.statusBar,
-                      this.panel,
                     ]
-                  : [
-                      fill(this.flow.view),
-                      ...(this.loader !== undefined ? [this.loader] : []),
-                      this.queue.view,
-                      keep(this.picker.view),
-                      keep(this.approvalBox),
-                      ...status,
-                      keep(this.input),
-                      this.statusBar,
-                      this.panel,
-                    ];
+                  : this.view === "worker" && this.workerSession !== undefined
+                    ? [
+                        this.title,
+                        fill(this.workerSession.flow.view),
+                        keep(this.approvalBox),
+                        ...status,
+                        keep(this.input),
+                        this.statusBar,
+                        this.panel,
+                      ]
+                    : [
+                        fill(this.flow.view),
+                        ...(this.loader !== undefined ? [this.loader] : []),
+                        this.queue.view,
+                        keep(this.approvalBox),
+                        ...status,
+                        keep(this.input),
+                        this.statusBar,
+                        this.panel,
+                      ];
     // 决策 441：每个视图一个 VStack 作布局根——中间的滚动区占满剩余高度，其余各条按自身高度排在上下
     this.tui.setLayoutRoot(new VStack(children));
   }
@@ -1015,7 +1026,10 @@ export class PigeonTuiShell
     this.updateStatus();
     this.tui.requestRender();
     // 决策 309：点名只看人的这条输入
-    this.options.onHumanInput?.(value);
+    const budgetProblem = this.options.onHumanInput?.(value);
+    if (budgetProblem !== undefined) {
+      this.flow.addAlert(`script orchestration not enabled: ${budgetProblem}`);
+    }
     // 决策 323、324：UserPromptSubmit 挡在每条输入前——可拦下、可补上下文；随后才是唯一提交通道
     //（application API：当前会话运行面——/resume 换绑后是新面）。终态摘要在 run() 决议后落
     void this.runWithHooks(value);
@@ -2193,9 +2207,11 @@ export class PigeonTuiShell
     }
     const filter = createSessionFilter(root);
     const among = new Set<string>(sessions.map((session) => session.sessionId));
+    // 决策 471：整屏的续接视图（同设置视图的做法）；选中或退出都先回主视图，再照旧续接
     this.picker.open(
       sessions,
       (picked) => {
+        this.showView("main");
         if (picked === undefined) {
           // 按 Esc 取消：不说
         } else if (picked.sandbox) {
@@ -2206,14 +2222,17 @@ export class PigeonTuiShell
         this.tui.requestRender();
         this.drainQueue();
       },
-      () => Math.max(1, this.options.terminal.rows - LIST_CHROME_ROWS),
+      () => Math.max(1, this.options.terminal.rows - RESUME_CHROME_ROWS),
       // 决策 466：打字即筛选——按会话内容筛列表里的这些会话
       {
         search: (query) => filter(query, among),
         updated: () => this.tui.requestRender(),
+        // 决策 474：Ctrl+R 就地改名（会话文件被别处持有时不改）
+        rename: (sessionId, name) => renameStoredSession(root, sessionId, name),
       }
     );
-    this.tui.requestRender();
+    this.panel.blur();
+    this.showView("resume");
   }
 
   // ---- S3 审批面板（TuiApprovalFace 实现；交互语义在 modal.ts）----
@@ -2231,8 +2250,11 @@ export class PigeonTuiShell
 
   // 挂着的审批块：显示在底部的审批区（决策 467，各视图都是），不进消息流；记下答完时写结论行的地方——主会话的消息流，
   // 在 worker 会话里同时写进它的消息流
-  addApprovalBlock(text: string): void {
-    this.approvalBox.setText(text);
+  addApprovalBlock(text: string, lines?: readonly ApprovalBlockLine[]): void {
+    // 决策 472：分好类的各行由审批区上色画框；没给（替身等）即整块按细节显示
+    this.approvalBox.setBlock(
+      lines ?? text.split("\n").map((line) => ({ kind: "detail" as const, text: line }))
+    );
     const flows = [this.flow];
     if (this.view === "worker" && this.workerSession !== undefined) {
       flows.push(this.workerSession.flow);
@@ -2251,8 +2273,8 @@ export class PigeonTuiShell
 
   // 决策 301：审批面板的其他行——审批挂着时接在审批区里；已收起时（扣住的消息被撤回等）写一行到消息流
   addApprovalLine(line: string): void {
-    if (this.pendingApprovalState !== null && this.approvalBox.getText() !== "") {
-      this.approvalBox.setText(`${this.approvalBox.getText()}\n${line}`);
+    if (this.pendingApprovalState !== null && !this.approvalBox.isEmpty()) {
+      this.approvalBox.append(line);
       return;
     }
     this.flow.addSystem(line);
@@ -2262,7 +2284,7 @@ export class PigeonTuiShell
   }
 
   private clearApprovalBox(): void {
-    this.approvalBox.setText("");
+    this.approvalBox.clear();
   }
 
   outsideMainView(): boolean {
@@ -2698,6 +2720,8 @@ export class PigeonTuiShell
     if (view !== "pooled") this.leavePooledSession();
     // 决策 442：离开设置视图即关它（它不可见时不能再吞键）
     if (view !== "config") this.configPanel.close();
+    // 决策 471：离开续接视图（切到树形视图等）即关掉列表，按没选处理
+    if (view !== "resume" && this.picker.isOpen()) this.picker.close();
     if (view !== "worker") this.leaveWorkerSession();
     if (view !== "history") this.historySession = undefined;
     this.view = view;

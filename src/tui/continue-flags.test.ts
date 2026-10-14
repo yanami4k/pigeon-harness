@@ -273,7 +273,7 @@ test("矮窗口里 /resume 的列表不被布局按比例压掉：提示行与�
   }
 });
 
-test("列表打开之后窗口变矮：行数按当前窗口高度现取，输入框仍在屏幕上，选中项保留、往下选照样看得见", async () => {
+test("决策 471：续接视图打开之后窗口变矮：行数按当前窗口高度现取，选中项保留、往下选照样看得见；回车续接并回到主视图", async () => {
   const project = await makeProject();
   // 再加 8 个会话（共 12 个可选）：40 行时列表显示 10 行，缩到 14 行后只放得下 6 行
   for (let index = 0; index < 8; index += 1) {
@@ -293,8 +293,9 @@ test("列表打开之后窗口变矮：行数按当前窗口高度现取，输�
     term.resize(120, 14);
     await settle();
     const lines = term.screen.contentLines();
-    // 输入框上下两道边框都在
-    assert.equal(lines.filter((line) => /^-{20,}/.test(line)).length, 2, lines.join("\n"));
+    // 整屏视图：没有输入框
+    assert.equal(shell.currentView(), "resume");
+    assert.equal(lines.filter((line) => /^-{20,}/.test(line)).length, 0, lines.join("\n"));
     // 选中项保留
     assert.ok(lines.includes(selected), lines.join("\n"));
     for (let index = 0; index < 10; index += 1) term.input("\x1b[B");
@@ -303,6 +304,42 @@ test("列表打开之后窗口变矮：行数按当前窗口高度现取，输�
     term.input("\r");
     await settle();
     assert.deepEqual(rebinds, [project.older]);
+    assert.equal(shell.currentView(), "main");
+  } finally {
+    cleanup();
+    project.cleanup();
+  }
+});
+
+test("决策 471：/resume 打开整屏的续接视图；打字即筛选；Esc 先清筛选词、再回主视图（不续接）", async () => {
+  const project = await makeProject();
+  const { shell, term, rebinds, cleanup } = makeResumeShell(project.root, 30);
+  try {
+    shell.start();
+    await settle();
+    term.input("/resume");
+    term.input("\r");
+    await settle();
+    assert.equal(shell.currentView(), "resume");
+    assert.match(screenText(term), /resume a session/);
+    assert.equal(term.screen.contentLines().filter((line) => /^-{20,}/.test(line)).length, 0);
+    term.input("最早");
+    await settle(300);
+    assert.match(screenText(term), /filter: 最早/);
+    assert.match(screenText(term), /最早的任务/);
+    term.input("\x1b");
+    await settle();
+    assert.equal(shell.currentView(), "resume", "第一下 Esc 只清筛选词");
+    assert.doesNotMatch(screenText(term), /filter:/);
+    term.input("\x1b");
+    await settle();
+    assert.equal(shell.currentView(), "main");
+    assert.deepEqual(rebinds, []);
+    // 再打开照样是整屏视图
+    term.input("/resume");
+    term.input("\r");
+    await settle();
+    assert.equal(shell.currentView(), "resume");
   } finally {
     cleanup();
     project.cleanup();

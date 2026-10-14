@@ -13,6 +13,7 @@ import {
   SANDBOX_WORKERS_UNSUPPORTED,
 } from "../application/sandbox-session.ts";
 import { SCRIPT_COMMAND_TEXTS, type ScriptCommands } from "../application/script-commands.ts";
+import { scriptBudgetProblem } from "../application/script-naming.ts";
 import { commandInputText } from "../application/script-texts.ts";
 import type { TuiWorktreesFace } from "../application/worktree-cleanup.ts";
 import type { SessionGrantStore } from "../approvals/grant-store.ts";
@@ -185,14 +186,10 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
       return;
     }
     // 决策 279：/take <worker 名> 把已收尾 worker 自己的改动叠进工作目录
-    // 决策 443：会话面板里的会话按名字取回；与 worker 同名时要写明"会话:名字"或"worker:名字"
+    // 决策 443：会话面板里的会话按名字取回；与 worker 同名时要写明"session:名字"或"worker:名字"（决策 475：不再认中文前缀）
     if (tokens[0] === "take" && tokens[1] !== undefined) {
       const raw = tokens[1];
-      const forced = /^(会话|session):/.test(raw)
-        ? "pooled"
-        : /^worker:/.test(raw)
-          ? "worker"
-          : undefined;
+      const forced = /^session:/.test(raw) ? "pooled" : /^worker:/.test(raw) ? "worker" : undefined;
       const name = forced !== undefined ? raw.slice(raw.indexOf(":") + 1) : raw;
       const isWorker = workers?.status().some((status) => status.name === name) === true;
       // 先判歧义：同名时什么都不做，要求写明
@@ -267,6 +264,12 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
       const task = value.trim().slice("/orchestrate".length).trim();
       if (task === "" || host.submitInput === undefined) {
         host.addSystem(SCRIPT_COMMAND_TEXTS.usage);
+        return;
+      }
+      // 决策 475：额度只收 token，金额写法说明原因、不发起
+      const problem = scriptBudgetProblem(task);
+      if (problem !== undefined) {
+        host.addAlert(problem);
         return;
       }
       host.submitInput(commandInputText(task));
