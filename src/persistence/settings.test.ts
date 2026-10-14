@@ -92,6 +92,23 @@ test("出错响亮失败并指出文件与层：不是合法 JSON、未知键、
   }
 });
 
+test("决策 457：已删的节开局即报错，写明哪个文件、哪一节已删、请删掉", () => {
+  const { root, home, cleanup } = dirs();
+  try {
+    write(userSettingsPath(home), { messaging: { inbound: "hold" } });
+    assert.throws(
+      () => loadSettings(root, { homeDir: home }),
+      (error: unknown) =>
+        error instanceof SettingsError &&
+        error.message.includes(
+          "~/.pigeon/settings.json (user settings): messaging has been removed; delete this section"
+        )
+    );
+  } finally {
+    cleanup();
+  }
+});
+
 test("快照冻结：读出之后改设置文件与 .mcp.json，已读的快照不变；下一次读取才看到新内容", () => {
   const { root, home, cleanup } = dirs();
   try {

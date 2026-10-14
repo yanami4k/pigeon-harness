@@ -5,7 +5,7 @@
 import { acquireSessionFileLock, sessionFileHolder } from "../persistence/session-lock.ts";
 import { locateSessionFile } from "../persistence/session-reader.ts";
 import { openSessionStoreWriter } from "../pi-runtime/session-store.ts";
-import { validPeerName } from "./peer-messaging.ts";
+import { validSessionName } from "./session-name.ts";
 import { sessionsDirOf } from "./workspace.ts";
 
 export const INVALID_NAME = "invalid name: use letters, digits, _, - and . (max 40)";
@@ -16,7 +16,7 @@ export async function renameStoredSession(
   sessionId: string,
   name: string
 ): Promise<string | undefined> {
-  if (!validPeerName(name)) return INVALID_NAME;
+  if (!validSessionName(name)) return INVALID_NAME;
   const sessionsDir = sessionsDirOf(governanceRoot);
   let path: string | undefined;
   try {

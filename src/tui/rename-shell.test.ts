@@ -1,5 +1,4 @@
-// 决策 450：壳这边的两处——忙闲变化告诉装配方（一轮开始为忙、真正空闲为闲，各一次）；/rename 交给装配方改名（决策 456：改的是
-// 会话名），改成了回一行暗色的 "renamed to <名字>"（同 main.ts；主视图不显示会话名，没有这一行就看不出改没改成），名字不合规
+// 决策 456：/rename 交给装配方改名（改的是会话名），改成了回一行暗色的 "renamed to <名字>"（同 main.ts；主视图不显示会话名，没有这一行就看不出改没改成），名字不合规
 // 返回的报错照显示；没给即命令不可用。
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -12,7 +11,7 @@ import { PigeonTuiShell, type TuiShellOptions } from "./shell.ts";
 import { isDimmed, MockTerminal, screenText, settle } from "./testing.ts";
 
 function makeShell(extra: Partial<TuiShellOptions>) {
-  const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-peer-shell-"));
+  const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-rename-shell-"));
   const sessionId = newSessionId();
   const term = new MockTerminal(90, 30);
   const runtime = new ScriptedRuntime(sessionId);
@@ -27,24 +26,6 @@ function makeShell(extra: Partial<TuiShellOptions>) {
     },
   };
 }
-
-test("忙闲：一轮开始为忙、跑完空闲为闲，各告诉一次", async () => {
-  const changes: boolean[] = [];
-  const { term, runtime, cleanup } = makeShell({ onBusyChange: (busy) => changes.push(busy) });
-  try {
-    await settle();
-    runtime.autoResolve = false;
-    term.input("做");
-    term.input("\r");
-    await settle();
-    assert.deepEqual(changes, [true]);
-    runtime.finishAll();
-    await settle();
-    assert.deepEqual(changes, [true, false]);
-  } finally {
-    cleanup();
-  }
-});
 
 test("/rename：交给装配方；改成了写一行暗色结果，返回的报错照显示；没给即命令不可用", async () => {
   const names: string[] = [];

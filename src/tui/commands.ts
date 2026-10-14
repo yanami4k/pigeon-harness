@@ -290,7 +290,7 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
       host.configCommand(value.trim().slice("/config".length).trim());
       return;
     }
-    // 决策 450、456：/rename <名字> 改当前会话的名字：记进会话记录（续接后还在），本机会话名录跟着改（别的会话按它找到本会话）
+    // 决策 456：/rename <名字> 改当前会话的名字：记进会话记录（续接后还在）
     if (tokens[0] === "rename" && host.renameSession !== undefined) {
       const name = value.trim().slice("/rename".length).trim();
       const reply = name === "" ? "usage: /rename <name>" : host.renameSession(name);

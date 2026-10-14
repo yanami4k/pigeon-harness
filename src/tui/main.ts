@@ -58,9 +58,6 @@ import {
   openNamedWorktree,
   reopenNamedWorktree,
 } from "../application/named-worktree.ts";
-import { type PeerMessaging, validPeerName } from "../application/peer-messaging.ts";
-import { CROSS_PROCESS_MESSAGING, openPeerInbox } from "../application/peer-session.ts";
-import { PeerSlot } from "../application/peer-tools.ts";
 import { restoreSessionWorkers } from "../application/previous-workers.ts";
 import { promptHistoryStore } from "../application/prompt-history.ts";
 import {
@@ -86,7 +83,7 @@ import {
   sandboxStatusFacts,
   startSandbox,
 } from "../application/sandbox-session.ts";
-import { sessionNameOf } from "../application/session-name.ts";
+import { sessionNameOf, validSessionName } from "../application/session-name.ts";
 import {
   type OpenedSessionRuntime,
   openSessionRuntime,
@@ -135,8 +132,6 @@ import {
   reopenMainSessionForReload,
   spawnWorkerOption,
 } from "./main-reload.ts";
-import { HeldPresenter } from "./peer-inbox.ts";
-import { MainPeerRoute } from "./peer-route.ts";
 import { PigeonTuiShell, type TuiShellOptions, type TuiWorkersFace } from "./shell.ts";
 import { installTerminalReset } from "./terminal-reset.ts";
 import { switchableWarn } from "./warn-sink.ts";
@@ -239,14 +234,6 @@ export async function main(argv: string[]): Promise<void> {
   let releaseWorktreeUse: (() => void) | undefined =
     namedWorktree !== undefined ? holdWorktreeInUse(namedWorktree.path) : undefined;
   const enterWorktreeSlot = new EnterWorktreeSlot();
-  // 决策 450：会话间通信的工具槽（收件口在壳就位后打开并绑定）；沙箱会话不给
-  const peerSlot = new PeerSlot();
-  let peerMessaging: PeerMessaging | undefined;
-  let heldPresenter: HeldPresenter | undefined;
-  // 决策 450：消息一律送主会话（查看 worker 会话期间先攒着，peer-route.ts）
-  let peerRoute: MainPeerRoute | undefined;
-  // 当前运行面是不是主会话（查看 worker 会话时为假）
-  let slotIsMain = true;
   // 决策 297–303：编排设定——设置的 orchestration 一节（缺失取缺省），--worker-concurrency 与 --worker-limit 优先
   let orchestration = orchestrationSettingsOf(flags, settings);
   // 决策 308：打转检测——设置的 loopGuard 一节（缺失取缺省即开着）
@@ -411,8 +398,6 @@ export async function main(argv: string[]): Promise<void> {
     ...(sandbox === undefined
       ? {
           enterWorktree: enterWorktreeSlot,
-          // 决策 450〔部分已改〕：跨进程的会话间通信先关闭（不注册 list_peers 与 send_message）
-          ...(CROSS_PROCESS_MESSAGING ? { peers: peerSlot } : {}),
         }
       : {}),
     streamFn,
@@ -437,8 +422,6 @@ export async function main(argv: string[]): Promise<void> {
     ...(sandbox === undefined
       ? {
           enterWorktree: enterWorktreeSlot,
-          // 决策 450〔部分已改〕：跨进程的会话间通信先关闭（不注册 list_peers 与 send_message）
-          ...(CROSS_PROCESS_MESSAGING ? { peers: peerSlot } : {}),
         }
       : {}),
     settings,
@@ -646,19 +629,14 @@ export async function main(argv: string[]): Promise<void> {
     },
     // 决策 446：模型调了 enter_worktree 的那一轮收尾后，按 /reload 的先建后换移进工作树，再递一条通知让 agent 接着做
     afterTurn: (info) => worktreeSwitch.afterTurn(info),
-    // 决策 450：忙闲进会话名录，空闲时回告订了空闲通知的会话
-    onBusyChange: (busy) => peerMessaging?.setBusy(busy),
-    // 决策 456：/rename 改当前会话的名字——记进会话记录（续接后还在），收件口开着且登记的是本会话时名录跟着改；
-    // 不依赖收件口（没开、沙箱里照样能改）。改成了回一行简短结果（会话名不在主视图上，看不到别处变化）
+    // 决策 456：/rename 改当前会话的名字——记进会话记录（续接后还在）；沙箱里照样能改。改成了回一行简短结果（会话名不在
+    // 主视图上，看不到别处变化）
     renameSession: (name: string) => {
-      if (!validPeerName(name)) {
+      if (!validSessionName(name)) {
         return "invalid name: use letters, digits, _, - and . (max 40)";
       }
       slot.bundle.sessionStore.setName(name);
       sessionName = name;
-      if (peerMessaging !== undefined && peerMessaging.sessionId === slot.sessionId) {
-        peerMessaging.rename(name);
-      }
       return `renamed to ${name}`;
     },
     // 决策 456：会话名（面板上当前会话的卡片、/take 的说明用）
@@ -762,8 +740,6 @@ export async function main(argv: string[]): Promise<void> {
           ...(sandbox === undefined
             ? {
                 enterWorktree: enterWorktreeSlot,
-                // 决策 450〔部分已改〕：跨进程的会话间通信先关闭（不注册 list_peers 与 send_message）
-                ...(CROSS_PROCESS_MESSAGING ? { peers: peerSlot } : {}),
               }
             : {}),
           streamFn,
@@ -798,17 +774,6 @@ export async function main(argv: string[]): Promise<void> {
           ...(opened.checkpoints !== undefined ? { checkpoints: opened.checkpoints } : {}),
         };
         sessionName = targetName;
-        // 决策 450、456：换好之后收件口跟着换到的主会话，名字用它自己的；查看 worker 会话期间名录里仍是原主会话
-        if (opened.scope.parentSessionId === undefined) {
-          peerMessaging?.moveTo({
-            sessionId: targetId,
-            cwd: opened.scope.workspaceRoot,
-            name: targetName,
-          });
-        }
-        // 决策 450：回到主会话时把查看 worker 期间攒下的消息递过去（换绑完成后再叫醒）
-        slotIsMain = opened.scope.parentSessionId === undefined;
-        peerRoute?.flush();
         // 决策 323、324：换走旧会话前跑它的 SessionEnd（reason "switch"）——记录要落在旧会话文件，
         // 必须在释放旧运行面之前；壳 rebindSession 随后会为新会话跑 SessionStart（source "resume"）
         await shellHolder.current?.endSession("switch");
@@ -851,8 +816,6 @@ export async function main(argv: string[]): Promise<void> {
     adopt: (worktree) => {
       setActiveWorktree(worktree);
       recordWorktreeEntry(slot.bundle.sessionStore, worktree);
-      // 决策 450：会话名录里的所在目录跟着换
-      peerMessaging?.moveTo({ sessionId: slot.sessionId, cwd: worktree.path });
     },
     system: (line, alert) =>
       alert === true ? shellHolder.current?.addAlert(line) : shellHolder.current?.addSystem(line),
@@ -912,54 +875,6 @@ export async function main(argv: string[]): Promise<void> {
       console.error(error instanceof Error ? (error.stack ?? error.message) : String(error)),
     (code) => process.exit(code)
   );
-  // 决策 450：本机会话间通信的收件口（沙箱会话不开；开局即续接 worker 会话时不开，worker 不登记名录）。消息进当前主会话的
-  // 通知队列，空闲时叫醒；扣住的逐条弹到审批面板
-  // 决策 450〔部分已改〕：跨进程的会话间通信先关闭——不开收件口、不写本机会话名录，扣住消息的面板也就不会出现
-  if (
-    CROSS_PROCESS_MESSAGING &&
-    sandbox === undefined &&
-    mainOpened.scope.parentSessionId === undefined
-  ) {
-    const presenter = new HeldPresenter({
-      ask: (request) => shell.askApproval(request),
-      // 输入框里有字时不弹（不打断正在打字的人）
-      ready: () => shell.inputIsEmpty(),
-      approve: (id) => peerMessaging?.approveHeld(id),
-      decline: (id) => peerMessaging?.dropHeld(id, "declined"),
-    });
-    heldPresenter = presenter;
-    // 叫醒放到下一拍：换绑过程中递过去的，等壳换上新运行面再跑
-    // 每次投递现取当下的主会话运行面（/reload、移进工作树重建之后即新的那个）
-    const route = new MainPeerRoute(
-      () => (slotIsMain ? slot.bundle.adapter : undefined),
-      () => setTimeout(() => shellHolder.current?.runNotices(), 0)
-    );
-    peerRoute = route;
-    peerMessaging = await openPeerInbox({
-      sessionId: slot.sessionId,
-      cwd: workspaceRoot,
-      // 决策 456：名录里的名字取会话自己的
-      name: sessionName,
-      yolo: flags.yolo,
-      settings,
-      deliver: (text) => route.deliver(text),
-      pendingCount: () => route.pendingCount(),
-      onHeld: (held) => presenter.held(held),
-      onHeldGone: (id) => presenter.gone(id),
-      ui: (line) => {
-        shellHolder.current?.addSystem(line);
-        shellHolder.current?.render();
-      },
-    });
-    if (peerMessaging !== undefined) {
-      peerSlot.bind(peerMessaging);
-      // 决策 456：收件口打开期间改了名（打开时取定的名字已旧）：补一次
-      if (peerMessaging.sessionId === slot.sessionId && peerMessaging.name !== sessionName) {
-        peerMessaging.rename(sessionName);
-      }
-      // 决策 456：开局不写"本会话在名录里叫…"一行（会话名在 /resume 列表与面板卡片上）
-    }
-  }
   // 决策 439：项目共享层（或被 git 跟踪的 settings.local.json）写的键位不采用——仓库不能改审批键
   if (settings.merged.keybindingsIgnored !== undefined) {
     shell.addSystem("keybindings in project settings are ignored");
@@ -1007,8 +922,6 @@ export async function main(argv: string[]): Promise<void> {
         });
       }
       releaseWorktreeUse?.();
-      heldPresenter?.stop();
-      await peerMessaging?.close().catch(() => {});
     })().finally(() => {
       process.exit(0);
     });

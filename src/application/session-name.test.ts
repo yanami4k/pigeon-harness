@@ -10,9 +10,13 @@ import { readSessionFile } from "../persistence/session-reader.ts";
 import type { AgentMessage } from "../pi-runtime/index.ts";
 import { forkSessionFile, openSessionStoreWriter } from "../pi-runtime/session-store.ts";
 import { newSessionId } from "../state/ids.ts";
-import { defaultPeerName } from "./peer-messaging.ts";
 import { listRecentMainSessions, recentSessionLine } from "./recent-sessions.ts";
-import { sessionDisplayName, sessionNameOf, storedSessionName } from "./session-name.ts";
+import {
+  defaultSessionName,
+  sessionDisplayName,
+  sessionNameOf,
+  storedSessionName,
+} from "./session-name.ts";
 
 function userMessage(text: string): AgentMessage {
   return { role: "user", content: [{ type: "text", text }], timestamp: 1 } as AgentMessage;
@@ -46,7 +50,7 @@ test("分叉出来的分支会话不带来源的名字：用它自己的缺省�
     });
     assert.equal(sessionNameOf(root, sessionId, root), "api-fix");
     assert.equal(storedSessionName(root, branchId)?.name, undefined);
-    assert.equal(sessionNameOf(root, branchId, root), defaultPeerName(root, branchId));
+    assert.equal(sessionNameOf(root, branchId, root), defaultSessionName(root, branchId));
   } finally {
     await writer.close();
     rmSync(root, { recursive: true, force: true });
@@ -60,7 +64,7 @@ test("会话目录读不了（不是目录、被占用、权限）：按没改�
     writeFileSync(join(root, ".pigeon", "state", "sessions"), "不是目录");
     const sessionId = newSessionId();
     assert.equal(storedSessionName(root, sessionId), undefined);
-    assert.equal(sessionNameOf(root, sessionId, root), defaultPeerName(root, sessionId));
+    assert.equal(sessionNameOf(root, sessionId, root), defaultSessionName(root, sessionId));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -82,7 +86,7 @@ test("改名记进会话文件：推迟建文件时不为改名建文件，随�
     assert.equal(writer.fileDeferred?.(), true, "只改名不建文件");
     assert.equal(storedSessionName(root, sessionId), undefined);
     // 没有文件：按给的目录取缺省名
-    assert.equal(sessionNameOf(root, sessionId, root), defaultPeerName(root, sessionId));
+    assert.equal(sessionNameOf(root, sessionId, root), defaultSessionName(root, sessionId));
 
     writer.appendMessage(userMessage("第一件事"));
     await writer.flush();
@@ -115,7 +119,7 @@ test("改名记进会话文件：推迟建文件时不为改名建文件，随�
     assert.equal(storedSessionName(root, sessionId)?.name, undefined);
     assert.equal(
       sessionNameOf(root, sessionId, join(root, "elsewhere")),
-      defaultPeerName(root, sessionId)
+      defaultSessionName(root, sessionId)
     );
   } finally {
     await writer.close();

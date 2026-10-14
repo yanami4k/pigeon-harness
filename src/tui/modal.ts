@@ -1,20 +1,17 @@
 // 模态与按键路由（决策 067 拆分自 shell.ts）：审批面板（S3，决策 029）、退出布防与取消键（S5 裁决 032 / 033）。
 // 状态（待审批、退出布防时刻）一律由壳本体持有，本模块只经窄接口读写，不各自存一份。
 // 决策 286：恢复菜单（S4 决策 031 的 1/2/3 单键决议）自决策 183 起已无调用方，连同状态行提示删除。
-import { matchesKey } from "@earendil-works/pi-tui";
 import { summarizeArgs } from "../application/format.ts";
 import type { ApprovalRequest } from "../approvals/handler.ts";
 import {
   APPROVAL_CANCEL_BUSY,
   APPROVAL_CANCEL_CLOSED,
   APPROVAL_WITHDRAWN,
-  APPROVAL_YIELDED,
   type ApprovalBlockLine,
   type ApprovalPanelKey,
   type ApprovalPanelResult,
   approvalBlockLines,
   approvalBlockText,
-  PEER_HOLD_WITHDRAWN,
   withdrawnLine,
 } from "./approval.ts";
 import { isKey } from "./keybindings.ts";
@@ -24,19 +21,9 @@ export interface PendingApproval {
   resolve: (result: ApprovalPanelResult) => void;
   // 决策 326 ①：受保护路径的请示只收 [y]/[n]/[r]，不收放权键
   protectedPath?: boolean;
-  // 决策 450：扣住待放行的消息——只收 [y]/[n]；有工具审批要上面板时让位
-  peerMessage?: boolean;
-  // 决策 450：防误触——这一刻之前的按键不作答（扣住的消息面板出现时，以及工具审批顶替它时）
-  guardUntil?: number;
-  // 决策 450：扣住的消息面板是二选一的列表——当前选中的一项（缺省丢弃）与是否用方向键选过
-  peerChoice?: "drop" | "deliver";
-  peerChosen?: boolean;
-  // 决策 458：主会话自己的审批（不是 worker、面板会话或扣住的消息）在等什么——会话面板里当前会话那张卡用
+  // 决策 458：主会话自己的审批（不是 worker 或面板会话）在等什么——会话面板里当前会话那张卡用
   mainWaiting?: string;
 }
-
-// 决策 450：扣住的消息面板出现、或工具审批顶替它之后，这么久之内的按键不作答
-export const PANEL_GUARD_MS = 600;
 
 // 单击 Ctrl+C 布防之后状态行的临时提示（布防窗口内显示，过了窗口或有别的输入即恢复）
 export const EXIT_HINT = "press Ctrl+C again to exit";
@@ -96,14 +83,7 @@ export function askApprovalPanel(
     return Promise.resolve({ key: "cancel", reason: APPROVAL_CANCEL_CLOSED });
   }
   const current = host.pendingApproval();
-  let displacedPeer = false;
-  if (current?.peerMessage === true && request.peerMessage === undefined) {
-    displacedPeer = true;
-    // 决策 450：扣住的消息让位给工具审批
-    host.setPendingApproval(null);
-    host.setReasonMode(false);
-    current.resolve({ key: "cancel", reason: APPROVAL_YIELDED });
-  } else if (current !== null) {
+  if (current !== null) {
     return Promise.resolve({ key: "cancel", reason: APPROVAL_CANCEL_BUSY });
   }
   const panelText = approvalBlockText(request, directoryGrant, host.outsideMainView?.() === true);
@@ -122,15 +102,7 @@ export function askApprovalPanel(
   const pending: PendingApproval = {
     resolve,
     ...(request.protectedPath !== undefined ? { protectedPath: true } : {}),
-    ...(request.peerMessage !== undefined
-      ? { peerMessage: true, peerChoice: "drop" as const, peerChosen: false }
-      : {}),
-    ...(request.peerMessage !== undefined || displacedPeer
-      ? { guardUntil: Date.now() + PANEL_GUARD_MS }
-      : {}),
-    ...(request.worker === undefined &&
-    request.pooled === undefined &&
-    request.peerMessage === undefined
+    ...(request.worker === undefined && request.pooled === undefined
       ? { mainWaiting: `${request.toolName} ${summarizeArgs(request.args)}` }
       : {}),
   };
@@ -144,8 +116,7 @@ export function askApprovalPanel(
       if (host.pendingApproval() !== pending) return;
       host.setPendingApproval(null);
       host.setReasonMode(false);
-      if (request.peerMessage !== undefined) approvalLine(host, PEER_HOLD_WITHDRAWN);
-      else if (host.settleApproval !== undefined) host.settleApproval(withdrawnLine(request));
+      if (host.settleApproval !== undefined) host.settleApproval(withdrawnLine(request));
       else approvalLine(host, APPROVAL_WITHDRAWN);
       host.updateStatus();
       host.render();
@@ -229,10 +200,6 @@ export function disarmExitOnInput(host: ModalHost, data: string): void {
 export function handleModalKey(host: ModalHost, data: string): { consume: true } | undefined {
   const approval = host.pendingApproval();
   if (approval !== null) {
-    // 决策 450：面板刚出现（或刚被顶替）时的按键不作答，吞掉——正在打字的人不会误按出决定
-    if (approval.guardUntil !== undefined && Date.now() < approval.guardUntil) {
-      return { consume: true };
-    }
     // 理由行（决策 066）：按键交给输入区编辑（回车提交在壳的提交路径上决议），
     // 只有 Esc 归模态——回到面板、不算拒绝，审批仍挂起
     if (host.reasonMode()) {
@@ -257,27 +224,6 @@ export function handleModalKey(host: ModalHost, data: string): { consume: true }
             : isKey(data, "pigeon.approval.grantDirectory")
               ? "d"
               : undefined;
-    // 决策 450：扣住的消息是二选一的列表——方向键在"丢弃"（缺省）与"放行"之间切换，回车确认；没用方向键选过时回车
-    // 不作答，字母键一律不作答（正在给 agent 打字的 "yes" 与回车不会放行消息，也不会丢掉它）
-    if (approval.peerMessage === true) {
-      if (
-        matchesKey(data, "up") ||
-        matchesKey(data, "down") ||
-        matchesKey(data, "left") ||
-        matchesKey(data, "right") ||
-        matchesKey(data, "tab")
-      ) {
-        approval.peerChoice = approval.peerChoice === "deliver" ? "drop" : "deliver";
-        approval.peerChosen = true;
-        host.updateStatus();
-        host.render();
-      } else if (matchesKey(data, "enter") && approval.peerChosen === true) {
-        host.setPendingApproval(null);
-        host.updateStatus();
-        approval.resolve({ key: approval.peerChoice === "deliver" ? "y" : "n" });
-      }
-      return { consume: true };
-    }
     // [r] 拒绝并说明（决策 066）：打开理由行，不在此决议
     if (key === "r") {
       // 理由行的提示写在状态行（不进消息区：审批答完收成一行之后不留残行）
@@ -298,11 +244,4 @@ export function handleModalKey(host: ModalHost, data: string): { consume: true }
     return { consume: true };
   }
   return undefined;
-}
-
-// 决策 450：扣住的消息面板在状态行里显示二选一的当前选中项（纯 ASCII）
-export function peerChoiceStatus(approval: PendingApproval): string {
-  const drop = approval.peerChoice === "deliver" ? "  drop  " : "[ drop ]";
-  const deliver = approval.peerChoice === "deliver" ? "[ deliver ]" : "  deliver  ";
-  return `state: held message | ${drop} ${deliver} | [up/down] choose, [enter] confirm`;
 }

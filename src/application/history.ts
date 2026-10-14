@@ -21,7 +21,6 @@ import { JOB_NOTICE_PREFIX, LEGACY_JOB_NOTICE_PREFIX } from "./background-jobs.t
 import { PROGRAM_NOTE_PREFIX } from "./enter-worktree-tool.ts";
 import { plural, summarizeArgs, workEndLine } from "./format.ts";
 import { LEGACY_LOOP_REMINDER_PREFIX, LOOP_REMINDER_PREFIX } from "./loop-guard.ts";
-import { PEER_NOTICE_PREFIXES } from "./peer-messaging.ts";
 import { LEGACY_WORKER_NOTICE_PREFIX, WORKER_NOTICE_PREFIX } from "./worker-notices.ts";
 
 export const DEFAULT_HISTORY_LIMIT = 500;
@@ -56,9 +55,14 @@ function clip(text: string, chars: number): string {
   return text.length <= chars ? text : `${text.slice(0, chars)}… (${text.length} chars)`;
 }
 
-// 决策 457：脚本编排已删除，旧会话里它的结束汇总只用这两个前缀认出（回看时不当成人说的话）
+// 决策 457、477：脚本编排与跨会话消息已删除，旧会话里它们递给模型的通知只用这几个前缀认出（回看时不当成人说的话）
 const SCRIPT_NOTICE_PREFIX = "[Script notice] ";
 const LEGACY_SCRIPT_NOTICE_PREFIX = "[脚本通知] ";
+const PEER_NOTICE_PREFIXES = [
+  "[Cross-session message] ",
+  "[Cross-session idle notice] ",
+  "[Cross-session delivery notice] ",
+];
 
 // 进模型上下文的程序通知（打转提醒、worker 通知、脚本通知、后台作业通知、跨会话消息与回告）整条以用户消息存下；回看时同
 // 实时一样显示成系统行。决策 428：新通知是英文前缀，旧会话里是中文前缀，两种都认（跨会话通信生来就是英文）

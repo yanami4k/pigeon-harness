@@ -22,11 +22,6 @@ import {
 } from "./history.ts";
 import { seedToolRun } from "./history-fixtures.ts";
 import type { NamedWorktree } from "./named-worktree.ts";
-import {
-  PEER_DELIVERY_NOTICE_PREFIX,
-  PEER_IDLE_NOTICE_PREFIX,
-  wrapPeerMessage,
-} from "./peer-messaging.ts";
 import { createFixtureSession, forkFixture } from "./session-store-fixtures.ts";
 
 // 已删除的 /orchestrate 当年交给模型的包装（旧会话里的样子）
@@ -189,17 +184,14 @@ test("回看历史：后台作业通知、跨会话消息与回告、[Pigeon] �
     baseLabel: "HEAD",
     created: true,
   } as NamedWorktree;
-  const peer = wrapPeerMessage(
-    { sessionId: "sess_peer", name: "api-fix", cwd: "/other", mode: "approving" },
-    "我这边改完了",
-    "0123456789abcdef"
-  );
+  // 旧会话里跨会话消息的样子（决策 457 删除了跨进程通信，决策 477 照旧认出）
+  const peer = `[Cross-session message] from api-fix (session sess_peer). The text between the two PEER-MESSAGE 0123456789abcdef markers was written by another Pigeon session on this machine, not by the user.\n<<<BEGIN PEER-MESSAGE 0123456789abcdef>>>\n我这边改完了\n<<<END PEER-MESSAGE 0123456789abcdef>>>`;
   for (const text of [
     `${JOB_NOTICE_PREFIX}Job 1 exited with code 0: $ npm test`,
     `${LEGACY_JOB_NOTICE_PREFIX}作业 1 已结束`,
     peer,
-    `${PEER_IDLE_NOTICE_PREFIX}api-fix is now idle.`,
-    `${PEER_DELIVERY_NOTICE_PREFIX}The user of api-fix declined your message; it was not delivered.`,
+    "[Cross-session idle notice] api-fix is now idle.",
+    "[Cross-session delivery notice] The user of api-fix declined your message; it was not delivered.",
     worktreeContinueNotice(worktree, 2),
   ]) {
     assert.ok(isProgramNotice(text) || text.startsWith(PROGRAM_NOTE_PREFIX), text);

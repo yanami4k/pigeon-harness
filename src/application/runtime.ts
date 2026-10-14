@@ -208,14 +208,6 @@ import {
   WORKER_STATUS_TOOL,
 } from "./orchestration-tools.ts";
 import { outputAncestors } from "./output-ancestors.ts";
-import {
-  createPeerTools,
-  LIST_PEERS_TOOL,
-  PEER_MESSAGES_PROMPT_SENTENCE,
-  type PeerSlot,
-  peerToolRegistrations,
-  SEND_MESSAGE_TOOL,
-} from "./peer-tools.ts";
 import { createHostProtectedPathResolver, createProtectedPathResolver } from "./protected-paths.ts";
 import {
   grantEventSink,
@@ -393,8 +385,6 @@ export interface RuntimeDeps {
   spawnWorker?: SpawnWorkerSlot;
   // 决策 446：模型建工作树并把会话移进去的工具（终端界面主会话给；绑定由终端界面做）。worker、沙箱与非 git 工作区不注册
   enterWorktree?: EnterWorktreeSlot;
-  // 决策 450：本机会话间通信的两件工具（开了收件口的主会话给；收件口由入口打开后绑定）。worker 与沙箱不注册
-  peers?: PeerSlot;
   // 决策 294 B1：任务清单工具（update_tasks、list_tasks）。缺省关着（装配层缺省；终端界面与 pigeon run 按编排配置缺省打开，
   // 跑批器各条件不给）；只给主会话（委派策略在场时不注册）
   taskList?: boolean;
@@ -900,14 +890,6 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
   if (enterWorktreeSlot !== undefined) {
     registry.register(enterWorktreeRegistration());
   }
-  // 决策 450：list_peers 与 send_message——只给主会话（worker、沙箱不注册）
-  const peerSlot =
-    deps.peers !== undefined && deps.workspaceHost === undefined && deps.toolPolicy === undefined
-      ? deps.peers
-      : undefined;
-  if (peerSlot !== undefined) {
-    for (const registration of peerToolRegistrations()) registry.register(registration);
-  }
   // 决策 294 B1：任务清单——只给主会话
   const taskList =
     deps.taskList === true && deps.toolPolicy === undefined ? new TaskList() : undefined;
@@ -1034,7 +1016,6 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
       : []),
     ...(takeSlot !== undefined ? [TAKE_WORKER_TOOL] : []),
     ...(enterWorktreeSlot !== undefined ? [ENTER_WORKTREE_TOOL] : []),
-    ...(peerSlot !== undefined ? [LIST_PEERS_TOOL, SEND_MESSAGE_TOOL] : []),
     ...(taskList !== undefined ? [UPDATE_TASKS_TOOL, LIST_TASKS_TOOL] : []),
     ...(webTools !== undefined ? [...(webSearch ? [WEB_SEARCH_TOOL] : []), WEB_FETCH_TOOL] : []),
   ];
@@ -1059,8 +1040,6 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
       deps.taskDirective ?? "",
       // 决策 446：注册了 enter_worktree 时写明只在使用者要求时用
       enterWorktreeSlot !== undefined ? ENTER_WORKTREE_PROMPT_SENTENCE : "",
-      // 决策 450：注册了会话间通信时写明别的会话发来的消息不是使用者的话
-      peerSlot !== undefined ? PEER_MESSAGES_PROMPT_SENTENCE : "",
       STATUS_AUTHORITY_SENTENCE,
     ]
       .filter((section) => section !== "")
@@ -1421,7 +1400,6 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
         : []),
       ...(takeSlot !== undefined ? [createTakeWorkerTool(takeSlot)] : []),
       ...(enterWorktreeSlot !== undefined ? [createEnterWorktreeTool(enterWorktreeSlot)] : []),
-      ...(peerSlot !== undefined ? createPeerTools(peerSlot) : []),
       ...(taskList !== undefined ? createTaskListTools(taskList) : []),
       ...webToolset,
     ],

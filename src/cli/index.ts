@@ -18,7 +18,6 @@ import {
 } from "../application/launch-flags.ts";
 import { LOOP_GUARD_TEXTS } from "../application/loop-guard.ts";
 import { MIGRATE_CONFIG_USAGE, runMigrateConfig } from "../application/migrate-config.ts";
-import { CROSS_PROCESS_MESSAGING } from "../application/peer-session.ts";
 import { loadStreamFn } from "../application/runtime.ts";
 import { runHeadlessInSandbox, runSandboxCommand } from "../application/sandbox-session.ts";
 import { runSessionListCommand } from "../application/session-list.ts";
@@ -312,8 +311,6 @@ async function runMain(argv: string[]): Promise<void> {
     // 决策 287–291：联网工具缺省给出，--sandbox-network off 不给
     ...webToolsOptionOf(flags, settings),
     loopGuard,
-    // 决策 450〔部分已改〕：跨进程的会话间通信先关闭（--sandbox 时本就由 headless 略过）
-    ...(CROSS_PROCESS_MESSAGING ? { peerInbox: {} } : {}),
   };
   // 决策 237：--sandbox 在一次性容器里跑，返回前交回成分支并删除容器；提示行写标准错误，不混进 --json 的一行结果
   const result =

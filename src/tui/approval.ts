@@ -58,12 +58,6 @@ const CANCEL_REASON_FOR_MODEL: Readonly<Record<string, string>> = {
 export function cancelReasonForModel(reason: string): string {
   return CANCEL_REASON_FOR_MODEL[reason] ?? reason;
 }
-// 决策 450：扣住待放行的消息为工具审批让位（稍后再弹）
-export const APPROVAL_YIELDED = "yielded to a tool approval; will ask again";
-// 决策 450：扣住的消息等放行超时或已被丢弃，面板撤下
-export const PEER_HOLD_WITHDRAWN = "[message] held message expired or was dropped";
-// 面板里显示的消息内容上限（全文在放行后交给 agent）
-const PEER_TEXT_SHOWN = 2000;
 
 export type ApprovalPanelKey = "y" | "n" | "a" | "d";
 
@@ -98,18 +92,6 @@ export function approvalBlockText(
   // 决策 301：面板不在主会话视图里弹出时，主会话自己的请求也写明来源
   labelMainSource = false
 ): string {
-  // 决策 450：别的会话发来、被扣住的消息
-  if (request.peerMessage !== undefined) {
-    // 二选一的选项与按键写在状态行（peerChoiceStatus）
-    return [
-      "-- held message from another session --",
-      `from: ${request.peerMessage.from} (cwd ${request.peerMessage.cwd})`,
-      "text:",
-      request.peerMessage.text.length > PEER_TEXT_SHOWN
-        ? `${request.peerMessage.text.slice(0, PEER_TEXT_SHOWN)}... (${request.peerMessage.text.length} chars, truncated)`
-        : request.peerMessage.text,
-    ].join("\n");
-  }
   const lines = ["-- approval --"];
   // M5.5 S3（决策 040）：worker 请求标明来源
   const source = approvalSourceLine(request);
@@ -199,20 +181,6 @@ export function approvalBlockLines(
   directoryGrant: boolean = offersDirectoryGrant(request, undefined),
   labelMainSource = false
 ): ApprovalBlockLine[] {
-  if (request.peerMessage !== undefined) {
-    const text =
-      request.peerMessage.text.length > PEER_TEXT_SHOWN
-        ? `${request.peerMessage.text.slice(0, PEER_TEXT_SHOWN)}... (${request.peerMessage.text.length} chars, truncated)`
-        : request.peerMessage.text;
-    return [
-      { kind: "title", text: "held message from another session" },
-      {
-        kind: "detail",
-        text: `from: ${request.peerMessage.from} (cwd ${request.peerMessage.cwd})`,
-      },
-      ...text.split("\n").map((line) => ({ kind: "subject" as const, text: line })),
-    ];
-  }
   const lines: ApprovalBlockLine[] = [{ kind: "title", text: request.toolName }];
   // 要批的那件事本身；参数里与它重复的字段不再列
   const shown = new Set<string>();

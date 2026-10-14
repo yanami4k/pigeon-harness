@@ -147,7 +147,6 @@ import {
   handleShellKey,
   type ModalHost,
   type PendingApproval,
-  peerChoiceStatus,
 } from "./modal.ts";
 import {
   handleResumeCommand as dispatchResumeCommand,
@@ -275,9 +274,7 @@ export interface TuiShellOptions {
   // 决策 446：一轮真正收尾、空闲下来之前调用（会话移进工作树时在这里换运行面）；期间仍按在跑处理，输入排队
   // 没有要做的返回 undefined（照常同步空闲下来）
   afterTurn?: (info: { cancelled: boolean }) => Promise<void> | undefined;
-  // 决策 450：忙闲变化（一轮开始、真正空闲）
-  onBusyChange?: (busy: boolean) => void;
-  // 决策 450、456：/rename 改当前会话的名字（记进会话记录，名录跟着改）；返回给人看的一行。缺省 = 命令不可用
+  // 决策 456：/rename 改当前会话的名字（记进会话记录）；返回给人看的一行。缺省 = 命令不可用
   renameSession?: (name: string) => string;
   // 决策 456：会话的显示名（会话记录里记的，没改过名为缺省名）；会话面板上当前会话的卡片与 /take 的说明用。缺省 = 会话号
   sessionName?: (sessionId: string) => string;
@@ -492,7 +489,6 @@ export class PigeonTuiShell
   private readonly disposers: Array<() => void> = [];
   private runtimeDisposers: Array<() => void> = [];
   private runningState = false;
-  // 决策 450：忙闲变化即告诉装配方（会话名录里的忙闲、空闲通知）
   private get running(): boolean {
     return this.runningState;
   }
@@ -500,7 +496,6 @@ export class PigeonTuiShell
     if (value === this.runningState) return;
     this.runningState = value;
     this.setWaiting(value);
-    this.options.onBusyChange?.(value);
   }
   // 决策 439：等模型时的转圈（一轮开始到第一段输出之间；ASCII 帧）
   private loader: Loader | undefined;
@@ -924,11 +919,9 @@ export class PigeonTuiShell
     // 输入排队（决策 286）
     const base =
       this.pendingApprovalState !== null
-        ? this.pendingApprovalState.peerMessage === true
-          ? peerChoiceStatus(this.pendingApprovalState)
-          : this.reasonModeOn
-            ? "reason for rejecting (enter to send, esc to go back)"
-            : ""
+        ? this.reasonModeOn
+          ? "reason for rejecting (enter to send, esc to go back)"
+          : ""
         : this.resuming
           ? "resuming"
           : this.interrupting

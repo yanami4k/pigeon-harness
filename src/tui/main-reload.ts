@@ -5,7 +5,6 @@
 
 import type { EnterWorktreeSlot } from "../application/enter-worktree-tool.ts";
 import { type LaunchFlags, orchestrationSettingsOf } from "../application/launch-flags.ts";
-import type { PeerSlot } from "../application/peer-tools.ts";
 import type { ApprovalModeCell, MemoryWriteConfig, RuntimeBundle } from "../application/runtime.ts";
 import {
   type OpenedSessionRuntime,
@@ -44,8 +43,6 @@ export interface MainReloadContext {
   workspaceRoot?: string | undefined;
   // 决策 446：enter_worktree 的工具槽（重建的运行面照常注册）
   enterWorktree?: EnterWorktreeSlot;
-  // 决策 450：会话间通信的工具槽（重建的运行面照常注册）
-  peers?: PeerSlot;
   streamFn: StreamFn;
   flags: LaunchFlags;
   workspaceHost?: WorkspaceHost;
@@ -90,7 +87,6 @@ export async function reopenMainSessionForReload(
     turnSnapshots: true,
     ...(context.workspaceRoot !== undefined ? { workspaceRoot: context.workspaceRoot } : {}),
     ...(context.enterWorktree !== undefined ? { enterWorktree: context.enterWorktree } : {}),
-    ...(context.peers !== undefined ? { peers: context.peers } : {}),
     settings: snapshot,
     sessionId: current.sessionId,
     streamFn: context.streamFn,

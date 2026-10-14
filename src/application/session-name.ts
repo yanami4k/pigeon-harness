@@ -1,9 +1,25 @@
 // 决策 456：会话名是会话自己的属性——/rename 改了即记进会话文件（上游会话的 name 事实，不属于任何分支，会话回退不影响），
-// 续接、/resume 换会话与列表、pigeon session list 与本机会话名录都从这里取（主视图不再有标题栏，决策 460）；没改过名的用缺省名（工作目录名加会话号末 4 位）。
+// 续接、/resume 换会话与列表、pigeon session list 都从这里取（主视图不再有标题栏，决策 460）；没改过名的用缺省名（工作目录名加会话号末 4 位）。
 // 文件里记的名字不合名字规则（被手改过）的不认，按没改过名处理。只读，不写任何记录
 import { locateSessionFile, readSessionFile } from "../persistence/session-reader.ts";
-import { defaultPeerName, validPeerName } from "./peer-messaging.ts";
 import { sessionsDirOf } from "./workspace.ts";
+
+// 会话名：字母、数字、下划线、连字符与点，1–40 个字符（单行）。决策 456：排除默认可忽略的字符（韩文填充符一类，
+// 算 0 宽却画成空白，名字看着是空的、或与别的会话看着一样）
+export function validSessionName(name: string): boolean {
+  return /^(?:(?!\p{Default_Ignorable_Code_Point})[\p{L}\p{N}_.-]){1,40}$/u.test(name);
+}
+
+// 缺省的会话名：工作目录名加会话号末 4 位（目录名里名字规则以外的字符换成连字符）
+export function defaultSessionName(cwd: string, sessionId: string): string {
+  const base =
+    cwd
+      .split(/[\\/]/)
+      .filter((part) => part !== "")
+      .at(-1) ?? "pigeon";
+  const cleaned = base.replace(/[^\p{L}\p{N}_.-]/gu, "-").slice(0, 35) || "pigeon";
+  return `${cleaned}-${sessionId.slice(-4).toLowerCase()}`;
+}
 
 // 显示用的会话名：记过的合规名字，否则缺省名
 export function sessionDisplayName(
@@ -11,7 +27,9 @@ export function sessionDisplayName(
   cwd: string,
   sessionId: string
 ): string {
-  return stored !== undefined && validPeerName(stored) ? stored : defaultPeerName(cwd, sessionId);
+  return stored !== undefined && validSessionName(stored)
+    ? stored
+    : defaultSessionName(cwd, sessionId);
 }
 
 // 会话文件里记的名字（合规的）与文件头的工作目录；没有这个会话文件、或读不了（占用、权限、刚被删）时为 undefined——
@@ -27,7 +45,7 @@ export function storedSessionName(
     if (file === undefined) return undefined;
     const name = file.name;
     return {
-      ...(name !== undefined && validPeerName(name) ? { name } : {}),
+      ...(name !== undefined && validSessionName(name) ? { name } : {}),
       cwd: file.header.cwd,
     };
   } catch {

@@ -10,6 +10,7 @@
 // - 合并：对象按键逐层合并，标量与数组由高优先层整体替换；两个例外：permissions 的放权规则三层并集生效，
 //   hooks 各层的条目并列生效（同一事件同一 matcher 下命令完全相同的只留一份）。
 // - 响亮失败：顶层或节内的未知键、写在设置里的 key、写在项目级的 trustedDirectories、非法的钩子 matcher，一律指出文件、键与所在层。
+//   已删的节（决策 457）单独说明已删、请删掉，不当成拼错的键。
 // 以后各段往 SETTINGS_SECTIONS 里加节，合并与未知键检查随之生效。
 import path from "node:path";
 import type { TSchema } from "typebox";
@@ -36,11 +37,6 @@ import {
 } from "./loop-guard-config.ts";
 import { type DotMcpJson, type McpConfig, McpSectionSchema, mergeMcpConfig } from "./mcp-config.ts";
 import { type MemoryLimits, MemorySectionSchema, memoryLimits } from "./memory-config.ts";
-import {
-  layeredInbound,
-  type MessagingSection,
-  MessagingSectionSchema,
-} from "./messaging-config.ts";
 import { type ModelInfoSection, ModelInfoSectionSchema } from "./model-info.ts";
 import {
   type ModelRequestSection,
@@ -130,7 +126,6 @@ export const SETTINGS_SECTIONS = {
   sessionSearch: SessionSearchSectionSchema,
   thinking: ThinkingSectionSchema,
   worktree: WorktreeSectionSchema,
-  messaging: MessagingSectionSchema,
   keybindings: KeybindingsSectionSchema,
   modelRequest: ModelRequestSectionSchema,
   tui: TuiSectionSchema,
@@ -164,7 +159,6 @@ export const SettingsFileSchema = Type.Object(
     sessionSearch: Type.Optional(SessionSearchSectionSchema),
     thinking: Type.Optional(ThinkingSectionSchema),
     worktree: Type.Optional(WorktreeSectionSchema),
-    messaging: Type.Optional(MessagingSectionSchema),
     keybindings: Type.Optional(KeybindingsSectionSchema),
     modelRequest: Type.Optional(ModelRequestSectionSchema),
     tui: Type.Optional(TuiSectionSchema),
@@ -186,6 +180,9 @@ export interface SettingsSource {
 export function describeSource(source: SettingsSource): string {
   return `${source.file} (${SETTINGS_LAYER_LABELS[source.layer]})`;
 }
+
+// 决策 457：已删的设置。写了即开局报错，写明哪个文件、哪一节已删、请删掉
+const REMOVED_SECTIONS: ReadonlySet<string> = new Set(["messaging"]);
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -233,6 +230,10 @@ export function validateSettingsLayer(
           }
         }
       }
+      continue;
+    }
+    if (REMOVED_SECTIONS.has(key)) {
+      problems.push(`settings file ${where}: ${key} has been removed; delete this section`);
       continue;
     }
     if (!Object.hasOwn(SETTINGS_SECTIONS, key)) {
@@ -341,7 +342,6 @@ export interface MergedSettings {
   sessionSearch?: Static<typeof SessionSearchSectionSchema>;
   thinking?: ThinkingSection;
   worktree?: WorktreeSection;
-  messaging?: MessagingSection;
   keybindings?: KeybindingsSection;
   // 决策 439：写了 keybindings 却不被采用的层（项目共享层、被 git 跟踪的 settings.local.json）
   keybindingsIgnored?: SettingsLayer[];
@@ -406,13 +406,6 @@ export function mergeSettingsLayers(
   // 并集按优先级从高到低排列（项目个人在前）
   grants.sort((a, b) => SETTINGS_LAYERS.indexOf(b.layer) - SETTINGS_LAYERS.indexOf(a.layer));
   const user = layers.find((entry) => entry.layer === "user")?.file;
-  // 决策 450：收件规则只许个人层放宽，项目共享层只能收紧
-  const inbound = layeredInbound(
-    layers.map(({ layer, file }) => ({
-      layer: layer === "local" && options.localLayerTracked === true ? "project" : layer,
-      ...(file.messaging?.inbound !== undefined ? { inbound: file.messaging.inbound } : {}),
-    }))
-  );
   // 决策 439：键位只认个人层（用户级、未被 git 跟踪的 settings.local.json）——仓库提交的设置不能改审批键；写了的层记下来提示
   const personalKeys = layers.filter(
     ({ layer }) => layer === "user" || (layer === "local" && options.localLayerTracked !== true)
@@ -429,11 +422,6 @@ export function mergeSettingsLayers(
     ...(Object.keys(keybindings).length > 0 ? { keybindings } : {}),
     ...(ignoredKeys.length > 0 ? { keybindingsIgnored: ignoredKeys } : {}),
   };
-  const mergedMessaging = merged.messaging as MessagingSection | undefined;
-  if (mergedMessaging !== undefined) {
-    const { inbound: _merged, ...rest } = mergedMessaging;
-    merged = { ...merged, messaging: { ...rest, ...(inbound !== undefined ? { inbound } : {}) } };
-  }
   return {
     merged: {
       ...(merged as Omit<
@@ -586,11 +574,6 @@ export function thinkingSectionOf(snapshot: SettingsSnapshot): ThinkingSection |
 // 决策 439：键位（合并后的 keybindings 一节；按动作名逐个覆盖）
 export function keybindingsSectionOf(snapshot: SettingsSnapshot): KeybindingsSection | undefined {
   return snapshot.merged.keybindings;
-}
-
-// 决策 450：本机会话间通信（合并后的 messaging 一节）
-export function messagingSectionOf(snapshot: SettingsSnapshot): MessagingSection | undefined {
-  return snapshot.merged.messaging;
 }
 
 // 决策 445：独立工作树的起点档位（合并后的 worktree 一节；没写为 fresh）

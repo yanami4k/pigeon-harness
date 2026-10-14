@@ -9,8 +9,8 @@ import { test } from "vitest";
 import { LEGACY_READER_HINT } from "../persistence/session-catalog.ts";
 import { asSessionId, type SessionId } from "../state/ids.ts";
 import { sessionCreatedAt } from "../state/session-summary.ts";
-import { defaultPeerName } from "./peer-messaging.ts";
 import { runSessionListCommand } from "./session-list.ts";
+import { defaultSessionName } from "./session-name.ts";
 import { createFixtureSession, type FixtureSession } from "./session-store-fixtures.ts";
 
 const FIRST = asSessionId("sess_01JAAAAAA10000000000000000");
@@ -60,7 +60,7 @@ test("session list：一会话一行安静行（时间 + Run 数 + 会话 id）�
     });
     assert.equal(
       runSessionListCommand({ root }),
-      `${minute(FIRST)}  ${defaultPeerName(root, FIRST)}  2 runs  ${FIRST}\n${minute(SECOND)}  ${defaultPeerName(root, SECOND)}  1 run  ${SECOND}\n`
+      `${minute(FIRST)}  ${defaultSessionName(root, FIRST)}  2 runs  ${FIRST}\n${minute(SECOND)}  ${defaultSessionName(root, SECOND)}  1 run  ${SECOND}\n`
     );
   } finally {
     cleanup();
@@ -112,7 +112,7 @@ test("session list：旧格式会话（会话根下平铺的 sess_<ULID>.jsonl�
     const notice = `1 old-format session not listed; ${LEGACY_READER_HINT}`;
     assert.equal(
       runSessionListCommand({ root }),
-      `${minute(SECOND)}  ${defaultPeerName(root, SECOND)}  1 run  ${SECOND}\n${notice}\n`
+      `${minute(SECOND)}  ${defaultSessionName(root, SECOND)}  1 run  ${SECOND}\n${notice}\n`
     );
     assert.equal(
       runSessionListCommand({ root, filters: { tool: "无此工具" } }),
@@ -133,7 +133,10 @@ test("决策 456（验收修改）：改过名的会话在列表里显示它的�
     await seed(sessionsDir, SECOND, (s) => s.startRun({ task: "b" }));
     const lines = runSessionListCommand({ root }).trimEnd().split("\n");
     assert.equal(lines[0], `${minute(FIRST)}  api-fix  1 run  ${FIRST}`);
-    assert.equal(lines[1], `${minute(SECOND)}  ${defaultPeerName(root, SECOND)}  1 run  ${SECOND}`);
+    assert.equal(
+      lines[1],
+      `${minute(SECOND)}  ${defaultSessionName(root, SECOND)}  1 run  ${SECOND}`
+    );
   } finally {
     cleanup();
   }

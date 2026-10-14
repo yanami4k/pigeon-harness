@@ -66,7 +66,6 @@ import { settleBackgroundJobs } from "./background-jobs.ts";
 import type { SessionHooks } from "./hooks.ts";
 import { loopGuardWatcher } from "./loop-guard.ts";
 import { type McpSession, startMcpSession } from "./mcp.ts";
-import type { PeerSlot } from "./peer-tools.ts";
 import {
   buildRuntime,
   disposeRuntime,
@@ -347,8 +346,6 @@ interface RuntimeSurface {
   spawnWorker?: SpawnWorkerSlot;
   // 决策 294 B1：任务清单（只有 headless 主会话会给）
   taskList?: boolean;
-  // 决策 450：会话间通信的工具槽（headless 主会话开了收件口时给）
-  peers?: PeerSlot;
   // 决策 302：worker 改自己工作树内的文件默认放行（只有 worker 会给）
   ownWorkspaceWrites?: boolean;
   // 决策 287–291：联网工具的配置
@@ -649,8 +646,6 @@ export interface DetachedRuntimeRequest {
   spawnWorker?: SpawnWorkerSlot;
   // 决策 294 B1：任务清单
   taskList?: boolean;
-  // 决策 450：会话间通信的工具槽（pigeon run 开了收件口时给）
-  peers?: PeerSlot;
   // 决策 287–291：联网工具的配置
   webTools?: WebToolsConfig;
   // M8（决策 087）：本次尝试的预算冻结进注入快照
@@ -722,7 +717,6 @@ function openRuntimeSurface(surface: RuntimeSurface): WorkerRuntimeHandle {
 
     ...(surface.spawnWorker !== undefined ? { spawnWorker: surface.spawnWorker } : {}),
     ...(surface.taskList === true ? { taskList: true } : {}),
-    ...(surface.peers !== undefined ? { peers: surface.peers } : {}),
     ...(surface.ownWorkspaceWrites === true ? { ownWorkspaceWrites: true } : {}),
     ...(surface.webTools !== undefined ? { webTools: surface.webTools } : {}),
     ...(surface.budget !== undefined ? { budget: surface.budget } : {}),

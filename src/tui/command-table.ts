@@ -145,7 +145,7 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     usage: "/panel",
     whileRunning: { allow: true },
   },
-  // 决策 450、456：改当前会话的名字（记进会话记录，名录跟着改），运行中可用
+  // 决策 456：改当前会话的名字（记进会话记录），运行中可用
   {
     name: "rename",
     usage: "/rename <name>",

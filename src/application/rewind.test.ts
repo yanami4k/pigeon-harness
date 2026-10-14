@@ -22,7 +22,6 @@ import {
 import { PROGRAM_NOTE_PREFIX, worktreeContinueNotice } from "./enter-worktree-tool.ts";
 import { noMcpSession } from "./mcp.ts";
 import type { NamedWorktree } from "./named-worktree.ts";
-import { PEER_IDLE_NOTICE_PREFIX, wrapPeerMessage } from "./peer-messaging.ts";
 import {
   applyRewind,
   checkCode,
@@ -997,12 +996,8 @@ test("消息树只列人发起的消息：/orchestrate 发起的列成人敲的�
     commandInputText("给各模块补测试"),
     `${JOB_NOTICE_PREFIX}Job 1 exited with code 0: $ npm test`,
     `${LEGACY_JOB_NOTICE_PREFIX}作业 1 已结束`,
-    wrapPeerMessage(
-      { sessionId: "sess_peer", name: "api-fix", cwd: "/other", mode: "approving" },
-      "改完了",
-      "0123456789abcdef"
-    ),
-    `${PEER_IDLE_NOTICE_PREFIX}api-fix is now idle.`,
+    `[Cross-session message] from api-fix (session sess_peer). The text between the two PEER-MESSAGE 0123456789abcdef markers was written by another Pigeon session on this machine, not by the user.\n<<<BEGIN PEER-MESSAGE 0123456789abcdef>>>\n改完了\n<<<END PEER-MESSAGE 0123456789abcdef>>>`,
+    "[Cross-session idle notice] api-fix is now idle.",
     worktreeContinueNotice(worktree, 0),
     TRUNCATION_RESUME_PROMPT,
     `${note}\n\n接着改`,
