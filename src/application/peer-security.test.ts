@@ -313,7 +313,7 @@ test.skipIf(process.platform === "win32")(
     const target = home();
     mkdirSync(join(other, ".pigeon", "state"), { recursive: true });
     symlinkSync(target, peersDirOf(other));
-    await assert.rejects(box(other, "b"), /符号链接/);
+    await assert.rejects(box(other, "b"), /is not a regular directory/);
   }
 );
 

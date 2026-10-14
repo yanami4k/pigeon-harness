@@ -111,6 +111,10 @@
 - `tsc --noEmit`、biome、dependency-cruiser 干净。
 - 全量测试（本机）：1830 过，8 条失败，其中 3 条是复查修正改了措辞后没跟上的断言（已改，单独重跑通过），其余 5 条是本机已知失败：`checkpoints-async` 保留修改时间的同长度覆盖、`spawn-worker-headless` 撞上时间上限、`script-acceptance` 卡住监测（偶发）、`container-host` 与 `container-round-trips`（本机没有建符号链接的权限）。
 
+补验（pigeon-verify，41171e6）：打包冒烟通过；verify:full 1 条失败——`peer-security.test.ts` 只在 POSIX 上跑的"目录是符号链接即拒开收件口"仍按中文报错匹配（行为正确，报错已是英文 `… is not a regular directory`），本机 Windows 跳过没看到，已改断言。随之扫了所有按平台或条件跳过的测试：含 `process.platform`/`win32` 判断的 46 个文件与带 `skipIf`/`runIf`/`.skip` 的 29 个文件（合计 47 个），找正则字面量、`includes`/`match`/`startsWith`/`rejects`/`throws` 的参数与 `equal` 期望值里的中文，再看这段中文在非测试源码（去掉注释）里还在不在；只此一处是遗留，其余命中都是测试自己传入的数据（模型回复、命令输出、注入的报错、锁的说明）或中英并列的否定断言。另对全部 345 个测试文件跑了同样的扫描，命中的都在本机会跑且通过的用例里，同属测试数据。
+
+开发脚本（`scripts/build-bundle.mjs`、`scripts/bundle-smoke.mjs` 等）的输出给开发者看，不在决策 462 "给使用者看"的范围里，照旧中文（与仓库的注释语言一致）；只改了冒烟脚本里与产品输出比对的期望值。
+
 ## 八、遗留
 
 - 命令行对话不显示模型回复的缺陷随入口删除，不再单独修。
