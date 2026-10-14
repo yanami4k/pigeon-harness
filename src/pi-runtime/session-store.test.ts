@@ -74,12 +74,7 @@ test("写者：照 pi 原生布局以 Pigeon 会话号建文件，文件头带�
         parentSessionId: "sess_P",
         metadata: {
           version: 1,
-          worker: {
-            name: "w1",
-            role: "implementer",
-            workspace: { kind: "none" },
-            startedAt: 5,
-          },
+          agent: { name: "explore-1", type: "explore", path: "explore-1", topSessionId: "sess_P" },
         } as never,
       })
     );
@@ -95,7 +90,7 @@ test("写者：照 pi 原生布局以 Pigeon 会话号建文件，文件头带�
     assert.deepEqual(view.header.metadata, {
       pigeon: {
         version: 1,
-        worker: { name: "w1", role: "implementer", workspace: { kind: "none" }, startedAt: 5 },
+        agent: { name: "explore-1", type: "explore", path: "explore-1", topSessionId: "sess_P" },
       },
     });
     assert.deepEqual(

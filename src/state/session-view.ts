@@ -11,6 +11,7 @@ import type { FailureClass } from "./classification.ts";
 import { canonicalJson, sha256Hex } from "./hashing.ts";
 import type { RunId, SessionId } from "./ids.ts";
 import {
+  type AgentMessageData,
   type ApprovalModeData,
   type BackgroundJobData,
   type CheckpointData,
@@ -133,7 +134,9 @@ export type ViewItem =
   // 决策 469：会话中途切换审批模式
   | { kind: "approval-mode"; entryId: string; timestamp: number; data: ApprovalModeData }
   // 决策 473：工作区的 git 分支（变了才记）
-  | { kind: "git-head"; entryId: string; timestamp: number; data: GitHeadData };
+  | { kind: "git-head"; entryId: string; timestamp: number; data: GitHeadData }
+  // 决策 480：agent 之间的一条传话（谁发给谁）
+  | { kind: "agent-message"; entryId: string; timestamp: number; data: AgentMessageData };
 
 // 一次工具调用：助手消息里的调用块与对应的工具结果消息（按工具调用号在同一 Run 内配对）
 export interface ViewToolCall {
@@ -169,7 +172,9 @@ export interface SessionView {
   parentSessionId?: SessionId;
   // 文件头 metadata 里的来历（分支会话）
   branch?: NonNullable<SessionHeaderMetadata["branch"]>;
-  // 文件开头从来源会话复制来的条目数（非分支会话为 0）
+  // 决策 480：子 agent 的会话——名字、类型、路径与所属会话
+  agent?: NonNullable<SessionHeaderMetadata["agent"]>;
+  // 文件开头从来源会话复制来的条目数（分支会话与带上下文起步的子 agent 才有，其余为 0）
   copiedEntries: number;
   // 本会话自己的全部条目（跳过复制段），按文件顺序
   items: ViewItem[];
@@ -331,6 +336,7 @@ const CUSTOM_KINDS = {
   [SessionEntryType.RequestRetry]: "request-retry",
   [SessionEntryType.ApprovalMode]: "approval-mode",
   [SessionEntryType.GitHead]: "git-head",
+  [SessionEntryType.AgentMessage]: "agent-message",
 } as const;
 
 // 自定义条目 → 时间线条目；不是 Pigeon 的条目返回 undefined，数据不合 schema 记告警
@@ -407,10 +413,11 @@ function customRunId(item: Exclude<ViewItem, { kind: "message" }>): string | und
 export function buildSessionView(input: SessionFileInput): SessionView {
   const warnings: string[] = [];
   const metadata = headerMetadata(input.header);
+  // 决策 480：带上下文起步的子 agent，文件开头复制了派出方会话的若干条
   const copiedEntries =
     metadata?.branch !== undefined
       ? copiedPrefixLength(input.entries, metadata.branch.forkPoint)
-      : 0;
+      : Math.min(metadata?.agent?.inheritedEntries ?? 0, input.entries.length);
   const items: ViewItem[] = [];
   const sessionItems: ViewItem[] = [];
   const runs: ViewRun[] = [];
@@ -500,6 +507,7 @@ export function buildSessionView(input: SessionFileInput): SessionView {
       ? { parentSessionId: input.header.parentSessionId as SessionId }
       : {}),
     ...(metadata?.branch !== undefined ? { branch: metadata.branch } : {}),
+    ...(metadata?.agent !== undefined ? { agent: metadata.agent } : {}),
     copiedEntries,
     items,
     sessionItems,

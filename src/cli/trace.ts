@@ -5,6 +5,7 @@
 // 工具调用的审批结果与出错归类改读工具结果消息上的运行面标记，工具级失败分类由 storeToolOutcomes 现算。
 import { createHash } from "node:crypto";
 import {
+  agentMessageLine,
   approvalVerdict,
   compactNumber,
   continuationLine,
@@ -233,6 +234,8 @@ function renderRun(
       lines.push(`  ${requestRetryLine(item.data)}`);
     } else if (item.kind === "approval-mode") {
       lines.push(`  ${approvalModeLine(item.data)}`);
+    } else if (item.kind === "agent-message") {
+      lines.push(`  ${agentMessageLine(item.data)}`);
     }
   }
   const unfinished = unfinishedCheckpointMarks(run.items);
@@ -294,16 +297,25 @@ export function renderSessionTrace(
     }
     renderRun(view, run, lines, options);
   }
-  // 会话级的钩子运行（323：SessionStart / SessionEnd 等窗口外事件没有所属 Run）与 Run 之外的审批模式切换（469）
+  // 会话级的钩子运行（323：SessionStart / SessionEnd 等窗口外事件没有所属 Run）、Run 之外的审批模式切换（469）与
+  // agent 之间的传话（480：派出时交代的任务、空闲时收到的消息与结果）
   const sessionEntries = view.sessionItems.filter(
-    (item): item is Extract<ViewItem, { kind: "hook" | "approval-mode" }> =>
-      item.kind === "hook" || item.kind === "approval-mode"
+    (item): item is Extract<ViewItem, { kind: "hook" | "approval-mode" | "agent-message" }> =>
+      item.kind === "hook" || item.kind === "approval-mode" || item.kind === "agent-message"
   );
   if (sessionEntries.length > 0) {
     lines.push("");
     lines.push("session entries:");
     for (const item of sessionEntries) {
-      lines.push(`  ${item.kind === "hook" ? hookLine(item.data) : approvalModeLine(item.data)}`);
+      lines.push(
+        `  ${
+          item.kind === "hook"
+            ? hookLine(item.data)
+            : item.kind === "approval-mode"
+              ? approvalModeLine(item.data)
+              : agentMessageLine(item.data)
+        }`
+      );
     }
   }
   // 会话级异常项：读取时跳过的行与条目如实报告，不猜测挂接

@@ -30,6 +30,7 @@ export type ConfigGroup =
   | "web"
   | "context"
   | "tools"
+  | "agents"
   | "guards"
   | "workspace"
   | "interface";
@@ -40,6 +41,7 @@ export const CONFIG_GROUPS: ReadonlyArray<{ id: ConfigGroup; label: string }> = 
   { id: "web", label: "web" },
   { id: "context", label: "context" },
   { id: "tools", label: "tools" },
+  { id: "agents", label: "agents" },
   { id: "guards", label: "guards & hooks" },
   { id: "workspace", label: "workspace" },
   { id: "interface", label: "interface" },
@@ -493,6 +495,31 @@ export const CONFIG_OPTIONS: readonly ConfigOption[] = [
     1
   ),
   int("loopGuard.stopAt", "guards", "loop: stop at", "repeats before stopping the turn", "20", 1),
+  // 子 agent（决策 457、480）
+  int(
+    "agents.maxConcurrent",
+    "agents",
+    "max running sub-agents",
+    "sub-agents one session can have running at once",
+    "20",
+    1
+  ),
+  int(
+    "agents.maxDepth",
+    "agents",
+    "max nesting depth",
+    "levels of sub-agents below a session",
+    "3",
+    1
+  ),
+  int(
+    "agents.runWaitMinutes",
+    "agents",
+    "pigeon run wait (minutes)",
+    "how long pigeon run waits for sub-agents after the main agent stops; 0 = no limit",
+    "10",
+    0
+  ),
   bool("disableAllHooks", "guards", "disable all hooks", "turn every hook off", "false"),
   int(
     "stopHookBlockCap",

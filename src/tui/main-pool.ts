@@ -2,9 +2,10 @@
 // 起点按设置的 worktree.baseRef，缺省远端默认分支，取远端在后台进行、不卡界面；名字为"面板里的名字-会话号末六位"；开着期间
 // 持有工作树的在用锁）。审批汇到主会话的同一队列并写明来源会话；与主会话一样挂打转检测、后台作业通知（空闲时叫醒）、
 // 会话级钩子（SessionStart、UserPromptSubmit、SessionEnd）与 MCP 提示。停下即释放运行面，工作树没有改动即删、有改动保留
-//（不问）。/take 完整取回之后：已停的会话删工作树与分支（同 448），还开着的把起点前移到取回时的样子。会话面板派出的会话
-// 不带派 worker 的工具（worker 属于派出它的会话）。
+//（不问）。/take 完整取回之后：已停的会话删工作树与分支（同 448），还开着的把起点前移到取回时的样子。决策 457、480：面板里的
+// 会话同样在通讯录里登记、能派子 agent（子 agent 的审批写明所属会话与子 agent 的路径）；会话停下时它派出的子 agent 一并停下。
 import { realpathSync } from "node:fs";
+import type { AgentTypeCatalog } from "../application/agent-types.ts";
 import { summarizeArgs } from "../application/format.ts";
 import type { LaunchFlags } from "../application/launch-flags.ts";
 import { attachLoopGuard } from "../application/loop-guard.ts";
@@ -15,7 +16,11 @@ import {
   prefetchWorktreeBase,
   removeNamedWorktree,
 } from "../application/named-worktree.ts";
-import { disposeRuntime, type MemoryWriteConfig } from "../application/runtime.ts";
+import {
+  type ApprovalModeCell,
+  disposeRuntime,
+  type MemoryWriteConfig,
+} from "../application/runtime.ts";
 import { validSessionName } from "../application/session-name.ts";
 import {
   advanceTakeBase,
@@ -24,6 +29,9 @@ import {
   takePooledChanges,
 } from "../application/session-pool.ts";
 import { openSessionRuntime } from "../application/session-runtime.ts";
+import { agentMessageEntry } from "../application/session-store.ts";
+import { createSubagentOpener } from "../application/subagent-runtime.ts";
+import type { AgentHub } from "../application/subagents.ts";
 import type { WarnSink } from "../application/warnings.ts";
 import type { WebToolsConfig } from "../application/web-tools.ts";
 import { isGitWorkspace } from "../application/worktree-cleanup.ts";
@@ -33,6 +41,7 @@ import { holdWorktreeInUse, worktreeInUseByOthers } from "../persistence/worktre
 import type { StreamFn } from "../pi-runtime/index.ts";
 import { newSessionId } from "../state/ids.ts";
 import {
+  agentLimitsOfSettings,
   loopGuardSettingsOf,
   type SettingsSnapshot,
   worktreeSectionOf,
@@ -58,6 +67,8 @@ export interface SessionPoolContext {
   notice(line: string, alert?: boolean): void;
   // 测试用：在用锁的家目录（缺省用户家目录）
   homeDir?: string;
+  // 决策 457、480：本进程的通讯录与子 agent 的类型；不给即面板里的会话不派子 agent
+  agents?: { hub: AgentHub; catalog(): AgentTypeCatalog };
 }
 
 type PooledLive = Pick<TuiRuntimeFace, "subscribe" | "subscribeStream" | "subscribeToolResults"> & {
@@ -105,13 +116,66 @@ export function createSessionPool(context: SessionPoolContext): {
       // 开着期间持有工作树的在用锁（/worktrees 与退出清理据此不删开着的）；共用目录的没有工作树
       const releaseInUse =
         worktree !== undefined ? holdWorktreeInUse(worktree.path, context.homeDir) : () => {};
-      let opened: Awaited<ReturnType<typeof openSessionRuntime>>;
+      let opened: Awaited<ReturnType<typeof openSessionRuntime>> | undefined;
+      // 决策 457、480：在通讯录里登记（运行面开好之前就登记：它的工具接口要交给运行面）
+      // 决策 469：这个会话自己的审批模式（从主会话当时的起）；它派出的子 agent 共用
+      const modeCell: ApprovalModeCell = {
+        current: context.approvalMode?.() ?? (context.flags.yolo ? "yolo" : "prompt"),
+      };
+      const workspaceOf = (): string => worktree?.path ?? context.governanceRoot;
+      const bundleOf = () => {
+        if (opened === undefined) throw new Error(`${name} isn't open yet`);
+        return opened.bundle;
+      };
+      const registration = context.agents?.hub.registerSession({
+        sessionId,
+        name: () => name,
+        deliver: (text) => {
+          bundleOf().adapter.notify(text);
+          hooks.wake();
+        },
+        pendingNotices: () => opened?.bundle.adapter.pendingNotices() ?? 0,
+        record: (entry) => bundleOf().sessionStore.append(agentMessageEntry(entry)),
+        open: createSubagentOpener({
+          governanceRoot: context.governanceRoot,
+          streamFn: context.streamFn,
+          flags: context.flags,
+          warn: context.warn,
+          topSessionId: () => sessionId,
+          topSessionFile: () => bundleOf().sessionStore.filePath(),
+          topContext: () => ({
+            sessionId,
+            settings,
+            approvalModeCell: modeCell,
+            workspaceRoot: workspaceOf(),
+            ...(bundleOf().mcp !== undefined ? { mcp: bundleOf().mcp } : {}),
+            ...(context.webToolsFor?.(settings) ?? {}),
+            grants: bundleOf().grantStore.list(),
+            modelId: context.flags.modelId,
+            transcript: () => bundleOf().adapter.transcript(),
+          }),
+          createApprovalHandler: (grants, path) => {
+            const inner = context.createApprovalHandler(grants);
+            return async (request) => {
+              hooks.waiting(`${path}: ${request.toolName} ${summarizeArgs(request.args)}`);
+              try {
+                return await inner({ ...request, sessionId, pooled: { name }, subagent: { path } });
+              } finally {
+                hooks.waiting(undefined);
+              }
+            };
+          },
+          notice: (path, line) => alert(`[${path}] ${line}`),
+          ...(context.homeDir !== undefined ? { homeDir: context.homeDir } : {}),
+        }),
+        catalog: () => context.agents?.catalog() ?? { types: [], problems: [] },
+        limits: () => agentLimitsOfSettings(settings),
+      });
       try {
         opened = await openSessionRuntime({
           governanceRoot: context.governanceRoot,
-          approvalModeCell: {
-            current: context.approvalMode?.() ?? (context.flags.yolo ? "yolo" : "prompt"),
-          },
+          approvalModeCell: modeCell,
+          ...(registration !== undefined ? { agents: registration.host } : {}),
           // 共用目录的会话工作区就是当前目录（会话文件头记的工作目录即此，没有工作树）
           workspaceRoot: worktree?.path ?? context.governanceRoot,
           sessionId,
@@ -137,6 +201,7 @@ export function createSessionPool(context: SessionPoolContext): {
           },
         });
       } catch (error) {
+        await registration?.unregister();
         releaseInUse();
         if (worktree !== undefined) {
           await closeNamedWorktree(worktree, { write: say }).catch(() => "kept");
@@ -211,6 +276,8 @@ export function createSessionPool(context: SessionPoolContext): {
         isRunning: () => adapter.isRunning(),
         transcript: () => adapter.transcript(),
         close: async () => {
+          // 决策 480：会话停下时它派出的子 agent 一并停下并释放
+          await registration?.unregister();
           detachLoopGuard();
           if (sessionHooks !== undefined && !sessionHooks.disabled) {
             await sessionHooks.runEvent("SessionEnd", "exit", { reason: "exit" }).catch(() => {});

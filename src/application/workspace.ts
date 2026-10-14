@@ -21,7 +21,14 @@ export function prepareWorkspace(root: string): string {
 }
 
 export function restoreGrantSeed(workspaceRoot: string, sessionId: SessionId): ActiveGrant[] {
-  const dir = sessionsDirOf(workspaceRoot);
-  const loaded = loadStoreSession(dir, sessionId);
-  return loaded !== undefined ? storeActiveGrants(loaded.view) : [];
+  return loadStoreSessionGrants(sessionsDirOf(workspaceRoot), sessionId) ?? [];
+}
+
+// 按会话根找会话、取其生效的放权；会话不在为 undefined（决策 480：子 agent 的会话在所属会话名下的子文件夹）
+export function loadStoreSessionGrants(
+  sessionsDir: string,
+  sessionId: string
+): ActiveGrant[] | undefined {
+  const loaded = loadStoreSession(sessionsDir, sessionId);
+  return loaded !== undefined ? storeActiveGrants(loaded.view) : undefined;
 }

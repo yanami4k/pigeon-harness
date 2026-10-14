@@ -51,6 +51,7 @@ export const SessionEntryType = {
   RewindStep: "pigeon.rewind-step",
   ApprovalMode: "pigeon.approval-mode",
   GitHead: "pigeon.git-head",
+  AgentMessage: "pigeon.agent-message",
 } as const;
 export type SessionEntryTypeName = (typeof SessionEntryType)[keyof typeof SessionEntryType];
 
@@ -604,6 +605,18 @@ export const GitHeadDataSchema = Type.Object({
 });
 export type GitHeadData = Static<typeof GitHeadDataSchema>;
 
+// 决策 457、480：agent 之间的一条传话，写在收件方的会话记录里——谁发给谁（名字）、哪一种（派出时交代的任务、消息、
+// 交回的结果）、正文（不含信任说明与边界标记）。trace 据此认出 agent 之间的传话，不靠文字前缀
+export const AgentMessageDataSchema = Type.Object({
+  version: VERSION,
+  from: Type.String({ minLength: 1 }),
+  to: Type.String({ minLength: 1 }),
+  kind: Type.Union([Type.Literal("task"), Type.Literal("message"), Type.Literal("result")]),
+  text: Type.String(),
+  sentAt: Type.Integer({ minimum: 0 }),
+});
+export type AgentMessageData = Static<typeof AgentMessageDataSchema>;
+
 // 一条待写的自定义条目：customType 与数据成对
 export type SessionCustomEntry =
   | { customType: typeof SessionEntryType.RunStart; data: RunStartData }
@@ -626,7 +639,8 @@ export type SessionCustomEntry =
   | { customType: typeof SessionEntryType.Rewind; data: RewindData }
   | { customType: typeof SessionEntryType.RewindStep; data: RewindStepData }
   | { customType: typeof SessionEntryType.ApprovalMode; data: ApprovalModeData }
-  | { customType: typeof SessionEntryType.GitHead; data: GitHeadData };
+  | { customType: typeof SessionEntryType.GitHead; data: GitHeadData }
+  | { customType: typeof SessionEntryType.AgentMessage; data: AgentMessageData };
 
 // 各 customType 的数据 schema（读者校验用）
 export const SESSION_ENTRY_SCHEMAS = {
@@ -651,6 +665,7 @@ export const SESSION_ENTRY_SCHEMAS = {
   [SessionEntryType.RewindStep]: RewindStepDataSchema,
   [SessionEntryType.ApprovalMode]: ApprovalModeDataSchema,
   [SessionEntryType.GitHead]: GitHeadDataSchema,
+  [SessionEntryType.AgentMessage]: AgentMessageDataSchema,
 } as const;
 
 // 自定义条目的写入面：写者自身从不抛，写失败按内部故障处理（向标准错误输出去重告警），不中断运行。
@@ -659,7 +674,8 @@ export interface SessionEntrySink {
   append(entry: SessionCustomEntry): void;
 }
 
-// 会话文件头 metadata 里 Pigeon 的一段（只在分叉时写一次）：分支会话记来源会话、分叉点、快照与工作树。父会话号在文件头的
+// 会话文件头 metadata 里 Pigeon 的一段（只在新建时写一次）：分支会话记来源会话、分叉点、快照与工作树；子 agent 的会话
+// 记名字、类型、从会话往下的路径与所属会话（决策 480），带上下文起步的另记文件开头复制了派出方会话的几条。父会话号在文件头的
 // parentSessionId 上，不重复。旧会话里 worker 会话头上的 worker 一段不再认（决策 477），按普通会话读
 export const SessionHeaderMetadataSchema = Type.Object({
   version: VERSION,
@@ -671,6 +687,17 @@ export const SessionHeaderMetadataSchema = Type.Object({
       workspace: GitWorktreeWorkspaceSchema,
       trigger: ForkTriggerSchema,
       startedAt: Type.Integer({ minimum: 0 }),
+    })
+  ),
+  agent: Type.Optional(
+    Type.Object({
+      name: Type.String({ minLength: 1 }),
+      type: Type.String({ minLength: 1 }),
+      path: Type.String({ minLength: 1 }),
+      // 所属会话（最上层）
+      topSessionId: SessionIdSchema,
+      // 带上下文起步：文件开头从派出方会话复制来的条目数（这一段的用量属于派出方，读者跳过）
+      inheritedEntries: Type.Optional(Type.Integer({ minimum: 1 })),
     })
   ),
 });

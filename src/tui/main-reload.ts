@@ -12,6 +12,7 @@ import {
   openSessionRuntime,
 } from "../application/session-runtime.ts";
 import type { StatusFacts } from "../application/status-sources.ts";
+import type { AgentToolsHost } from "../application/subagents.ts";
 import type { WebToolsConfig } from "../application/web-tools.ts";
 import type { StreamFn } from "../pi-runtime/index.ts";
 import type { SessionId } from "../state/ids.ts";
@@ -49,6 +50,8 @@ export interface MainReloadContext {
   webToolsFor: (snapshot: SettingsSnapshot) => { webTools?: WebToolsConfig };
   hooksNotice: (line: string) => void;
   onMcpNote: (note: string) => void;
+  // 决策 457、480：当前会话在通讯录里的工具接口（重建的运行面照常注册四件工具；/resume 换会话时换成新的）
+  agents?: AgentToolsHost;
   // 测试注入：用户级目录与 MCP 启动
   homeDir?: string;
   startMcp?: OpenSessionRuntimeRequest["startMcp"];
@@ -89,6 +92,7 @@ export async function reopenMainSessionForReload(
     createApprovalHandler: context.createApprovalHandler,
     // 决策 331：/reload 重建的运行面照常注册 update_memory
     memoryWrite: context.memoryWrite,
+    ...(context.agents !== undefined ? { agents: context.agents } : {}),
     resume: true,
     reloadFrom: current.bundle,
     hooksNotice: context.hooksNotice,

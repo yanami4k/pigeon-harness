@@ -30,6 +30,7 @@ import {
   extractCommandArg,
   extractPathArg,
   grantScopeFor,
+  grantTargetOf,
   hostGrantKeyLabel,
   offersDirectoryGrant,
   outsidePathLine,
@@ -127,8 +128,8 @@ export function approvalBlockText(
           : request.tier === "exec"
             ? `${APPROVAL_KEYS_BASE} / ${execGrantKeyLabel(request)}`
             : directoryGrant
-              ? `${APPROVAL_KEYS_BASE} / [a] allow for this session / [d] allow for this session (this directory)`
-              : `${APPROVAL_KEYS_BASE} / [a] allow for this session`
+              ? `${APPROVAL_KEYS_BASE} / [a] allow for ${grantTargetOf(request)} / [d] allow for ${grantTargetOf(request)} (this directory)`
+              : `${APPROVAL_KEYS_BASE} / [a] allow for ${grantTargetOf(request)}`
     )
   );
   return lines.join("\n");
@@ -160,8 +161,8 @@ function keysLabel(request: ApprovalRequest, directoryGrant: boolean): string {
         : request.tier === "exec"
           ? `${APPROVAL_KEYS_BASE} / ${execGrantKeyLabel(request)}`
           : directoryGrant
-            ? `${APPROVAL_KEYS_BASE} / [a] allow for this session / [d] allow for this session (this directory)`
-            : `${APPROVAL_KEYS_BASE} / [a] allow for this session`
+            ? `${APPROVAL_KEYS_BASE} / [a] allow for ${grantTargetOf(request)} / [d] allow for ${grantTargetOf(request)} (this directory)`
+            : `${APPROVAL_KEYS_BASE} / [a] allow for ${grantTargetOf(request)}`
   );
 }
 
@@ -247,8 +248,10 @@ function subjectOf(request: ApprovalRequest): string {
 }
 
 function sourceOf(request: ApprovalRequest): string {
-  const name = request.pooled?.name;
-  return name !== undefined ? `[${name}] ` : "";
+  const parts = [request.pooled?.name, request.subagent?.path].filter(
+    (part): part is string => part !== undefined
+  );
+  return parts.length > 0 ? `[${parts.join(" › ")}] ` : "";
 }
 
 export function approvedLine(request: ApprovalRequest, note = ""): string {
@@ -269,7 +272,7 @@ function grantedLine(
     scope.command ??
     scope.host ??
     (scope.pathPrefix !== undefined ? `in ${scope.pathPrefix}` : undefined);
-  return `${sourceOf(request)}✓ allowed for this session: ${request.toolName}${what !== undefined ? ` ${what}` : ""}`;
+  return `${sourceOf(request)}✓ allowed for ${grantTargetOf(request)}: ${request.toolName}${what !== undefined ? ` ${what}` : ""}`;
 }
 
 // 面板版 handler 工厂（决策 025 的注入形态：装配根先建 grantStore，[a]/[d] 放权键需要它）

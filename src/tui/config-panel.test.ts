@@ -105,7 +105,7 @@ test("/config 打开整屏的设置视图：每项下面常显说明、生效值
     // 分组：标签行写各组，当前组加方括号；只列当前组的项，每一项的说明都常显（不只选中项），带缺省值
     assert.match(
       screen,
-      /\[model\] {2}web {2}context {2}tools {2}guards & hooks {2}workspace {2}interface {2}keys/
+      /\[model\] {2}web {2}context {2}tools {2}agents {2}guards & hooks {2}workspace {2}interface {2}keys/
     );
     const model = CONFIG_OPTIONS.filter((option) => option.group === "model");
     for (const option of model) {

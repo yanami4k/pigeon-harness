@@ -17,7 +17,15 @@ const ARGS_SUMMARY_LIMIT = 160;
 export function approvalSourceLine(request: {
   readonly sessionId?: string;
   readonly pooled?: { readonly name: string };
+  readonly subagent?: { readonly path: string };
 }): string | undefined {
+  // 决策 480：子 agent（嵌套带路径）；所属会话是面板里的会话时一并写明
+  if (request.subagent !== undefined) {
+    return (
+      `source: sub-agent ${request.subagent.path}` +
+      (request.pooled !== undefined ? ` | session ${request.pooled.name}` : "")
+    );
+  }
   // 决策 443：会话面板派出的会话
   if (request.pooled !== undefined) {
     return (
@@ -26,6 +34,18 @@ export function approvalSourceLine(request: {
     );
   }
   return undefined;
+}
+
+// 决策 480：agent 之间的一条传话（trace 与 replay 共用）：哪一种、谁发给谁、正文开头一行
+export function agentMessageLine(data: {
+  from: string;
+  to: string;
+  kind: "task" | "message" | "result";
+  text: string;
+}): string {
+  const first = data.text.split("\n").find((line) => line.trim() !== "") ?? "";
+  const preview = first.length > 80 ? `${first.slice(0, 80)}…` : first;
+  return `agent ${data.kind} | ${data.from} -> ${data.to} | ${preview}`;
 }
 
 // 稳定 id 短哈希：`exec_` 等前缀 + ULID 前 8 位 + 省略号；非稳定 id（toolCallId 等）原样

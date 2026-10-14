@@ -6,6 +6,7 @@
 // 验证、worker、分叉、授权、Run 收尾）按会话文件里的顺序逐条呈现。
 import { createHash } from "node:crypto";
 import {
+  agentMessageLine,
   continuationLine,
   evalVerdictLabel,
   failureBadge,
@@ -56,6 +57,7 @@ const ITEM_TYPE: Record<ViewItem["kind"], string> = {
   "request-retry": "pigeon.request-retry",
   "approval-mode": "pigeon.approval-mode",
   "git-head": "pigeon.git-head",
+  "agent-message": "pigeon.agent-message",
 };
 
 // 单条条目的关键字段摘要（各类型的要点，通俗措辞）
@@ -156,6 +158,8 @@ function itemDetail(item: ViewItem): string {
       return item.data.branch !== undefined
         ? `branch ${item.data.branch}`
         : `detached at ${item.data.commit ?? "?"}`;
+    case "agent-message":
+      return agentMessageLine(item.data);
     case "approval-mode":
       return `approval mode ${item.data.from === "yolo" ? "yolo" : "ask"} -> ${item.data.to === "yolo" ? "yolo" : "ask"}`;
     case "background-job": {

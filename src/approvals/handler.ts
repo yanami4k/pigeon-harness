@@ -24,6 +24,9 @@ export interface ApprovalRequest {
   readonly sessionId?: SessionId;
   // 决策 443：会话面板派出的独立会话的审批汇到同一队列时在场（面板写明来源会话的名字）
   readonly pooled?: { readonly name: string };
+  // 决策 480：子 agent 的审批汇到所属会话的队列时在场——从会话往下的名字路径（"general-1 › explore-2"）；
+  // 这时放权只记在这个子 agent 自己的会话里，按键说明写 for this sub-agent
+  readonly subagent?: { readonly path: string };
   // M5.5 S3（决策 040）：放权落点——[a]/[d] 创建的会话 grant 写进请求来源会话的存储；
   // 缺省 = 审批 handler 绑定的主会话存储
   readonly grants?: GrantCreator;
@@ -127,11 +130,16 @@ export function outsidePathLine(request: ApprovalRequest): string | undefined {
   return `outside workspace (read-only): ${request.outsidePath}`;
 }
 
+// 放权管到哪：会话自己的请求为本会话，子 agent 的请求只对这个子 agent 有效（决策 480）
+export function grantTargetOf(request: Pick<ApprovalRequest, "subagent">): string {
+  return request.subagent !== undefined ? "this sub-agent" : "this session";
+}
+
 // exec 档 [a] 键的提示文案
 export function execGrantKeyLabel(request: ApprovalRequest): string {
   return request.needsShell === true
-    ? "[a] allow this exact command for this session (shell)"
-    : "[a] allow this exact command for this session";
+    ? `[a] allow this exact command for ${grantTargetOf(request)} (shell)`
+    : `[a] allow this exact command for ${grantTargetOf(request)}`;
 }
 
 // 放权作用域（M5.5 S5，决策 048 及其修订）：exec 档 [a]/[d] 都收窄为这条一模一样的命令串（精确匹配，§3.9
@@ -162,5 +170,5 @@ export function grantScopeFor(
 
 // 网络档 [a] 键的提示文案（决策 290）：以后都允许访问这个网站
 export function hostGrantKeyLabel(request: ApprovalRequest): string {
-  return `[a] allow ${request.host ?? ""} for this session`;
+  return `[a] allow ${request.host ?? ""} for ${grantTargetOf(request)}`;
 }

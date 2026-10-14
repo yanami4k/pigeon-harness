@@ -2,8 +2,8 @@
 // DeepSeek 接入（provider deepseek）的回复自带价格为 0，这类回复按官方人民币价目
 // （state/model-pricing.ts，含高峰时段）与该条回复的开始、结束时刻计价，单列为人民币（显示为 ¥）。其余价格为零而用了 token 的
 // 记作"无价格的 token"，状态栏据此注明无价格，不当作免费。
-// 本会话花费 = 主会话自己的消息 + 父会话是它的 worker 会话 + 从它分叉出的复盘会话；后台补做的复盘补的是别的会话，
-// 其花费记在那个会话名下（补做进度里单独显示），不并入当前会话。/fork 分支与失败自动分叉重试是独立的会话，不计入。
+// 本会话花费 = 会话自己的消息 + 它（连同各层）派出的子 agent 的会话（决策 480，在它名下的 subagents 文件夹里；带上下文起步时
+// 复制来的那一段不计）+ 从它分叉出的复盘会话。旧会话里的 worker 会话不再计入（决策 457）。/fork 分支是独立的会话，不计入。
 // 只读会话文件，不写任何记录。
 import {
   listSessionRefs,
@@ -11,8 +11,10 @@ import {
   readSessionView,
   sessionRefTime,
 } from "../persistence/session-catalog.ts";
+import type { SessionFileRef } from "../persistence/session-reader.ts";
 import { DEEPSEEK_PROVIDER } from "../pi-runtime/deepseek-model.ts";
 import { requestCostCny } from "../state/model-pricing.ts";
+import { subagentSessionsDir } from "../state/paths.ts";
 import type { SessionView } from "../state/session-view.ts";
 import { toolResultModelUsage } from "../state/tool-usage.ts";
 
@@ -129,6 +131,12 @@ export function sessionCostTally(sessionsRoot: string, sessionId: string): CostT
   return ref !== undefined ? branchesCostTally(readSessionBranchViews(ref)) : emptyCostTally();
 }
 
+// 决策 480：一个会话（连同各层）派出的子 agent 的会话文件；会话自己还没有文件即没有
+export function subagentSessionRefs(sessionsRoot: string, sessionId: string): SessionFileRef[] {
+  const top = listSessionRefs(sessionsRoot).find((file) => file.sessionId === sessionId);
+  return top !== undefined ? listSessionRefs(subagentSessionsDir(top.path, sessionId)) : [];
+}
+
 // 复盘会话：Run 开始条目带复盘标记（175、192、207）
 export function isReviewSession(view: SessionView): boolean {
   return view.runs.some((run) => run.start.memoryReview !== undefined);
@@ -139,9 +147,12 @@ export function isReviewForkOf(view: SessionView, sessionId: string): boolean {
   return view.parentSessionId === sessionId && isReviewSession(view);
 }
 
-// 续接会话时的已有花费：主会话 + 从它分叉出的复盘（旧 worker 会话不再计入，决策 457）
+// 续接会话时的已有花费：会话自己 + 它的子 agent + 从它分叉出的复盘（旧 worker 会话不再计入，决策 457）
 export function accumulatedSessionCost(sessionsRoot: string, sessionId: string): CostTally {
   const tally = emptyCostTally();
+  for (const ref of subagentSessionRefs(sessionsRoot, sessionId)) {
+    mergeCostTally(tally, branchesCostTally(readSessionBranchViews(ref)));
+  }
   for (const ref of listSessionRefs(sessionsRoot)) {
     if (ref.sessionId !== sessionId) {
       // 只有子会话才可能计入；先按文件名排除不了，读头部即读全文，这里一并投影
@@ -159,19 +170,35 @@ export function accumulatedSessionCost(sessionsRoot: string, sessionId: string):
   return tally;
 }
 
-// 本会话打开之后新出现的子会话（worker 与复盘）：收尾后计入一次，没收尾的下次再看。
+// 本会话打开之后新出现的子会话（复盘）：收尾后计入一次，没收尾的下次再看。
 // 只读创建时刻不早于打开时刻的会话文件；判明不是本会话子会话的（别的会话、/fork 分支）记下不再读。
+// 决策 480：子 agent 的会话会多次接着干，按条目计——每次只计还没计过的消息（打开时已有的条目算在续接的已有花费里）
 export class ChildSessionCosts {
   private readonly settled = new Set<string>();
   private readonly ignored = new Set<string>();
   private readonly sessionsRoot: string;
   private readonly parentId: string;
   private readonly since: number;
+  // 子 agent 会话里已计过的条目
+  private readonly agentCounted = new Map<string, Set<string>>();
 
   constructor(sessionsRoot: string, parentId: string, since: number) {
     this.sessionsRoot = sessionsRoot;
     this.parentId = parentId;
     this.since = since;
+    for (const ref of this.agentRefs()) {
+      const counted = new Set<string>();
+      for (const view of readSessionBranchViews(ref)) costTallyOfView(view, counted);
+      this.agentCounted.set(ref.sessionId, counted);
+    }
+  }
+
+  private agentRefs(): SessionFileRef[] {
+    try {
+      return subagentSessionRefs(this.sessionsRoot, this.parentId);
+    } catch {
+      return [];
+    }
   }
 
   // 决策 301：这个子会话的花费是否已由 collect 计入（界面据此不再把它在跑时的实时花费另算一遍）
@@ -182,6 +209,16 @@ export class ChildSessionCosts {
   // 新收尾的子会话的花费合计（没有即为零）
   collect(): CostTally {
     const delta = emptyCostTally();
+    for (const ref of this.agentRefs()) {
+      let counted = this.agentCounted.get(ref.sessionId);
+      if (counted === undefined) {
+        counted = new Set<string>();
+        this.agentCounted.set(ref.sessionId, counted);
+      }
+      for (const view of readSessionBranchViews(ref)) {
+        mergeCostTally(delta, costTallyOfView(view, counted));
+      }
+    }
     for (const ref of listSessionRefs(this.sessionsRoot)) {
       const id = ref.sessionId;
       if (

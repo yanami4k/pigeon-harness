@@ -159,7 +159,7 @@ export interface SettingsReloaderDeps {
   apply(snapshot: SettingsSnapshot): Promise<void>;
   // --no-hooks（本次运行停用全部钩子）：重读出的新快照也停用，reload 不把钩子带回来
   hooksDisabled?: boolean;
-  // 现在不能重载的原因（有 worker 在跑等）；可以即 undefined
+  // 现在不能重载的原因（有子 agent 在跑等）；可以即 undefined
   busy?(): string | undefined;
   // 沙箱会话的会话号（在沙箱里才给）：sandbox 一节有变化时提示退出后续跑才对容器生效
   sandboxSessionId?(): string | undefined;

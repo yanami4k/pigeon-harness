@@ -145,6 +145,17 @@ export function projectSkillsDir(root: string): string {
   return path.join(root, PIGEON_DIR, "skills");
 }
 
+// 决策 480：子 agent 的会话根——所属会话的会话文件所在目录下 <所属会话号>/subagents/（列会话只看会话根下一层，
+// 这里的不进 /resume 与会话检索）
+export function subagentSessionsDir(topSessionFile: string, topSessionId: string): string {
+  return path.join(path.dirname(topSessionFile), topSessionId, "subagents");
+}
+
+// 决策 457：项目级子 agent 类型（一个类型一个 Markdown 文件）
+export function projectAgentsDir(root: string): string {
+  return path.join(root, PIGEON_DIR, "agents");
+}
+
 // 旧的项目级人写说明（决策 330 改读 AGENTS.md；迁移命令改名备份）
 export function projectMemoryDir(root: string): string {
   return path.join(root, PIGEON_DIR, "memory");
@@ -228,6 +239,11 @@ export function configTrustPathOf(homeDir: string = homedir()): string {
 
 export function userSkillsDir(homeDir: string = homedir()): string {
   return path.join(homeDir, PIGEON_DIR, "skills");
+}
+
+// 决策 457：用户级子 agent 类型
+export function userAgentsDir(homeDir: string = homedir()): string {
+  return path.join(homeDir, PIGEON_DIR, "agents");
 }
 
 // 旧的用户级人写说明（决策 330：迁移命令改名为 ~/.pigeon/AGENTS.md）

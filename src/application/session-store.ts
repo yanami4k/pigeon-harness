@@ -47,15 +47,25 @@ export function storeFaultWarner(sink?: WarnSink): StoreFaultHandler {
   return (fault) => warn(fault, `session store warning: ${failureDetail(fault)}`);
 }
 
-// worker 与分支会话的来历（新建会话文件时写进文件头）
+// 分支会话与子 agent 会话的来历（新建会话文件时写进文件头）
 export interface StoreLineage {
   branch?: BranchHeaderInput;
+  // 决策 480：子 agent——派出方的会话号记在文件头的 parentSessionId 上，其余进 metadata
+  agent?: NonNullable<SessionHeaderMetadata["agent"]> & { parentSessionId: string };
 }
 
 function headerOf(lineage: StoreLineage | undefined): {
   parentSessionId?: string;
   metadata?: SessionHeaderMetadata;
 } {
+  const agent = lineage?.agent;
+  if (agent !== undefined) {
+    const { parentSessionId, ...metadata } = agent;
+    return {
+      parentSessionId,
+      metadata: { version: SESSION_ENTRY_VERSION, agent: metadata },
+    };
+  }
   const branch = lineage?.branch;
   if (branch === undefined) {
     return {};
@@ -112,6 +122,19 @@ export function openSessionStore(input: {
 }
 
 // ---- 写入输入 → 条目 ----
+
+// 决策 457、480：agent 之间的一条传话（写在收件方的会话记录里）
+export function agentMessageEntry(record: {
+  from: string;
+  to: string;
+  kind: "task" | "message" | "result";
+  text: string;
+}): SessionCustomEntry {
+  return {
+    customType: SessionEntryType.AgentMessage,
+    data: { version: SESSION_ENTRY_VERSION, ...record, sentAt: Date.now() },
+  };
+}
 
 // 决策 436：发消息时的工作区快照
 export function turnSnapshotEntry(

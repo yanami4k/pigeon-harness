@@ -18,6 +18,8 @@ import { homedir } from "node:os";
 import { createInterface } from "node:readline/promises";
 import { pathToFileURL } from "node:url";
 import { ProcessTerminal } from "@earendil-works/pi-tui";
+import { MailGate } from "../application/agent-mail.ts";
+import { type AgentTypeCatalog, loadAgentTypes } from "../application/agent-types.ts";
 import type { CheckpointAttachment } from "../application/checkpoints.ts";
 import {
   configView,
@@ -87,7 +89,10 @@ import {
   type TrustChoice,
   trustPromptText,
 } from "../application/session-settings.ts";
+import { agentMessageEntry } from "../application/session-store.ts";
 import { createSettingsReloader } from "../application/settings-reload.ts";
+import { createSubagentOpener, restoredAgentsOf } from "../application/subagent-runtime.ts";
+import { AgentHub, type AgentToolsHost } from "../application/subagents.ts";
 import { renderTaskList } from "../application/task-list-tool.ts";
 import { closeTuiSession } from "../application/tui-exit.ts";
 import { prepareWorkspace } from "../application/workspace.ts";
@@ -100,6 +105,7 @@ import { asSessionId, newSessionId, type SessionId } from "../state/ids.ts";
 import { FROM_BUNDLE } from "../state/package-paths.ts";
 import { tuiLogDirOf } from "../state/paths.ts";
 import {
+  agentLimitsOfSettings,
   keybindingsSectionOf,
   loopGuardSettingsOf,
   memoryLimitsOf,
@@ -314,6 +320,76 @@ export async function main(argv: string[]): Promise<void> {
     hooksNotice: (line) => say(line, true),
     onMcpNote: (note) => say(`[mcp] ${note}`, true),
   };
+  // 决策 457、480：本进程的通讯录与子 agent（沙箱会话与 --no-subagents 不开）。类型开局读一次，/reload 重读；
+  // 读不成的类型文件开局报一行
+  const agentHub =
+    sandbox === undefined && flags.subagents
+      ? new AgentHub({ mail: new MailGate(), onChange: () => shellHolder.current?.agentsChanged() })
+      : undefined;
+  let agentCatalog: AgentTypeCatalog = loadAgentTypes({ governanceRoot });
+  if (agentHub !== undefined) {
+    for (const problem of agentCatalog.problems) say(`[agents] ${problem}`, true);
+  }
+  // 当前会话在通讯录里的登记（/resume 换会话时换登记）
+  let mainAgents: { host: AgentToolsHost; unregister: () => Promise<void> } | undefined;
+  function registerMainAgents(id: SessionId): AgentToolsHost | undefined {
+    if (agentHub === undefined) return undefined;
+    const registration = agentHub.registerSession({
+      sessionId: id,
+      name: () => sessionName,
+      deliver: (text) => {
+        slot.bundle.adapter.notify(text);
+        shellHolder.current?.runNotices();
+      },
+      pendingNotices: () => slot.bundle.adapter.pendingNotices(),
+      record: (entry) => slot.bundle.sessionStore.append(agentMessageEntry(entry)),
+      open: createSubagentOpener({
+        governanceRoot,
+        streamFn,
+        flags,
+        warn,
+        topSessionId: () => id,
+        topSessionFile: () => slot.bundle.sessionStore.filePath(),
+        topContext: () => ({
+          sessionId: id,
+          settings,
+          approvalModeCell: mainModeCell,
+          workspaceRoot,
+          ...(slot.bundle.mcp !== undefined ? { mcp: slot.bundle.mcp } : {}),
+          ...webToolsOption,
+          grants: slot.bundle.grantStore.list(),
+          modelId: flags.modelId,
+          transcript: () => slot.bundle.adapter.transcript(),
+        }),
+        createApprovalHandler: (grants, path) => {
+          const inner = createHandler(grants);
+          return (request) => inner({ ...request, subagent: { path } });
+        },
+        notice: (path, line) => say(`[${path}] ${line}`, true),
+      }),
+      catalog: () => agentCatalog,
+      limits: () => agentLimitsOfSettings(settings),
+    });
+    mainAgents = registration;
+    reloadContext.agents = registration.host;
+    return registration.host;
+  }
+  async function restoreAgents(id: SessionId, bundle: RuntimeBundle): Promise<void> {
+    if (agentHub === undefined) return;
+    const file = await bundle.sessionStore.filePath();
+    if (file === undefined) return;
+    try {
+      agentHub.restoreAgents(id, restoredAgentsOf(file, id));
+    } catch (error) {
+      say(`[agents] ${error instanceof Error ? error.message : String(error)}`, true);
+    }
+  }
+  // 决策 480：当前会话还有子 agent 在跑时不能换会话、改设置、重读设置、移进工作树
+  const agentsBusy = (): string | undefined =>
+    agentHub !== undefined && agentHub.runningUnder(slot.sessionId) > 0
+      ? "sub-agents are running"
+      : undefined;
+  const mainAgentsHost = registerMainAgents(sessionId);
   const mainOpened = await openSessionRuntime({
     approvalModeCell: mainModeCell,
     governanceRoot: governanceRoot,
@@ -337,6 +413,7 @@ export async function main(argv: string[]): Promise<void> {
     warn,
     memoryWrite,
     createApprovalHandler: createHandler,
+    ...(mainAgentsHost !== undefined ? { agents: mainAgentsHost } : {}),
     // 决策 183、286：--continue / --resume <id> 直接续接——还原对话上下文；
     // 决策 432：新开的会话等第一次真要落盘时才建会话文件
     ...(resumed ? { resume: true } : { deferSessionFile: true }),
@@ -348,6 +425,8 @@ export async function main(argv: string[]): Promise<void> {
     throw error;
   });
   const mainBundle = mainOpened.bundle;
+  // 决策 480：续接的会话把它的子 agent 认回通讯录（没干完的标已中断，发消息即接着干）
+  if (resumed) await restoreAgents(sessionId, mainBundle);
   // 决策 445、446：续接的会话开在独立工作树里（--continue、--resume）：工作区与退出清理跟着它
   adoptWorkspace(mainOpened.scope.workspaceRoot);
   guardMainAgent(mainBundle);
@@ -375,6 +454,9 @@ export async function main(argv: string[]): Promise<void> {
           governanceRoot,
           streamFn,
           flags,
+          ...(agentHub !== undefined
+            ? { agents: { hub: agentHub, catalog: () => agentCatalog } }
+            : {}),
           settings: () => settings,
           warn,
           createApprovalHandler: createHandler,
@@ -424,6 +506,7 @@ export async function main(argv: string[]): Promise<void> {
     // 决策 442：/config 设置面板——生效值取本会话当前的设置快照，改动写用户级设置（随后壳按 /reload 重建）
     config: {
       view: () => configView(settings),
+      busy: agentsBusy,
       // 决策 465：键位组的改动名字带 keybindings: 前缀（值为键，空串 = 清空，default = 恢复缺省）
       set: (id: string, value: string) =>
         id.startsWith(KEYBINDING_ID_PREFIX)
@@ -491,6 +574,7 @@ export async function main(argv: string[]): Promise<void> {
       // 决策 324：--no-hooks 是本次运行的进程级开关，/reload 重读出的新快照同样停用钩子
       ...(flags.noHooks ? { hooksDisabled: true } : {}),
       sandboxSessionId: () => (sandbox !== undefined ? slot.sessionId : undefined),
+      busy: agentsBusy,
       apply: (snapshot) => rebuildMain(snapshot),
     }),
     // 决策 294 B1：/tasks 查看当前会话的任务清单（换绑后跟着当前会话）
@@ -559,6 +643,8 @@ export async function main(argv: string[]): Promise<void> {
     const reloaded = await reopenMainSessionForReload(reloadContext, snapshot, slot);
     const opened = reloaded.opened;
     settings = snapshot;
+    // 决策 480：子 agent 的类型随 /reload 重读
+    agentCatalog = loadAgentTypes({ governanceRoot });
     // 决策 439：键位随新快照重装
     shellHolder.current?.applyKeybindings(keybindingsSectionOf(snapshot));
     loopGuard = reloaded.loopGuard;
@@ -594,6 +680,11 @@ export async function main(argv: string[]): Promise<void> {
     return {
       root: governanceRoot,
       rebind: async (targetId) => {
+        const busy = agentsBusy();
+        if (busy !== undefined) throw new Error(`can't switch sessions: ${busy}`);
+        // 决策 480：换到的会话在通讯录里另行登记；换不成即退回原来的登记
+        const previousAgents = mainAgents;
+        const targetAgents = agentHub !== undefined ? registerMainAgents(targetId) : undefined;
         // 分支会话回到它的工作树（工作树缺失时响亮失败）；决策 3b：会话 grant 种子还原。两者与 MCP 启动一并在 session-runtime.ts（与 cli resume 同一份）
         const opened = await openSessionRuntime({
           approvalModeCell: mainModeCell,
@@ -613,10 +704,19 @@ export async function main(argv: string[]): Promise<void> {
           warn,
           memoryWrite,
           createApprovalHandler: createHandler,
+          ...(targetAgents !== undefined ? { agents: targetAgents } : {}),
           // 决策 183：还原对话上下文，悬空的工具调用补"结果未知"的工具结果
           resume: true,
           hooksNotice: (line) => shellHolder.current?.addSystem(line),
+        }).catch(async (error: unknown) => {
+          await mainAgents?.unregister();
+          mainAgents = previousAgents;
+          if (previousAgents !== undefined) reloadContext.agents = previousAgents.host;
+          throw error;
         });
+        // 换走的会话：它派出的子 agent 停下并释放；换到的会话认回它的子 agent
+        await previousAgents?.unregister();
+        await restoreAgents(targetId, opened.bundle);
         const bundle = opened.bundle;
         // 决策 445、446：换到的会话开在独立工作树里时，工作区与退出清理跟着它
         adoptWorkspace(opened.scope.workspaceRoot);
@@ -676,7 +776,7 @@ export async function main(argv: string[]): Promise<void> {
     governanceRoot,
     workspaceRoot: () => workspaceRoot,
     baseMode: () => worktreeBaseModeOf(worktreeSectionOf(settings)),
-    blocked: worktreeSwitch.blocked,
+    blocked: () => agentsBusy() ?? worktreeSwitch.blocked(),
     onEntered: worktreeSwitch.entered,
   });
   function setActiveWorktree(next: NamedWorktree | undefined): void {
@@ -747,6 +847,8 @@ export async function main(argv: string[]): Promise<void> {
       // 决策 323、324：退出前跑一次 SessionEnd（reason "exit"）——必须在释放运行面之前，记录才落盘
       // （331：补做复盘记录已随复盘删除，退出不再等补做）
       await shellHolder.current?.endSession("exit");
+      // 决策 480：子 agent 先停下并释放（它们与所属会话共用 MCP 连接）
+      await agentHub?.close().catch(() => {});
       // 决策 443：关掉 Pigeon，会话面板里的会话全部停止（工作树没有改动即删，有改动保留）
       poolExiting = true;
       const poolProblems = (await sessionPool?.pool.closeAll().catch(() => [])) ?? [];

@@ -13,6 +13,7 @@ import type { CompactionConfigInput } from "../pi-runtime/compaction.ts";
 import { pruneSeedFromEntries } from "../pi-runtime/context-prune.ts";
 import type { StreamFn } from "../pi-runtime/index.ts";
 import { restoreSessionContext } from "../pi-runtime/session-store.ts";
+import type { ActiveGrant } from "../state/grants.ts";
 import type { SessionId } from "../state/ids.ts";
 import type { LoopGuardSettings } from "../state/loop-guard-config.ts";
 import type { ThinkingLevel } from "../state/runtime-events.ts";
@@ -30,13 +31,16 @@ import {
   type MemoryWriteConfig,
   type RuntimeBundle,
   type RuntimeDeps,
+  type ToolScope,
 } from "./runtime.ts";
 import { type SessionRuntimeScope, sessionRuntimeScope } from "./session-scope.ts";
+import type { StoreLineage } from "./session-store.ts";
 import { statusFromEntries } from "./status-block.ts";
 import type { StatusFacts } from "./status-sources.ts";
+import type { AgentToolsHost } from "./subagents.ts";
 import type { WarnSink } from "./warnings.ts";
 import type { WebToolsConfig } from "./web-tools.ts";
-import { restoreGrantSeed, sessionsDirOf } from "./workspace.ts";
+import { loadStoreSessionGrants, restoreGrantSeed, sessionsDirOf } from "./workspace.ts";
 
 // 装配需要的运行参数（launch-flags.ts 的子集：解析出来直接传进来）
 export interface SessionRuntimeFlags {
@@ -121,6 +125,19 @@ export interface OpenSessionRuntimeRequest {
   hooksNotice?: WarnSink;
   // 决策 308：打转检测设定——此处挂到压缩与运行面内的用点；主 agent 由入口自己挂（叫停后的交代各入口不同）
   loopGuard?: LoopGuardSettings;
+  // 决策 457、480：本会话（或本子 agent）的子 agent 与通讯录工具；缺省不注册
+  agents?: AgentToolsHost;
+  // 决策 480：子 agent 的运行面——会话文件放在所属会话名下的子文件夹、文件头记来历，附加系统提示，按类型收窄工具，
+  // 派出方的放权作种子；不打快照
+  subagent?: SubagentRuntimeOptions;
+}
+
+export interface SubagentRuntimeOptions {
+  storeSessionsDir: string;
+  lineage: StoreLineage;
+  taskDirective: string;
+  toolScope?: ToolScope;
+  restoredGrants: readonly ActiveGrant[];
 }
 
 export interface OpenedSessionRuntime {
@@ -168,10 +185,17 @@ export async function openSessionRuntime(
     request.workspaceRoot !== undefined
       ? { ...derived, workspaceRoot: request.workspaceRoot }
       : derived;
+  const subagent = request.subagent;
+  // 决策 480：子 agent 的会话在所属会话名下的子文件夹
+  const storeDir = subagent?.storeSessionsDir ?? sessionsDirOf(request.governanceRoot);
   const restoredGrants =
     request.resume === true
-      ? restoreGrantSeed(request.governanceRoot, request.sessionId)
-      : undefined;
+      ? subagent !== undefined
+        ? (loadStoreSessionGrants(storeDir, request.sessionId) ?? [...subagent.restoredGrants])
+        : restoreGrantSeed(request.governanceRoot, request.sessionId)
+      : subagent !== undefined
+        ? [...subagent.restoredGrants]
+        : undefined;
   // 决策 252：沙箱会话不启动 MCP 服务（它们在宿主上运行，会越出容器）
   const startMcp =
     request.workspaceHost !== undefined
@@ -194,9 +218,7 @@ export async function openSessionRuntime(
   // 状态块照新规则追加）。状态变化通道的起点：/reload 接着旧运行面最后发出的那份（含模型自己写的记忆记成已发的），
   // 续跑取会话记录主分支最后一条状态条目；都没有时首次给完整块
   const recorded =
-    request.resume === true
-      ? loadStoreSession(sessionsDirOf(request.governanceRoot), request.sessionId)
-      : undefined;
+    request.resume === true ? loadStoreSession(storeDir, request.sessionId) : undefined;
   const recordedStart = recorded?.view.runs.at(-1)?.start;
   const recordedSystemPrompt = recordedStart?.systemPrompt;
   // 决策 430：生成这份系统提示时所用的模型（旧记录没有模型信息）
@@ -286,6 +308,15 @@ export async function openSessionRuntime(
       ...(request.statusFacts !== undefined ? { statusFacts: request.statusFacts } : {}),
       ...(reloadJobs !== undefined ? { reloadJobs } : {}),
       ...(previousJobs !== undefined ? { previousJobs } : {}),
+      ...(request.agents !== undefined ? { agents: request.agents } : {}),
+      ...(subagent !== undefined
+        ? {
+            storeSessionsDir: subagent.storeSessionsDir,
+            storeLineage: subagent.lineage,
+            taskDirective: subagent.taskDirective,
+            ...(subagent.toolScope !== undefined ? { toolScope: subagent.toolScope } : {}),
+          }
+        : {}),
       mcp,
     });
     let restored: OpenedSessionRuntime["restored"];
@@ -313,7 +344,7 @@ export async function openSessionRuntime(
     // M7（决策 078）：主会话在 git 工作区里打快照（写或命令确实改变文件后）
     // 执行端另一侧的工作区（沙箱）不在宿主上打快照
     const checkpoints =
-      request.workspaceHost === undefined
+      request.workspaceHost === undefined && subagent === undefined
         ? attachCheckpoints({
             bundle,
             workspaceRoot: scope.workspaceRoot,

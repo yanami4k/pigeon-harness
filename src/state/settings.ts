@@ -16,6 +16,7 @@ import path from "node:path";
 import type { TSchema } from "typebox";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
+import { type AgentLimits, AgentsSectionSchema, agentLimitsOf } from "./agents-config.ts";
 import { COMMAND_NAME_PATTERN, type CommandsConfig, CommandsSectionSchema } from "./commands.ts";
 import { type ConfigGrantRule, PermissionsSectionSchema } from "./grants.ts";
 import {
@@ -123,6 +124,7 @@ export const SETTINGS_SECTIONS = {
   keybindings: KeybindingsSectionSchema,
   modelRequest: ModelRequestSectionSchema,
   tui: TuiSectionSchema,
+  agents: AgentsSectionSchema,
 } as const satisfies Record<string, TSchema>;
 export type SettingsSectionName = keyof typeof SETTINGS_SECTIONS;
 
@@ -155,6 +157,7 @@ export const SettingsFileSchema = Type.Object(
     keybindings: Type.Optional(KeybindingsSectionSchema),
     modelRequest: Type.Optional(ModelRequestSectionSchema),
     tui: Type.Optional(TuiSectionSchema),
+    agents: Type.Optional(AgentsSectionSchema),
     [DISABLE_ALL_HOOKS_KEY]: Type.Optional(Type.Boolean()),
     [STOP_HOOK_BLOCK_CAP_KEY]: Type.Optional(Type.Integer({ minimum: 1 })),
     trustedDirectories: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
@@ -349,6 +352,7 @@ export interface MergedSettings {
   keybindingsIgnored?: SettingsLayer[];
   modelRequest?: ModelRequestSection;
   tui?: TuiSection;
+  agents?: Static<typeof AgentsSectionSchema>;
   trustedDirectories: string[];
   // 停用全部钩子（324）：三层按标量覆盖（高优先层说了算），缺省 false
   disableAllHooks: boolean;
@@ -588,6 +592,11 @@ export function backgroundJobLimitsOf(snapshot: SettingsSnapshot): BackgroundJob
 }
 
 // 决策 294 B1：任务清单开不开（tools.taskList，缺省开）
+// 决策 457、480：子 agent 的上限（agents 一节）
+export function agentLimitsOfSettings(snapshot: SettingsSnapshot): AgentLimits {
+  return agentLimitsOf(snapshot.merged.agents);
+}
+
 export function taskListEnabledOf(snapshot: SettingsSnapshot): boolean {
   return taskListEnabled(snapshot.merged.tools);
 }

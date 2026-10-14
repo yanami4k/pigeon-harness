@@ -154,7 +154,7 @@ export interface TuiRuntimeFace {
   // 决策 189：压缩完成的提示（自动与手动）与手动压缩；缺省（替身运行面）即不提示、/compact 不可用
   subscribeCompaction?(listener: (notice: CompactionNotice) => void): () => void;
   compact?(customInstructions?: string): Promise<ManualCompactionOutcome>;
-  // 决策 297：worker 完成通知——待递的条数与空闲时只带通知跑一轮；缺省（替身运行面）即不支持
+  // 决策 297、480：待递的通知（子 agent 的结果与消息、后台作业结束等）——待递的条数与空闲时只带通知跑一轮；缺省（替身运行面）即不支持
   pendingNotices?(): number;
   runNotices?(): Promise<RunResult>;
   // 决策 286：工具结果（展开显示与 diff）与上下文用量（状态栏）；缺省即不显示结果块、状态栏不显示上下文
@@ -216,7 +216,7 @@ export interface TuiShellOptions {
   stopHookCap?: () => number;
   // 决策 331：/memory 的命令面（记忆按项目与用户分层，不跟会话走）；缺省 = 命令不可用
   memory?: TuiMemoryFace;
-  // 决策 448：/worktrees 的命令面（留下的 worker 工作树与分支）；缺省 = 命令不可用
+  // 决策 448：/worktrees 的命令面（留下的工作树与分支）；缺省 = 命令不可用
   worktrees?: TuiWorktreesFace;
   // 决策 446：一轮真正收尾、空闲下来之前调用（会话移进工作树时在这里换运行面）；期间仍按在跑处理，输入排队
   // 没有要做的返回 undefined（照常同步空闲下来）
@@ -240,7 +240,7 @@ export interface TuiShellOptions {
     set(id: string, value: string): string | undefined;
     // 决策 465：设置视图的键位组（每个动作的生效键、缺省键与冲突）；改键位经 set（名字带 keybindings: 前缀）。缺省没有键位组
     keys?(): KeybindingRow[];
-    // 现在不能改的原因（有 worker 在跑等）；能改为 undefined
+    // 现在不能改的原因（有子 agent 在跑等）；能改为 undefined
     busy?(): string | undefined;
   };
   // 决策 439：输入框补全（"/" 命令、Tab 路径、"@" 文件）；缺省不接
@@ -860,7 +860,7 @@ export class PigeonTuiShell
   }
 
   // 空闲后发出排队的输入（pi 惯例逐条：一条跑完再发下一条）；即时完成的命令不占住，接着发下一条。
-  // 决策 297：worker 完成通知也从这里发出——有排队的输入时先发输入，这一轮由运行面在开头带上已到的通知（通知在前、输入在后）；
+  // 决策 297、480：待递的通知也从这里发出——有排队的输入时先发输入，这一轮由运行面在开头带上已到的通知（通知在前、输入在后）；
   // 没有排队的输入时，已到的通知单独跑一轮（只带通知）
   private drainQueue(): void {
     while (
@@ -887,7 +887,7 @@ export class PigeonTuiShell
     ) {
       this.running = true;
       this.runCancelled = false;
-      // 决策 452：刚收尾就有通知叫醒（换工作树后自动续一轮、worker 的结果等）算同一次工作接着跑
+      // 决策 452：刚收尾就有通知叫醒（换工作树后自动续一轮、子 agent 的结果等）算同一次工作接着跑
       this.beginWork(true);
       this.updateStatus();
       runtime.runNotices().then(
@@ -898,7 +898,13 @@ export class PigeonTuiShell
     this.tui.requestRender();
   }
 
-  // 决策 297：worker 完成通知到来时叫醒主 agent——与排队输入同一个出口；在跑时不动，通知留在运行面上，下一轮或这一轮结束后再递
+  // 决策 480：子 agent 的状态有变（派出、干完、停下）：重算花费并重画
+  agentsChanged(): void {
+    this.collectChildCosts();
+    this.tui.requestRender();
+  }
+
+  // 决策 297、480：通知（子 agent 的结果与消息等）到来时叫醒 agent——与排队输入同一个出口；在跑时不动，通知留在运行面上，下一轮或这一轮结束后再递
   runNotices(): void {
     this.drainQueue();
   }
@@ -971,7 +977,7 @@ export class PigeonTuiShell
   }
 
   // 写进用户级设置，再按 /reload 的重建当场生效（重建期间与 Run 同样占住输入）；面板开着时随后刷新。
-  // 主运行中、上一次重建还没完、或有 worker 在跑时不改（改了也重建不了），说明原因
+  // 主运行中、上一次重建还没完、或有子 agent 在跑时不改（改了也重建不了），说明原因
   private applyConfig(id: string, value: string): void {
     const face = this.options.config;
     if (face === undefined) return;
@@ -1757,7 +1763,7 @@ export class PigeonTuiShell
     }
   }
 
-  // ---- 决策 286：排队接口（编排一段在"下一轮发什么"处接入 worker 完成通知）----
+  // ---- 决策 286：排队接口（编排一段在"下一轮发什么"处接入待递的通知）----
 
   enqueueInput(text: string): void {
     this.queue.enqueue(text);
@@ -1869,7 +1875,7 @@ export class PigeonTuiShell
     this.statusBar.update({ cost: total });
   }
 
-  // 打开或续接会话时重置花费：续接从会话记录累计已有花费（主会话、其 worker 与复盘）
+  // 打开或续接会话时重置花费：续接从会话记录累计已有花费（会话自己、它的子 agent 与复盘）
   private resetCosts(sessionId: SessionId, resumed: boolean): void {
     const root = this.options.sessions?.root;
     this.costLive = emptyCostTally();
@@ -1890,7 +1896,7 @@ export class PigeonTuiShell
     this.refreshCost();
   }
 
-  // 收尾了的 worker 与复盘会话的花费（运行收尾、压缩、worker 收尾时查）
+  // 子 agent 与收尾了的复盘会话的花费（运行收尾、压缩、子 agent 状态有变时查）
   private collectChildCosts(): void {
     if (this.childCosts === undefined) return;
     try {
@@ -2611,7 +2617,7 @@ export class PigeonTuiShell
   }
 
   private handleEvent(event: EventEnvelope): void {
-    // 消息区的投影与进入的 worker 会话共用（message-flow.ts）；活动 Run、花费与上下文用量在此记
+    // 消息区的投影在 message-flow.ts；活动 Run、花费与上下文用量在此记
     if (event.kind === RuntimeEventKind.TurnStarted) {
       this.activeRunId = event.runId;
       this.turnStartedAt = event.timestamp;

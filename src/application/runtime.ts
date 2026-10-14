@@ -146,7 +146,7 @@ import {
   JobOutputParamsSchema,
 } from "../tools/job-tools.ts";
 import { createLocalWorkspaceHost } from "../tools/local-host.ts";
-import type { ApprovalMode, ToolPolicyLike } from "../tools/policy.ts";
+import type { ApprovalMode } from "../tools/policy.ts";
 import {
   createReadFileTool,
   type OutsideReadMode,
@@ -179,6 +179,7 @@ import {
   webFetchRegistration,
   webSearchRegistration,
 } from "../web/tools.ts";
+import { agentToolRegistrations, createAgentTools } from "./agent-tools.ts";
 import {
   backgroundJobEntry,
   cleanupOrphanedJobsOnce,
@@ -225,6 +226,7 @@ import {
   localStatusProbe,
   type StatusFacts,
 } from "./status-sources.ts";
+import type { AgentToolsHost } from "./subagents.ts";
 import { promptModelName, sameModelIdentity, systemPromptBase } from "./system-prompt.ts";
 import {
   createTaskListTools,
@@ -254,14 +256,14 @@ export interface RuntimeDeps {
   // 缺省不放开，注入执行端时带审批通道即报错
   pathScopedGrants?: boolean;
   // M5.5 S1（决策 040）：治理根——.pigeon/（设置、程序状态、Skill）所在；
-  // 缺省同工作区根。worker 的工作区根是自己的 git 工作树，治理根恒为主仓库根
+  // 缺省同工作区根。开在独立工作树里的会话与子 agent，治理根恒为主仓库根
   governanceRoot?: string;
-  // 工具策略——在场时 allow 与已注册工具取交、deny 与审批模式照搬，yolo 旗标不再参与；缺省按 yolo 旗标给全部内置工具
-  toolPolicy?: ToolPolicyLike;
+  // 决策 480：子 agent 的工具范围——allow 在场即只留列出的，readOnly 只留读档与联网档的；缺省不收窄
+  toolScope?: ToolScope;
   sessionId: SessionId;
   yolo: boolean;
-  // 决策 469：主会话的审批模式单元（会话中途可切换；/reload 等重建运行面时沿用同一个单元）。缺省 = 按 yolo 旗标新建；
-  // 委派策略（worker）在场时不用它，模式随派出时定
+  // 决策 469：会话的审批模式单元（会话中途可切换；/reload 等重建运行面时沿用同一个单元）。缺省 = 按 yolo 旗标新建；
+  // 子 agent 与派出方共用一个（决策 480：权限继承）
   approvalModeCell?: ApprovalModeCell;
   provider: string;
   modelId: string;
@@ -269,7 +271,7 @@ export interface RuntimeDeps {
   // 放权键需要它；终端界面传面板版。
   // M6.5 S1（决策 056）：缺省 = 无审批通道，prompt 档一律 fail-closed 拒绝（006）——headless 运行如此
   createApprovalHandler?: (grants: SessionGrantStore) => ApprovalHandler;
-  // 决策 325：本会话的设置快照（会话开始时读一次；worker 与沙箱会话用派出它的会话的快照）。放权规则（三层并集）与
+  // 决策 325：本会话的设置快照（会话开始时读一次；子 agent 与沙箱会话用派出它的会话的快照）。放权规则（三层并集）与
   // 命令短名都从它取；缺省为空快照（不读任何设置文件——测试与跑批器如此，日常入口一律显式给出）
   settings?: SettingsSnapshot;
   // M4 S6（D6/F）：固化配置规则——缺省取设置快照里的放权规则（测试可直接注入）
@@ -281,10 +283,10 @@ export interface RuntimeDeps {
   persistThinking?: boolean;
   // 用户级目录（~/.pigeon：AGENTS.md、Skill、学到的记忆的用户级）所在的家目录（缺省 os.homedir()；测试注入临时目录）
   homeDir?: string;
-  // M5.5 S5（决策 050）：推理档位——Actor 传启动参数全局值，worker 装配按角色配置覆盖。没给时取设置的 thinking 一节，
+  // M5.5 S5（决策 050）：推理档位——入口传启动参数全局值。没给时取设置的 thinking 一节，
   // 设置也没写即按模型信息：支持推理的模型 high，不支持或不知道的 off（决策 390，见 state/thinking-config.ts）
   thinkingLevel?: ThinkingLevel;
-  // M5.7 S3（决策 041 / 051 / 052）：已启动的 MCP 会话（Actor 在装配前异步启动，worker 按其工作树各起一份）；
+  // M5.7 S3（决策 041 / 051 / 052）：已启动的 MCP 会话（入口在装配前异步启动；子 agent 用派出方的那一份）；
   // 缺省 = 本会话没有外部工具
   mcp?: McpSession;
   // M6.5（决策 059）：显式 Skill 根——在场时只用给定的根（空数组 = 不注入），不扫治理根与用户级目录
@@ -307,12 +309,14 @@ export interface RuntimeDeps {
   // M8（决策 087）：本次尝试的预算——冻结进注入快照并随 Run 开始条目落盘
   budget?: AttemptBudget;
   // 决策 418：墙钟预算对模型可见（开工状态块的时间预算一节、run_command 的超时按剩余时间夹取）。只有设了墙钟预算的
-  // 无人值守运行给（pigeon run --wall-clock）；worker 自己的时限与交互入口不给
+  // 无人值守运行给（pigeon run --wall-clock）；交互入口与子 agent 不给
   wallClock?: WallClockBudget;
   // M7（决策 077）：分叉续跑的 Agent 初始消息
   initialMessages?: AgentMessage[];
-  // 决策 177：worker 与分支会话的来历，新建会话文件时写进文件头
+  // 决策 177、480：分支会话与子 agent 会话的来历，新建会话文件时写进文件头
   storeLineage?: StoreLineage;
+  // 决策 480：本会话文件所在的会话根——子 agent 的会话放在所属会话名下的子文件夹；缺省治理根的会话根
+  storeSessionsDir?: string;
   // 决策 432：新会话等第一次真要落盘时才建会话文件（交互入口新开的会话给）
   deferSessionFile?: boolean;
   // 会话存储故障告警的出口（缺省标准错误输出；测试注入）
@@ -352,14 +356,23 @@ export interface RuntimeDeps {
   previousJobs?: PreviousJobs;
   // 无人值守收尾等后台作业的总时限（缺省取设置的 tools.runCommand.backgroundCloseoutSeconds；跑批器显式给出）
   jobCloseoutMs?: number;
-  // 决策 446：模型建工作树并把会话移进去的工具（终端界面主会话给；绑定由终端界面做）。worker、沙箱与非 git 工作区不注册
+  // 决策 446：模型建工作树并把会话移进去的工具（终端界面主会话给；绑定由终端界面做）。子 agent、沙箱与非 git 工作区不注册
   enterWorktree?: EnterWorktreeSlot;
   // 决策 294 B1：任务清单工具（update_tasks、list_tasks）。缺省关着（装配层缺省；终端界面与 pigeon run 按编排配置缺省打开，
-  // 跑批器各条件不给）；只给主会话（委派策略在场时不注册）
+  // 跑批器各条件不给）；子 agent 不给
   taskList?: boolean;
   // 决策 287–291：联网工具的配置。在场即注册 web_search 与 web_fetch；缺省不注册（装配层缺省；交互入口与 pigeon run 由启动参数
-  // 缺省给出，--sandbox-network off 不给，跑批器各条件不给）。worker 与主会话同样拿到（父策略里有才带）
+  // 缺省给出，--sandbox-network off 不给，跑批器各条件不给）。子 agent 与派出方同样拿到
   webTools?: WebToolsConfig;
+  // 决策 457、480：子 agent 与通讯录的四件工具（spawn_agent、send_message、list_agents、stop_agent），绑着本会话或本子 agent；
+  // 缺省不注册
+  agents?: AgentToolsHost;
+}
+
+// 决策 480：子 agent 的工具范围
+export interface ToolScope {
+  allow?: readonly string[];
+  readOnly?: boolean;
 }
 
 // 推送记忆的配置
@@ -369,7 +382,7 @@ export interface LearnedMemoryConfig {
   // 推送哪几层；缺省两层（跑批器只推项目级：不读使用者的用户级记忆）
   layers?: readonly MemoryLayer[];
   // 决策 331：写入。在场即注册 update_memory，推送段带写入说明与交互版的冲突处理；只由有人对话的入口给（终端界面主会话
-  // 含沙箱会话）。委派策略在场（worker 与续开的 worker 会话）时不生效
+  // 含沙箱会话），子 agent 不给
   write?: MemoryWriteConfig;
 }
 
@@ -399,7 +412,7 @@ const RUN_TAIL_HOOK_EVENTS: ReadonlySet<HookEventName> = new Set([
   "SubagentStop",
 ]);
 
-// 决策 360：worker 没给的工具不注册——注册表只留委派策略里有的
+// 决策 480：子 agent 的工具范围之外的不注册——注册表只留范围里的
 function registrySubset(source: ToolRegistry, names: readonly string[]): ToolRegistry {
   const subset = new ToolRegistry();
   for (const registration of source.list()) {
@@ -438,7 +451,7 @@ export interface ApprovalModeCell {
 
 export interface RuntimeBundle {
   adapter: PiRuntimeAdapter;
-  // 决策 469：会话中途切换审批模式（worker 等委派策略的运行面没有）：切换写一条会话记录，之后的工具调用按新模式判定
+  // 决策 469：会话中途切换审批模式：切换写一条会话记录，之后的工具调用按新模式判定
   approvalMode?: {
     get(): ApprovalMode;
     set(mode: ApprovalMode): void;
@@ -448,7 +461,7 @@ export interface RuntimeBundle {
   // M4 S6：grant 运行态（审批提示 [a]/[d] 与 /grants /revoke /grants save 共用同一存储）
   grantStore: SessionGrantStore;
   configGrants: readonly ConfigGrantRule[];
-  // 决策 325：本会话的设置快照（worker 按它继承，/grants 按它列出各层的放权规则）
+  // 决策 325：本会话的设置快照（子 agent 按它继承，/grants 按它列出各层的放权规则）
   settings: SettingsSnapshot;
   // 决策 323 / 324：会话级钩子（冻结的清单、执行、记录与提示；入口层据此跑 SessionStart/Stop 等会话级事件）
   hooks: SessionHooks;
@@ -467,7 +480,7 @@ export interface RuntimeBundle {
   // 决策 350：运行面停下（在途 Run 中止并收尾）之后、会话存储关闭之前执行的收尾动作——快照器在此等未完成的快照拍完
   // （最后一个工具结果同样先写拍摄中标记、开拍），标记与快照条目因此都落在会话存储关闭之前
   closers?: Array<() => Promise<void>>;
-  // 推送记忆开着时在场（worker 按它继承）
+  // 推送记忆开着时在场（子 agent 按它继承）
   learnedMemory?: LearnedMemoryConfig;
   // 决策 330：人写的说明超出 32 KiB 被截断时给终端的一行提示（入口打出）；没截断时缺省
   instructionsNotice?: string;
@@ -479,9 +492,9 @@ export interface RuntimeBundle {
   frozenPrompt: FrozenSessionPrompt;
   // 决策 362：本运行面所用的模型信息（逐项带来源）与缓存规则
   modelInfo: ResolvedModelInfo;
-  // 决策 188、422：装配时显式给的压缩配置（worker 按它继承，窗口按 worker 自己的模型信息取）；没给时缺省
+  // 决策 188、422：装配时显式给的压缩配置（子 agent 按它继承，窗口按它自己的模型信息取）；没给时缺省
   compaction?: CompactionConfigInput;
-  // 决策 367：本运行面实际生效的撞上限续跑与流式重复检测设定（worker 按它继承）
+  // 决策 367：本运行面实际生效的撞上限续跑与流式重复检测设定（子 agent 按它继承）
   truncationContinuation: TruncationContinuationSettings;
   repetitionGuard: RepetitionGuardSettings;
   // 决策 363：状态变化通道（续跑时从会话记录还原，/reload 时把最后发出的一份交给新运行面）
@@ -610,7 +623,7 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
   const commandsConfig = commandsConfigOf(settings);
   // 会话存储写者在配置校验之后打开（装配早期抛错时不留下空的会话文件）
   const sessionStore = openSessionStore({
-    sessionsDir,
+    sessionsDir: deps.storeSessionsDir ?? sessionsDir,
     sessionId: deps.sessionId,
     cwd: deps.workspaceRoot,
     ...(deps.storeLineage !== undefined ? { lineage: deps.storeLineage } : {}),
@@ -622,15 +635,12 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     onFault: storeFaultWarner(deps.storeWarn),
     persistThinking: deps.persistThinking ?? true,
   });
-  // 170 ④：本会话的审批状态——委派策略在场时取其审批模式，否则取 yolo 旗标；非 yolo 时看有没有注入审批通道。
+  // 170 ④：本会话的审批状态——取审批模式单元（缺省按 yolo 旗标）；非 yolo 时看有没有注入审批通道。
   // run_command 的三处说明与系统提示里的审批说法都按它与执行端的平台生成，不写死本地、人工批准的说法；
   // 钩子 JSON 的 permission_mode 也用它（324）
-  const approvalMode = deps.toolPolicy?.approvalMode ?? (deps.yolo ? "yolo" : "prompt");
-  // 决策 469：主会话的当前模式单元（委派策略的运行面没有，模式不变）。run_command 的说明与工作区外写入仍按开会话时的模式
-  const modeCell: ApprovalModeCell | undefined =
-    deps.toolPolicy !== undefined
-      ? undefined
-      : (deps.approvalModeCell ?? { current: approvalMode });
+  const approvalMode = deps.approvalModeCell?.current ?? (deps.yolo ? "yolo" : "prompt");
+  // 决策 469：会话的当前模式单元。run_command 的说明与工作区外写入仍按开会话时的模式
+  const modeCell: ApprovalModeCell = deps.approvalModeCell ?? { current: approvalMode };
   // 最近一个已收尾的 Run：收尾类钩子（Stop / StopFailure / SubagentStop、自动压缩的 PostCompact）在 Run 窗口外触发，
   // 记录挂到刚结束的那个 Run；其余 Run 之外的钩子（下一条消息的 UserPromptSubmit、手动压缩、Notification、
   // SessionEnd 等）按会话级记录，不挂上一个 Run
@@ -785,10 +795,9 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
       registry.register(registration);
     }
   }
-  // 决策 331：只有带写入配置的主会话注册记忆工具（写档、只写两层记忆文件、免审批）；worker 只推送
+  // 决策 331：只有带写入配置的会话注册记忆工具（写档、只写两层记忆文件、免审批）；子 agent 只推送
   const memoryLimits = learned?.limits ?? memoryLimitsOf(settings);
-  const memoryWrite =
-    learned?.write !== undefined && deps.toolPolicy === undefined ? learned.write : undefined;
+  const memoryWrite = learned?.write;
   // 决策 431：推送记忆读到旧格式文件时一次性迁移，迁移的结果与没能落盘的告警走运行期告警的出口；同一行本运行面只说一次
   // （没能落盘时每个 Run 开始都会重试）
   const memoryReport = onceEachLine(deps.storeWarn ?? stderrWarn);
@@ -804,7 +813,6 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
   const enterWorktreeSlot =
     deps.enterWorktree !== undefined &&
     deps.workspaceHost === undefined &&
-    deps.toolPolicy === undefined &&
     (environment.check("gitWorkspace") ||
       skip([ENTER_WORKTREE_TOOL], "workspace is not a git repository"))
       ? deps.enterWorktree
@@ -812,13 +820,18 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
   if (enterWorktreeSlot !== undefined) {
     registry.register(enterWorktreeRegistration());
   }
-  // 决策 294 B1：任务清单——只给主会话
-  const taskList =
-    deps.taskList === true && deps.toolPolicy === undefined ? new TaskList() : undefined;
+  // 决策 294 B1：任务清单——子 agent 不给
+  const taskList = deps.taskList === true ? new TaskList() : undefined;
   if (taskList !== undefined) {
     for (const registration of taskListRegistrations()) {
       registry.register(registration);
     }
+  }
+  // 决策 457、480：子 agent 与通讯录的四件工具（层数到了上限的不注册 spawn_agent）
+  const agentsHost = deps.agents;
+  const agentRegistrations = agentsHost !== undefined ? agentToolRegistrations(agentsHost) : [];
+  for (const registration of agentRegistrations) {
+    registry.register(registration);
   }
   // 决策 287–291：联网工具——web_search 读档免审批，web_fetch 网络档按网站审批
   const webTools = deps.webTools;
@@ -844,8 +857,8 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     }
     registry.register(webFetchRegistration());
   }
-  // 决策 330：会话开始读人写的说明（AGENTS.md），清单进注入快照（开局的身份）。本地工作区从工作区根往上读（worker 即它自己的
-  // 工作树）；沙箱读宿主上的工作区（治理根），与本机会话内容一致。决策 363 起说明本身进开工状态块，会话中改动时整段追加
+  // 决策 330：会话开始读人写的说明（AGENTS.md），清单进注入快照（开局的身份）。本地工作区从工作区根往上读（在临时工作树里的
+  // 子 agent 即它自己的工作树）；沙箱读宿主上的工作区（治理根），与本机会话内容一致。决策 363 起说明本身进开工状态块，会话中改动时整段追加
   // （见下方状态变化通道）；这里开局读的一份只用于清单与超长提示。/reload 重建运行面时沿用开局读的这份
   const frozen = deps.frozenPrompt;
   const instructions =
@@ -869,10 +882,18 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
           report: memoryReport,
         }))
       : undefined;
-  // 决策 360：工具策略在场时提示只介绍它有的工具；缺省工具一律在场，提示不变
-  const delegatedAllow = deps.toolPolicy?.allow;
-  const offered = (...names: string[]): boolean =>
-    delegatedAllow === undefined || names.every((name) => delegatedAllow.includes(name));
+  // 决策 480：子 agent 的工具范围在场时提示只介绍范围里的工具；缺省工具一律在场，提示不变
+  const scope = deps.toolScope;
+  const inScope = (name: string): boolean => {
+    if (scope === undefined) return true;
+    if (scope.allow !== undefined && !scope.allow.includes(name)) return false;
+    if (scope.readOnly === true) {
+      const tier = registry.get(name)?.tier;
+      return tier === "read" || tier === "network";
+    }
+    return true;
+  };
+  const offered = (...names: string[]): boolean => names.every((name) => inScope(name));
   // 决策 363：系统提示只留固定底座——审批与联网的说法随 /reload 会变，搬进开工状态块（见下方「审批」「联网」两节）。
   // 决策 428、429：底座为英文，开头写明所用模型，做事规矩与工具用法只写本会话有的工具
   const modelName = promptModelName(modelInfo);
@@ -929,8 +950,9 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     ...(enterWorktreeSlot !== undefined ? [ENTER_WORKTREE_TOOL] : []),
     ...(taskList !== undefined ? [UPDATE_TASKS_TOOL, LIST_TASKS_TOOL] : []),
     ...(webTools !== undefined ? [...(webSearch ? [WEB_SEARCH_TOOL] : []), WEB_FETCH_TOOL] : []),
+    ...agentRegistrations.map((registration) => registration.name),
   ];
-  // 决策 360：worker 只在给了某件外部工具时才说外部工具
+  // 决策 480：子 agent 只在范围里有某件外部工具时才说外部工具
   const mcpSection = mcpTools.some((bridged) => offered(bridged.name))
     ? "## External tools\nTools whose names start with mcp__<server>__ come from external MCP servers and go through the same approvals and records as built-in tools; " +
       "when a server is unavailable these tools return errors, so continue with the built-in tools."
@@ -961,14 +983,14 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     deps.workspaceHost !== undefined
       ? hostStatusProbe(deps.workspaceHost)
       : localStatusProbe(deps.workspaceRoot);
-  // 「审批」一节：写操作与 run_command 的审批说法（随审批模式变）；决策 360：worker 只说它有的工具
+  // 「审批」一节：写操作与 run_command 的审批说法（随审批模式变）；决策 480：子 agent 只说它有的工具
   const approvalSection = [
     ...(offered("edit_file") || offered(WRITE_FILE_TOOL)
       ? [WRITE_APPROVAL_SENTENCES[approval]]
       : []),
     ...(offered(RUN_COMMAND_TOOL) ? [commandTexts.approval] : []),
   ].join("\n");
-  // 「联网」一节：决策 359 没注册 web_search 时只说 web_fetch；决策 360 worker 只说它有的
+  // 「联网」一节：决策 359 没注册 web_search 时只说 web_fetch；决策 480 子 agent 只说它有的
   const webSection =
     webTools !== undefined && offered(WEB_FETCH_TOOL)
       ? webSearch && offered(WEB_SEARCH_TOOL)
@@ -1038,7 +1060,7 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     if (hasSkills) {
       skillCatalog.skills = rescanned.skills;
     }
-    // 决策 360：worker 没给 load_skill 时不说 Skill 目录
+    // 决策 480：子 agent 的范围里没有 load_skill 时不说 Skill 目录
     const skills = offered(LOAD_SKILL_TOOL)
       ? rescanned.section === "" || hasSkills
         ? rescanned.section
@@ -1116,17 +1138,12 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     },
     delivered: () => recordStatus(statusTracker.delivered()),
   };
-  const delegated = deps.toolPolicy;
-  const policy: ToolPolicy =
-    delegated !== undefined
-      ? {
-          allow: toolNames.filter((name) => delegated.allow.includes(name)),
-          deny: [...delegated.deny],
-          approvalMode: delegated.approvalMode,
-        }
-      : { allow: toolNames, deny: [], approvalMode: deps.yolo ? "yolo" : "prompt" };
-  const governedRegistry =
-    delegated !== undefined ? registrySubset(registry, policy.allow) : registry;
+  const policy: ToolPolicy = {
+    allow: toolNames.filter((name) => inScope(name)),
+    deny: [],
+    approvalMode: deps.yolo ? "yolo" : "prompt",
+  };
+  const governedRegistry = scope !== undefined ? registrySubset(registry, policy.allow) : registry;
   // Run 开始条目的附加摘要：MCP 工具集与 server 状态（有 server 时）
   const mcpSummary = mcp !== undefined && mcp.connections.length > 0 ? mcp : undefined;
   // 决策 359：按环境没注册的工具与原因（有才带）
@@ -1304,6 +1321,7 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
       ...(enterWorktreeSlot !== undefined ? [createEnterWorktreeTool(enterWorktreeSlot)] : []),
       ...(taskList !== undefined ? createTaskListTools(taskList) : []),
       ...webToolset,
+      ...(agentsHost !== undefined ? createAgentTools(agentsHost) : []),
     ],
     // M5.5 S0（决策 049）：装配根组装工具调用治理后注入 Adapter
     governance: createToolGovernance({
