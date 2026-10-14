@@ -77,6 +77,7 @@ import {
   sandboxStatusFacts,
   startSandbox,
 } from "../application/sandbox-session.ts";
+import { subagentSessionsDirFor } from "../application/session-cost.ts";
 import { sessionNameOf, validSessionName } from "../application/session-name.ts";
 import {
   type OpenedSessionRuntime,
@@ -92,7 +93,7 @@ import {
 import { agentMessageEntry } from "../application/session-store.ts";
 import { createSettingsReloader } from "../application/settings-reload.ts";
 import { createSubagentOpener, restoredAgentsOf } from "../application/subagent-runtime.ts";
-import { AgentHub, type AgentToolsHost } from "../application/subagents.ts";
+import { AgentHub, type AgentToolsHost, type SubagentRecord } from "../application/subagents.ts";
 import { renderTaskList } from "../application/task-list-tool.ts";
 import { closeTuiSession } from "../application/tui-exit.ts";
 import { prepareWorkspace } from "../application/workspace.ts";
@@ -103,7 +104,7 @@ import { holdWorktreeInUse } from "../persistence/worktree-in-use.ts";
 import type { TrustEntry } from "../state/config-trust.ts";
 import { asSessionId, newSessionId, type SessionId } from "../state/ids.ts";
 import { FROM_BUNDLE } from "../state/package-paths.ts";
-import { tuiLogDirOf } from "../state/paths.ts";
+import { sessionsDirOf, tuiLogDirOf } from "../state/paths.ts";
 import {
   agentLimitsOfSettings,
   keybindingsSectionOf,
@@ -327,6 +328,13 @@ export async function main(argv: string[]): Promise<void> {
       ? new AgentHub({ mail: new MailGate(), onChange: () => shellHolder.current?.agentsChanged() })
       : undefined;
   let agentCatalog: AgentTypeCatalog = loadAgentTypes({ governanceRoot });
+  // 决策 482：在等审批的子 agent（路径），子 agent 面板据此标出
+  const waitingAgents = new Set<string>();
+  const agentWaiting = (path: string, on: boolean): void => {
+    if (on) waitingAgents.add(path);
+    else waitingAgents.delete(path);
+    shellHolder.current?.agentsChanged();
+  };
   if (agentHub !== undefined) {
     for (const problem of agentCatalog.problems) say(`[agents] ${problem}`, true);
   }
@@ -337,8 +345,8 @@ export async function main(argv: string[]): Promise<void> {
     const registration = agentHub.registerSession({
       sessionId: id,
       name: () => sessionName,
-      deliver: (text) => {
-        slot.bundle.adapter.notify(text);
+      deliver: (text, mark) => {
+        slot.bundle.adapter.notify(text, mark);
         shellHolder.current?.runNotices();
       },
       pendingNotices: () => slot.bundle.adapter.pendingNotices(),
@@ -366,7 +374,14 @@ export async function main(argv: string[]): Promise<void> {
         }),
         createApprovalHandler: (grants, path) => {
           const inner = createHandler(grants);
-          return (request) => inner({ ...request, subagent: { path } });
+          return async (request) => {
+            agentWaiting(path, true);
+            try {
+              return await inner({ ...request, subagent: { path } });
+            } finally {
+              agentWaiting(path, false);
+            }
+          };
         },
         notice: (path, line) => say(`[${path}] ${line}`, true),
       }),
@@ -458,7 +473,7 @@ export async function main(argv: string[]): Promise<void> {
           streamFn,
           flags,
           ...(agentHub !== undefined
-            ? { agents: { hub: agentHub, catalog: () => agentCatalog } }
+            ? { agents: { hub: agentHub, catalog: () => agentCatalog, waiting: agentWaiting } }
             : {}),
           settings: () => settings,
           warn,
@@ -492,6 +507,22 @@ export async function main(argv: string[]): Promise<void> {
   const modelLabel = modelLabelOf(slot.bundle.modelInfo);
   const shell = new PigeonTuiShell({
     terminal: new ProcessTerminal(),
+    // 决策 482：子 agent 面板与进入子 agent（沙箱、--no-subagents 没有）
+    ...(agentHub !== undefined
+      ? {
+          agents: {
+            list: (id: string) => agentHub.agentsOf(id),
+            subscribe: (listener: () => void) => agentHub.subscribe(listener),
+            running: () => agentHub.runningTotal(),
+            waiting: () => waitingAgents,
+            stop: (record: SubagentRecord) => agentHub.stop(record),
+            send: (record: SubagentRecord, text: string) => agentHub.sendFromUser(record, text),
+            live: (record: SubagentRecord) => record.runtime?.live,
+            historyDir: (record: SubagentRecord) =>
+              subagentSessionsDirFor(sessionsDirOf(governanceRoot), record.top.endpoint.sessionId),
+          },
+        }
+      : {}),
     // 决策 439：键位（设置的 keybindings 一节）
     ...(keybindingsSectionOf(settings) !== undefined
       ? { keybindings: keybindingsSectionOf(settings) }

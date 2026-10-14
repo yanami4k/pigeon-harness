@@ -351,3 +351,12 @@ test("关系说法：会话给孙辈发消息、孙辈给会话发消息、同�
   assert.equal(grandchild?.spec.agents.send("general-2", "peer"), "Sent to general-2.");
   assert.match(agents[2]?.notices.at(-1) ?? "", /another agent in your session/);
 });
+
+test("加序号后名字仍至多 40 个字符（截短原名）", async () => {
+  const { host, agents } = harness();
+  const long = "a".repeat(40);
+  await host.spawn({ task: "one", name: long });
+  await host.spawn({ task: "two", name: long });
+  await tick();
+  assert.equal(agents[1]?.spec.name, `${"a".repeat(38)}-2`);
+});

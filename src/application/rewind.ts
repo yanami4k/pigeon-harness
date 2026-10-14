@@ -37,7 +37,7 @@ import {
   SessionEntryType,
 } from "../state/session-entries.ts";
 import { storeActiveGrants, storeSessionView } from "../state/session-judge.ts";
-import { isStatusMessage } from "../state/status-text.ts";
+import { agentMessageMarkOf, isStatusMessage } from "../state/status-text.ts";
 import { insideGitMetadata } from "../tools/paths.ts";
 import { isContinuationPrompt, userTextParts } from "./history.ts";
 import {
@@ -69,6 +69,8 @@ function messageText(message: unknown): string {
 // "/orchestrate <任务>"（回退时放回输入框的就是它，见 history.ts 的 userTextParts）
 export function humanInputText(message: unknown): string | undefined {
   if ((message as { role?: unknown }).role !== "user" || isStatusMessage(message)) return undefined;
+  // 决策 480：agent 之间的传话（按消息上的标记认）
+  if (agentMessageMarkOf(message) !== undefined) return undefined;
   const human = userTextParts(messageText(message)).human;
   return human === undefined || isContinuationPrompt(human) ? undefined : human;
 }

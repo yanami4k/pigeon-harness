@@ -3,6 +3,7 @@
 // 决策 286：恢复菜单（S4 决策 031 的 1/2/3 单键决议）自决策 183 起已无调用方，连同状态行提示删除。
 import { summarizeArgs } from "../application/format.ts";
 import type { ApprovalRequest } from "../approvals/handler.ts";
+import { APPROVAL_WITHDRAWN_REASON } from "../approvals/queue.ts";
 import {
   APPROVAL_CANCEL_BUSY,
   APPROVAL_CANCEL_CLOSED,
@@ -11,6 +12,7 @@ import {
   type ApprovalPanelResult,
   approvalBlockLines,
   approvalBlockText,
+  withdrawnLine,
 } from "./approval.ts";
 import { isKey } from "./keybindings.ts";
 
@@ -104,6 +106,22 @@ export function askApprovalPanel(
   host.setPendingApproval(pending);
   host.updateStatus();
   host.render();
+  // 决策 480：请求方撤回（子 agent 被停下）——审批区收掉、消息区留一行结论，按取消收口
+  const signal = request.signal;
+  if (signal !== undefined) {
+    const withdraw = (): void => {
+      if (host.pendingApproval() !== pending) return;
+      host.setPendingApproval(null);
+      host.setReasonMode(false);
+      if (host.settleApproval !== undefined) host.settleApproval(withdrawnLine(request));
+      else approvalLine(host, withdrawnLine(request));
+      host.updateStatus();
+      host.render();
+      resolve({ key: "cancel", reason: APPROVAL_WITHDRAWN_REASON });
+    };
+    if (signal.aborted) withdraw();
+    else signal.addEventListener("abort", withdraw, { once: true });
+  }
   return promise;
 }
 

@@ -27,7 +27,7 @@ import {
   openAgentWorktree,
 } from "./agent-worktree.ts";
 import { attachLoopGuard, LOOP_GUARD_TEXTS } from "./loop-guard.ts";
-import { type McpSession, startMcpSession } from "./mcp.ts";
+import { describeMcpStartup, type McpSession, startMcpSession } from "./mcp.ts";
 import { type ApprovalModeCell, disposeRuntime, type RuntimeBundle } from "./runtime.ts";
 import { openSessionRuntime, type SessionRuntimeFlags } from "./session-runtime.ts";
 import { agentMessageEntry } from "./session-store.ts";
@@ -144,6 +144,10 @@ export function createSubagentOpener(base: SubagentOpenerBase): SubagentOpener {
       .filter((part): part is string => part !== undefined && part !== "")
       .join("\n\n");
     const say = (line: string) => base.notice(spec.path, line);
+    // 停下时撤回挂着的审批：每次停下换一个新的撤回信号，之后的审批照常
+    let approvals = new AbortController();
+    const approvalFactory = base.createApprovalHandler;
+    const reportedMcp = new Set(parent.mcp !== undefined ? describeMcpStartup(parent.mcp) : []);
     // 带上下文起步：派出方截到这一轮之前的对话（派出它的那条助手消息与之后的不带：工具调用还没有结果）
     const inherited =
       spec.inheritContext && resuming === undefined ? inheritedMessages(parent.transcript()) : [];
@@ -184,7 +188,10 @@ export function createSubagentOpener(base: SubagentOpenerBase): SubagentOpener {
         warn: base.warn,
         ...(parent.webTools !== undefined ? { webTools: parent.webTools } : {}),
         hooksNotice: say,
-        onMcpNote: (note) => say(`[mcp] ${note}`),
+        // 派出方开会话时已报过的 MCP 启动问题（沿用的连接照样算出来）不再报
+        onMcpNote: (note) => {
+          if (!reportedMcp.has(note)) say(`[mcp] ${note}`);
+        },
         ...(base.homeDir !== undefined ? { homeDir: base.homeDir } : {}),
         // MCP 沿用派出方的连接（启动定义未变的按引用沿用）
         startMcp: (target) =>
@@ -193,10 +200,13 @@ export function createSubagentOpener(base: SubagentOpenerBase): SubagentOpener {
             config: mcpConfigOf(settings),
             ...(parent.mcp !== undefined ? { reuse: parent.mcp } : {}),
           }),
-        ...(base.createApprovalHandler !== undefined
+        ...(approvalFactory !== undefined
           ? {
-              createApprovalHandler: (grants: SessionGrantStore) =>
-                base.createApprovalHandler?.(grants, spec.path) as ApprovalHandler,
+              // 停下时撤回挂着的审批（带上撤回信号）
+              createApprovalHandler: (grants: SessionGrantStore): ApprovalHandler => {
+                const handler = approvalFactory(grants, spec.path);
+                return (request) => handler({ ...request, signal: approvals.signal });
+              },
             }
           : {}),
         subagent: {
@@ -264,14 +274,23 @@ export function createSubagentOpener(base: SubagentOpenerBase): SubagentOpener {
     const agentFields = { agent_name: spec.name, agent_type: spec.type.name };
     const runtime: SubagentRuntime = {
       sessionId,
-      run: (text) => adapter.run(text),
+      run: (text, mark) => adapter.run(text, mark),
       runNotices: () => adapter.runNotices(),
-      notify: (text) => {
-        adapter.notify(text);
+      notify: (text, mark) => {
+        adapter.notify(text, mark);
       },
       pendingNotices: () => adapter.pendingNotices(),
-      interrupt: () => adapter.interrupt(),
+      interrupt: () => {
+        approvals.abort();
+        approvals = new AbortController();
+        return adapter.interrupt();
+      },
       reply: () => lastReply(bundle),
+      live: {
+        subscribe: (listener) => adapter.subscribe(listener),
+        subscribeStream: (listener) => adapter.subscribeStream(listener),
+        subscribeToolResults: (listener) => adapter.subscribeToolResults(listener),
+      },
       record: (entry) => {
         bundle.sessionStore.append(agentMessageEntry(entry, adapter.currentRunId()));
       },
@@ -315,6 +334,10 @@ export function createSubagentOpener(base: SubagentOpenerBase): SubagentOpener {
         if (next.length === 0 || stopBlocks >= stopCap) return undefined;
         stopBlocks += 1;
         return next.join("\n\n");
+      },
+      hasJobs: () => (bundle.jobs?.toSettle().length ?? 0) > 0,
+      stopJobs: () => {
+        void bundle.jobs?.killAll("aborted").catch(() => []);
       },
       stopReason: () => {
         const reason = loopReason;

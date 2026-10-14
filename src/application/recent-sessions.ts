@@ -8,7 +8,7 @@ import { SANDBOX_START_REF_PREFIX, sandboxBranch } from "../execution/sandbox.ts
 import { listSessionRefs, readSessionView } from "../persistence/session-catalog.ts";
 import type { SessionId } from "../state/ids.ts";
 import type { SessionView } from "../state/session-view.ts";
-import { isStatusMessage } from "../state/status-text.ts";
+import { agentMessageMarkOf, isStatusMessage } from "../state/status-text.ts";
 import { hardenedGitArgs } from "../tools/git-hardening.ts";
 import { userTextParts } from "./history.ts";
 import { isReviewSession } from "./session-cost.ts";
@@ -37,6 +37,8 @@ function firstInputOf(view: SessionView): string {
     // 决策 363：开工状态块（按消息上的标记认）不是人输入的话；程序送进对话的通知与附注同样不算，/orchestrate 发起的取人敲的
     // 命令（同回看历史，见 history.ts 的 userTextParts）
     if (message.role !== "user" || isStatusMessage(message.raw)) continue;
+    // 决策 480：agent 之间的传话（按消息上的标记认）不是人输入的话
+    if (agentMessageMarkOf(message.raw) !== undefined) continue;
     const raw = message.blocks
       .map((block) => (block.type === "text" ? (userTextParts(block.text).human ?? "") : ""))
       .join(" ");

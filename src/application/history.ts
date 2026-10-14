@@ -16,7 +16,7 @@ import {
 } from "../state/runaway-config.ts";
 import { type StoreMessage, toolResultMark } from "../state/session-judge.ts";
 import type { ViewMessage } from "../state/session-view.ts";
-import { isStatusMessage, statusSummary } from "../state/status-text.ts";
+import { agentMessageMarkOf, isStatusMessage, statusSummary } from "../state/status-text.ts";
 import { JOB_NOTICE_PREFIX, LEGACY_JOB_NOTICE_PREFIX } from "./background-jobs.ts";
 import { PROGRAM_NOTE_PREFIX } from "./enter-worktree-tool.ts";
 import { plural, summarizeArgs, workEndLine } from "./format.ts";
@@ -48,6 +48,8 @@ export interface HistoryLine {
 export interface SessionHistoryOptions {
   limit?: number;
   entryChars?: number;
+  // 决策 482：会话所在的会话根（子 agent 的会话在所属会话名下的 subagents 文件夹）；缺省治理根的会话根
+  sessionsDir?: string;
 }
 
 function clip(text: string, chars: number): string {
@@ -182,6 +184,11 @@ export function messageLines(
         lines.push({ kind: "notice", text: statusSummary(block.text) });
         continue;
       }
+      // 决策 480：agent 之间的传话（按消息上的标记认）不是人说的话，回看时显示成系统行，不成为回退点
+      if (message.role === "user" && agentMessageMarkOf(message.raw) !== undefined) {
+        lines.push({ kind: "notice", text: clip(block.text, entryChars) });
+        continue;
+      }
       if (message.role === "user") {
         // 进模型上下文的程序通知与附注虽以用户消息存下，回看时同实时一样显示成系统行，不像人输入的话（也不进 ↑ 召回）；
         // /orchestrate 发起的显示人敲的命令
@@ -221,7 +228,7 @@ export function loadSessionHistory(
 ): HistoryLine[] {
   const limit = options.limit ?? DEFAULT_HISTORY_LIMIT;
   const entryChars = options.entryChars ?? DEFAULT_HISTORY_ENTRY_CHARS;
-  const sessionsDir = sessionsDirOf(root);
+  const sessionsDir = options.sessionsDir ?? sessionsDirOf(root);
   const view = loadSessionView(sessionsDir, sessionId);
   if (view === undefined) {
     return [

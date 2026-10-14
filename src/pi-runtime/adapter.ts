@@ -96,7 +96,24 @@ import {
   SessionEntryType,
 } from "../state/session-entries.ts";
 import { TOOL_RESULT_MARK_KEY, type ToolResultMark } from "../state/session-judge.ts";
-import { isStatusMessage, STATUS_MARKER, withoutStatusMarker } from "../state/status-text.ts";
+import {
+  AGENT_MESSAGE_MARKER,
+  type AgentMessageMark,
+  isStatusMessage,
+  STATUS_MARKER,
+  withoutStatusMarker,
+} from "../state/status-text.ts";
+
+// 一条用户消息；mark 在场即 agent 之间的传话（决策 480）
+function userMessage(text: string, mark?: AgentMessageMark): AgentMessage {
+  return {
+    role: "user",
+    content: [{ type: "text", text }],
+    timestamp: Date.now(),
+    ...(mark !== undefined ? { [AGENT_MESSAGE_MARKER]: mark } : {}),
+  } as AgentMessage;
+}
+
 import type { ToolErrorKind, ToolExecution } from "../state/tool-execution.ts";
 import { classifyToolError } from "../tools/error-kind.ts";
 import type { ApprovalMode } from "../tools/policy.ts";
@@ -492,27 +509,21 @@ export class PiRuntimeAdapter {
 
   // 启动一次 Run 并等待其彻底收尾；返回终态判定结果。有待递的通知时连同输入一起交给模型（通知在前）
   // 决策 363：状态通道给的状态消息排在最前（lead）
-  async run(input: string): Promise<RunResult> {
+  // 决策 480：mark 在场即这条输入是 agent 之间的传话（派出时交代的任务），消息带上标记
+  async run(input: string, mark?: AgentMessageMark): Promise<RunResult> {
     return this.#runWith((lead) => {
-      if (lead.length === 0 && this.#notices.length === 0) {
+      if (lead.length === 0 && this.#notices.length === 0 && mark === undefined) {
         return this.#agent.prompt(input);
       }
-      return this.#agent.prompt([
-        ...lead,
-        ...this.#takeNotices(),
-        { role: "user", content: [{ type: "text", text: input }], timestamp: Date.now() },
-      ]);
+      return this.#agent.prompt([...lead, ...this.#takeNotices(), userMessage(input, mark)]);
     });
   }
 
-  // 决策 297：递一条通知（作一条用户消息进模型的下一轮）；返回撤回与查询用的键
-  notify(text: string): string {
+  // 决策 297：递一条通知（作一条用户消息进模型的下一轮）；返回撤回与查询用的键。决策 480：agent 之间的传话带上标记
+  notify(text: string, mark?: AgentMessageMark): string {
     this.#noticeSeq += 1;
     const key = `notice-${this.#noticeSeq}`;
-    this.#notices.push({
-      key,
-      message: { role: "user", content: [{ type: "text", text }], timestamp: Date.now() },
-    });
+    this.#notices.push({ key, message: userMessage(text, mark) });
     return key;
   }
 

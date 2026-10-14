@@ -164,7 +164,7 @@ export interface HeadlessRunOptions {
   continueFromHistory?: boolean;
   // 运行面装起来后的回调（挂会话树写穿）
   onBundle?: (bundle: RuntimeBundle) => void;
-  // 决策 457、481：主 agent 能不能派子 agent；缺省不能（pigeon run 按 --no-subagents 缺省打开，沙箱与跑批器不给）
+  // 决策 457、481：主 agent 能不能派子 agent；缺省不能（pigeon run 按 --no-subagents 缺省打开，沙箱不给）
   subagents?: boolean;
   // 测试用：干等子 agent 的上限（毫秒）；缺省取设置的 agents.runWaitMinutes
   subagentWaitMs?: number;
@@ -221,6 +221,8 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
   const settingsSnapshot = options.settings ?? emptySettingsSnapshot(options.governanceRoot);
   const agentLimits = agentLimitsOfSettings(settingsSnapshot);
   const subagentWaitMs = options.subagentWaitMs ?? agentLimits.runWaitMinutes * 60_000;
+  // 子 agent 的会话号（收尾时列出它们保留的后台作业）
+  const agentSessionIds = new Set<string>();
   // 子 agent 交回、发来消息或状态有变时叫醒干等
   let wakeWaiter: (() => void) | undefined;
   const wakeUp = (): void => {
@@ -250,8 +252,8 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
       ? agentHub.registerSession({
           sessionId,
           name: () => defaultSessionName(options.workspaceRoot, sessionId),
-          deliver: (text) => {
-            mainBundle().adapter.notify(text);
+          deliver: (text, mark) => {
+            mainBundle().adapter.notify(text, mark);
             wakeUp();
           },
           pendingNotices: () => liveBundle?.adapter.pendingNotices() ?? 0,
@@ -469,11 +471,14 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
           latest = await target.runNotices();
           progressed = true;
         } else if (waited === "timeout") {
-          const left = agentHub.runningUnder(sessionId);
-          await agentRegistration?.unregister();
+          const left = agentHub.busyUnder(sessionId);
+          await agentHub.stopUnder(sessionId);
           warnLine(
-            `stopped ${left} sub-agent${left === 1 ? "" : "s"} after waiting ${Math.round(subagentWaitMs / 60_000)} min`
+            `stopped ${left} sub-agent${left === 1 ? "" : "s"} after waiting ${waitText(subagentWaitMs)}`
           );
+        } else if (waited === "stopped" && agentHub.busyUnder(sessionId) > 0) {
+          // 等子 agent 的时候撞上限或被外部中止：这一步按中止收尾（终态按撞上限的原因）
+          drainInterrupted = true;
         }
       }
       if (!progressed || stopped()) {
@@ -491,7 +496,7 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
     for (;;) {
       if (stopped()) return "stopped";
       if (bundle.adapter.pendingNotices() > 0) return "notice";
-      if (agentHub === undefined || agentHub.runningUnder(sessionId) === 0) return "done";
+      if (agentHub === undefined || agentHub.busyUnder(sessionId) === 0) return "done";
       const left = subagentWaitMs > 0 ? subagentWaitMs - (Date.now() - since) : 1000;
       if (left <= 0) return "timeout";
       let poll: NodeJS.Timeout | undefined;
@@ -641,7 +646,10 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
     deadline = undefined;
     unsubscribe();
     options.abortSignal?.removeEventListener("abort", onAbort);
-    // 决策 481：还在跑的子 agent 停下并释放（它们与主 agent 共用 MCP 连接）
+    // 决策 481：还在跑的子 agent 停下并释放（它们与主 agent 共用 MCP 连接）；先记下它们的会话号（保留的作业要列出）
+    for (const agent of agentHub?.agentsOf(sessionId) ?? []) {
+      if (agent.sessionId !== undefined) agentSessionIds.add(agent.sessionId);
+    }
     await agentRegistration?.unregister().catch(() => {});
     // 决策 323 / 324：SessionEnd——会话结束（只作副作用；缺省短时限 1.5 秒、单个钩子最长 60 秒）。
     // 在释放运行面之前跑：记录要落在本会话文件里
@@ -655,7 +663,9 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
   const metrics = outcome.metrics;
   // 决策 409：本次运行结束时保留下来的作业，取自整次运行共用的作业池
   const keptJobs =
-    liveBundle?.jobs?.pool.keptJobs().filter((job) => job.sessionId === sessionId) ?? [];
+    liveBundle?.jobs?.pool
+      .keptJobs()
+      .filter((job) => job.sessionId === sessionId || agentSessionIds.has(job.sessionId)) ?? [];
   return {
     sessionId,
     status,
@@ -666,6 +676,13 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
     ...(errorMessage !== undefined ? { errorMessage } : {}),
     ...(keptJobs.length > 0 ? { keptJobs } : {}),
   };
+}
+
+// 干等的时长写法：整分钟写分钟，不到一分钟写秒
+function waitText(ms: number): string {
+  return ms >= 60_000
+    ? `${Math.round(ms / 60_000)} min`
+    : `${Math.max(1, Math.round(ms / 1000))} s`;
 }
 
 // 一次运行的指标、标签与 Run 数：从会话存储现算；会话存储里没有这个会话（运行面没装起来、写者打不开）时为空指标

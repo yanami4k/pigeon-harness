@@ -67,8 +67,12 @@ export interface SessionPoolContext {
   notice(line: string, alert?: boolean): void;
   // 测试用：在用锁的家目录（缺省用户家目录）
   homeDir?: string;
-  // 决策 457、480：本进程的通讯录与子 agent 的类型；不给即面板里的会话不派子 agent
-  agents?: { hub: AgentHub; catalog(): AgentTypeCatalog };
+  // 决策 457、480：本进程的通讯录与子 agent 的类型；不给即面板里的会话不派子 agent。waiting：子 agent 在等审批（路径）
+  agents?: {
+    hub: AgentHub;
+    catalog(): AgentTypeCatalog;
+    waiting?(path: string, on: boolean): void;
+  };
 }
 
 type PooledLive = Pick<TuiRuntimeFace, "subscribe" | "subscribeStream" | "subscribeToolResults"> & {
@@ -130,8 +134,8 @@ export function createSessionPool(context: SessionPoolContext): {
       const registration = context.agents?.hub.registerSession({
         sessionId,
         name: () => name,
-        deliver: (text) => {
-          bundleOf().adapter.notify(text);
+        deliver: (text, mark) => {
+          bundleOf().adapter.notify(text, mark);
           hooks.wake();
         },
         pendingNotices: () => opened?.bundle.adapter.pendingNotices() ?? 0,
@@ -161,10 +165,12 @@ export function createSessionPool(context: SessionPoolContext): {
             const inner = context.createApprovalHandler(grants);
             return async (request) => {
               hooks.waiting(`${path}: ${request.toolName} ${summarizeArgs(request.args)}`);
+              context.agents?.waiting?.(path, true);
               try {
                 return await inner({ ...request, sessionId, pooled: { name }, subagent: { path } });
               } finally {
                 hooks.waiting(undefined);
+                context.agents?.waiting?.(path, false);
               }
             };
           },

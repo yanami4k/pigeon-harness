@@ -1,0 +1,105 @@
+// 子 agent 面板（决策 482）：一次一层、下层标 (+N)、钻进下层写回到会话的路径、已结束的保留约 30 秒、x 清掉、在跑与已中断的一直列着
+import assert from "node:assert/strict";
+import { test } from "vitest";
+import type { AgentState, SubagentRecord } from "../application/subagents.ts";
+import { AGENT_ROW_RETAIN_MS, AgentPanel } from "./agent-panel.ts";
+
+// biome-ignore lint/suspicious/noControlCharactersInRegex: 去掉暗色样式的转义序列
+const plain = (lines: string[]) => lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
+
+function fixture() {
+  let now = 100_000;
+  const session = { kind: "session", name: () => "main" };
+  const agents: SubagentRecord[] = [];
+  const add = (
+    name: string,
+    state: AgentState,
+    parent: SubagentRecord | undefined,
+    type = "general"
+  ): SubagentRecord => {
+    const record = {
+      kind: "agent",
+      agentName: name,
+      name: () => name,
+      type: { name: type },
+      path: parent === undefined ? name : `${parent.path} › ${name}`,
+      parent: parent ?? session,
+      state,
+      updatedAt: now,
+      startedAt: now,
+    } as unknown as SubagentRecord;
+    agents.push(record);
+    return record;
+  };
+  const waiting = new Set<string>();
+  const panel = new AgentPanel({
+    agents: () => agents,
+    sessionName: () => "main",
+    waiting: () => waiting,
+    now: () => now,
+  });
+  return { panel, add, waiting, advance: (ms: number) => (now += ms) };
+}
+
+test("一次一层，下层标 (+N)；→ 钻进去写回到会话的路径，← 回上层，最上层再 ← 回输入框", () => {
+  const { panel, add } = fixture();
+  assert.deepEqual(panel.render(80), [], "没有子 agent 不占地方");
+  const general = add("general-1", "running", undefined);
+  add("explore-1", "running", general, "explore");
+  add("explore-2", "idle", general, "explore");
+  add("explore-3", "running", undefined, "explore");
+  assert.deepEqual(plain(panel.render(80)), [
+    "  general-1  general · running (+2)",
+    "  explore-3  explore · running",
+  ]);
+  assert.equal(panel.focus(), true);
+  assert.equal(plain(panel.render(80))[0], "› general-1  general · running (+2)");
+  assert.equal(panel.drillIn(), true);
+  assert.deepEqual(plain(panel.render(80)), [
+    "main › general-1",
+    "› explore-1  explore · running",
+    "  explore-2  explore · done",
+  ]);
+  panel.down();
+  assert.equal(panel.selected()?.agentName, "explore-2");
+  assert.equal(panel.drillIn(), false, "没有下层不钻");
+  assert.equal(panel.drillOut(), true);
+  assert.equal(panel.selected()?.agentName, "general-1");
+  assert.equal(panel.drillOut(), false);
+  assert.equal(panel.isFocused(), false);
+});
+
+test("已结束的保留约 30 秒，x 提前清掉；已中断的一直列着；等审批的写明", () => {
+  const { panel, add, waiting, advance } = fixture();
+  const done = add("general-1", "idle", undefined);
+  const failed = add("general-2", "failed", undefined);
+  (failed as { error?: string }).error = "boom";
+  add("explore-1", "interrupted", undefined, "explore");
+  const running = add("general-3", "running", undefined);
+  waiting.add(running.path);
+  assert.deepEqual(plain(panel.render(80)), [
+    "  general-1  general · done",
+    "  general-2  general · failed: boom",
+    "  explore-1  explore · interrupted",
+    "  general-3  general · waiting for approval",
+  ]);
+  assert.equal(panel.hasRetained(), true);
+  panel.clear(done);
+  advance(AGENT_ROW_RETAIN_MS);
+  assert.deepEqual(plain(panel.render(80)), [
+    "  explore-1  explore · interrupted",
+    "  general-3  general · waiting for approval",
+  ]);
+  assert.equal(panel.hasRetained(), false);
+});
+
+test("已结束的保留期过了、下层还有在跑的：照样列着才钻得进去；↑ 在第一行即回输入框", () => {
+  const { panel, add, advance } = fixture();
+  const parent = add("general-1", "idle", undefined);
+  advance(AGENT_ROW_RETAIN_MS * 2);
+  add("explore-1", "running", parent, "explore");
+  assert.deepEqual(plain(panel.render(80)), ["  general-1  general · done (+1)"]);
+  panel.focus();
+  assert.equal(panel.up(), false);
+  assert.equal(panel.isFocused(), false);
+});

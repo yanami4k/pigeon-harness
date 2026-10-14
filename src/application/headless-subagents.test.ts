@@ -137,3 +137,41 @@ test("不开子 agent：四件工具都不注册", async () => {
     cleanup();
   }
 });
+
+test("等子 agent 的时候撞到墙钟上限：照上限收尾（终态 wall-clock-limit），子 agent 一并停下", async () => {
+  const { root, home, cleanup } = dirs();
+  try {
+    const { streamFn } = routed(
+      [
+        { text: "", toolCalls: [{ name: "spawn_agent", args: { task: "slow work" } }] },
+        { text: "started; waiting" },
+      ],
+      [
+        {
+          text: "",
+          toolCalls: [
+            { name: "run_command", args: { command: 'node -e "setTimeout(() => {}, 20000)"' } },
+          ],
+        },
+        { text: "late" },
+      ]
+    );
+    const started = Date.now();
+    const result = await runHeadless({
+      task: "go",
+      governanceRoot: root,
+      workspaceRoot: root,
+      streamFn,
+      yolo: true,
+      homeDir: home,
+      startMcp: noMcp,
+      subagents: true,
+      subagentWaitMs: 0,
+      wallClockMs: 1500,
+    });
+    assert.equal(result.status, "wall-clock-limit");
+    assert.ok(Date.now() - started < 15_000);
+  } finally {
+    cleanup();
+  }
+});

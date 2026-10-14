@@ -26,10 +26,10 @@ import {
   removeWorktree,
   removeWorktreeAndBranch,
   WorktreeError,
-  workerStartRefFor,
   worktreeBranchFor,
   worktreePathFor,
   worktreePristine,
+  worktreeStartRefFor,
 } from "./worktree.ts";
 
 function git(cwd: string, args: string[]): string {
@@ -131,7 +131,7 @@ test("起点引用 refs/pigeon/worker-start/<会话号后 8 位>-<名>：删分�
     const head = git(repo, ["rev-parse", "HEAD"]).trim();
     const sessionId = newSessionId();
     const tail = branchTailFor(sessionId, "fix-a");
-    const ref = workerStartRefFor(tail);
+    const ref = worktreeStartRefFor(tail);
     assert.equal(ref, `refs/pigeon/worker-start/${tail}`);
     git(repo, ["update-ref", ref, head]);
     const first = addWorktree({ repoRoot: repo, sessionId, name: "fix-a", baseRef: head });
@@ -145,11 +145,11 @@ test("起点引用 refs/pigeon/worker-start/<会话号后 8 位>-<名>：删分�
     deleteBranch({ repoRoot: repo, branch: second.branch });
     // 决策 447 之前的旧分支 pigeon/<名字> 照样能删（连同旧的起点引用）
     git(repo, ["branch", "pigeon/old-one"]);
-    git(repo, ["update-ref", workerStartRefFor("old-one"), head]);
+    git(repo, ["update-ref", worktreeStartRefFor("old-one"), head]);
     deleteBranch({ repoRoot: repo, branch: "pigeon/old-one" });
     assert.equal(git(repo, ["for-each-ref", "refs/heads/pigeon/"]).trim(), "");
     assert.equal(git(repo, ["for-each-ref", "refs/pigeon/worker-start/"]).trim(), "");
-    assert.throws(() => workerStartRefFor("../x"), WorktreeError);
+    assert.throws(() => worktreeStartRefFor("../x"), WorktreeError);
     assert.throws(() => deleteBranch({ repoRoot: repo, branch: "main" }), WorktreeError);
   } finally {
     cleanup();

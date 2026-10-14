@@ -8,8 +8,8 @@ import {
   branchTailFor,
   mainRepoRoot,
   removeWorktreeAndBranch,
-  workerStartRefFor,
   worktreePristine,
+  worktreeStartRefFor,
 } from "../orchestration/worktree.ts";
 import { holdWorktreeInUse } from "../persistence/worktree-in-use.ts";
 import type { SessionId } from "../state/ids.ts";
@@ -49,7 +49,7 @@ export function openAgentWorktree(input: {
     throw new Error("a worktree needs a git repository");
   }
   const name = worktreeSafeName(input.name);
-  const startRef = workerStartRefFor(branchTailFor(input.sessionId, name));
+  const startRef = worktreeStartRefFor(branchTailFor(input.sessionId, name));
   const snapshot = snapshotWorkdir({ repoRoot: input.parentWorkspace, ref: startRef });
   let handle: ReturnType<typeof addWorktree>;
   try {

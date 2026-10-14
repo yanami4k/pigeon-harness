@@ -15,12 +15,35 @@ export function isStatusMessage(message: unknown): boolean {
   return record.role === "user" && record[STATUS_MARKER] === true;
 }
 
+// 决策 480、482：agent 之间的传话（派出时交代的任务、消息、交回的结果）以一条带标记的用户消息进模型——标记记谁发给谁、
+// 哪一种，随消息原样存进会话记录、交给模型之前去掉；回看、回退与续接列表据此认出不是人说的（旧会话里的程序通知照旧按前缀认）
+export const AGENT_MESSAGE_MARKER = "pigeonAgentMessage";
+
+export interface AgentMessageMark {
+  from: string;
+  to: string;
+  kind: "task" | "message" | "result";
+}
+
+export function agentMessageMarkOf(message: unknown): AgentMessageMark | undefined {
+  if (typeof message !== "object" || message === null) return undefined;
+  const record = message as Record<string, unknown>;
+  const mark = record[AGENT_MESSAGE_MARKER];
+  return record.role === "user" && typeof mark === "object" && mark !== null
+    ? (mark as AgentMessageMark)
+    : undefined;
+}
+
 // 交给模型之前去掉标记（各 provider 不认识的字段不往外发）
 export function withoutStatusMarker<T extends object>(message: T): T {
-  if (!(STATUS_MARKER in message)) {
+  if (!(STATUS_MARKER in message) && !(AGENT_MESSAGE_MARKER in message)) {
     return message;
   }
-  const { [STATUS_MARKER]: _marker, ...rest } = message as Record<string, unknown>;
+  const {
+    [STATUS_MARKER]: _marker,
+    [AGENT_MESSAGE_MARKER]: _agent,
+    ...rest
+  } = message as Record<string, unknown>;
   return rest as T;
 }
 

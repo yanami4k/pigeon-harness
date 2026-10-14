@@ -17,6 +17,7 @@ import { afterEach, test } from "vitest";
 import { addWorktree } from "../orchestration/worktree.ts";
 import { sessionFileLockPath } from "../persistence/session-lock.ts";
 import { sessionDirectoryName, sessionFileName } from "../persistence/session-reader.ts";
+import { holdWorktreeInUse } from "../persistence/worktree-in-use.ts";
 import { newSessionId, type SessionId } from "../state/ids.ts";
 import { sessionsDirOf } from "../state/paths.ts";
 import {
@@ -307,7 +308,7 @@ test("确认之后、删之前重新核一遍：期间又改了文件的、变�
   assert.ok(existsSync(f.dirty.path));
 });
 
-test("在用的另几种：所属会话被另一个仍在的进程打开、刚建还没有会话记录、调用方给的本进程里还在用的", () => {
+test("在用的另几种：所属会话被另一个仍在的进程打开、刚建还没有会话记录、本进程持有在用锁的", () => {
   const repo = makeRepo();
   const owner = newSessionId();
   const workerId = newSessionId();
@@ -329,11 +330,13 @@ test("在用的另几种：所属会话被另一个仍在的进程打开、刚�
   assert.equal(byName(items, "owned").inUseReason, "owner session is open");
   assert.equal(byName(items, "fresh").inUseReason, "just created, no session yet");
   assert.deepEqual(planClean(items, ["--all"]).remove, []);
-  const live = listLeftoverWorktrees({
-    workspaceRoot: repo,
-    now: later,
-    liveWorkers: () => new Set([fresh.sessionId]),
-  });
-  assert.match(byName(live, "fresh").inUseReason ?? "", /in use in this session/);
+  // 决策 480：子 agent 的临时工作树开着期间持有在用锁（它的会话不在会话根下，按会话号找不到）
+  const release = holdWorktreeInUse(fresh.path);
+  try {
+    const live = listLeftoverWorktrees({ workspaceRoot: repo, now: later });
+    assert.equal(byName(live, "fresh").inUseReason, "session open");
+  } finally {
+    release();
+  }
   void w;
 });

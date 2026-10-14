@@ -5,7 +5,7 @@
 // - 比较的基准一律是主检出（不是当前目录）；当前目录在这些工作树里时拒绝列出与删除。
 // - 起点取分支引用日志里最早的一条；取不到记为"不明"，按有改动对待。
 // - 在用：工作树里那个会话正被一个仍在的进程打开；所属会话正被另一个仍在的进程打开；刚建、还没有会话记录（10 分钟内）；
-//   调用方另给本进程里仍在用它的会话（liveWorkers）。读锁出错也按在用算。
+//   工作树的在用锁（本进程或别的进程开着它，子 agent 的临时工作树即如此）。读锁出错也按在用算。
 // 删除缺省只删没有未取走改动的；点名或 --all 才删有改动的，并明说会丢。在用的一律不删。删之前重新核一遍：
 // 期间变成在用或改动有变化的剔除并说明。删除不跟随链接（worktree.ts 的 removeWorktree）。
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
@@ -67,8 +67,6 @@ export interface WorktreeScope {
   workspaceRoot: string;
   // 治理根（.pigeon 所在）；缺省主仓库根
   governanceRoot?: string;
-  // 本进程里仍在用工作树的会话号（缺省没有）
-  liveWorkers?: () => ReadonlySet<string>;
   // 测试用的时钟（判断"刚建"）
   now?: () => number;
 }
@@ -174,9 +172,6 @@ function workerFacts(
   dir: string | undefined
 ): WorkerFacts {
   if (workerSessionId === undefined) return {};
-  if (scope.liveWorkers?.().has(workerSessionId) === true) {
-    return { inUseReason: "in use in this session" };
-  }
   // 决策 480：子 agent 的临时工作树开着期间持有在用锁（它的会话在所属会话名下，按会话号在会话根里找不到）
   if (dir !== undefined && worktreeInUse(dir)) return { inUseReason: "session open" };
   const sessionsDir = sessionsDirOf(governanceRoot);

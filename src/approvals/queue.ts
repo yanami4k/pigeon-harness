@@ -3,6 +3,9 @@
 // 前一个请求抛错或拒绝都不堵住后面的请求。
 import type { ApprovalHandler } from "./handler.ts";
 
+// 撤回的请求交给模型的拒绝理由
+export const APPROVAL_WITHDRAWN_REASON = "The request was withdrawn: the sub-agent was stopped";
+
 export interface ApprovalQueue {
   wrap(handler: ApprovalHandler): ApprovalHandler;
   // 在问与排队中的请求数
@@ -15,7 +18,16 @@ export function createApprovalQueue(): ApprovalQueue {
   return {
     wrap: (handler) => (request) => {
       pending += 1;
-      const turn = tail.then(() => handler(request));
+      // 决策 480：排队期间已撤回的请求（子 agent 被停下）不再交给 handler，按拒绝回话
+      const turn = tail.then(() =>
+        request.signal?.aborted === true
+          ? {
+              approved: false,
+              reason: APPROVAL_WITHDRAWN_REASON,
+              reasonSource: "system-default" as const,
+            }
+          : handler(request)
+      );
       tail = turn.catch(() => undefined);
       return turn.finally(() => {
         pending -= 1;

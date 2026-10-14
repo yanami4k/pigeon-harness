@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
 import { snapshotWorkdir } from "./workdir-snapshot.ts";
-import { OverlayError, overlayWorkerChanges } from "./worker-overlay.ts";
+import { OverlayError, overlayWorktreeChanges } from "./worktree-overlay.ts";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -99,7 +99,11 @@ test("硬性规则：只写入 worker 改过的文件，worker 没碰的文件�
     const before = snapshotOf(f.main, untouched);
     const gitBefore = mainGitState(f.main);
 
-    const result = overlayWorkerChanges({ repoRoot: f.main, base: f.base, worktreePath: f.worker });
+    const result = overlayWorktreeChanges({
+      repoRoot: f.main,
+      base: f.base,
+      worktreePath: f.worker,
+    });
     assert.deepEqual(result, {
       applied: ["b.txt", "deep/er/x.txt", "n.txt"],
       unchanged: [],
@@ -130,7 +134,11 @@ test("硬性规则：worker 删除的文件不自动删，只在结果里列出�
     const mainC = LINES("c").replace("c3\n", "c3 main-later\n");
     writeFileSync(join(f.main, "c.txt"), mainC);
     const gitBefore = mainGitState(f.main);
-    const result = overlayWorkerChanges({ repoRoot: f.main, base: f.base, worktreePath: f.worker });
+    const result = overlayWorktreeChanges({
+      repoRoot: f.main,
+      base: f.base,
+      worktreePath: f.worker,
+    });
     assert.deepEqual(result, {
       applied: [],
       unchanged: [],
@@ -162,7 +170,11 @@ test("硬性规则：主工作目录有未提交改动（含已暂存的）时�
     const gitBefore = mainGitState(f.main);
     assert.match(gitBefore.staged, /b3 staged/);
 
-    const result = overlayWorkerChanges({ repoRoot: f.main, base: f.base, worktreePath: f.worker });
+    const result = overlayWorktreeChanges({
+      repoRoot: f.main,
+      base: f.base,
+      worktreePath: f.worker,
+    });
     assert.deepEqual(result, {
       applied: ["a.txt"],
       unchanged: [],
@@ -207,7 +219,11 @@ test("硬性规则：叠不上时列出冲突文件、不写入冲突的那部�
       b: readFileSync(join(f.worker, "b.txt"), "utf8"),
     };
 
-    const result = overlayWorkerChanges({ repoRoot: f.main, base: f.base, worktreePath: f.worker });
+    const result = overlayWorktreeChanges({
+      repoRoot: f.main,
+      base: f.base,
+      worktreePath: f.worker,
+    });
     assert.deepEqual(result, {
       applied: ["c.txt"],
       unchanged: ["same.txt"],
@@ -246,7 +262,11 @@ test("硬性规则：不回退主工作目录——主已删掉的文件 worker 
     writeFileSync(join(f.worker, "c.txt"), LINES("c").replace("c2\n", "c2 worker\n"));
     rmSync(join(f.main, "c.txt"));
     writeFileSync(join(f.worker, "bin.dat"), Buffer.from([0, 9, 9]));
-    const result = overlayWorkerChanges({ repoRoot: f.main, base: f.base, worktreePath: f.worker });
+    const result = overlayWorktreeChanges({
+      repoRoot: f.main,
+      base: f.base,
+      worktreePath: f.worker,
+    });
     assert.deepEqual(result, {
       applied: ["bin.dat"],
       unchanged: [],
@@ -264,7 +284,11 @@ test("worker 相对起点没有改动：三份清单全空，主工作目录一�
   const f = fixture();
   try {
     const before = snapshotOf(f.main, ["a.txt", "b.txt", "c.txt", "d.txt", "u.txt"]);
-    const result = overlayWorkerChanges({ repoRoot: f.main, base: f.base, worktreePath: f.worker });
+    const result = overlayWorktreeChanges({
+      repoRoot: f.main,
+      base: f.base,
+      worktreePath: f.worker,
+    });
     assert.deepEqual(result, { applied: [], unchanged: [], conflicts: [], deletedByWorker: [] });
     assert.deepEqual(snapshotOf(f.main, ["a.txt", "b.txt", "c.txt", "d.txt", "u.txt"]), before);
   } finally {
@@ -284,12 +308,16 @@ test("主工作目录里该路径是目录或符号链接：不写、列为冲�
       symlinkSync("a.txt", join(f.main, "c.txt"));
       expectConflicts = ["c.txt", "n.txt"];
     }
-    const result = overlayWorkerChanges({ repoRoot: f.main, base: f.base, worktreePath: f.worker });
+    const result = overlayWorktreeChanges({
+      repoRoot: f.main,
+      base: f.base,
+      worktreePath: f.worker,
+    });
     assert.deepEqual(result.conflicts, expectConflicts);
     assert.ok(!result.applied.includes("n.txt"));
     assert.throws(
       () =>
-        overlayWorkerChanges({
+        overlayWorktreeChanges({
           repoRoot: f.main,
           base: "0123456789abcdef0123456789abcdef01234567",
           worktreePath: f.worker,
@@ -322,7 +350,7 @@ test("决策 325：worker 改了仓库已跟踪的 .pigeon/settings.json——�
     writeFileSync(join(worker, ".pigeon", "settings.local.json"), "{}\n");
     mkdirSync(join(worker, ".pigeon", "state"), { recursive: true });
     writeFileSync(join(worker, ".pigeon", "state", "x.json"), "{}\n");
-    const result = overlayWorkerChanges({
+    const result = overlayWorktreeChanges({
       repoRoot: main,
       base: snap.commit,
       worktreePath: worker,

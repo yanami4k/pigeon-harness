@@ -25,7 +25,9 @@ import { SessionEntryType } from "../state/session-entries.ts";
 import { emptySettingsSnapshot, type SettingsSnapshot } from "../state/settings.ts";
 import { MailGate } from "./agent-mail.ts";
 import { loadAgentTypes } from "./agent-types.ts";
+import { loadSessionHistory } from "./history.ts";
 import type { McpSession } from "./mcp.ts";
+import { humanInputText } from "./rewind.ts";
 import { disposeRuntime } from "./runtime.ts";
 import { accumulatedSessionCost, sessionCostTally } from "./session-cost.ts";
 import { openSessionRuntime } from "./session-runtime.ts";
@@ -95,9 +97,9 @@ async function openTop(
   const { host } = hub.registerSession({
     sessionId,
     name: () => "main",
-    deliver: (text) => {
+    deliver: (text, mark) => {
       delivered.push(text);
-      bundle().adapter.notify(text);
+      bundle().adapter.notify(text, mark);
     },
     pendingNotices: () => bundle().adapter.pendingNotices(),
     record: (entry) =>
@@ -165,6 +167,8 @@ test("前台派 explore：回复直接带回；会话文件在所属会话名下
       .find((message) => message.role === "toolResult");
     const text = JSON.stringify(toolResult);
     assert.match(text, /explore-1 finished\./);
+    assert.ok(text.includes(AGENT_TRUST_SENTENCE), "前台的结果同样附信任说明");
+    assert.match(text, /<<<BEGIN AGENT-MESSAGE [0-9a-f]{16}>>>/);
     assert.match(text, /found it in a\.txt/);
     assert.deepEqual(delivered, [], "前台的不另发消息");
     // 子 agent 只拿到读与搜的工具
@@ -200,6 +204,11 @@ test("前台派 explore：回复直接带回；会话文件在所属会话名下
       version: 1,
       agent: { name: "explore-1", type: "explore", path: "explore-1", topSessionId: sessionId },
     });
+    // 派出方的会话里记一条交回的结果
+    assert.match(
+      readFileSync(topFile, "utf8"),
+      /"customType":"pigeon.agent-message"[^\n]*"kind":"result"/
+    );
     const records = readFileSync(files[0]?.path ?? "", "utf8")
       .split("\n")
       .filter((line) => line.includes(SessionEntryType.AgentMessage));
@@ -398,6 +407,44 @@ test("钩子：SubagentStart 补的上下文作任务的前缀；SubagentStop �
       opened.bundle.adapter.transcript().find((message) => message.role === "toolResult")
     );
     assert.match(toolResult, /second/);
+    await hub.close();
+  } finally {
+    await disposeRuntime(opened.bundle).catch(() => {});
+    root.cleanup();
+  }
+});
+
+test("回看、回退与续接列表按消息上的标记认出 agent 的传话：后台交回的结果显示成系统行，不算人说的话，不成为回退点", async () => {
+  const root = repo();
+  const delivered: string[] = [];
+  const { streamFn } = routed(
+    [
+      { text: "", toolCalls: [{ name: "spawn_agent", args: { task: "look" } }] },
+      { text: "started" },
+      { text: "thanks" },
+    ],
+    [{ text: "child says hi" }]
+  );
+  const { hub, sessionId, opened } = await openTop(root, streamFn, delivered);
+  try {
+    await opened.bundle.adapter.run("first human words");
+    for (let i = 0; i < 200 && delivered.length < 1; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    await opened.bundle.adapter.runNotices();
+    await opened.bundle.sessionStore.flush();
+    const agentTurn = opened.bundle.adapter
+      .transcript()
+      .find(
+        (message) => JSON.stringify(message).includes("child says hi") && message.role === "user"
+      );
+    assert.ok(agentTurn !== undefined);
+    assert.equal(humanInputText(agentTurn), undefined, "不是人说的话");
+    const lines = loadSessionHistory(root.dir, sessionId);
+    const users = lines.filter((line) => line.kind === "user").map((line) => line.text);
+    assert.ok(users.some((text) => text.includes("first human words")));
+    assert.ok(!users.some((text) => text.includes("child says hi")), users.join(" | "));
+    assert.ok(lines.some((line) => line.kind === "notice" && line.text.includes("child says hi")));
     await hub.close();
   } finally {
     await disposeRuntime(opened.bundle).catch(() => {});

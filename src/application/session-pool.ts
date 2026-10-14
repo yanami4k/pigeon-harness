@@ -6,7 +6,7 @@
 //（先等还在开的开完，整体有时限）。
 import { existsSync } from "node:fs";
 import { SNAPSHOT_REF_ROOT, snapshotWorkdir } from "../execution/workdir-snapshot.ts";
-import { type OverlayResult, overlayWorkerChanges } from "../execution/worker-overlay.ts";
+import { type OverlayResult, overlayWorktreeChanges } from "../execution/worktree-overlay.ts";
 import { isStatusMessage } from "../state/status-text.ts";
 import { plural } from "./format.ts";
 import { humanInputText } from "./rewind.ts";
@@ -448,7 +448,7 @@ export function takePooledChanges(input: {
   }
   let result: OverlayResult;
   try {
-    result = overlayWorkerChanges({
+    result = overlayWorktreeChanges({
       repoRoot: input.repoRoot,
       base: input.base,
       worktreePath: input.worktreePath,

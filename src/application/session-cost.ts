@@ -133,8 +133,17 @@ export function sessionCostTally(sessionsRoot: string, sessionId: string): CostT
 
 // 决策 480：一个会话（连同各层）派出的子 agent 的会话文件；会话自己还没有文件即没有
 export function subagentSessionRefs(sessionsRoot: string, sessionId: string): SessionFileRef[] {
+  const dir = subagentSessionsDirFor(sessionsRoot, sessionId);
+  return dir !== undefined ? listSessionRefs(dir) : [];
+}
+
+// 一个会话的子 agent 会话所在的会话根；会话自己还没有文件即 undefined
+export function subagentSessionsDirFor(
+  sessionsRoot: string,
+  sessionId: string
+): string | undefined {
   const top = listSessionRefs(sessionsRoot).find((file) => file.sessionId === sessionId);
-  return top !== undefined ? listSessionRefs(subagentSessionsDir(top.path, sessionId)) : [];
+  return top !== undefined ? subagentSessionsDir(top.path, sessionId) : undefined;
 }
 
 // 复盘会话：Run 开始条目带复盘标记（175、192、207）

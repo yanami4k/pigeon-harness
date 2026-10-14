@@ -9,6 +9,9 @@
 //   发给在跑的 agent 的消息排在它的待递通知里，这一轮干完接着递；发给已停下的子 agent 即叫它接着干。
 // - 叫停：只能停自己派出的（连同其下各层）；停下的子 agent 发消息仍可叫它接着干。
 // 子 agent 的运行面由入口装配好交来（SubagentOpener）：这里不碰会话文件、工作树与审批，只管名字、状态、上限与传话。
+import type { StreamTextDelta, ToolResultNotice } from "../pi-runtime/adapter.ts";
+import type { EventEnvelope } from "../state/events.ts";
+import type { AgentMessageMark } from "../state/status-text.ts";
 import { type MailGate, type MailVerdict, wrapBetweenMarkers } from "./agent-mail.ts";
 import {
   type AgentType,
@@ -41,11 +44,11 @@ export interface AgentRunOutcome {
 // 一个子 agent 的运行面（入口装配好交来）
 export interface SubagentRuntime {
   sessionId: string;
-  // 跑一轮（text 为这一轮的输入）
-  run(text: string): Promise<AgentRunOutcome>;
+  // 跑一轮（text 为这一轮的输入；mark 在场即 agent 之间的传话，消息带上标记）
+  run(text: string, mark?: AgentMessageMark): Promise<AgentRunOutcome>;
   // 只带待递的通知跑一轮
   runNotices(): Promise<AgentRunOutcome>;
-  notify(text: string): void;
+  notify(text: string, mark?: AgentMessageMark): void;
   pendingNotices(): number;
   interrupt(): Promise<void>;
   // 最后一条助手回复的正文
@@ -56,10 +59,20 @@ export interface SubagentRuntime {
   beforeTask?(task: string): Promise<string>;
   // SubagentStop：要它接着干时返回下一轮的输入；active 为这一轮是不是已经由它要求接着干的
   afterRun?(active: boolean): Promise<string | undefined>;
+  // 进入它的会话时订阅的运行面（终端界面用）
+  live?: {
+    subscribe(listener: (event: EventEnvelope) => void): () => void;
+    subscribeStream(listener: (delta: StreamTextDelta) => void): () => void;
+    subscribeToolResults?(listener: (notice: ToolResultNotice) => void): () => void;
+  };
   // 每次停下都调：在临时工作树里干活的，有改动即返回工作树的位置与分支
   settle?(): Promise<{ path: string; branch: string } | undefined>;
   // 这一轮是被叫停的（打转等）：原因（取走即清掉）
   stopReason?(): string | undefined;
+  // 它开的后台作业还有没收尾的（停着也算还在干活：作业结束会叫醒它）
+  hasJobs?(): boolean;
+  // 停掉它开的后台作业
+  stopJobs?(): void;
   // 关掉；interrupted 为干到一半（临时工作树一律保留）
   close(options?: { interrupted?: boolean }): Promise<void>;
 }
@@ -111,8 +124,8 @@ export type SubagentOpener = (spec: SubagentSpec) => Promise<SubagentRuntime>;
 export interface SessionEndpoint {
   sessionId: string;
   name(): string;
-  // 递一条通知并在空闲时叫醒
-  deliver(text: string): void;
+  // 递一条通知并在空闲时叫醒（mark：agent 之间的传话的标记）
+  deliver(text: string, mark: AgentMessageMark): void;
   pendingNotices(): number;
   record(entry: AgentMessageRecord): void;
   // 这个会话派子 agent 用的装配；不在即这个会话不能派
@@ -161,6 +174,8 @@ interface AgentNode {
   readonly top: SessionNode;
   // 递一条（已包好的）消息
   deliver(text: string, record: AgentMessageRecord): void;
+  // 只在它的会话记录里记一条传话（前台派出的结果作工具结果交回，不另递消息）
+  record(entry: AgentMessageRecord): void;
   pendingNotices(): number;
 }
 
@@ -192,8 +207,8 @@ export interface SubagentRecord extends AgentNode {
   stoppedByParent?: boolean;
   // 续接认回、还没重开的：有消息来时按它重开
   reopen?: () => Promise<SubagentRuntime>;
-  // 还没有运行面时收到的（续接认回的、或撞上并发上限一时开不了的）：开好后一并递出
-  inbox?: Array<{ text: string; entry: AgentMessageRecord }>;
+  // 还没有运行面时收到的（续接认回的、或撞上并发上限一时开不了的）：开好后一并递出；使用者亲手打的没有传话条目
+  inbox?: Array<{ text: string; entry?: AgentMessageRecord }>;
 }
 
 interface Deferred {
@@ -217,10 +232,21 @@ function stateOf(record: SubagentRecord): AgentState {
 // 释放一批子 agent 时等它们这一轮收尾的上限
 const SHUTDOWN_WAIT_MS = 5_000;
 
+const NAME_LIMIT = 40;
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/;
 
 export function validAgentName(name: string): boolean {
   return NAME_PATTERN.test(name);
+}
+
+function markOf(entry: AgentMessageRecord): AgentMessageMark {
+  return { from: entry.from, to: entry.to, kind: entry.kind };
+}
+
+// 名字至多 40 个字符：加序号时截短原名
+function withSuffix(name: string, n: number): string {
+  const suffix = `-${n}`;
+  return `${name.slice(0, NAME_LIMIT - suffix.length)}${suffix}`;
 }
 
 function describeVerdict(verdict: MailVerdict, to: string): string {
@@ -321,8 +347,9 @@ export class AgentHub {
       endpoint,
       deliver: (text, record) => {
         endpoint.record(record);
-        endpoint.deliver(text);
+        endpoint.deliver(text, markOf(record));
       },
+      record: (entry) => endpoint.record(entry),
       pendingNotices: () => endpoint.pendingNotices(),
     };
     this.#sessions.set(endpoint.sessionId, node);
@@ -371,14 +398,14 @@ export class AgentHub {
     if (wanted !== undefined) {
       if (!this.#taken(wanted)) return wanted;
       for (let n = 2; ; n += 1) {
-        const candidate = `${wanted}-${n}`;
+        const candidate = withSuffix(wanted, n);
         if (!this.#taken(candidate)) return candidate;
       }
     }
     let n = this.#counters.get(type) ?? 0;
     for (;;) {
       n += 1;
-      const candidate = `${type}-${n}`;
+      const candidate = withSuffix(type, n);
       if (!this.#taken(candidate)) {
         this.#counters.set(type, n);
         return candidate;
@@ -458,6 +485,7 @@ export class AgentHub {
       startedAt: now,
       updatedAt: now,
       deliver: (text, entry) => this.#deliverTo(record, text, entry),
+      record: (entry) => record.runtime?.record(entry),
       pendingNotices: () => record.runtime?.pendingNotices() ?? 0,
       ...(background ? {} : { foreground: deferred() }),
     };
@@ -494,7 +522,7 @@ export class AgentHub {
       const input = (await runtime.beforeTask?.(task)) ?? task;
       // SubagentStart 跑着的时候被叫停：不开跑
       if (stateOf(record) === "stopped") return { status: "aborted" };
-      return runtime.run(input);
+      return runtime.run(input, { from: parent.name(), to: name, kind: "task" });
     });
     if (background) {
       return `Started ${name} (${type.name}) in the background. Its final reply will come to you as a message when it finishes; don't wait or poll for it. To give it more instructions, use send_message to ${name}; to stop it, use stop_agent.`;
@@ -610,24 +638,27 @@ export class AgentHub {
       );
     }
     const body = reply === "" ? "(no reply)" : reply;
-    const foreground = record.foreground;
-    if (foreground !== undefined) {
-      delete record.foreground;
-      foreground.resolve(`${lines.join("\n")}\n\n${body}`);
-      return;
-    }
-    if (this.#closing || (record.state === "stopped" && record.stoppedByParent === true)) return;
     const parent = record.parent;
+    // 前台、后台一样：附信任说明、放进边界之间，派出方的会话记录里记一条
     const text = wrapBetweenMarkers(
       `${headOf("result", record.agentName, relationOf(record, parent))}\n${lines.join("\n")}`,
       body
     );
-    parent.deliver(text, {
+    const entry: AgentMessageRecord = {
       from: record.agentName,
       to: parent.name(),
       kind: "result",
       text: `${lines.join("\n")}\n\n${body}`,
-    });
+    };
+    const foreground = record.foreground;
+    if (foreground !== undefined) {
+      delete record.foreground;
+      parent.record(entry);
+      foreground.resolve(text);
+      return;
+    }
+    if (this.#closing || (record.state === "stopped" && record.stoppedByParent === true)) return;
+    parent.deliver(text, entry);
   }
 
   // 递给一个子 agent：在跑的这一轮结束后递，停着的叫它接着干（撞上并发上限即先排着，有空位再开），续接认回的先重开会话
@@ -635,13 +666,13 @@ export class AgentHub {
     const runtime = record.runtime;
     if (runtime !== undefined) {
       runtime.record(entry);
-      runtime.notify(text);
+      runtime.notify(text, markOf(entry));
     } else if (record.opening !== undefined) {
       // 还在开：开好之后的这一轮结束时一并递出
       void record.opening
         .then((opened) => {
           opened.record(entry);
-          opened.notify(text);
+          opened.notify(text, markOf(entry));
         })
         .catch(() => {});
       return;
@@ -673,8 +704,12 @@ export class AgentHub {
     this.#changed();
     record.activity = this.#activate(record, (current) => {
       for (const queued of record.inbox?.splice(0) ?? []) {
-        current.record(queued.entry);
-        current.notify(queued.text);
+        if (queued.entry !== undefined) {
+          current.record(queued.entry);
+          current.notify(queued.text, markOf(queued.entry));
+        } else {
+          current.notify(queued.text);
+        }
       }
       return current.pendingNotices() > 0
         ? current.runNotices()
@@ -724,6 +759,7 @@ export class AgentHub {
         startedAt: restored.startedAt,
         updatedAt: restored.updatedAt,
         deliver: (text, entry) => this.#deliverTo(record, text, entry),
+        record: (entry) => record.runtime?.record(entry),
         pendingNotices: () => record.runtime?.pendingNotices() ?? 0,
       };
       record.reopen = () =>
@@ -828,6 +864,55 @@ export class AgentHub {
     await this.#halt(record, "stopped");
   }
 
+  // 某会话下还在干活的子 agent：在跑的，加上停着但开的后台作业还没收尾的（pigeon run 据此等）
+  busyUnder(sessionId: string): number {
+    return this.agentsOf(sessionId).filter(
+      (agent) => this.#active(agent) || agent.runtime?.hasJobs?.() === true
+    ).length;
+  }
+
+  // pigeon run 干等到了上限：停下某会话下还在干活的子 agent，丢下它们没交回的结果（会话照旧登记，之后还能派）
+  async stopUnder(sessionId: string): Promise<void> {
+    const busy = this.agentsOf(sessionId).filter(
+      (agent) => this.#active(agent) || agent.runtime?.hasJobs?.() === true
+    );
+    for (const agent of busy) agent.stoppedByParent = true;
+    await Promise.all(busy.map((agent) => this.#halt(agent, "stopped")));
+    for (const agent of busy) agent.runtime?.stopJobs?.();
+  }
+
+  // 整个进程里还在跑的子 agent 个数（退出前确认用）
+  runningTotal(): number {
+    return this.#agents.filter((agent) => this.#active(agent)).length;
+  }
+
+  // 决策 482：使用者在子 agent 里亲手打的字——算使用者的话，不附信任说明、不记传话条目；在跑的这一轮结束后递，
+  // 停着的叫它接着干（撞上并发上限即如实说）；不能发时返回原因
+  sendFromUser(record: SubagentRecord, text: string): string | undefined {
+    if (!this.#agents.includes(record)) return `${record.agentName} is gone`;
+    if (
+      record.runtime === undefined &&
+      record.opening === undefined &&
+      record.reopen === undefined
+    ) {
+      return `${record.agentName} can't be reached`;
+    }
+    const limit = record.top.endpoint.limits().maxConcurrent;
+    if (!this.#active(record) && this.runningUnder(record.top.endpoint.sessionId) >= limit) {
+      return `concurrent sub-agent limit reached (${limit} running)`;
+    }
+    if (record.runtime !== undefined) {
+      record.runtime.notify(text);
+    } else if (record.opening !== undefined) {
+      void record.opening.then((opened) => opened.notify(text)).catch(() => {});
+      return undefined;
+    } else {
+      record.inbox = [...(record.inbox ?? []), { text }];
+    }
+    this.#startIfRoom(record);
+    return undefined;
+  }
+
   // 从通讯录去掉已停下的一行连同它下面各层，并释放它们的运行面；还有在跑的不去
   remove(record: SubagentRecord): boolean {
     const subtree = [record, ...this.#descendantsOf(record)];
@@ -862,10 +947,12 @@ export class AgentHub {
     // 等这一轮收尾，有上限：卡在审批上的等不到人答，到时照样释放
     const settled = Promise.all(agents.map((agent) => agent.activity?.catch(() => {})));
     await Promise.race([settled, new Promise((resolve) => setTimeout(resolve, SHUTDOWN_WAIT_MS))]);
-    await Promise.all(
+    // 释放也有上限：手上的工具调用等不到收尾的，到时不再等（运行面随进程或之后的收尾释放）
+    const closed = Promise.all(
       agents.map((agent) =>
         agent.runtime?.close({ interrupted: interrupted.has(agent) }).catch(() => {})
       )
     );
+    await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, SHUTDOWN_WAIT_MS))]);
   }
 }

@@ -79,13 +79,14 @@ function assertBranchTail(tail: string): void {
   }
 }
 
-// 决策 279：worker 起点快照的引用（快照提交挂在这里防止被 git 回收；与分支同名、随分支一并删除）
-export const WORKER_START_REF_PREFIX = "refs/pigeon/worker-start/";
+// 决策 279、480：工作树起点快照的引用（以前 worker 的、现在子 agent 临时工作树的；快照提交挂在这里防止被 git 回收；与分支
+// 同名、随分支一并删除）。引用的目录名沿用 worker-start，旧的照样认得、删得掉
+export const WORKTREE_START_REF_PREFIX = "refs/pigeon/worker-start/";
 
 // tail 为分支名去掉 pigeon/ 的部分（branchTailFor 给出；旧分支即 worker 名）
-export function workerStartRefFor(tail: string): string {
+export function worktreeStartRefFor(tail: string): string {
   assertBranchTail(tail);
-  return `${WORKER_START_REF_PREFIX}${tail}`;
+  return `${WORKTREE_START_REF_PREFIX}${tail}`;
 }
 
 // 显式给出的分支名（/fork、独立工作树）：小写字母数字开头，小写字母数字、下划线、连字符与斜杠，不含空段、不以斜杠结尾
@@ -403,7 +404,7 @@ export function deleteBranch(input: { repoRoot: string; branch: string }): void 
     : "";
   assertBranchTail(tail);
   runGit(input.repoRoot, ["branch", "-D", input.branch]);
-  runGit(input.repoRoot, ["update-ref", "-d", workerStartRefFor(tail)]);
+  runGit(input.repoRoot, ["update-ref", "-d", worktreeStartRefFor(tail)]);
 }
 
 // 决策 448：删一个工作树连同它的分支。目录在不在都按登记删（目录已被手删的只删登记），不跟随链接；分支已不在不算失败；

@@ -27,6 +27,8 @@ export interface ApprovalRequest {
   // 决策 480：子 agent 的审批汇到所属会话的队列时在场——从会话往下的名字路径（"general-1 › explore-2"）；
   // 这时放权只记在这个子 agent 自己的会话里，按键说明写 for this sub-agent
   readonly subagent?: { readonly path: string };
+  // 决策 480：请求方撤回（子 agent 被停下）——还在排队的不再上审批区，已在审批区的收掉；撤回后的回答不再被采用
+  readonly signal?: AbortSignal;
   // M5.5 S3（决策 040）：放权落点——[a]/[d] 创建的会话 grant 写进请求来源会话的存储；
   // 缺省 = 审批 handler 绑定的主会话存储
   readonly grants?: GrantCreator;

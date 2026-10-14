@@ -1,4 +1,5 @@
-// worker 结果叠加（决策 279）：只取 worker 相对起点快照自己的改动，以快照里的版本为共同祖先逐文件三方合并，写进主工作目录。
+// 工作树改动叠回（决策 279；起初给 worker，决策 457 起给会话面板里会话的 /take）：只取工作树相对起点快照自己的改动，
+// 以快照里的版本为共同祖先逐文件三方合并，写进主工作目录。下文的"worker"指被取回改动的那个工作树。
 // 硬性规则：
 //   ① 只写入 worker 改过的文件，worker 没碰的文件一律不动；
 //   ② 不删除、不回退主工作目录里的任何文件——worker 删除的文件不自动删，只列出；主工作目录已删而 worker 改了的文件不写回；
@@ -153,7 +154,7 @@ export function workerOverlayPaths(input: OverlayInput): string[] {
     .sort();
 }
 
-export function overlayWorkerChanges(input: OverlayInput): OverlayResult {
+export function overlayWorktreeChanges(input: OverlayInput): OverlayResult {
   const { top, base, workerTree, changes, skipped } = workerChanges(input);
   const topResolved = resolve(top);
   const result: OverlayResult = {

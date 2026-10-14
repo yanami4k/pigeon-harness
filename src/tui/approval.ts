@@ -254,6 +254,11 @@ function sourceOf(request: ApprovalRequest): string {
   return parts.length > 0 ? `[${parts.join(" › ")}] ` : "";
 }
 
+// 决策 480：撤回的请求（子 agent 被停下）答完的一行
+export function withdrawnLine(request: ApprovalRequest): string {
+  return `${sourceOf(request)}withdrawn: ${request.subagent?.path ?? request.toolName} was stopped`;
+}
+
 export function approvedLine(request: ApprovalRequest, note = ""): string {
   return `${sourceOf(request)}✓ approved ${request.toolName}: ${subjectOf(request)}${note}`;
 }
