@@ -310,6 +310,19 @@ test("没有快照的会话（非 git 工作区）只退对话；退对话后原
       ["tip", "重发之后", 1],
     ]
   );
+  // 同一深度分不出分叉与链：parent 记上一条消息（界面按它画连接线）
+  const textOf = new Map(nodes.map((node) => [node.key, node.text]));
+  assert.deepEqual(
+    nodes.map((node) => [node.text, node.parent === null ? null : textOf.get(node.parent)]),
+    [
+      ["first", null],
+      ["second", "first"],
+      ["third", "second"],
+      ["第三条", "third"],
+      ["second, rewritten", "first"],
+      ["重发之后", "second, rewritten"],
+    ]
+  );
   assert.equal(nodes.at(-1)?.current, true);
 });
 

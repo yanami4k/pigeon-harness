@@ -21,6 +21,7 @@ import { RuntimeEventKind } from "../state/runtime-events.ts";
 import { PigeonTuiShell, type TuiRuntimeFace } from "./shell.ts";
 import {
   assertWidthsWithin,
+  isDimmed,
   MockTerminal,
   screenFlat,
   screenText,
@@ -193,6 +194,8 @@ test("工具调用行：工具名+参数摘要+结果状态；settled 原位更�
     const settledLine = term.screen.contentLines().find((line) => line.includes("$ read_file"));
     assert.ok(settledLine?.includes("-> ok"), "tool.settled 应在原工具行追加结果状态");
     assert.ok(!settledLine?.includes("-> error"), "成功调用不得标 error");
+    // 验收修改：工具条目暗色
+    assert.ok(isDimmed(term.writes.join(""), "$ read_file"));
 
     // 失败调用：isError + errorKind 落分类标签
     runtime.emit(RuntimeEventKind.ToolProposed, {
@@ -207,8 +210,13 @@ test("工具调用行：工具名+参数摘要+结果状态；settled 原位更�
       errorKind: "domain",
     });
     await settle();
-    const errorLine = term.screen.contentLines().find((line) => line.includes("$ edit_file"));
+    // 失败的：开头的 "$" 换成红色 ✗（不随整行变暗），其余仍暗
+    const errorLine = term.screen.contentLines().find((line) => line.includes("✗ edit_file"));
     assert.ok(errorLine?.includes("-> error [domain]"), "失败调用应标 error 与错误分类");
+    assert.ok(
+      term.writes.join("").includes("\x1b[22m\x1b[31m✗\x1b[39m\x1b[2m edit_file"),
+      "失败的开头标记为红色 ✗，之后恢复暗色"
+    );
 
     runtime.emit(RuntimeEventKind.TurnCompleted, {
       stopReason: "toolUse",

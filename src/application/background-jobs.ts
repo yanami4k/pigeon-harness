@@ -85,9 +85,16 @@ export function jobNoticeText(jobs: readonly BackgroundJob[]): string {
     : [`${jobs.length} background jobs finished:`, ...sections].join("\n\n");
 }
 
+// 给人看的一行：作业结束时写在消息区（终端界面里没有别处列后台作业）
+export function jobEndedLine(job: BackgroundJob): string {
+  return `job ${job.id} ${jobStateText(job)}: $ ${commandLabel(job.command)}`;
+}
+
 export interface JobNoticesOptions {
   wake?: () => void;
   onNotice?: (text: string) => void;
+  // 每个作业结束时一次（给人看的一行，见 jobEndedLine）
+  onEnded?: (line: string) => void;
 }
 
 // 一个运行面上的作业结束通知
@@ -95,6 +102,7 @@ export class JobNotices {
   readonly #target: NoticeTarget;
   #wake: (() => void) | undefined;
   #onNotice: ((text: string) => void) | undefined;
+  #onEnded: ((line: string) => void) | undefined;
   #key: string | undefined;
   #inNotice: BackgroundJob[] = [];
   readonly #unsubscribe: Array<() => void>;
@@ -103,8 +111,10 @@ export class JobNotices {
     this.#target = target;
     this.#wake = options.wake;
     this.#onNotice = options.onNotice;
+    this.#onEnded = options.onEnded;
     this.#unsubscribe = [
       jobs.onSettled((job) => {
+        this.#onEnded?.(jobEndedLine(job));
         if (!job.reported) this.#post([job], true);
       }),
       jobs.onReported((job) => this.#claim(job)),
@@ -115,6 +125,7 @@ export class JobNotices {
   bind(options: JobNoticesOptions): void {
     this.#wake = options.wake;
     this.#onNotice = options.onNotice;
+    this.#onEnded = options.onEnded;
   }
 
   dispose(): void {

@@ -93,6 +93,8 @@ export interface RewindNode {
   key: string;
   kind: "message" | "tip";
   depth: number;
+  // 上一条消息的 key（会话开头为 null）：界面按它画分叉的连接线（同一深度分不出"分叉的下一枝"与"同一枝的下一条"）
+  parent: string | null;
   // 消息：人输入的那条（截成一行由界面做）；末端：那条分支最后一条助手回复
   text: string;
   timestamp: number;
@@ -205,7 +207,7 @@ export function rewindTree(file: SessionFileView): RewindNode[] {
   const seqOf = (point: MessagePoint | TipPoint) =>
     isTip(point) ? point.leaf.seq : point.runStart.seq;
   const nodes: RewindNode[] = [];
-  const visit = (list: Array<MessagePoint | TipPoint>, depth: number) => {
+  const visit = (list: Array<MessagePoint | TipPoint>, depth: number, parent: string | null) => {
     const sorted = [...list].sort((left, right) => seqOf(left) - seqOf(right));
     const childDepth = sorted.length > 1 ? depth + 1 : depth;
     for (const point of sorted) {
@@ -215,6 +217,7 @@ export function rewindTree(file: SessionFileView): RewindNode[] {
           key: `tip:${point.leaf.id}`,
           kind: "tip",
           depth: childDepth,
+          parent,
           text: point.text,
           timestamp: point.leaf.timestamp,
           onMain: leafId === mainLeaf,
@@ -227,6 +230,7 @@ export function rewindTree(file: SessionFileView): RewindNode[] {
         key: `run:${point.runStart.id}`,
         kind: "message",
         depth: childDepth,
+        parent,
         text: point.text,
         timestamp: point.runStart.timestamp,
         onMain: main.has(point.runStart.id),
@@ -234,10 +238,10 @@ export function rewindTree(file: SessionFileView): RewindNode[] {
         target: point.runStart.parentId,
         prefill: point.text,
       });
-      visit(point.children, childDepth);
+      visit(point.children, childDepth, `run:${point.runStart.id}`);
     }
   };
-  visit(roots, 0);
+  visit(roots, 0, null);
   return nodes;
 }
 

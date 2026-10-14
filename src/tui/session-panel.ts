@@ -57,7 +57,8 @@ export interface SessionPanelSourceView {
 // 决策 458：当前会话那张卡：名字后标 current，状态写在卡里（它不在分组里）
 export function currentSessionCardText(card: PooledSessionCard): string {
   const [name, ...rest] = sessionCardText(card).split("  ");
-  return [`${name} ${secondary("current")} · ${GROUP_LABEL[card.state]}`, ...rest].join("  ");
+  const state = card.cancelling === true ? "cancelling" : GROUP_LABEL[card.state];
+  return [`${name} ${secondary("current")} · ${state}`, ...rest].join("  ");
 }
 
 export class SessionPanel implements Component {

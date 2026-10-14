@@ -232,7 +232,7 @@ test("验收修改：面板里改被别的层覆盖的一项——名字旁标�
   }
 });
 
-test("/config 选项=值 直接改；被项目覆盖的另有提醒；值没变不写；值不合法如实报错、不重建", async () => {
+test("/config 选项=值 直接改；被项目覆盖的另有提醒；值没变不写、回一行；值不合法如实报错、不重建", async () => {
   const { term, writes, reloads, cleanup } = makeShell();
   try {
     await settle();
@@ -251,8 +251,12 @@ test("/config 选项=值 直接改；被项目覆盖的另有提醒；值没变�
     term.input("/config modelRequest.maxRetries=3");
     term.input("\r");
     await settle();
-    // 值没变：不写、不重建、也不说
+    // 值没变：不写、不重建，回一行（直接打的命令没有别处可见的变化）
     assert.equal(reloads.length, 1);
+    assert.match(
+      screenFlat(term),
+      /modelRequest\.maxRetries is already 3, but project settings override it/
+    );
     assert.equal(
       (screenText(term).match(/written to user settings/g) ?? []).length,
       (before.match(/written to user settings/g) ?? []).length

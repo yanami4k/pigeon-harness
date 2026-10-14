@@ -28,7 +28,7 @@ import {
 } from "../state/runtime-events.ts";
 import { MARKDOWN_OPTIONS, MARKDOWN_THEME } from "./markdown-theme.ts";
 import { clipToWidth } from "./status-bar.ts";
-import { secondary } from "./style.ts";
+import { failureMark, secondary } from "./style.ts";
 import { diffOfDetails, type ToolResultView, toolResultBody } from "./tool-output.ts";
 
 // thinking 段视觉弱化（M5 S2，决策 045）：暗色由壳的受信代码在 pi-tui 补齐行宽后逐行包裹；
@@ -49,10 +49,7 @@ export class MessageFlow {
   // M5 S2（决策 045）：thinking 流式段——与正文尾巴分开，谁的增量到了谁开段（同 035 懒创建）
   private thinkingTail: Text | null = null;
   private thinkingText = "";
-  private readonly toolLines = new Map<
-    string,
-    { text: Text; content: string; result?: ToolResultView }
-  >();
+  private readonly toolLines = new Map<string, ToolEntry>();
   private toolsExpanded = false;
   // 决策 451：对话流最上方的欢迎头（随消息滚动；清空消息区时留着）
   private header: Component | undefined;
@@ -149,6 +146,11 @@ export class MessageFlow {
     for (const line of lines) {
       if (line.kind === "thinking" || line.kind === "end") {
         this.appendDim(line.text);
+      } else if (line.kind === "tool" || line.kind === "toolResult") {
+        // 工具调用行与结果行同实时流：暗色，失败的开头标红色 ✗
+        this.list.addChild(
+          new Text(toolEntryText(line.text, line.failed === true), 1, 1, secondary)
+        );
       } else if (line.kind === "assistant") {
         this.appendMarkdown(line.text);
         this.lastReply = line.text;
@@ -240,16 +242,20 @@ export class MessageFlow {
     return this.list.children.length;
   }
 
-  // tool.proposed：工具名 + 参数摘要（措辞复用 application/format.ts 的 summarizeArgs）
-  addToolCall(toolCallId: string, line: string): void {
-    this.toolLines.set(toolCallId, { text: this.append(line), content: line });
+  // tool.proposed：工具名 + 参数摘要（措辞复用 application/format.ts 的 summarizeArgs）。工具条目整块暗色（调用行与结果预览）
+  addToolCall(toolCallId: string, line: string, failed = false): void {
+    const text = new Text("", 1, 1, secondary);
+    this.list.addChild(text);
+    const entry: ToolEntry = { text, content: line, failed };
+    this.toolLines.set(toolCallId, entry);
+    this.renderTool(entry);
   }
 
   // 调用行 + 结果块（有结果时）
-  private renderTool(entry: { text: Text; content: string; result?: ToolResultView }): void {
+  private renderTool(entry: ToolEntry): void {
     const body = entry.result !== undefined ? toolResultBody(entry.result, this.toolsExpanded) : "";
     entry.text.setText(
-      linkify(sanitizeTerminalText(body === "" ? entry.content : `${entry.content}\n${body}`))
+      toolEntryText(body === "" ? entry.content : `${entry.content}\n${body}`, entry.failed)
     );
   }
 
@@ -297,14 +303,15 @@ export class MessageFlow {
     }
   }
 
-  // tool.settled：在原行追加结果状态（参数摘要保持可见）；settled 先到则如实落整行
-  settleToolCall(toolCallId: string, line: string, state: string): void {
+  // tool.settled：在原行追加结果状态（参数摘要保持可见）；settled 先到则如实落整行。失败的开头标记换成红色 ✗
+  settleToolCall(toolCallId: string, line: string, state: string, failed = false): void {
     const existing = this.toolLines.get(toolCallId);
     if (existing === undefined) {
-      this.addToolCall(toolCallId, `${line} ${state}`);
+      this.addToolCall(toolCallId, `${line} ${state}`, failed);
       return;
     }
     existing.content += ` ${state}`;
+    existing.failed = failed;
     this.renderTool(existing);
   }
 }
@@ -337,12 +344,30 @@ export function projectRuntimeEvent(
     }
     case RuntimeEventKind.ToolSettled: {
       const payload = event.payload as ToolSettledPayload;
-      flow.settleToolCall(payload.toolCallId, `$ ${payload.toolName}`, toolSettledState(payload));
+      flow.settleToolCall(
+        payload.toolCallId,
+        `$ ${payload.toolName}`,
+        toolSettledState(payload),
+        payload.isError
+      );
       break;
     }
     default:
       break;
   }
+}
+
+interface ToolEntry {
+  text: Text;
+  content: string;
+  result?: ToolResultView;
+  failed: boolean;
+}
+
+// 工具条目的显示文字：先净化、加链接；失败的把开头的 "$" 换成红色 ✗（整行的暗色由 Text 的逐行样式加）
+function toolEntryText(content: string, failed: boolean): string {
+  const shown = linkify(sanitizeTerminalText(content));
+  return failed && shown.startsWith("$ ") ? `${failureMark("✗")}${shown.slice(1)}` : shown;
 }
 
 // 工具调用行：工具名 + 参数摘要（面板的"正在做什么"与树形视图的最近调用用同一行）

@@ -297,6 +297,19 @@ export function settle(ms = 80): Promise<void> {
   return promise;
 }
 
+// 写往终端的字节里 text 第一次出现处是否为暗色：它之前最近的一个样式序列是 454 的暗色（\x1b[2m）
+export function isDimmed(raw: string, text: string): boolean {
+  const at = raw.indexOf(text);
+  if (at < 0) return false;
+  const style = raw.lastIndexOf("\x1b[", at);
+  return style >= 0 && raw.startsWith("\x1b[2m", style);
+}
+
+// 去掉样式序列（只看文字与位置）
+export function withoutStyles(text: string): string {
+  return text.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g"), "");
+}
+
 export function screenText(term: MockTerminal): string {
   return term.screen.contentLines().join("\n");
 }

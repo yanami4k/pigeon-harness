@@ -86,7 +86,7 @@ export interface CommandsHost {
   captureEscape?(onEscape: () => void): () => void;
   // 决策 448：/worktrees 的命令面（缺省 = /worktrees 不可用）
   worktrees?(): TuiWorktreesFace | undefined;
-  // 决策 450、456：/rename 改当前会话的名字（缺省 = /rename 不可用）
+  // 决策 450、456：/rename 改当前会话的名字，返回落消息区的一行（改成了为 "renamed to <名字>"，不合规为报错）；缺省 = /rename 不可用
   readonly renameSession?: ((name: string) => string) | undefined;
   // 决策 442：/config（缺省 = 不可用）；参数为空即打开面板，"选项=值" 即直接改
   readonly configCommand?: ((args: string) => void) | undefined;

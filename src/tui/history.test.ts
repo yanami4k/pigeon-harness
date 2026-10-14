@@ -10,8 +10,9 @@ import type { RunResult, StreamTextDelta } from "../pi-runtime/adapter.ts";
 import { EVENT_ENVELOPE_VERSION, type EventEnvelope } from "../state/events.ts";
 import { newEntryId, newRunId, newSessionId, type RunId } from "../state/ids.ts";
 import { RuntimeEventKind } from "../state/runtime-events.ts";
+import { MessageFlow } from "./message-flow.ts";
 import { PigeonTuiShell, type TuiRuntimeFace } from "./shell.ts";
-import { MockTerminal, screenText, settle } from "./testing.ts";
+import { isDimmed, MockTerminal, screenText, settle } from "./testing.ts";
 
 class FakeRuntime implements TuiRuntimeFace {
   private readonly listeners = new Set<(event: EventEnvelope) => void>();
@@ -148,4 +149,17 @@ test("/resume 换绑后渲染全部历史：正文、thinking、工具行与折�
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("验收修改：回看历史里的工具调用行与结果行用暗色；失败的调用行开头为红色 ✗，其余仍暗", () => {
+  const flow = new MessageFlow();
+  flow.addHistory([
+    { kind: "tool", text: '$ read_file {"path":"a"} -> ok' },
+    { kind: "tool", text: '$ edit_file {"path":"a"} -> error', failed: true },
+    { kind: "toolResult", text: "[result] edit_file error (5 chars, collapsed)" },
+  ]);
+  const raw = flow.view.render(80).join("\n");
+  assert.ok(isDimmed(raw, "$ read_file"), raw);
+  assert.ok(raw.includes('\x1b[22m\x1b[31m✗\x1b[39m\x1b[2m edit_file {"path":"a"} -> error'), raw);
+  assert.ok(isDimmed(raw, "[result] edit_file error"), raw);
 });

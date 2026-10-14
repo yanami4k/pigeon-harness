@@ -1155,20 +1155,21 @@ export class PigeonTuiShell
       this.tui.requestRender();
       return;
     }
+    // /config 选项=值 直接改的写一行结果（面板里改的，那一项当场更新就是反馈）；与现在相同、没写文件的也写一行，
+    // 不然直接打的命令没有任何反应
+    const overridden = (): string => {
+      const view = this.configItems()?.find((item) => item.option.id === id);
+      return view?.overriddenBy !== undefined
+        ? `, but ${OVERRIDE_LAYER[view.overriddenBy]} override it`
+        : "";
+    };
     if (file === undefined) {
+      if (!inPanel) this.flow.addSystem(`${id} is already ${value}${overridden()}`);
       this.tui.requestRender();
       return;
     }
-    // /config 选项=值 直接改的写一行结果（面板里改的，那一项当场更新就是反馈）
     if (!inPanel) {
-      const view = this.configItems()?.find((item) => item.option.id === id);
-      this.flow.addSystem(
-        `${id} = ${value} (written to user settings${
-          view?.overriddenBy !== undefined
-            ? `, but ${OVERRIDE_LAYER[view.overriddenBy]} override it`
-            : ""
-        })`
-      );
+      this.flow.addSystem(`${id} = ${value} (written to user settings${overridden()})`);
     }
     const reload = this.options.reload;
     if (reload === undefined) {
@@ -1251,6 +1252,7 @@ export class PigeonTuiShell
       id,
       name: this.options.sessionName?.(id) ?? id,
       state,
+      ...(this.interrupting && state !== "idle" ? { cancelling: true } : {}),
       task: digest.firstInput,
       summary: digest.lastReply,
       ...(waiting !== undefined ? { waiting } : {}),
@@ -1366,6 +1368,7 @@ export class PigeonTuiShell
       last.work === work
     ) {
       this.lastPanelStop = undefined;
+      this.sessionPanel.setNote("");
       if (main) {
         this.requestInterrupt();
         return;

@@ -5,6 +5,11 @@ export function secondary(text: string): string {
   return text === "" ? text : `\x1b[2m${text}\x1b[22m`;
 }
 
+// 失败的工具调用开头的标记：醒目的红色，不随整行变暗（先关暗色、写完再开回来，整行仍由 secondary 包着）。只包受信的固定字符
+export function failureMark(text: string): string {
+  return text === "" ? text : `\x1b[22m\x1b[31m${text}\x1b[39m\x1b[2m`;
+}
+
 // 加粗（欢迎头的名字与版本）
 export function bold(text: string): string {
   return text === "" ? text : `\x1b[1m${text}\x1b[22m`;

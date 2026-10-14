@@ -221,6 +221,8 @@ test("连按两次 Ctrl+X 停止选中的会话（第一次只提示）；面板
     term.input(CTRL_X);
     await settle();
     assert.deepEqual(stopped, ["s1"]);
+    // 停下之后"再按一次"的提示不留着
+    assert.doesNotMatch(screenText(term), /press Ctrl\+X again/);
     assert.match(screenText(term), /stopped \(1\)/);
     term.input("/config");
     term.input("\r");
@@ -468,10 +470,18 @@ test("决策 458：在面板里对当前会话按两次 Ctrl+X 是中断它这�
     term.input(CTRL_X);
     await settle();
     assert.match(screenText(term), /press Ctrl\+X again to interrupt demo-main/);
+    // 真实运行面的中断等这一轮停下才返回：这里挂起来，看中断途中的卡片
+    const { promise: stopped, resolve: stop } = Promise.withResolvers<void>();
+    const interrupt = runtime.interrupt.bind(runtime);
+    runtime.interrupt = () => interrupt().then(() => stopped);
     term.input(CTRL_X);
     await settle();
     assert.equal(runtime.interrupts, 1);
     assert.equal(shell.currentView(), "panel", "没有退出程序，也没离开面板");
+    // 已请求中断、这一轮还没停下：卡片写 cancelling，"再按一次"的提示不留着
+    assert.doesNotMatch(screenText(term), /press Ctrl\+X again/);
+    assert.match(screenText(term), /demo-main current · cancelling/);
+    stop();
     runtime.finishAll();
     await settle();
     // 主会话自己的审批挂着：卡片写等待回应与在等什么

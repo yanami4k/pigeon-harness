@@ -1,5 +1,5 @@
 // 整屏树形视图的通用树列表（决策 435：会话树与消息树共用）：压平后的各行、光标、超过一屏时以光标为中心滚动、树下方一行说明。
-// 行的文字与缩进由使用方给出；渲染只加光标列与缩进，提示行与光标只用 ASCII
+// 行的文字与缩进由使用方给出；渲染只加光标列与缩进（或整行交给使用方画），提示行与光标只用 ASCII
 import { clipToWidth } from "./status-bar.ts";
 
 export interface TreeRow<T> {
@@ -51,17 +51,24 @@ export class TreeList<T> {
     return this.note;
   }
 
-  // 树的各行（room 为可用行数）与说明行
-  render(width: number, room: number, empty: string): string[] {
+  // 树的各行（room 为可用行数）与说明行；给了 renderRow 时每行由它画（含光标列）
+  render(
+    width: number,
+    room: number,
+    empty: string,
+    renderRow?: (row: TreeRow<T>, selected: boolean, width: number) => string
+  ): string[] {
     const lines: string[] = [];
     if (this.problem !== undefined || this.rows.length === 0) {
       lines.push(`  ${this.problem ?? empty}`);
     } else {
       const rendered = this.rows.map((row, index) =>
-        clipToWidth(
-          ` ${index === this.cursor ? ">" : " "}${"  ".repeat(row.depth + 1)}${row.text}`,
-          width
-        )
+        renderRow !== undefined
+          ? renderRow(row, index === this.cursor, width)
+          : clipToWidth(
+              ` ${index === this.cursor ? ">" : " "}${"  ".repeat(row.depth + 1)}${row.text}`,
+              width
+            )
       );
       const rows = Math.max(1, room);
       if (rendered.length > rows) {

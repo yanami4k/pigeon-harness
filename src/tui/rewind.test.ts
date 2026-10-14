@@ -24,6 +24,7 @@ const NODES: RewindNode[] = [
     key: "run:1",
     kind: "message",
     depth: 0,
+    parent: null,
     text: "first task",
     timestamp: 0,
     onMain: true,
@@ -35,6 +36,7 @@ const NODES: RewindNode[] = [
     key: "run:2",
     kind: "message",
     depth: 0,
+    parent: "run:1",
     text: `second \u001b[2Jtask`,
     timestamp: 0,
     onMain: true,
@@ -46,6 +48,7 @@ const NODES: RewindNode[] = [
     key: "tip:9",
     kind: "tip",
     depth: 0,
+    parent: "run:2",
     text: "done",
     timestamp: 0,
     onMain: true,
@@ -187,7 +190,9 @@ test("双击 Esc（空闲、输入框为空）打开消息树；单击、输入�
     const screen = screenText(term);
     assert.match(screen, /== messages/);
     assert.match(screen, /first task/);
-    assert.match(screen, /\(end\) done {2}\(current\)/);
+    // 分支末尾一行写回复的开头；当前位置标在当前末端的上一条消息后面
+    assert.match(screen, /`- reply: done/);
+    assert.match(screen, /second ␛\[2Jtask\s+current\s+\d\d-\d\d \d\d:\d\d$/m);
     assert.ok(!term.writes.join("").includes(`${ESC}[2Jtask`), "消息里的控制序列不写进终端");
     assert.match(screen, /second ␛\[2Jtask/);
     // 当前位置回车不动

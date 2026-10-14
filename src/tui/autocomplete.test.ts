@@ -1,5 +1,6 @@
 // 决策 439：输入框补全。"/" 开头列出命令（取自命令表），回车先套用补全再发出（发出的文字去掉尾随空格后照常走命令）；
-// 补全列表开着时 Esc 归它（关列表，不当作取消）；Tab 以工作区为根补全路径；没有 fd 时 "@" 不出结果。选中项前缀为 ASCII。
+// 补全列表开着时 Esc 归它（关列表，不当作取消）；Tab 以工作区为根补全打了半截的路径，没打字时 Tab 什么都不做；
+// 没有 fd 时 "@" 不出结果。选中项前缀为 ASCII。
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -59,6 +60,30 @@ test('"/" 开头列出命令，选中前缀为 ASCII；回车套用并发出命�
     term.input("\r");
     await settle();
     assert.deepEqual(runtime.runs, [], "斜杠命令不交给模型");
+    assert.match(screenText(term), /search/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("输入框空、或刚敲完空格时 Tab 什么都不做（不弹文件列表）；斜杠命令照常补全", async () => {
+  const { term, runtime, cleanup } = makeShell();
+  try {
+    await settle();
+    term.input("\t");
+    await settle();
+    assert.doesNotMatch(screenText(term), /alpha-module|src\//, screenText(term));
+    term.input("看看 ");
+    term.input("\t");
+    await settle();
+    assert.doesNotMatch(screenText(term), /alpha-module|src\//, screenText(term));
+    // Tab 没往输入框里塞东西：发出的就是打的字
+    term.input("\r");
+    await settle();
+    assert.deepEqual(runtime.runs, ["看看"]);
+    term.input("/sear");
+    term.input("\t");
+    await settle();
     assert.match(screenText(term), /search/);
   } finally {
     cleanup();

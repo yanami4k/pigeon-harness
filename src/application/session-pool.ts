@@ -33,6 +33,8 @@ export interface PooledSessionCard {
   worktree?: { path: string; branch: string };
   // 决策 459：不是 git 仓库时派出的会话与其他会话共用当前目录（没有工作树、不隔离）
   sharedDir?: boolean;
+  // 当前会话那张卡：已请求中断、这一轮还没停下（卡上写 cancelling）
+  cancelling?: boolean;
   startedAt: number;
   updatedAt: number;
 }

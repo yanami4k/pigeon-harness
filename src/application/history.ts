@@ -46,6 +46,8 @@ export type HistoryLineKind =
 export interface HistoryLine {
   kind: HistoryLineKind;
   text: string;
+  // 工具调用行：调用失败（终端界面在开头标红色 ✗）
+  failed?: boolean;
 }
 
 export interface SessionHistoryOptions {
@@ -236,10 +238,16 @@ export function loadSessionHistory(
         // 工具行补上结果（同实时流：先落定、再出结果消息）
         const state = message.isError === true ? "-> error" : "-> ok";
         const existing = toolLines.get(`${message.runId}\n${message.toolCallId ?? ""}`);
+        const failed = message.isError === true;
         if (existing !== undefined) {
           existing.text += ` ${state}`;
+          if (failed) existing.failed = true;
         } else {
-          body.push({ kind: "tool", text: `$ ${message.toolName ?? "?"} ${state}` });
+          body.push({
+            kind: "tool",
+            text: `$ ${message.toolName ?? "?"} ${state}`,
+            ...(failed ? { failed } : {}),
+          });
         }
       }
       body.push(...messageLines(message, entryChars));

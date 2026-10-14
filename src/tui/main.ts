@@ -675,7 +675,7 @@ export async function main(argv: string[]): Promise<void> {
     // 决策 450：忙闲进会话名录，空闲时回告订了空闲通知的会话
     onBusyChange: (busy) => peerMessaging?.setBusy(busy),
     // 决策 456：/rename 改当前会话的名字——记进会话记录（续接后还在），收件口开着且登记的是本会话时名录跟着改；
-    // 不依赖收件口（没开、沙箱里照样能改）
+    // 不依赖收件口（没开、沙箱里照样能改）。改成了回一行简短结果（会话名不在主视图上，看不到别处变化）
     renameSession: (name: string) => {
       if (!validPeerName(name)) {
         return "invalid name: use letters, digits, _, - and . (max 40)";
@@ -685,7 +685,7 @@ export async function main(argv: string[]): Promise<void> {
       if (peerMessaging !== undefined && peerMessaging.sessionId === slot.sessionId) {
         peerMessaging.rename(name);
       }
-      return "";
+      return `renamed to ${name}`;
     },
     // 决策 456：会话名（面板上当前会话的卡片、/take 的说明用）
     sessionName: (id: string) =>
@@ -724,10 +724,12 @@ export async function main(argv: string[]): Promise<void> {
       shell: () => shellHolder.current,
     });
     bundle.disposers = [...(bundle.disposers ?? []), async () => detach()];
-    // 决策 365：后台作业结束时主 agent 空闲即叫醒它（同 worker 完成通知；通知是给模型的原文，不显示在消息区）
+    // 决策 365：后台作业结束时主 agent 空闲即叫醒它（同 worker 完成通知；通知是给模型的原文，不显示在消息区）。
+    // 消息区另写一行简短结果（作业号、结束状态与命令）：界面上没有别处列后台作业
     bundle.jobNotices?.bind({
       wake: () => shellHolder.current?.runNotices(),
       onNotice: () => shellHolder.current?.render(),
+      onEnded: (line) => shellHolder.current?.addSystem(line),
     });
   }
   // 决策 340：/reload 的先建后换；决策 446：会话移进工作树时同样按这条路重建（reloadContext.workspaceRoot 先换成工作树）
