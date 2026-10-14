@@ -272,8 +272,9 @@ function stubHost(
 
 test("经执行端执行：容器内 timeout 的 124、137、143 用满限时记为超时，未到限时的同值退出码照常记为钩子出错", async () => {
   for (const code of [124, 137, 143]) {
+    // 桩多等 100 毫秒：定时器按事件循环缓存的时刻起算，到点时实际用时可能差一毫秒不到满 1000
     const host = stubHost(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 1100));
       return { exitCode: code };
     });
     const outcome = await runHookCommandViaHost(host, {

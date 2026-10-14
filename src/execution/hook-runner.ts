@@ -167,7 +167,9 @@ export async function runHookCommandViaHost(
   host: WorkspaceHost,
   input: HookCommandInput
 ): Promise<HookCommandOutcome> {
-  const started = Date.now();
+  // 用时取单调时钟：系统时间被调动时不误判超时
+  const started = performance.now();
+  const elapsed = (): number => Math.round(performance.now() - started);
   const env = input.env ?? process.env;
   const seconds = Math.max(1, Math.ceil(input.timeoutMs / 1000));
   const short = input.timeoutMs <= SHORT_BUDGET_MS;
@@ -183,7 +185,7 @@ export async function runHookCommandViaHost(
       spawned: false,
       exitCode: null,
       timedOut: false,
-      durationMs: Date.now() - started,
+      durationMs: elapsed(),
       stdout: "",
       stderr: "",
     };
@@ -205,8 +207,8 @@ export async function runHookCommandViaHost(
     timedOut:
       result.timedOut ||
       (HOOK_TIMEOUT_EXIT_CODES.includes(result.exitCode ?? -1) &&
-        Date.now() - started >= seconds * 1000),
-    durationMs: Date.now() - started,
+        elapsed() >= seconds * 1000),
+    durationMs: elapsed(),
     stdout: result.stdout,
     stderr: result.stderr,
     ...(result.spawnError !== undefined ? { spawnError: result.spawnError } : {}),
