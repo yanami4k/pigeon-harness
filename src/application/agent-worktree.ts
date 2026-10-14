@@ -2,7 +2,7 @@
 // （含未提交的改动），目录与分支沿用 .pigeon/state/worktrees/<会话号>-<名字> 与 pigeon/<会话号后 8 位>-<名字> 的命名
 //（/worktrees 照样列出与清理），起点快照挂在 refs/pigeon/worker-start/ 下随分支一并删。开着期间持有在用锁。
 // 每次停下报告时有改动即附位置与分支；进程里关掉它时没有改动即删，有改动或干到一半被打断的保留。
-import { snapshotWorkdir } from "../execution/workdir-snapshot.ts";
+import { deleteSnapshotRef, snapshotWorkdir } from "../execution/workdir-snapshot.ts";
 import {
   addWorktree,
   branchTailFor,
@@ -49,25 +49,43 @@ export function openAgentWorktree(input: {
     throw new Error("a worktree needs a git repository");
   }
   const name = worktreeSafeName(input.name);
-  const snapshot = snapshotWorkdir({
-    repoRoot: input.parentWorkspace,
-    ref: workerStartRefFor(branchTailFor(input.sessionId, name)),
-  });
-  const handle = addWorktree({
-    repoRoot,
-    governanceRoot: input.governanceRoot,
-    sessionId: input.sessionId,
-    name,
-    baseRef: snapshot.commit,
-    includeSource: input.parentWorkspace,
-  });
-  return {
-    path: handle.path,
-    branch: handle.branch,
-    base: snapshot.commit,
-    repoRoot,
-    release: holdWorktreeInUse(handle.path, input.homeDir),
-  };
+  const startRef = workerStartRefFor(branchTailFor(input.sessionId, name));
+  const snapshot = snapshotWorkdir({ repoRoot: input.parentWorkspace, ref: startRef });
+  let handle: ReturnType<typeof addWorktree>;
+  try {
+    handle = addWorktree({
+      repoRoot,
+      governanceRoot: input.governanceRoot,
+      sessionId: input.sessionId,
+      name,
+      baseRef: snapshot.commit,
+      includeSource: input.parentWorkspace,
+    });
+  } catch (error) {
+    // 建不成：起点快照的引用不留
+    try {
+      deleteSnapshotRef(repoRoot, startRef);
+    } catch {
+      // 删不掉也无害：只是一个引用
+    }
+    throw error;
+  }
+  try {
+    return {
+      path: handle.path,
+      branch: handle.branch,
+      base: snapshot.commit,
+      repoRoot,
+      release: holdWorktreeInUse(handle.path, input.homeDir),
+    };
+  } catch (error) {
+    try {
+      removeWorktreeAndBranch({ repoRoot, path: handle.path, branch: handle.branch });
+    } catch {
+      // 删不掉的留给 /worktrees
+    }
+    throw error;
+  }
 }
 
 export function agentWorktreeChanged(worktree: AgentWorktree): boolean {

@@ -24,12 +24,16 @@ interface FakeAgent {
   closed: boolean;
 }
 
-function harness(limits = { maxConcurrent: 20, maxDepth: 3 }) {
+function harness(
+  limits = { maxConcurrent: 20, maxDepth: 3 },
+  options: { failOpen?: boolean; beforeTask?: () => Promise<void> } = {}
+) {
   const hub = new AgentHub({ mail: new MailGate() });
   const agents: FakeAgent[] = [];
   const delivered: string[] = [];
   const sessionRecords: AgentMessageRecord[] = [];
   const open = async (spec: SubagentSpec): Promise<SubagentRuntime> => {
+    if (options.failOpen === true) throw new Error("no worktree here");
     let reply = "";
     let pending: ((outcome: AgentRunOutcome) => void) | undefined;
     const fake: FakeAgent = {
@@ -66,6 +70,14 @@ function harness(limits = { maxConcurrent: 20, maxDepth: 3 }) {
         fake.finish(reply, "aborted");
       },
       reply: () => reply,
+      ...(options.beforeTask !== undefined
+        ? {
+            beforeTask: async (task: string) => {
+              await options.beforeTask?.();
+              return task;
+            },
+          }
+        : {}),
       record: (entry) => {
         fake.records.push(entry);
       },
@@ -278,4 +290,64 @@ test("续接认回：没干完的标已中断、干完的标空闲；发消息�
   assert.equal(reopened?.records.at(-1)?.text, "go on");
   assert.match(reopened?.inputs.at(-1) ?? "", /go on/);
   assert.equal(restored[0]?.state, "running");
+});
+
+test("SubagentStart 跑着的时候被叫停：不开跑；派出方自己停的不交回", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const { hub, host, agents, delivered } = harness(undefined, { beforeTask: () => gate });
+  await host.spawn({ task: "a" });
+  await tick();
+  assert.equal(await host.stop("general-1"), "Stopped general-1.");
+  release();
+  await tick();
+  await tick();
+  assert.deepEqual(agents[0]?.inputs, [], "没开跑");
+  assert.equal(hub.runningUnder("main-session"), 0);
+  assert.deepEqual(delivered, [], "派出方自己停的不交回");
+});
+
+test("开不成：交回失败原因；之后发消息如实说找不到它，不说已送达", async () => {
+  const { host, delivered } = harness(undefined, { failOpen: true });
+  await host.spawn({ task: "a", worktree: true });
+  await tick();
+  assert.match(delivered[0] ?? "", /general-1 failed: no worktree here/);
+  assert.match(host.send("general-1", "hello"), /^Error: general-1 can't be reached/);
+});
+
+test("并发上限也管叫回来接着干的：满了即如实说，不排队；有空位后照常", async () => {
+  const { host, agents } = harness({ maxConcurrent: 1, maxDepth: 3 });
+  await host.spawn({ task: "one" });
+  await tick();
+  agents[0]?.finish("one done");
+  await tick();
+  await host.spawn({ task: "two" });
+  await tick();
+  assert.match(host.send("general-1", "more"), /concurrent sub-agent limit reached \(1 running\)/);
+  agents[1]?.finish("two done");
+  await tick();
+  assert.equal(host.send("general-1", "more"), "Sent to general-1.");
+  await tick();
+  assert.equal(agents[0]?.inputs.length, 2);
+});
+
+test("关系说法：会话给孙辈发消息、孙辈给会话发消息、同一会话里的平级", async () => {
+  const { host, agents, delivered } = harness();
+  await host.spawn({ task: "a" });
+  await tick();
+  await agents[0]?.spec.agents.spawn({ task: "b", type: "explore" });
+  await host.spawn({ task: "c" });
+  await tick();
+  const grandchild = agents[1];
+  assert.equal(host.send("explore-1", "hi"), "Sent to explore-1.");
+  assert.match(
+    grandchild?.notices.at(-1) ?? "",
+    /From main \(an agent above the one that started you\)/
+  );
+  assert.equal(grandchild?.spec.agents.send("main", "up"), "Sent to main.");
+  assert.match(delivered.at(-1) ?? "", /From explore-1 \(a sub-agent below the ones you started\)/);
+  assert.equal(grandchild?.spec.agents.send("general-2", "peer"), "Sent to general-2.");
+  assert.match(agents[2]?.notices.at(-1) ?? "", /another agent in your session/);
 });

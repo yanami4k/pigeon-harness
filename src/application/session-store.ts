@@ -124,15 +124,24 @@ export function openSessionStore(input: {
 // ---- 写入输入 → 条目 ----
 
 // 决策 457、480：agent 之间的一条传话（写在收件方的会话记录里）
-export function agentMessageEntry(record: {
-  from: string;
-  to: string;
-  kind: "task" | "message" | "result";
-  text: string;
-}): SessionCustomEntry {
+export function agentMessageEntry(
+  record: {
+    from: string;
+    to: string;
+    kind: "task" | "message" | "result";
+    text: string;
+  },
+  // 收件方当时在跑的 Run（挂到它下面，trace 按时间排进去）
+  runId?: RunId
+): SessionCustomEntry {
   return {
     customType: SessionEntryType.AgentMessage,
-    data: { version: SESSION_ENTRY_VERSION, ...record, sentAt: Date.now() },
+    data: {
+      version: SESSION_ENTRY_VERSION,
+      ...(runId !== undefined ? { runId } : {}),
+      ...record,
+      sentAt: Date.now(),
+    },
   };
 }
 

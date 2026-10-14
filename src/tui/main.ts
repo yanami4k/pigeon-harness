@@ -342,7 +342,10 @@ export async function main(argv: string[]): Promise<void> {
         shellHolder.current?.runNotices();
       },
       pendingNotices: () => slot.bundle.adapter.pendingNotices(),
-      record: (entry) => slot.bundle.sessionStore.append(agentMessageEntry(entry)),
+      record: (entry) =>
+        slot.bundle.sessionStore.append(
+          agentMessageEntry(entry, slot.bundle.adapter.currentRunId())
+        ),
       open: createSubagentOpener({
         governanceRoot,
         streamFn,

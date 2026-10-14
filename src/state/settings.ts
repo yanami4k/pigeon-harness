@@ -591,12 +591,12 @@ export function backgroundJobLimitsOf(snapshot: SettingsSnapshot): BackgroundJob
   return backgroundJobLimits(snapshot.merged.tools);
 }
 
-// 决策 294 B1：任务清单开不开（tools.taskList，缺省开）
 // 决策 457、480：子 agent 的上限（agents 一节）
 export function agentLimitsOfSettings(snapshot: SettingsSnapshot): AgentLimits {
   return agentLimitsOf(snapshot.merged.agents);
 }
 
+// 决策 294 B1：任务清单开不开（tools.taskList，缺省开）
 export function taskListEnabledOf(snapshot: SettingsSnapshot): boolean {
   return taskListEnabled(snapshot.merged.tools);
 }

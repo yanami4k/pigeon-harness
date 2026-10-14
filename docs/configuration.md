@@ -555,7 +555,7 @@ config/secrets.json
 | `list_agents` | 列出通讯录：本进程里的会话与子 agent（类型、状态、谁派的） |
 | `stop_agent` | 停下自己派出的子 agent（连同它下面各层）；之后仍可用 `send_message` 叫它接着干 |
 
-四件工具不经审批（权限继承派出方，子 agent 自己的工具调用照常审批）。名字整个进程内不重名，重名自动加序号；`send_message` 直接写名字。层数到上限的子 agent 不注册 `spawn_agent`。
+四件工具不经审批（权限继承派出方，子 agent 自己的工具调用照常审批）。叫回停着的子 agent（发消息、后台作业结束）同样受同时在跑的上限：满了即如实说，不排队。只读的 `explore` 不注册 `spawn_agent`。名字整个进程内不重名，重名自动加序号；`send_message` 直接写名字。层数到上限的子 agent 不注册 `spawn_agent`。
 
 ### 类型
 
@@ -580,7 +580,7 @@ Review the change you're given; report problems with file and line.
 
 ### 权限与审批
 
-子 agent 与派出方共用审批模式（Shift+Tab 切换对它们同样生效）；派出那一刻派出方已有的会话放权带过去作种子。ask 模式下子 agent 的审批出现在所属会话（最上层）的审批区，来源行写 `source: sub-agent <路径>`（嵌套时路径写成 `general-1 › explore-2`；所属会话是面板里的会话时一并写明），一直等人答、不设超时。在子 agent 的审批里给的放权（`[a]`、`[d]`）只记在这个子 agent 自己的会话里，按键说明写 `for this sub-agent`：不往上给派出方，也不给兄弟。
+子 agent 与派出方共用审批模式（Shift+Tab 切换对它们同样生效）；派出那一刻派出方已有的会话放权带过去作种子（续接重开时按派出方当时的再带一次）。停下一个在等审批的子 agent，要等这次审批答完它才真停下（审批没有撤回）。ask 模式下子 agent 的审批出现在所属会话（最上层）的审批区，来源行写 `source: sub-agent <路径>`（嵌套时路径写成 `general-1 › explore-2`；所属会话是面板里的会话时一并写明），一直等人答、不设超时。在子 agent 的审批里给的放权（`[a]`、`[d]`）只记在这个子 agent 自己的会话里，按键说明写 `for this sub-agent`：不往上给派出方，也不给兄弟。
 
 ### 消息与信任
 
@@ -589,7 +589,7 @@ agent 之间的一切传话——派出时交代的任务、`send_message` 的�
 ### 带上下文起步与临时工作树
 
 - `inherit_context`：复制派出方截到这一轮之前的对话（派出它的那条助手消息不带），写进子 agent 自己的会话文件开头；文件头记复制了几条，会话视图、trace 与花费都跳过这一段（用量算派出方的）。
-- `worktree`：起点是派出方工作目录此刻的快照（含未提交的改动），工作树在 `.pigeon/state/worktrees/<会话号>-<名字>`、分支 `pigeon/<会话号后 8 位>-<名字>`（`/worktrees` 照样列出与清理），开着期间持有在用锁。每次交回时有改动即附工作树的位置与分支；子 agent 被释放时（换会话、关掉会话或程序）没有改动即删，有改动的、干到一半被打断的保留。改动由派出方或人自己取用（例如 `git merge` 那个分支）。
+- `worktree`：起点是派出方工作目录此刻的快照（含未提交的改动），工作树在 `.pigeon/state/worktrees/<会话号>-<名字>`、分支 `pigeon/<会话号后 8 位>-<名字>`。开着期间持有在用锁，`/worktrees` 把它列为在用、不删；释放之后照样由 `/worktrees` 列出与清理（所属会话一栏不写，它的会话在所属会话名下）。每次交回时有改动即附工作树的位置与分支；子 agent 被释放时（换会话、关掉会话或程序）没有改动即删，有改动的、干到一半被打断的保留。改动由派出方或人自己取用（例如 `git merge` 那个分支）。
 
 ### 会话记录、续接与花费
 
@@ -597,7 +597,7 @@ agent 之间的一切传话——派出时交代的任务、`send_message` 的�
 
 续接所属会话（`--continue`、`--resume`、`/resume`）时，它的子 agent 认回通讯录：最后一次没干完的（程序退出时还在跑）标为已中断，干完的为空闲；给它发一句话即重开它的会话接着干（临时工作树还在即回到那里）。程序退出（连按两下 Ctrl+C、`/exit`、直接关掉终端）时子 agent 随之停下；会话记录边干边写，最多丢进行中的那一步。
 
-所属会话的花费（状态栏）连同它的子 agent：续接时从会话记录累计，运行中子 agent 每有进展即计入新增的部分。
+所属会话的花费（状态栏）连同它的子 agent：续接时从会话记录累计；运行中在子 agent 状态有变（派出、干完、停下）与会话自己一轮收尾时计入新增的部分。
 
 当前会话还有子 agent 在跑时，`/resume`、`/reload`、`/config` 改值与 `enter_worktree` 都不做，说明 `sub-agents are running`。换到别的会话、关掉面板里的会话时，它派出的子 agent 停下并释放。
 
@@ -607,7 +607,7 @@ agent 之间的一切传话——派出时交代的任务、`send_message` 的�
 
 ### 钩子
 
-`SubagentStart` 在子 agent 第一轮之前触发（matcher 匹配类型名，补的上下文作任务的前缀），`SubagentStop` 在它每次停下时触发（拦下或补上下文即再跑一轮，连续到 `stopHookBlockCap` 后不再理会）；两者都多给 `agent_name` 与 `agent_type`，`SubagentStop` 另有 `stop_hook_active` 与 `last_assistant_message`。子 agent 不跑 `SessionStart`、`SessionEnd`；它的工具类钩子照常触发，运行记录写在它自己的会话里。
+`SubagentStart` 在子 agent 第一轮之前触发（matcher 匹配类型名，补的上下文作任务的前缀），`SubagentStop` 在它一轮正常干完时触发（出错或被停下的不触发；拦下或补上下文即再跑一轮，连续到 `stopHookBlockCap` 后不再理会）；两者都多给 `agent_name` 与 `agent_type`，`SubagentStop` 另有 `stop_hook_active` 与 `last_assistant_message`。子 agent 不跑 `SessionStart`、`SessionEnd`；它的工具类钩子照常触发，运行记录写在它自己的会话里。
 
 ## 会话名
 

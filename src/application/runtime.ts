@@ -179,7 +179,7 @@ import {
   webFetchRegistration,
   webSearchRegistration,
 } from "../web/tools.ts";
-import { agentToolRegistrations, createAgentTools } from "./agent-tools.ts";
+import { agentToolRegistrations, createAgentTools, SPAWN_AGENT_TOOL } from "./agent-tools.ts";
 import {
   backgroundJobEntry,
   cleanupOrphanedJobsOnce,
@@ -317,6 +317,8 @@ export interface RuntimeDeps {
   storeLineage?: StoreLineage;
   // 决策 480：本会话文件所在的会话根——子 agent 的会话放在所属会话名下的子文件夹；缺省治理根的会话根
   storeSessionsDir?: string;
+  // 决策 480：除本会话外还能读哪些会话的命令输出（子 agent 为派出方一路往上）；缺省按会话文件头的来历现算
+  outputAncestors?: () => readonly string[];
   // 决策 432：新会话等第一次真要落盘时才建会话文件（交互入口新开的会话给）
   deferSessionFile?: boolean;
   // 会话存储故障告警的出口（缺省标准错误输出；测试注入）
@@ -575,7 +577,8 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
       outputsRoot: outputsRootOf(governanceRoot),
       sessionId: deps.sessionId,
       maxBytes: outputLimits.savedOutputsMaxBytes,
-      ancestors: () => outputAncestors(sessionsDir, deps.sessionId, forkSource),
+      ancestors: () =>
+        deps.outputAncestors?.() ?? outputAncestors(sessionsDir, deps.sessionId, forkSource),
     });
   // 决策 365：单次超时与后台作业（每会话一份作业表，整次运行共用一个作业池；/reload 接着用旧运行面的）
   const commandTimeouts = runCommandTimeoutsOf(settings);
@@ -888,6 +891,8 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     if (scope === undefined) return true;
     if (scope.allow !== undefined && !scope.allow.includes(name)) return false;
     if (scope.readOnly === true) {
+      // 只读的不能再派子 agent（派出的可以是通用的，等于绕过只读）
+      if (name === SPAWN_AGENT_TOOL) return false;
       const tier = registry.get(name)?.tier;
       return tier === "read" || tier === "network";
     }

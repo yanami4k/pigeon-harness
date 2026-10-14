@@ -135,7 +135,10 @@ export function createSessionPool(context: SessionPoolContext): {
           hooks.wake();
         },
         pendingNotices: () => opened?.bundle.adapter.pendingNotices() ?? 0,
-        record: (entry) => bundleOf().sessionStore.append(agentMessageEntry(entry)),
+        record: (entry) =>
+          bundleOf().sessionStore.append(
+            agentMessageEntry(entry, bundleOf().adapter.currentRunId())
+          ),
         open: createSubagentOpener({
           governanceRoot: context.governanceRoot,
           streamFn: context.streamFn,

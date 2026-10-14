@@ -99,6 +99,8 @@ export interface RestoredAgent {
   interrupted: boolean;
   // 它当时的工作目录（临时工作树）
   workspace?: string;
+  // 派出时指定的模型
+  model?: string;
   startedAt: number;
   updatedAt: number;
 }
@@ -190,6 +192,8 @@ export interface SubagentRecord extends AgentNode {
   stoppedByParent?: boolean;
   // 续接认回、还没重开的：有消息来时按它重开
   reopen?: () => Promise<SubagentRuntime>;
+  // 还没有运行面时收到的（续接认回的、或撞上并发上限一时开不了的）：开好后一并递出
+  inbox?: Array<{ text: string; entry: AgentMessageRecord }>;
 }
 
 interface Deferred {
@@ -209,6 +213,9 @@ function deferred(): Deferred {
 function stateOf(record: SubagentRecord): AgentState {
   return record.state;
 }
+
+// 释放一批子 agent 时等它们这一轮收尾的上限
+const SHUTDOWN_WAIT_MS = 5_000;
 
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/;
 
@@ -244,15 +251,26 @@ function headOf(kind: AgentMessageKind, from: string, relation: string): string 
   }
 }
 
-// 收件方眼里发件方是谁
+// 收件方眼里发件方是谁（同一会话里按上下层说，跨会话说是别的会话的）
 function relationOf(from: AgentNode, to: AgentNode): string {
+  const above = (node: AgentNode, other: AgentNode): boolean => {
+    let current: AgentNode | undefined =
+      other.kind === "agent" ? (other as SubagentRecord).parent : undefined;
+    while (current !== undefined) {
+      if (current === node) return true;
+      current = current.kind === "agent" ? (current as SubagentRecord).parent : undefined;
+    }
+    return false;
+  };
   if (from.kind === "agent" && (from as SubagentRecord).parent === to) {
     return "a sub-agent you started";
   }
   if (to.kind === "agent" && (to as SubagentRecord).parent === from) {
     return "the agent that started you";
   }
-  return from.kind === "session" ? "another session's agent" : "another agent";
+  if (above(from, to)) return "an agent above the one that started you";
+  if (above(to, from)) return "a sub-agent below the ones you started";
+  return from.top === to.top ? "another agent in your session" : "an agent in another session";
 }
 
 export interface AgentHubOptions {
@@ -401,7 +419,7 @@ export class AgentHub {
   async #spawn(parent: AgentNode, request: SpawnRequest): Promise<string> {
     const top = parent.top;
     const open = top.endpoint.open;
-    if (open === undefined) return "Error: this session can't start sub-agents.";
+    if (open === undefined || this.#closing) return "Error: this session can't start sub-agents.";
     const limits = top.endpoint.limits();
     if (parent.depth >= limits.maxDepth) {
       return `Error: sub-agents can be nested at most ${limits.maxDepth} levels deep; this one can't start more.`;
@@ -474,6 +492,8 @@ export class AgentHub {
     record.activity = this.#activate(record, async (runtime) => {
       runtime.record({ from: parent.name(), to: name, kind: "task", text: request.task });
       const input = (await runtime.beforeTask?.(task)) ?? task;
+      // SubagentStart 跑着的时候被叫停：不开跑
+      if (stateOf(record) === "stopped") return { status: "aborted" };
       return runtime.run(input);
     });
     if (background) {
@@ -492,7 +512,7 @@ export class AgentHub {
   }
 
   // 让子 agent 干一次活（派出、续聊、续接后叫醒）：开运行面（还没开时）、跑、处理 SubagentStop、递完这期间收到的消息，
-  // 停下后把结果交回派出方
+  // 停下后把结果交回派出方。收尾（查临时工作树）做完才改状态：期间到的消息照"在跑"排着，收尾后再接着干
   async #activate(
     record: SubagentRecord,
     first: (runtime: SubagentRuntime) => Promise<AgentRunOutcome>
@@ -503,15 +523,21 @@ export class AgentHub {
       record.runtime = runtime;
       record.sessionId = runtime.sessionId;
     } catch (error) {
+      // 开不成：不再挂着这次的打开（续接认回的下次收到消息再重开）
+      delete record.opening;
+      delete record.inbox;
       record.state = "failed";
       record.error = error instanceof Error ? error.message : String(error);
       record.updatedAt = this.#now();
       this.#changed();
       this.#report(record, undefined);
+      this.#pump();
       return;
     }
+    delete record.opening;
     if (record.state === "stopped") {
       this.#report(record, runtime);
+      this.#pump();
       return;
     }
     record.state = "running";
@@ -525,6 +551,8 @@ export class AgentHub {
         if (stateOf(record) === "stopped") break;
         if (outcome.status === "completed") {
           const again = await runtime.afterRun?.(active);
+          // SubagentStop 跑着的时候被叫停：不再接着跑
+          if (stateOf(record) === "stopped") break;
           if (again !== undefined) {
             active = true;
             outcome = await runtime.run(again);
@@ -544,6 +572,9 @@ export class AgentHub {
         errorMessage: error instanceof Error ? error.message : String(error),
       };
     }
+    const kept = await runtime.settle?.().catch(() => record.worktree);
+    if (kept !== undefined) record.worktree = kept;
+    else delete record.worktree;
     if (stateOf(record) !== "stopped") {
       const stopped = runtime.stopReason?.();
       if (outcome.status === "failed" || stopped !== undefined) {
@@ -556,12 +587,10 @@ export class AgentHub {
         delete record.error;
       }
     }
-    const kept = await runtime.settle?.().catch(() => record.worktree);
-    if (kept !== undefined) record.worktree = kept;
-    else delete record.worktree;
     record.updatedAt = this.#now();
     this.#changed();
     this.#report(record, runtime);
+    this.#pump();
   }
 
   // 交回结果：前台的直接作工具结果，后台的作一条消息给派出方
@@ -601,17 +630,13 @@ export class AgentHub {
     });
   }
 
-  // 递给一个子 agent：在跑的这一轮结束后递，停着的叫它接着干，续接认回的先重开会话
+  // 递给一个子 agent：在跑的这一轮结束后递，停着的叫它接着干（撞上并发上限即先排着，有空位再开），续接认回的先重开会话
   #deliverTo(record: SubagentRecord, text: string, entry: AgentMessageRecord): void {
     const runtime = record.runtime;
     if (runtime !== undefined) {
       runtime.record(entry);
       runtime.notify(text);
-      if (record.state === "starting" || record.state === "running") return;
-      record.activity = this.#activate(record, (current) => current.runNotices());
-      return;
-    }
-    if (record.opening !== undefined) {
+    } else if (record.opening !== undefined) {
       // 还在开：开好之后的这一轮结束时一并递出
       void record.opening
         .then((opened) => {
@@ -620,16 +645,46 @@ export class AgentHub {
         })
         .catch(() => {});
       return;
+    } else {
+      record.inbox = [...(record.inbox ?? []), { text, entry }];
     }
-    if (record.reopen === undefined) return;
+    this.#startIfRoom(record);
+  }
+
+  #active(record: SubagentRecord): boolean {
+    return record.state === "starting" || record.state === "running";
+  }
+
+  // 停着的子 agent 有待递的：没撞并发上限即叫它接着干
+  #startIfRoom(record: SubagentRecord): void {
+    if (this.#active(record) || this.#closing) return;
+    const waiting = (record.runtime?.pendingNotices() ?? 0) > 0 || (record.inbox?.length ?? 0) > 0;
+    if (!waiting) return;
+    if (record.runtime === undefined && record.reopen === undefined) return;
+    if (
+      this.runningUnder(record.top.endpoint.sessionId) >= record.top.endpoint.limits().maxConcurrent
+    ) {
+      return;
+    }
+    record.stoppedByParent = false;
     record.state = "starting";
-    record.opening = record.reopen();
+    if (record.runtime === undefined)
+      record.opening = (record.reopen as () => Promise<SubagentRuntime>)();
     this.#changed();
     record.activity = this.#activate(record, (current) => {
-      current.record(entry);
-      current.notify(text);
-      return current.runNotices();
+      for (const queued of record.inbox?.splice(0) ?? []) {
+        current.record(queued.entry);
+        current.notify(queued.text);
+      }
+      return current.pendingNotices() > 0
+        ? current.runNotices()
+        : Promise.resolve({ status: "completed" });
     });
+  }
+
+  // 有子 agent 停下（空出位置）：排着的按先后接着干
+  #pump(): void {
+    for (const record of this.#agents) this.#startIfRoom(record);
   }
 
   // 续接所属会话：把会话记录里的子 agent 认回通讯录（没干完的标已中断）；名字被占了加序号
@@ -651,6 +706,10 @@ export class AgentHub {
       const name = this.#taken(restored.name)
         ? this.#allocateName(type.name, restored.name)
         : restored.name;
+      // 改了名的路径末段跟着改
+      const segments = restored.path.split(" › ");
+      segments[segments.length - 1] = name;
+      const path = segments.join(" › ");
       const record: SubagentRecord = {
         kind: "agent",
         agentName: name,
@@ -658,7 +717,7 @@ export class AgentHub {
         depth: parent.depth + 1,
         top,
         type,
-        path: restored.path,
+        path,
         parent,
         state: restored.interrupted ? "interrupted" : "idle",
         sessionId: restored.sessionId,
@@ -671,7 +730,8 @@ export class AgentHub {
         open({
           name,
           type,
-          path: restored.path,
+          ...(restored.model !== undefined ? { model: restored.model } : {}),
+          path,
           depth: record.depth,
           parentSessionId: restored.parentSessionId,
           parentName: parent.name(),
@@ -690,11 +750,9 @@ export class AgentHub {
     this.#changed();
   }
 
-  // 后台作业结束等：有待递的通知时叫醒（空闲时接着干，在跑时这一轮结束后递）
+  // 后台作业结束等：有待递的通知时叫醒（空闲时接着干，在跑时这一轮结束后递；撞上并发上限即等空位）
   #wake(record: SubagentRecord): void {
-    if (record.state === "starting" || record.state === "running") return;
-    if (record.runtime === undefined || record.runtime.pendingNotices() === 0) return;
-    record.activity = this.#activate(record, (current) => current.runNotices());
+    this.#startIfRoom(record);
   }
 
   #send(from: AgentNode, to: string, text: string): string {
@@ -714,6 +772,11 @@ export class AgentHub {
         record.reopen === undefined
       ) {
         return `Error: ${to} can't be reached.`;
+      }
+      // 停着的叫不起来（撞了并发上限）：如实说，不排队
+      const limit = record.top.endpoint.limits().maxConcurrent;
+      if (!this.#active(record) && this.runningUnder(record.top.endpoint.sessionId) >= limit) {
+        return `Error: concurrent sub-agent limit reached (${limit} running); ${to} can't start now. Try again when one finishes.`;
       }
     }
     const verdict = this.#mail.admit(from.name(), to, text, target.pendingNotices());
@@ -745,16 +808,19 @@ export class AgentHub {
     return `Stopped ${name}.`;
   }
 
-  // 停下一个子 agent 连同它下面各层
+  // 停下一个子 agent 连同它下面各层：只发中止请求，不等它真停下（等审批时要等人答完才停）
   async #halt(record: SubagentRecord, state: "stopped"): Promise<void> {
     const children = this.#agents.filter((agent) => agent.parent === record);
     await Promise.all(children.map((child) => this.#halt(child, state)));
-    if (record.state !== "starting" && record.state !== "running") return;
+    if (!this.#active(record)) return;
     record.state = state;
     record.updatedAt = this.#now();
     this.#changed();
-    const runtime = record.runtime ?? (await record.opening?.catch(() => undefined));
-    await runtime?.interrupt().catch(() => {});
+    if (record.runtime !== undefined) {
+      void record.runtime.interrupt().catch(() => {});
+    } else {
+      void record.opening?.then((opened) => opened.interrupt()).catch(() => {});
+    }
   }
 
   // 使用者在界面里停下（x）；同叫停
@@ -762,14 +828,22 @@ export class AgentHub {
     await this.#halt(record, "stopped");
   }
 
-  // 从通讯录去掉已停下的一行（界面里 x 清掉）；还在跑的不去
+  // 从通讯录去掉已停下的一行连同它下面各层，并释放它们的运行面；还有在跑的不去
   remove(record: SubagentRecord): boolean {
-    if (record.state === "starting" || record.state === "running") return false;
-    const index = this.#agents.indexOf(record);
-    if (index < 0) return false;
-    this.#agents.splice(index, 1);
+    const subtree = [record, ...this.#descendantsOf(record)];
+    if (subtree.some((agent) => this.#active(agent))) return false;
+    if (!this.#agents.includes(record)) return false;
+    for (const agent of subtree) {
+      this.#agents.splice(this.#agents.indexOf(agent), 1);
+      void agent.runtime?.close().catch(() => {});
+    }
     this.#changed();
     return true;
+  }
+
+  #descendantsOf(record: SubagentRecord): SubagentRecord[] {
+    const children = this.#agents.filter((agent) => agent.parent === record);
+    return [...children, ...children.flatMap((child) => this.#descendantsOf(child))];
   }
 
   // 关掉：全部停下并释放运行面
@@ -785,7 +859,9 @@ export class AgentHub {
     );
     for (const agent of agents) agent.stoppedByParent = true;
     await Promise.all(agents.map((agent) => this.#halt(agent, "stopped")));
-    await Promise.all(agents.map((agent) => agent.activity?.catch(() => {})));
+    // 等这一轮收尾，有上限：卡在审批上的等不到人答，到时照样释放
+    const settled = Promise.all(agents.map((agent) => agent.activity?.catch(() => {})));
+    await Promise.race([settled, new Promise((resolve) => setTimeout(resolve, SHUTDOWN_WAIT_MS))]);
     await Promise.all(
       agents.map((agent) =>
         agent.runtime?.close({ interrupted: interrupted.has(agent) }).catch(() => {})

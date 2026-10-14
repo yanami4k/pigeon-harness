@@ -100,7 +100,8 @@ async function openTop(
       bundle().adapter.notify(text);
     },
     pendingNotices: () => bundle().adapter.pendingNotices(),
-    record: (entry) => bundle().sessionStore.append(agentMessageEntry(entry)),
+    record: (entry) =>
+      bundle().sessionStore.append(agentMessageEntry(entry, bundle().adapter.currentRunId())),
     open: createSubagentOpener({
       governanceRoot: root.dir,
       streamFn,
@@ -170,6 +171,8 @@ test("前台派 explore：回复直接带回；会话文件在所属会话名下
     const advertised = (sub.calls[0]?.context.tools ?? []).map((tool) => tool.name);
     assert.ok(advertised.includes("read_file"), advertised.join(","));
     assert.ok(!advertised.includes("edit_file") && !advertised.includes("run_command"));
+    assert.ok(!advertised.includes("spawn_agent"), "只读的不能再派子 agent");
+    assert.ok(advertised.includes("send_message"));
     assert.match(sub.calls[0]?.context.systemPrompt ?? "", /read-only exploration agent/);
     assert.match(
       sub.calls[0]?.context.systemPrompt ?? "",

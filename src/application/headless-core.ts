@@ -255,7 +255,10 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
             wakeUp();
           },
           pendingNotices: () => liveBundle?.adapter.pendingNotices() ?? 0,
-          record: (entry) => mainBundle().sessionStore.append(agentMessageEntry(entry)),
+          record: (entry) =>
+            mainBundle().sessionStore.append(
+              agentMessageEntry(entry, mainBundle().adapter.currentRunId())
+            ),
           open: createSubagentOpener({
             governanceRoot: options.governanceRoot,
             streamFn: options.streamFn,

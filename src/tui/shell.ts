@@ -289,6 +289,8 @@ export interface TuiPoolFace {
     | undefined;
 }
 
+// 决策 480：子 agent 状态有变后隔多久重算花费（期间的变化合并成一次）
+const AGENT_COST_DELAY_MS = 500;
 // 决策 443：会话面板里连按两次 Ctrl+X 停止的间隔
 const PANEL_STOP_CONFIRM_MS = 1500;
 // 设置面板里"被哪一层覆盖"的说法（与面板上那一项旁的标注同一口径）
@@ -684,6 +686,10 @@ export class PigeonTuiShell
       clearTimeout(this.exitHintTimer);
       this.exitHintTimer = undefined;
     }
+    if (this.agentCostTimer !== undefined) {
+      clearTimeout(this.agentCostTimer);
+      this.agentCostTimer = undefined;
+    }
     this.leavePooledSession();
     for (const dispose of this.disposers.splice(0)) dispose();
     for (const dispose of this.runtimeDisposers.splice(0)) dispose();
@@ -898,9 +904,17 @@ export class PigeonTuiShell
     this.tui.requestRender();
   }
 
-  // 决策 480：子 agent 的状态有变（派出、干完、停下）：重算花费并重画
+  // 决策 480：子 agent 的状态有变（派出、干完、停下）：重画；花费要读子 agent 的会话文件，合并成半秒一次
+  private agentCostTimer: ReturnType<typeof setTimeout> | undefined;
   agentsChanged(): void {
-    this.collectChildCosts();
+    if (this.agentCostTimer === undefined) {
+      this.agentCostTimer = setTimeout(() => {
+        this.agentCostTimer = undefined;
+        this.collectChildCosts();
+        this.tui.requestRender();
+      }, AGENT_COST_DELAY_MS);
+      this.agentCostTimer.unref?.();
+    }
     this.tui.requestRender();
   }
 

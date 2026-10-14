@@ -177,6 +177,8 @@ function workerFacts(
   if (scope.liveWorkers?.().has(workerSessionId) === true) {
     return { inUseReason: "in use in this session" };
   }
+  // 决策 480：子 agent 的临时工作树开着期间持有在用锁（它的会话在所属会话名下，按会话号在会话根里找不到）
+  if (dir !== undefined && worktreeInUse(dir)) return { inUseReason: "session open" };
   const sessionsDir = sessionsDirOf(governanceRoot);
   const file = locateSessionFile(sessionsDir, workerSessionId);
   if (file === undefined) {

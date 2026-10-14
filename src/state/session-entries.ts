@@ -609,6 +609,8 @@ export type GitHeadData = Static<typeof GitHeadDataSchema>;
 // 交回的结果）、正文（不含信任说明与边界标记）。trace 据此认出 agent 之间的传话，不靠文字前缀
 export const AgentMessageDataSchema = Type.Object({
   version: VERSION,
+  // 收件方当时在跑的 Run（空闲时收到的不带，按会话级条目）
+  runId: Type.Optional(RunIdSchema),
   from: Type.String({ minLength: 1 }),
   to: Type.String({ minLength: 1 }),
   kind: Type.Union([Type.Literal("task"), Type.Literal("message"), Type.Literal("result")]),
@@ -698,6 +700,8 @@ export const SessionHeaderMetadataSchema = Type.Object({
       topSessionId: SessionIdSchema,
       // 带上下文起步：文件开头从派出方会话复制来的条目数（这一段的用量属于派出方，读者跳过）
       inheritedEntries: Type.Optional(Type.Integer({ minimum: 1 })),
+      // 派出时指定的模型（续接重开时沿用）
+      model: Type.Optional(Type.String({ minLength: 1 })),
     })
   ),
 });

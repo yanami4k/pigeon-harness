@@ -58,6 +58,13 @@ export interface SessionRuntimeFlags {
   sessionSearch?: boolean;
 }
 
+// 决策 480：子 agent 续接时的放权——派出方此刻的（种子不落盘，续接时重新带上）加上它自己会话里给的，按放权号去重
+function mergeGrants(seed: readonly ActiveGrant[], own: readonly ActiveGrant[]): ActiveGrant[] {
+  const byId = new Map<string, ActiveGrant>();
+  for (const grant of [...seed, ...own]) byId.set(grant.grantId, grant);
+  return [...byId.values()];
+}
+
 // 交互会话的推送记忆配置（决策 331）：有人对话，给写入配置（注册 update_memory、推送段带写入说明）；两层上限取设置快照
 function interactiveLearnedMemory(
   flags: SessionRuntimeFlags,
@@ -138,6 +145,8 @@ export interface SubagentRuntimeOptions {
   taskDirective: string;
   toolScope?: ToolScope;
   restoredGrants: readonly ActiveGrant[];
+  // 能读命令输出的上游会话（派出方一路往上）
+  outputAncestors: () => readonly string[];
 }
 
 export interface OpenedSessionRuntime {
@@ -191,7 +200,10 @@ export async function openSessionRuntime(
   const restoredGrants =
     request.resume === true
       ? subagent !== undefined
-        ? (loadStoreSessionGrants(storeDir, request.sessionId) ?? [...subagent.restoredGrants])
+        ? mergeGrants(
+            subagent.restoredGrants,
+            loadStoreSessionGrants(storeDir, request.sessionId) ?? []
+          )
         : restoreGrantSeed(request.governanceRoot, request.sessionId)
       : subagent !== undefined
         ? [...subagent.restoredGrants]
@@ -314,6 +326,7 @@ export async function openSessionRuntime(
             storeSessionsDir: subagent.storeSessionsDir,
             storeLineage: subagent.lineage,
             taskDirective: subagent.taskDirective,
+            outputAncestors: subagent.outputAncestors,
             ...(subagent.toolScope !== undefined ? { toolScope: subagent.toolScope } : {}),
           }
         : {}),

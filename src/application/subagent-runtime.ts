@@ -9,14 +9,16 @@
 //   不跑 SessionStart、SessionEnd。挂打转检测（叫停即中断这一轮）；后台作业结束时叫醒它。
 
 import { existsSync } from "node:fs";
+import { isAbsolute, relative } from "node:path";
 import type { SessionGrantStore } from "../approvals/grant-store.ts";
 import type { ApprovalHandler } from "../approvals/handler.ts";
 import { listSessionRefs, readSessionView } from "../persistence/session-catalog.ts";
+import { holdWorktreeInUse } from "../persistence/worktree-in-use.ts";
 import type { AgentMessage, StreamFn } from "../pi-runtime/index.ts";
 import type { ActiveGrant } from "../state/grants.ts";
 import { DEFAULT_STOP_HOOK_BLOCK_CAP } from "../state/hooks.ts";
 import { asSessionId, newSessionId } from "../state/ids.ts";
-import { subagentSessionsDir } from "../state/paths.ts";
+import { subagentSessionsDir, worktreesDirOf } from "../state/paths.ts";
 import { loopGuardSettingsOf, mcpConfigOf, type SettingsSnapshot } from "../state/settings.ts";
 import {
   type AgentWorktree,
@@ -45,6 +47,8 @@ export interface SubagentParentContext {
   modelId: string;
   // 派出方此刻的对话（带上下文起步时复制）
   transcript(): readonly AgentMessage[];
+  // 能读哪些会话的命令输出（派出方自己连同它一路往上的）；缺省只有派出方自己
+  outputSessions?(): readonly string[];
 }
 
 export interface SubagentOpenerBase {
@@ -73,6 +77,12 @@ export function subagentPreamble(spec: Pick<SubagentSpec, "name" | "parentName">
   );
 }
 
+// path 在 dir 之下
+function insideDir(dir: string, path: string): boolean {
+  const rel = relative(dir, path);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
 // 续接所属会话时认回它的子 agent：读它名下 subagents 文件夹里的会话（最后一个 Run 没收尾的算没干完）
 export function restoredAgentsOf(topSessionFile: string, topSessionId: string): RestoredAgent[] {
   const agents: RestoredAgent[] = [];
@@ -89,6 +99,7 @@ export function restoredAgentsOf(topSessionFile: string, topSessionId: string): 
       parentSessionId: view.parentSessionId,
       interrupted: last !== undefined && last.end === undefined,
       ...(view.cwd !== undefined ? { workspace: view.cwd } : {}),
+      ...(agent.model !== undefined ? { model: agent.model } : {}),
       startedAt: view.createdAt,
       updatedAt: last?.end?.endedAt ?? last?.start.startedAt ?? view.createdAt,
     });
@@ -115,10 +126,12 @@ function lastReply(bundle: RuntimeBundle): string {
 export function createSubagentOpener(base: SubagentOpenerBase): SubagentOpener {
   const contexts = new Map<string, () => SubagentParentContext>();
   return async (spec: SubagentSpec): Promise<SubagentRuntime> => {
+    // 续接认回的子 agent，派出它的那个还没重开（或已释放）时按所属会话的样子开
     const parent =
       spec.parentSessionId === base.topSessionId()
         ? base.topContext()
-        : contexts.get(spec.parentSessionId)?.();
+        : (contexts.get(spec.parentSessionId)?.() ??
+          (spec.resume !== undefined ? base.topContext() : undefined));
     if (parent === undefined) throw new Error(`the agent that started ${spec.name} is gone`);
     const topFile = await base.topSessionFile();
     if (topFile === undefined) throw new Error("the session has no session file yet");
@@ -134,6 +147,18 @@ export function createSubagentOpener(base: SubagentOpenerBase): SubagentOpener {
     // 带上下文起步：派出方截到这一轮之前的对话（派出它的那条助手消息与之后的不带：工具调用还没有结果）
     const inherited =
       spec.inheritContext && resuming === undefined ? inheritedMessages(parent.transcript()) : [];
+    // 能读派出方一路往上的命令输出（带上下文起步时复制来的对话里会有它们的输出路径）
+    const upstream = parent.outputSessions?.() ?? [parent.sessionId];
+    // 续接重开、回到原来那个临时工作树的：开着期间同样持有在用锁（/worktrees 不删）
+    const resumedWorkspace =
+      resuming?.workspace !== undefined && existsSync(resuming.workspace)
+        ? resuming.workspace
+        : undefined;
+    const releaseResumed =
+      resumedWorkspace !== undefined &&
+      insideDir(worktreesDirOf(base.governanceRoot), resumedWorkspace)
+        ? holdWorktreeInUse(resumedWorkspace, base.homeDir)
+        : undefined;
     // 决策 480：临时工作树——起点是派出方工作目录此刻的快照
     const worktree: AgentWorktree | undefined =
       spec.worktree && resuming === undefined
@@ -150,11 +175,7 @@ export function createSubagentOpener(base: SubagentOpenerBase): SubagentOpener {
       opened = await openSessionRuntime({
         governanceRoot: base.governanceRoot,
         approvalModeCell: parent.approvalModeCell,
-        workspaceRoot:
-          worktree?.path ??
-          (resuming?.workspace !== undefined && existsSync(resuming.workspace)
-            ? resuming.workspace
-            : parent.workspaceRoot),
+        workspaceRoot: worktree?.path ?? resumedWorkspace ?? parent.workspaceRoot,
         ...(resuming !== undefined ? { resume: true } : {}),
         sessionId,
         settings,
@@ -188,6 +209,7 @@ export function createSubagentOpener(base: SubagentOpenerBase): SubagentOpener {
               path: spec.path,
               topSessionId: asSessionId(topSessionId),
               ...(inherited.length > 0 ? { inheritedEntries: inherited.length } : {}),
+              ...(spec.model !== undefined ? { model: spec.model } : {}),
             },
           },
           taskDirective: directive,
@@ -200,11 +222,13 @@ export function createSubagentOpener(base: SubagentOpenerBase): SubagentOpener {
               }
             : {}),
           restoredGrants: parent.grants,
+          outputAncestors: () => upstream,
         },
         agents: spec.agents,
       });
     } catch (error) {
       if (worktree !== undefined) closeAgentWorktree(worktree, false);
+      releaseResumed?.();
       throw error;
     }
     const bundle = opened.bundle;
@@ -233,6 +257,7 @@ export function createSubagentOpener(base: SubagentOpenerBase): SubagentOpener {
       grants: bundle.grantStore.list(),
       modelId: spec.model ?? parent.modelId,
       transcript: () => adapter.transcript(),
+      outputSessions: () => [sessionId, ...upstream],
     }));
     const stopCap = settings.merged.stopHookBlockCap ?? DEFAULT_STOP_HOOK_BLOCK_CAP;
     let stopBlocks = 0;
@@ -248,7 +273,7 @@ export function createSubagentOpener(base: SubagentOpenerBase): SubagentOpener {
       interrupt: () => adapter.interrupt(),
       reply: () => lastReply(bundle),
       record: (entry) => {
-        bundle.sessionStore.append(agentMessageEntry(entry));
+        bundle.sessionStore.append(agentMessageEntry(entry, adapter.currentRunId()));
       },
       beforeTask: async (task) => {
         stopBlocks = 0;
@@ -309,6 +334,7 @@ export function createSubagentOpener(base: SubagentOpenerBase): SubagentOpener {
         contexts.delete(sessionId);
         await disposeRuntime(bundle).catch(() => {});
         if (worktree !== undefined) closeAgentWorktree(worktree, options?.interrupted === true);
+        releaseResumed?.();
       },
     };
     return runtime;
