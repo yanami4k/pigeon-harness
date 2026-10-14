@@ -257,7 +257,8 @@ test("/resume 旧格式会话：明确报错、不换绑，原运行面不受影
       term.input("\r");
       await settle();
       const text = screenFlat(term);
-      assert.ok(text.includes("resume failed: "), text);
+      // 报错本身已说清（can't …），不再叠一层 "resume failed:"
+      assert.ok(text.includes("can't resume") && !text.includes("resume failed:"), text);
       assert.ok(text.includes("old-format session"), text);
       assert.deepEqual(tracker.rebinds, [], "失败不得换绑");
       term.input("还活着");

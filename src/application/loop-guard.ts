@@ -30,9 +30,9 @@ function clip(line: string): string {
     : `${chars.slice(0, RESULT_LINE_CHARS).join("")}…`;
 }
 
-// english：给模型看的提醒与 worker 失败原因用完整的参数说法（决策 428）；给人看的写短
-function callLine(call: ComparedRound["calls"][number], english: boolean): string {
-  return `${call.toolName} ${summarizeArgs(call.args, english)}`;
+// 调用的一行：参数用完整的英文说法（决策 428：提醒与 worker 失败原因给模型看；终端界面与 pigeon run 的叫停说明同一写法）
+function callLine(call: ComparedRound["calls"][number]): string {
+  return `${call.toolName} ${summarizeArgs(call.args, true)}`;
 }
 
 function resultHead(call: ComparedRound["calls"][number]): string {
@@ -50,7 +50,7 @@ function resultHead(call: ComparedRound["calls"][number]): string {
 // 提醒里的调用与结果：每条调用一行，其下缩进给结果的前几行；两轮一循环时分两段
 function patternDetail(stop: Pick<LoopStop, "pattern" | "alternating">): string {
   const block = (round: ComparedRound) =>
-    round.calls.map((call) => `- ${callLine(call, true)}\n    ${resultHead(call)}`).join("\n");
+    round.calls.map((call) => `- ${callLine(call)}\n    ${resultHead(call)}`).join("\n");
   if (stop.alternating && stop.pattern.length === 2) {
     const [first, second] = stop.pattern;
     return `Round 1:\n${block(first as ComparedRound)}\nRound 2:\n${block(second as ComparedRound)}`;
@@ -59,10 +59,8 @@ function patternDetail(stop: Pick<LoopStop, "pattern" | "alternating">): string 
 }
 
 // 调用的一行摘要（叫停说明用）：多条以 "; " 相连
-export function loopCallsSummary(stop: Pick<LoopStop, "pattern">, english = false): string {
-  return stop.pattern
-    .flatMap((round) => round.calls.map((call) => callLine(call, english)))
-    .join("; ");
+function loopCallsSummary(stop: Pick<LoopStop, "pattern">): string {
+  return stop.pattern.flatMap((round) => round.calls.map(callLine)).join("; ");
 }
 
 function repeatLead(stop: Pick<LoopStop, "count" | "alternating">): string {
@@ -85,13 +83,13 @@ export const LOOP_GUARD_TEXTS = {
     "Switch to a different approach now; if you really cannot make progress, stop and summarize what you know and where you are stuck.",
   // 终端界面：消息区的叫停说明（一行，怎么接着做写在文档里）
   tuiStopped: (stop: LoopStop) =>
-    `[loop] stopped after ${stop.count} rounds of the same tool calls and results: ${loopCallsSummary(stop, true)}`,
+    `[loop] stopped after ${stop.count} rounds of the same tool calls and results: ${loopCallsSummary(stop)}`,
   // worker：交回与通知里的失败原因（套 271 定稿的失败文字："worker X（角色）失败：<原因>。分支 … 上可能有部分改动。"）
   workerReason: (stop: LoopStop) =>
-    `stuck in a loop: the same tool calls and results repeated for ${stop.count} consecutive rounds, so it was stopped. Repeated calls: ${loopCallsSummary(stop, true)}`,
+    `stuck in a loop: the same tool calls and results repeated for ${stop.count} consecutive rounds, so it was stopped. Repeated calls: ${loopCallsSummary(stop)}`,
   // pigeon run：收尾说明（终态一行之后）
   runStopped: (stop: LoopStop) =>
-    `stopped after ${stop.count} rounds of the same tool calls and results: ${loopCallsSummary(stop, true)}`,
+    `stopped after ${stop.count} rounds of the same tool calls and results: ${loopCallsSummary(stop)}`,
 };
 
 // 挂打转检测的运行面：整轮观察口与通知队列

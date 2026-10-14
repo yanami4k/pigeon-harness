@@ -1,4 +1,4 @@
-// run_command shell 修订端到端（048 修订）：真实装配根 + CLI 审批问答版。
+// run_command shell 修订端到端（048 修订）：真实装配根 + 按脚本作答的审批（终端界面同一个审批 handler，approval-fixtures.ts）。
 // prompt 下需 shell 的命令经人确认后以 shell 执行，面板文案含"经 shell"并原样显示命令串；[a] 创建带 shell 标记的
 // 精确命令放权，同串再来免审、不同串再问；不带 shell 标记的固化规则不能免审需 shell 的命令；yolo 下直接执行；
 // 工具结果 details 里的执行证据标明经 shell。
@@ -13,7 +13,7 @@ import { createFakeStreamFn } from "../pi-runtime/fixtures.ts";
 import { newGrantId, newSessionId } from "../state/ids.ts";
 import { type StoreMessage, toolResultMark } from "../state/session-judge.ts";
 import type { ExecEvidence } from "../tools/run-command.ts";
-import { scriptedApprovalHandler } from "../tui/approval-fixtures.ts";
+import { REASON_PROMPT, scriptedApprovalHandler } from "../tui/approval-fixtures.ts";
 import { buildRuntime } from "./runtime.ts";
 
 // 用户级设置指到的空临时目录：这个测试结束后删掉
@@ -76,7 +76,7 @@ function makeRuntime(
       scriptedApprovalHandler(
         async (prompt) => {
           prompts.push(prompt);
-          if (prompt.startsWith("拒绝理由")) {
+          if (prompt === REASON_PROMPT) {
             return "不跑这条";
           }
           asked += 1;

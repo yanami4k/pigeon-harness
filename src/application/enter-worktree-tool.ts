@@ -170,9 +170,13 @@ export function enterWorktreeRegistration(): ToolRegistration {
   };
 }
 
+// 程序递给 agent 的附注的前缀：移进工作树之后的通知（单独一条），没移进去的说明（随人的下一条输入前缀给模型，与输入之间
+// 空一行，见 tui/worktree-switch.ts）。回看历史与回退据此把附注与人输入的话分开
+export const PROGRAM_NOTE_PREFIX = "[Pigeon] ";
+
 // 移进工作树之后递给 agent 的通知（新的一轮由它开头）
 export function worktreeContinueNotice(worktree: NamedWorktree, uncommitted: number): string {
-  return `[Pigeon] This session has moved into the worktree ${worktree.path} (branch ${worktree.branch}); your working directory is now that worktree.${
+  return `${PROGRAM_NOTE_PREFIX}This session has moved into the worktree ${worktree.path} (branch ${worktree.branch}); your working directory is now that worktree.${
     uncommitted > 0
       ? ` The ${uncommitted} uncommitted ${uncommitted === 1 ? "file" : "files"} from the previous checkout are not here.`
       : ""

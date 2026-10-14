@@ -46,18 +46,6 @@ export function parseBudgetSetting(text: string): ScriptBudget {
   return budget;
 }
 
-export function budgetText(budget: ScriptBudget | undefined): string | undefined {
-  if (budget === undefined) return undefined;
-  switch (budget.unit) {
-    case "cny":
-      return `¥${budget.amount}`;
-    case "usd":
-      return `$${budget.amount}`;
-    default:
-      return `${budget.amount} token`;
-  }
-}
-
 export interface ScriptGateSettings {
   // 项目配置：由模型判断何时用（工具常驻）
   modelDecides: boolean;

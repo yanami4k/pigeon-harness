@@ -20,7 +20,7 @@ import {
 } from "../tools/read-file.ts";
 import { ToolRegistry } from "../tools/registry.ts";
 import { createReplaceEditTool, ReplaceEditParamsSchema } from "../tools/replace-edit.ts";
-import { scriptedApprovalHandler } from "../tui/approval-fixtures.ts";
+import { REASON_PROMPT, scriptedApprovalHandler } from "../tui/approval-fixtures.ts";
 import { createToolGovernance, type ToolGovernanceOptions } from "./governance.ts";
 
 function layout() {
@@ -155,7 +155,7 @@ test("非放手模式：工作区内不问人；工作区外问人（请求带�
     const answers = ["n", "d"];
     const requests: ApprovalRequest[] = [];
     const cli = scriptedApprovalHandler(
-      async (prompt) => (prompt.startsWith("拒绝理由") ? "" : (answers.shift() ?? "n")),
+      async (prompt) => (prompt === REASON_PROMPT ? "" : (answers.shift() ?? "n")),
       () => {},
       { grants: store }
     );

@@ -578,11 +578,19 @@ test("树形视图里审批就地弹出：显示在树下方并写明来源（wo
     assert.ok(text.includes("source: worker ship (tester)"), text);
     await type(term, "n");
     assert.equal((await answer).key, "n");
+    // handler 答完把审批收成一行（决策 460）：树下方的审批框换成这一行，主会话的消息区同样只留这一行
+    shell.noteApproval("[ship] ✗ rejected run_command: npm test");
     await settle();
     assert.equal(shell.currentView(), "tree");
     text = lines(term).join("\n");
     assert.ok(!text.includes("-- approval --"), "答完审批框撤下");
+    assert.ok(text.includes("[ship] ✗ rejected run_command: npm test"), text);
     assert.ok(text.includes("== workers tree"), text);
+    await type(term, CTRL_X);
+    assert.equal(shell.currentView(), "main");
+    text = lines(term).join("\n");
+    assert.ok(text.includes("[ship] ✗ rejected run_command: npm test"), text);
+    assert.ok(!text.includes("-- approval --"), "主会话消息区里的块同样收起");
   } finally {
     shell.stop();
     await h.stopAll();

@@ -180,6 +180,9 @@ async function askTrustOnStderr(entries: readonly TrustEntry[]): Promise<TrustCh
 export async function main(argv: string[]): Promise<void> {
   // 壳接管终端之前的提示与报错先存着，壳起来后落消息区（全屏之前写到标准错误输出的会被备用屏盖住，看不见）
   const early: Array<{ line: string; alert: boolean }> = [];
+  process.once("exit", () => {
+    for (const item of early.splice(0)) process.stderr.write(`${item.line}\n`);
+  });
   const continued = takeContinueFlags(argv);
   // 决策 445：--worktree <名字> 在独立工作树里开会话
   const worktreeFlag = takeWorktreeFlag(continued.argv);
@@ -221,12 +224,8 @@ export async function main(argv: string[]): Promise<void> {
           notice: (line) => early.push({ line, alert: true }),
         })
       : undefined;
-  // 起点的说法只有 "HEAD" 一词之外还带说明的，是取远端失败退回 HEAD（说法本身由 named-worktree.ts 给）
-  if (
-    namedWorktree?.created === true &&
-    namedWorktree.baseLabel.startsWith("HEAD") &&
-    namedWorktree.baseLabel !== "HEAD"
-  ) {
+  // 取远端默认分支失败、退回了 HEAD：报一行（没有远端默认分支不算报错）
+  if (namedWorktree?.created === true && namedWorktree.fetchFailed === true) {
     early.push({ line: `worktree base: ${namedWorktree.baseLabel}`, alert: true });
   }
   // 决策 446：会话移进工作树后换成工作树（worker 编排、取用、脚本等闭包按它取）
@@ -400,7 +399,7 @@ export async function main(argv: string[]): Promise<void> {
         ? {
             // 决策 279：/take 与 take_worker 同一套逻辑与文字
             take: async (name: string) =>
-              takeWorkerChanges({ orchestrator, workspaceRoot }, name).text,
+              takeWorkerChanges({ orchestrator, workspaceRoot }, name, "human").text,
             spawnAttempts: createSessionAttemptRunner({ orchestrator }),
             // M7（决策 079）：/fork 手动分叉
             fork: (args: string) =>
@@ -432,7 +431,10 @@ export async function main(argv: string[]): Promise<void> {
     settings,
     sessionId,
     ...(resumed ? { resume: true } : {}),
-    log: (line) => console.error(`[sandbox] ${line}`),
+    log: (line, progress) => {
+      if (progress === true) console.error(`[sandbox] ${line}`);
+      else say(`[sandbox] ${line}`, true);
+    },
     // 决策 333：运行中的提示（命令超出内存上限）经告警出口：壳接管终端期间落消息区
     notice: (line) => warn(`[sandbox] ${line}`),
   });
@@ -532,8 +534,9 @@ export async function main(argv: string[]): Promise<void> {
           memoryWrite,
           webToolsFor,
           mainWorkspace: () => workspaceRoot,
-          notice: (line) => {
+          notice: (line, alert) => {
             if (poolExiting) console.error(line);
+            else if (alert === true) shellHolder.current?.addAlert(line);
             else shellHolder.current?.addSystem(line);
           },
         })
@@ -875,7 +878,8 @@ export async function main(argv: string[]): Promise<void> {
       // 决策 450：会话名录里的所在目录跟着换
       peerMessaging?.moveTo({ sessionId: slot.sessionId, cwd: worktree.path });
     },
-    system: (line) => shellHolder.current?.addSystem(line),
+    system: (line, alert) =>
+      alert === true ? shellHolder.current?.addAlert(line) : shellHolder.current?.addSystem(line),
     notify: (text) => slot.bundle.adapter.notify(text),
     noteForNextInput: (text) => shellHolder.current?.addNextInputNote(text),
     continueNotice: worktreeContinueNotice,
@@ -916,6 +920,11 @@ export async function main(argv: string[]): Promise<void> {
   }
   faceHolder.current = shell;
   shellHolder.current = shell;
+  // 壳接管终端之前存下的提示与报错先落消息区（发生得更早，排在前面）
+  for (const item of early.splice(0)) {
+    if (item.alert) shell.addAlert(item.line);
+    else shell.addSystem(item.line);
+  }
   // 决策 323、324：壳接管终端之前跑一次 SessionStart——续跑类入口（--continue / --resume <id>）为
   // "resume"，否则 "startup"；补的上下文存进壳、下一条输入带上
   await shell.beginSession(resumed ? "resume" : "startup");
@@ -972,7 +981,7 @@ export async function main(argv: string[]): Promise<void> {
       if (peerMessaging.sessionId === slot.sessionId && peerMessaging.name !== sessionName) {
         peerMessaging.rename(sessionName);
       }
-      // 决策 456：开局不再写"本会话在名录里叫…"一行（标题栏已写会话名）
+      // 决策 456：开局不写"本会话在名录里叫…"一行（会话名在 /resume 列表与面板卡片上）
     }
   }
   // 决策 439：项目共享层（或被 git 跟踪的 settings.local.json）写的键位不采用——仓库不能改审批键
@@ -983,10 +992,6 @@ export async function main(argv: string[]): Promise<void> {
   if (mainBundle.instructionsNotice !== undefined) shell.addSystem(mainBundle.instructionsNotice);
   if (mainBundle.toolsNotice !== undefined) shell.addSystem(mainBundle.toolsNotice);
   warnSink.attach((line) => shell.addWarning(line));
-  for (const item of early.splice(0)) {
-    if (item.alert) shell.addAlert(item.line);
-    else shell.addSystem(item.line);
-  }
   if (target.kind === "resume") {
     shell.announceResumed(governanceRoot, target.report);
   } else if (target.picker) {

@@ -1,5 +1,5 @@
-// 决策 444 走终端界面提交路径：输入历史先于会话文件写（不带提示口），会话文件建出时带提示口——全局排除文件那一行提示仍到
-// 消息区；只敲斜杠命令就退出不留 .pigeon。真实运行面（推迟建会话文件）+ 真实输入历史 + git 仓库；全局配置与 XDG 由测试总装
+// 决策 444 走终端界面提交路径：输入历史先于会话文件写（不带提示口），会话文件建出时带提示口、把规则写进全局排除文件——写进去
+// 不告知（决策 460），消息区与提示口都没有那一行；只敲斜杠命令就退出不留 .pigeon。真实运行面（推迟建会话文件）+ 真实输入历史 + git 仓库；全局配置与 XDG 由测试总装
 // 指到临时位置。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -65,7 +65,7 @@ function gitRepo(): string {
   return root;
 }
 
-test("决策 444：终端界面里发第一条消息——先写输入历史、后建会话文件，写进全局排除文件的那一行提示照样给出", async () => {
+test("决策 444：终端界面里发第一条消息——先写输入历史、后建会话文件，规则写进全局排除文件、不告知（决策 460）", async () => {
   const root = gitRepo();
   const file = globalExcludesFile(root) ?? "";
   assert.ok(realpathSync.native(tmpdir()) !== "" && file.includes("pigeon-test-gitenv-"), file);
@@ -82,10 +82,14 @@ test("决策 444：终端界面里发第一条消息——先写输入历史、�
     assert.ok(existsSync(join(root, ".pigeon", "state", "sessions")), "会话文件建了");
     const after = readFileSync(file, "utf8");
     assert.notEqual(after, before);
-    // 验收修改：写进全局排除文件不再告知（文档写明）
+    // 验收修改：写进全局排除文件不再告知（文档写明）。原先的提示是"已在 git 全局排除文件 <文件> 加入 Pigeon 程序状态的忽略
+    // 规则：…"，改英文即"added Pigeon state ignore rules to the git global excludes file <文件>: …"——两种写法与文件路径都不出现
+    const announced = (text: string) =>
+      /excludes file|added (pigeon )?(state )?ignore rules/i.test(text) ||
+      text.includes(file) ||
+      text.includes("已在 git 全局排除文件");
     assert.ok(
-      !warnings.some((line) => line.includes("已在 git 全局排除文件")) &&
-        !screenText(term).includes("已在 git 全局排除文件"),
+      !warnings.some(announced) && !announced(screenText(term)),
       `${warnings.join("\n")}\n${screenText(term)}`
     );
   } finally {

@@ -437,7 +437,9 @@ class ConclusionLine implements Component {
   private readonly line: string;
 
   constructor(line: string) {
-    this.line = line;
+    // 按行渲染：行里不能带换行（多行只取首行）
+    const lines = line.split(/\r?\n/);
+    this.line = lines.length > 1 ? `${lines[0]} …` : line;
   }
 
   invalidate(): void {}

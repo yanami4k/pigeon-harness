@@ -1,6 +1,6 @@
 // 测试用的"按脚本作答的人"（决策 461：命令行对话与它的内联审批去掉之后，application 层的治理测试改用它）：
 // 审批走终端界面同一个 handler（同一份审批块、放权语义与答完的一行结论）。ask 收到审批块的按键提示行，返回按键；
-// 按 n 之后再问一次拒绝理由（REASON_PROMPT 开头），给了理由即按 [r] 拒绝并说明，留空即单按拒绝；write 收到审批块与结论
+// 按 n 之后再问一次拒绝理由（问的就是 REASON_PROMPT），给了理由即按 [r] 拒绝并说明，留空即单按拒绝；write 收到审批块与结论
 import type { SessionGrantStore } from "../approvals/grant-store.ts";
 import type { ApprovalHandler } from "../approvals/handler.ts";
 import {
@@ -10,7 +10,8 @@ import {
   createTuiApprovalHandler,
 } from "./approval.ts";
 
-export const REASON_PROMPT = "拒绝理由：";
+// 问拒绝理由时给 ask 的提示（测试按它认出这一问）
+export const REASON_PROMPT = "reason: ";
 
 const KEYS: readonly string[] = ["y", "n", "a", "d", "s"];
 

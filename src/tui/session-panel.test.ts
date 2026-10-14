@@ -375,7 +375,7 @@ test("/take：面板会话与 worker 同名时要写明是哪一个", async () =
     await settle();
     assert.match(screenText(term), /a session and a worker are both named s1/);
     assert.deepEqual(taken, [], "有歧义时什么都不取");
-    term.input("/take 会话:s1");
+    term.input("/take session:s1");
     term.input("\r");
     await settle();
     // 写明之后归面板会话

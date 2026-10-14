@@ -3,7 +3,7 @@
 //   - /grants 渲染会话 grant + 固化规则（createdAt/命中次数/作用域/出处，口径同
 //     application/grants.ts 的 listGrants），含空列表文案；
 //   - /revoke <id> 后 store 状态（立即停免审）；/grants save <id> 写 .pigeon/settings.local.json 的 permissions 一节；
-//   - 未知命令与命令失败（语法/语义错误）如实呈现（同 REPL 口径）；
+//   - 未知命令与命令失败（语法/语义错误）如实呈现；
 //   - busy 期间斜杠命令同样被拒绝（决策 027 语义不开旁路）；
 //   - 命令层只有一份：TUI 只换 write 投影，治理语义零新增（决策 030）。
 import assert from "node:assert/strict";
@@ -202,7 +202,7 @@ test("/revoke <id>：store 立即移除（停免审），回显同 cli 措辞；
   }
 });
 
-test("未知命令与命令失败如实呈现（同 REPL 口径）；未知命令只报命令词，不列可用命令（决策 286）", async () => {
+test("未知命令与命令失败如实呈现；未知命令只报命令词，不列可用命令（决策 286）", async () => {
   const { shell, term, cleanup } = makeView();
   try {
     shell.start();

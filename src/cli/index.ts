@@ -173,7 +173,20 @@ function sessionListMain(argv: string[]): void {
 
 // pigeon resume [sessionId] [参数]（决策 461）：在终端界面里续接，等同 pigeon --resume [sessionId]（不带会话号时弹出会话列表）
 async function resumeMain(argv: string[]): Promise<void> {
-  await launchTui(["--resume", ...argv]);
+  // 会话号可以写在参数之后（pigeon resume --yolo <会话号>）：挪到 --resume 后面
+  const rest = [...argv];
+  let at = -1;
+  for (let index = 0; index < rest.length; index++) {
+    const arg = rest[index] ?? "";
+    if (arg.startsWith("--")) {
+      if (!VALUELESS_FLAGS.has(arg) && !arg.includes("=")) index++;
+      continue;
+    }
+    at = index;
+    break;
+  }
+  const sessionId = at >= 0 ? rest.splice(at, 1) : [];
+  await launchTui(["--resume", ...sessionId, ...rest]);
 }
 
 // pigeon run [任务描述] [--root <dir>] [--governance-root <dir>] --stream-fn <模块路径> [--yolo] [--thinking <档位>] [--provider <p>]

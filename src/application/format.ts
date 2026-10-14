@@ -13,8 +13,7 @@ import type { ToolExecutionDecision } from "../state/tool-execution.ts";
 // 参数摘要上限（字符）；超出截断并标注原长，防大参数刷屏
 const ARGS_SUMMARY_LIMIT = 160;
 
-// 审批来源行（M5.5 S3，决策 040）：worker 的审批汇聚到父级时标明来源；主会话自己的请求无来源行。
-// cli 与 tui 两个审批 Actor 共用
+// 审批来源行（M5.5 S3，决策 040）：worker 的审批汇聚到父级时标明来源；主会话自己的请求无来源行（终端界面的审批块用）
 export function approvalSourceLine(request: {
   readonly sessionId?: string;
   readonly worker?: { readonly name: string; readonly role: string };
@@ -65,7 +64,14 @@ export function pruneLine(data: PruneData): string {
   );
 }
 
+// 失败的一行：报错本身已说清的（用法、"can't …"）原样，其余写成"<哪件事> failed: <原因>"
+export function failureLine(what: string, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return /^(usage:|can't )/.test(message) ? message : `${what} failed: ${message}`;
+}
+
 // 英文数量写法："1 file"、"3 files"；复数不是加 s 的词传第三个参数
+
 export function plural(count: number, noun: string, nouns = `${noun}s`): string {
   return `${count} ${count === 1 ? noun : nouns}`;
 }

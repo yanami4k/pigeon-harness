@@ -55,7 +55,8 @@ export interface StartSandboxInput {
   resume?: boolean;
   // 决策 325：本会话的设置快照（镜像配置取 sandbox 一节，MCP 服务名取合并后的配置）
   settings?: SettingsSnapshot;
-  log: (line: string) => void;
+  // progress：等待中的进度（拉镜像、建镜像），其余是告警
+  log: (line: string, progress?: boolean) => void;
   // 运行中给人看的提示（命令超出沙箱内存上限等）；缺省同 log
   notice?: (line: string) => void;
   overrides?: SandboxOverrides;

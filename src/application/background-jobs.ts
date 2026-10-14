@@ -38,6 +38,8 @@ import { escapeStatusText } from "./status-block.ts";
 import type { DrainTarget, NoticeTarget } from "./worker-notices.ts";
 
 export const JOB_NOTICE_PREFIX = "[Background job notice] ";
+// 决策 428 之前的中文原文，只用来认出旧会话里的通知（回看历史、回退）
+export const LEGACY_JOB_NOTICE_PREFIX = "[后台作业通知] ";
 // 通知里带的输出末尾
 const NOTICE_TAIL_BYTES = 2048;
 

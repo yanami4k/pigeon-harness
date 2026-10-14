@@ -416,7 +416,7 @@ export interface LearnedMemoryConfig {
   // 推送哪几层；缺省两层（跑批器只推项目级：不读使用者的用户级记忆）
   layers?: readonly MemoryLayer[];
   // 决策 331：写入。在场即注册 update_memory，推送段带写入说明与交互版的冲突处理；只由有人对话的入口给（终端界面主会话
-  // 含沙箱会话、--line）。委派策略在场（worker 与续开的 worker 会话）时不生效
+  // 含沙箱会话）。委派策略在场（worker 与续开的 worker 会话）时不生效
   write?: MemoryWriteConfig;
 }
 

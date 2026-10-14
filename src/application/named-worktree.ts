@@ -42,8 +42,10 @@ export interface NamedWorktree {
   branch: string;
   // 起点提交（重新打开的取分支建立时的那条引用日志；取不到为 undefined，退出时按有改动对待）
   base?: string;
-  // 起点的说法（"origin/main"、"HEAD"，或"HEAD（取远端失败：…）"）
+  // 起点的说法（"origin/main"、"HEAD"，或"HEAD (fetching origin failed)" 一类）
   baseLabel: string;
+  // 新建时取远端默认分支失败或超时、退回了 HEAD（没有远端默认分支不算）
+  fetchFailed?: boolean;
   // 这次新建的（false = 打开已有的）
   created: boolean;
   // 工作树当前不在自己的分支 pigeon-wt/<名字> 上时为它当前的分支（或"分离头指针"）：退出时按有改动对待，删除只删自己的分支
@@ -145,6 +147,7 @@ function existingNamedWorktree(
 export interface BaseResolution {
   commit: string;
   label: string;
+  fetchFailed?: boolean;
 }
 
 // 起点：fresh = 远端默认分支（必要时先 fetch），取不到即 HEAD；head = 当前 HEAD
@@ -184,7 +187,7 @@ export function resolveWorktreeBase(
         error instanceof Error && /ETIMEDOUT|timed out/i.test(error.message)
           ? "timed out"
           : "failed";
-      return { commit: head, label: `HEAD (fetching origin ${reason})` };
+      return { commit: head, label: `HEAD (fetching origin ${reason})`, fetchFailed: true };
     }
   }
   const commit = resolveCommit(repoRoot, `refs/remotes/origin/${branch}`);
@@ -239,6 +242,7 @@ export function openNamedWorktree(input: {
     branch,
     base: resolution.commit,
     baseLabel: resolution.label,
+    ...(resolution.fetchFailed === true ? { fetchFailed: true } : {}),
     created: true,
   };
 }

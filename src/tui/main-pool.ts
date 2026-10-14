@@ -52,8 +52,8 @@ export interface SessionPoolContext {
   webToolsFor?: (snapshot: SettingsSnapshot) => { webTools?: WebToolsConfig };
   // /take 取回到哪（主会话当前的工作区）
   mainWorkspace(): string;
-  // 工作树建立与清理、钩子、MCP、打转与作业通知的说明（写明来源会话）
-  notice(line: string): void;
+  // 工作树建立与清理、钩子、MCP 与打转的说明（写明来源会话）；alert 为报错，醒目显示
+  notice(line: string, alert?: boolean): void;
   // 测试用：在用锁的家目录（缺省用户家目录）
   homeDir?: string;
 }
@@ -77,16 +77,17 @@ export function createSessionPool(context: SessionPoolContext): {
   const sharedDir = (): boolean => !isGitWorkspace(context.governanceRoot);
   const pool = new LocalSessionPool<PooledLive>({
     sharedDir,
-    open: async ({ name, hooks }) => {
-      const say = (line: string) => context.notice(`[${name}] ${line}`);
+    open: async ({ name, hooks, sharedDir: shared }) => {
+      const say = (line: string, alert = false) => context.notice(`[${name}] ${line}`, alert);
+      const alert = (line: string) => say(line, true);
       const sessionId = newSessionId();
       const settings = context.settings();
       let worktree: NamedWorktree | undefined;
-      if (!sharedDir()) {
+      if (shared !== true) {
         let baseMode = worktreeBaseModeOf(worktreeSectionOf(settings));
         // 取远端在后台进行（不卡界面）；取不到即从 HEAD 起
         if (baseMode === "fresh" && !(await prefetchWorktreeBase(context.governanceRoot))) {
-          say("fetching the remote default branch failed; worktree starts from HEAD");
+          alert("fetching the remote default branch failed; worktree starts from HEAD");
           baseMode = "head";
         }
         worktree = openNamedWorktree({
@@ -112,8 +113,8 @@ export function createSessionPool(context: SessionPoolContext): {
           warn: context.warn,
           ...(context.memoryWrite !== undefined ? { memoryWrite: context.memoryWrite } : {}),
           ...(context.webToolsFor?.(settings) ?? {}),
-          hooksNotice: say,
-          onMcpNote: (note) => say(`[mcp] ${note}`),
+          hooksNotice: alert,
+          onMcpNote: (note) => alert(`[mcp] ${note}`),
           // 决策 443：审批汇到同一队列，写明来源会话；挂着时面板把它放进"等待回应"
           createApprovalHandler: (grants) => {
             const inner = context.createApprovalHandler(grants);
@@ -135,7 +136,7 @@ export function createSessionPool(context: SessionPoolContext): {
         throw error;
       }
       const bundle = opened.bundle;
-      // 决策 456：面板会话的名字记进它自己的会话记录（续接、/resume 列表与标题栏照用）
+      // 决策 456：面板会话的名字记进它自己的会话记录（续接与 /resume 列表照用）
       if (validPeerName(name)) bundle.sessionStore.setName(name);
       const adapter = bundle.adapter;
       const sessionHooks = bundle.hooks;
@@ -145,7 +146,8 @@ export function createSessionPool(context: SessionPoolContext): {
         void adapter.interrupt("looping").catch(() => {});
       });
       // 后台作业结束：通知写明来源，空闲时叫醒它
-      bundle.jobNotices?.bind({ wake: () => hooks.wake(), onNotice: (text) => say(text) });
+      // 后台作业的结束通知是给模型的，不显示（决策 460）
+      bundle.jobNotices?.bind({ wake: () => hooks.wake(), onNotice: () => {} });
       // SessionStart：补的上下文存起来当作第一条输入的前缀
       let startContexts: string[] = [];
       if (sessionHooks !== undefined && !sessionHooks.disabled) {
@@ -156,7 +158,7 @@ export function createSessionPool(context: SessionPoolContext): {
           for (const line of report.systemMessages) say(line);
           startContexts = [...report.additionalContext];
         } catch (error) {
-          say(
+          alert(
             `SessionStart hook failed: ${error instanceof Error ? error.message : String(error)}`
           );
         }
@@ -187,7 +189,7 @@ export function createSessionPool(context: SessionPoolContext): {
               startContexts = [];
               if (contexts.length > 0) input = `${contexts.join("\n\n")}\n\n${text}`;
             } catch (error) {
-              say(
+              alert(
                 `UserPromptSubmit hook failed: ${error instanceof Error ? error.message : String(error)}`
               );
             }

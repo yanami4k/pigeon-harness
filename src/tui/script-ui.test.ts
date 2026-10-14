@@ -182,7 +182,12 @@ test("开跑的计划行、log 行与结束汇总进消息区；树形视图接�
     await until(() => harness.sink.spawned.length === 1, "派出第一个");
     await settle();
     const flat = screenFlat(term);
-    assert.ok(!flat.includes("[脚本] t（运行号"), "开跑那一行不写");
+    // 开跑那一行不写：原先是"[脚本] t（运行号 …）开跑：阶段 调查 → 修改；额度 ¥5"，改英文即"[script] t (run …) started:
+    // phases 调查 → 修改; budget ¥5"——两种写法与阶段连写都不出现
+    assert.ok(
+      !flat.includes("[script] t") && !flat.includes("[脚本] t") && !flat.includes("调查 → 修改"),
+      flat
+    );
     assert.ok(flat.includes("[script t] 开始了"), flat);
     assert.ok(flat.includes(`${runId}-1`), "面板照常列出脚本派出的 worker");
     await type(term, CTRL_X);

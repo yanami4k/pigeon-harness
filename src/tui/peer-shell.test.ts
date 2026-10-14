@@ -1,5 +1,5 @@
-// 决策 450：壳这边的两处——忙闲变化告诉装配方（一轮开始为忙、真正空闲为闲，各一次）；/rename 交给装配方改名并显示（决策 456：改的是会话名）
-// 返回的一行，没给即命令不可用。
+// 决策 450：壳这边的两处——忙闲变化告诉装配方（一轮开始为忙、真正空闲为闲，各一次）；/rename 交给装配方改名（决策 456：改的是
+// 会话名），改成了返回空串、不显示（同 main.ts），名字不合规返回的报错照显示；没给即命令不可用。
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -45,12 +45,13 @@ test("忙闲：一轮开始为忙、跑完空闲为闲，各告诉一次", async
   }
 });
 
-test("/rename：交给装配方并显示返回的一行；没给即命令不可用", async () => {
+test("/rename：交给装配方；改成了（返回空串）不显示，返回的报错照显示；没给即命令不可用", async () => {
   const names: string[] = [];
   const { term, cleanup } = makeShell({
+    // 同 main.ts 的 renameSession：改成了返回空串，名字不合规返回一行报错
     renameSession: (name) => {
       names.push(name);
-      return `本会话改名为 ${name}`;
+      return name.includes("/") ? "invalid name: use letters, digits, _, - and . (max 40)" : "";
     },
   });
   try {
@@ -59,7 +60,17 @@ test("/rename：交给装配方并显示返回的一行；没给即命令不可�
     term.input("\r");
     await settle();
     assert.deepEqual(names, ["api-fix"]);
-    assert.match(screenText(term), /改名为 api-fix/);
+    // 改成了：屏上提到 api-fix 的只有命令回显那一行，不另写结果
+    const mentions = screenText(term)
+      .split("\n")
+      .filter((line) => line.includes("api-fix"));
+    assert.equal(mentions.length, 1, screenText(term));
+    assert.match(mentions[0] ?? "", /^\s*> \/rename\s+api-fix\s*$/);
+    term.input("/rename a/b");
+    term.input("\r");
+    await settle();
+    assert.deepEqual(names, ["api-fix", "a/b"]);
+    assert.match(screenText(term), /invalid name: use letters/);
     term.input("/rename");
     term.input("\r");
     await settle();
@@ -73,7 +84,7 @@ test("/rename：交给装配方并显示返回的一行；没给即命令不可�
     plain.term.input("/rename x");
     plain.term.input("\r");
     await settle();
-    assert.doesNotMatch(screenText(plain.term), /改名为/);
+    assert.match(screenText(plain.term), /unknown command: \/rename/);
   } finally {
     plain.cleanup();
   }

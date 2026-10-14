@@ -6,7 +6,6 @@ import type { WorkerOrchestrator } from "../orchestration/workers.ts";
 import type { SessionId } from "../state/ids.ts";
 import { parseScriptBudget, SCRIPT_COMMAND } from "./script-naming.ts";
 import { ScriptBudgetError, type ScriptRuns } from "./script-runner.ts";
-import { ORCHESTRATE_TEXTS } from "./script-texts.ts";
 
 // "额度"是人输入里认的关键词（script-naming.ts），照原样写进用法
 export const SCRIPT_COMMAND_USAGE = `/${SCRIPT_COMMAND} <task> [额度 ¥5|$2|300k]`;
@@ -16,6 +15,10 @@ export const SCRIPT_COMMAND_TEXTS = {
   stopped: (runIds: readonly string[]) => `stopped script ${runIds.join(", ")}`,
   noneRunning: "no scripts running",
   dropped: (runId: string) => `dropped script ${runId}`,
+  // 给人看的短句（给模型的整句在 script-texts.ts 的 ORCHESTRATE_TEXTS）
+  unknownRun: (runId: string) => `no script with run ID ${runId} in this session`,
+  stillRunning: (runId: string) => `script ${runId} is still running`,
+  resumed: (name: string, runId: string) => `resumed script ${name} (run ${runId})`,
 } as const;
 
 export interface ScriptCommands {
@@ -32,7 +35,7 @@ export function scriptCommands(
 ): ScriptCommands {
   const stop = async (runId?: string): Promise<string> => {
     const targets = runId !== undefined ? [runId] : runs.running();
-    if (runId !== undefined && !runs.has(runId)) return ORCHESTRATE_TEXTS.unknownRun(runId);
+    if (runId !== undefined && !runs.has(runId)) return SCRIPT_COMMAND_TEXTS.unknownRun(runId);
     const stopped: string[] = [];
     for (const id of targets) {
       if (await runs.stop(id)) stopped.push(id);
@@ -51,9 +54,9 @@ export function scriptCommands(
         if (error instanceof ScriptBudgetError) return error.message;
         throw error;
       }
-      if (result === "unknown") return ORCHESTRATE_TEXTS.unknownRun(runId);
-      if (result === "running") return ORCHESTRATE_TEXTS.stillRunning(runId);
-      return ORCHESTRATE_TEXTS.resumed(runs.spec(runId)?.name ?? runId, runId);
+      if (result === "unknown") return SCRIPT_COMMAND_TEXTS.unknownRun(runId);
+      if (result === "running") return SCRIPT_COMMAND_TEXTS.stillRunning(runId);
+      return SCRIPT_COMMAND_TEXTS.resumed(runs.spec(runId)?.name ?? runId, runId);
     },
     stop,
     drop: (runId) => {
@@ -61,8 +64,8 @@ export function scriptCommands(
       return result === "dropped"
         ? SCRIPT_COMMAND_TEXTS.dropped(runId)
         : result === "running"
-          ? ORCHESTRATE_TEXTS.stillRunning(runId)
-          : ORCHESTRATE_TEXTS.unknownRun(runId);
+          ? SCRIPT_COMMAND_TEXTS.stillRunning(runId)
+          : SCRIPT_COMMAND_TEXTS.unknownRun(runId);
     },
     stopOfWorker: async (sessionId) => {
       const runId = orchestrator.status().find((status) => status.sessionId === sessionId)

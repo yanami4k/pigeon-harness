@@ -1,5 +1,5 @@
 // 审批汇聚端到端（M5.5 S3，决策 040、303）：两个 worker 并发请求审批（跑命令；302 起改自己工作树不再请示），经审批队列与
-// CLI 问答版一次一个；批准与拒绝各自挂在对应 worker 会话文件里那次调用的工具结果上（审批闸标记，拒绝理由在结果正文里）；
+// 按脚本作答的审批（终端界面同一个审批 handler）一次一个；批准与拒绝各自挂在对应 worker 会话文件里那次调用的工具结果上（审批闸标记，拒绝理由在结果正文里）；
 // worker 的 [a] 放权只记在该 worker 会话内；父会话只有 worker 派出与收尾，没有工具调用与放权。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -18,7 +18,7 @@ import { openSessionStoreWriter } from "../pi-runtime/session-store.ts";
 import { newSessionId } from "../state/ids.ts";
 import { type StoreMessage, toolResultMark } from "../state/session-judge.ts";
 import type { SessionView } from "../state/session-view.ts";
-import { scriptedApprovalHandler } from "../tui/approval-fixtures.ts";
+import { REASON_PROMPT, scriptedApprovalHandler } from "../tui/approval-fixtures.ts";
 import { childFamilySink } from "./session-store.ts";
 import { createWorkerRuntimeFactory } from "./workers.ts";
 
@@ -79,7 +79,7 @@ test("审批汇聚：两个 worker 并发审批一次一个，决定与放权各
     let screen = "";
     const cli = scriptedApprovalHandler(
       async (prompt) => {
-        if (prompt.startsWith("拒绝理由")) {
+        if (prompt === REASON_PROMPT) {
           return "fix-b 不准改";
         }
         // 留出时间让另一个 worker 的请求并发到达

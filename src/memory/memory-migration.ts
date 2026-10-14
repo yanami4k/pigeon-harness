@@ -7,7 +7,7 @@
 // - 落盘：在这一层的记忆锁内现读，仍是旧格式即先把原文复制进迁移备份目录（不覆盖已有备份），再整份原子改写；已是新格式
 //   的文件不碰、不备份。
 // - 读路径（readMemoryLayer）：拿不到锁（另一处正在写、只试一次不等）或备份、改写出错时，这一次在内存里转换后照常读出、
-//   不写文件，经 report 给人一行告警，下次读到时再试；改写成功同样经 report 说一行备份位置。
+//   不写文件，经 report 给人一行告警，下次读到时再试；改写成功不告知（决策 460）。
 import { readFileSync } from "node:fs";
 import { ExclusiveLockError } from "../persistence/exclusive-lock.ts";
 import { copyToMigrationBackup } from "../persistence/migration-backup.ts";
@@ -119,7 +119,7 @@ export function migrateMemoryFileLocked(location: MemoryLocation): MigratedMemor
   return { ...readOfText(converted), backup };
 }
 
-// 给人看的一行（迁移成功、没能落盘）
+// 给人看的一行（没能落盘时的告警；迁移成功不告知，决策 460）
 export type MemoryMigrationReport = (line: string) => void;
 
 const stderrReport: MemoryMigrationReport = (line) => {
@@ -155,9 +155,8 @@ export function readMemoryLayer(
     return readOfText(convertLegacyMemoryText(first.text));
   }
   try {
-    const { backup, ...read } = migrateMemoryFileLocked(location);
-    if (backup !== undefined) {
-    }
+    // 迁移成功不告知（决策 460）；备份位置只在迁移的读数里，不随日常读数交出
+    const { backup: _backup, ...read } = migrateMemoryFileLocked(location);
     return read;
   } catch (error) {
     report(memoryMigrationPendingText(location, failureReason(error)));

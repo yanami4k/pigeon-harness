@@ -266,7 +266,8 @@ export interface OpenSandboxOptions {
   cacheVolume?: string;
   cacheRoot?: string;
   // 开工时给人看的提示（带入的未提交改动、残留容器、首次构建镜像）
-  log?: (line: string) => void;
+  // progress：等待中的进度（拉镜像、建镜像），其余是告警
+  log?: (line: string, progress?: boolean) => void;
   // 运行中给人看的提示（命令超出内存上限等）；缺省同 log
   notice?: (line: string) => void;
   // 决策 333：资源上限的设置（缺项取缺省）
@@ -416,8 +417,6 @@ export async function cleanResidualSandboxes(
 
 export const SANDBOX_CLEAN_COMMAND = "pigeon sandbox clean";
 // 决策 280：查看与清空共用下载缓存的命令
-export const SANDBOX_CACHE_COMMAND = "pigeon sandbox cache";
-export const SANDBOX_CLEAR_CACHE_COMMAND = "pigeon sandbox clear-cache";
 
 export interface CacheVolumeInfo {
   volume: string;
@@ -894,13 +893,13 @@ export async function openSandbox(options: OpenSandboxOptions): Promise<Sandbox>
 async function imageRunsAsRoot(
   image: string,
   docker: readonly string[],
-  log: (line: string) => void
+  log: (line: string, progress?: boolean) => void
 ): Promise<boolean> {
   const inspect = () =>
     dockerOnce(docker, ["image", "inspect", "--format", "{{.Config.User}}", image], 60_000);
   let result = await inspect();
   if (result.exitCode !== 0) {
-    log(`image ${image} not found locally; pulling`);
+    log(`image ${image} not found locally; pulling`, true);
     const pulled = await dockerOnce(docker, ["pull", image], HEAVY_TIMEOUT_MS);
     if (pulled.exitCode !== 0) {
       throw new Error(`pulling sandbox image ${image} failed: ${pulled.stderr.trim()}`);

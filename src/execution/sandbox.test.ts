@@ -22,6 +22,10 @@ import { readSnapshotRef } from "./workdir-snapshot.ts";
 
 const IMAGE = { kind: "image", image: "sandbox-test:latest" } as const;
 
+// 开箱时带入了多少未提交文件那一行已不写（验收修改）：原先是"已带入 N 个未提交的文件（含新建文件）"，改英文即
+// "brought in N uncommitted files (including new files)"——两种写法都不该出现
+const BROUGHT_IN_LINE = /brought in|\d+ uncommitted files?\b|已带入/i;
+
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 }
@@ -83,7 +87,7 @@ test("开沙箱缺省带入未提交的改动（含新建文件，不含被忽�
     const sandbox = await openSandbox(
       options(fake, repo, "sess_T1", { log: (line) => lines.push(line) })
     );
-    assert.ok(!lines.some((line) => line.startsWith("已带入")), lines.join("｜"));
+    assert.ok(!lines.some((line) => BROUGHT_IN_LINE.test(line)), lines.join("｜"));
     assert.ok(sandbox.startSnapshot !== undefined, "带了快照");
     assert.deepEqual(sandbox.startSnapshot.files, [".gitignore", "a.txt", "u.txt"]);
     assert.equal(sandbox.startCommit, sandbox.startSnapshot.commit);
@@ -190,7 +194,7 @@ test("没有未提交的改动：不拍快照、不提示、不留引用，起�
     const sandbox = await openSandbox(
       options(fake, repo, "sess_CLEAN", { log: (line) => lines.push(line) })
     );
-    assert.equal(lines.filter((line) => line.includes("已带入")).length, 0, lines.join("｜"));
+    assert.equal(lines.filter((line) => BROUGHT_IN_LINE.test(line)).length, 0, lines.join("｜"));
     assert.equal(sandbox.startSnapshot, undefined);
     assert.equal(sandbox.startCommit, head);
     assert.equal(readSnapshotRef(repo, sandboxStartRef("sess_CLEAN")), undefined);

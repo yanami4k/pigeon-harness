@@ -1,9 +1,10 @@
 // 斜杠命令分发（决策 067 拆分自 shell.ts，零行为变化）：grant 命令层在 application/grants.ts
 //（决策 030）、检索在 application/search.ts、恢复流程在
-// application/resume.ts——全部与 cli 同一份逻辑；语法/语义错误响亮呈现（同 REPL 口径），
+// application/resume.ts；语法/语义错误响亮呈现，
 // 未知命令如实说明。worker 与 resume 的具体动作由壳转交给对应视图模块。
 // 决策 286：命令的用法与运行中能不能用在命令表（command-table.ts）；未知命令只报命令词。
 import { compactFocusOf } from "../application/compaction-text.ts";
+import { failureLine } from "../application/format.ts";
 import { runGrantCommand } from "../application/grants.ts";
 import { MEMORY_COMMAND_USAGE, MEMORY_SAVE_WAITING_TEXT } from "../application/memory-command.ts";
 import {
@@ -114,7 +115,7 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
       host.requestExit();
       return;
     }
-    // M5 S2（决策 038）：/search 内容级检索——命令层与 cli 同一份；异步扫描完成后落消息区
+    // M5 S2（决策 038）：/search 内容级检索——命令层在 application/search.ts；异步扫描完成后落消息区
     const searchRoot = host.searchRoot();
     if (tokens[0] === "search" && searchRoot !== undefined) {
       void runSearchCommand({ root: searchRoot, args: tokens.slice(1) }).then(
@@ -123,9 +124,7 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
           host.render();
         },
         (error: unknown) => {
-          host.addAlert(
-            `command failed: ${error instanceof Error ? error.message : String(error)}`
-          );
+          host.addAlert(failureLine("command", error));
           host.render();
         }
       );
@@ -175,7 +174,7 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
           host.render();
         },
         (error: unknown) => {
-          host.addAlert(`fork failed: ${error instanceof Error ? error.message : String(error)}`);
+          host.addAlert(failureLine("fork", error));
           host.render();
         }
       );
@@ -263,8 +262,10 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
         host.addSystem(text);
         host.render();
       };
-      const failed = (error: unknown) =>
-        done(`command failed: ${error instanceof Error ? error.message : String(error)}`);
+      const failed = (error: unknown) => {
+        host.addAlert(failureLine("command", error));
+        host.render();
+      };
       if (sub === "resume" || sub === "drop") {
         const runId = tokens[2];
         if (runId === undefined) {
@@ -319,9 +320,7 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
               host.render();
             },
             (error: unknown) => {
-              host.addAlert(
-                `command failed: ${error instanceof Error ? error.message : String(error)}`
-              );
+              host.addAlert(failureLine("command", error));
               host.render();
             }
           )
@@ -398,6 +397,6 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
       host.addSystem(unknownCommandText(value));
     }
   } catch (error) {
-    host.addAlert(`command failed: ${error instanceof Error ? error.message : String(error)}`);
+    host.addAlert(failureLine("command", error));
   }
 }

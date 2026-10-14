@@ -74,7 +74,7 @@ export function formatBytes(bytes: number): string {
   return mib >= 0.1 ? `${mib.toFixed(1)} MiB` : `${Math.max(1, Math.round(bytes / 1024))} KiB`;
 }
 
-// 跳过清单的一行文字："path (size)" 以逗号相接；人与模型看的写法一样（第二个参数留给原先区分两种写法的调用方，已不起作用）
-export function skippedFilesText(skipped: readonly SkippedFile[], _english = true): string {
+// 跳过清单的一行文字："path (size)" 以逗号相接；人与模型看的写法一样
+export function skippedFilesText(skipped: readonly SkippedFile[]): string {
   return skipped.map((file) => `${file.path} (${formatBytes(file.bytes)})`).join(", ");
 }

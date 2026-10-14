@@ -1,9 +1,9 @@
 // TUI 审批面板 handler（M2 S3；ROADMAP §M2：审批四键作为同一治理状态的投影继承，
-// 零新增治理语义）。与 cli/approval-ui.ts 同一治理语义、同一措辞口径：
+// 零新增治理语义）。决策 461 起审批只有这一个界面（命令行对话的内联审批已去掉）：
 // 四键 [y/n/a/d]；审批动作集只有批准/拒绝（决策 001，无"人工改参数"）；[a]/[d] 经
 // SessionGrantStore 创建会话 grant（store.create fail-closed：grant.created 事件写盘
 // 失败则 grant 不生效，异常上抛由审批闸转阻断）；[d] 仅限 args.path 可定位目录的调用
-//（决策 3a；无 path 时提示不提供该键，仍按下则与 cli 版同语义退化为工具级，同 [a]）。
+//（决策 3a；无 path 时提示不提供该键，仍按下则退化为工具级，同 [a]）。
 // M5.5 S5（决策 048 及其修订）：exec 档原样显示将执行的命令串，需 shell 时标明；[a] 收窄为这条一模一样的命令串
 // （需 shell 的带 shell 标记），不提供 [d]。
 // 决策 290：网络档（web_fetch）显示将访问的网站，[a] 为"以后都允许访问该网站"（按主机名放权），不提供 [d]。
@@ -12,7 +12,7 @@
 // - ApprovalHandler 是异步函数（M2 开工 5a 第 2 件）：面板把 Promise 挂起，
 //   addInputListener 接管四键，按键 resolve；接口形状不动。
 // - 面板期间普通输入忽略（简单语义）：除四键外一律吞掉——不进输入缓冲、不提交、不回显。
-// - 无墙钟审批超时（与 cli 版一致：等人是审批语义本身）；取消路径一律 fail-closed
+// - 无墙钟审批超时（等人是审批语义本身）；取消路径一律 fail-closed
 //   按拒绝处理、理由逐字回模型（决策 001 的自我修正闭环不断；决策 428：交给模型的为完整英文句，面板与消息区显示短语）：壳停止
 //   （APPROVAL_CANCEL_CLOSED）、面板未装配（APPROVAL_CANCEL_DETACHED）、并发审批防御
 //   （APPROVAL_CANCEL_BUSY）。
@@ -86,7 +86,7 @@ export interface TuiApprovalFace {
   noteApproval(line: string): void;
 }
 
-// 审批块文本：与 cli 版同口径（工具名 + exec 命令行 + pretty JSON 参数 + diff 预览 + 四键提示）；
+// 审批块文本（工具名 + exec 命令行 + pretty JSON 参数 + diff 预览 + 按键提示）；
 // [d] 仅在调用可定位目录时提供（决策 3a）；exec 档 [a] 为精确命令放权（决策 048 及其修订）
 // 决策 301：主会话自己的请求的来源行
 export const MAIN_SOURCE_LINE = "source: main session";
@@ -223,8 +223,9 @@ export function createTuiApprovalHandler(
     const target = request.grants ?? grants;
     // 不能建目录放权的会话（日常沙箱，决策 253）不提供 [d]
     const result = await panel.askApproval(request, offersDirectoryGrant(request, target));
-    // 决策 303：请求已撤回，这次决定不被采用，不再回显裁决
+    // 决策 303：请求已撤回，这次决定不被采用；审批块收成撤回的那一行（撤回时已收起的，这里不再重复）
     if (request.signal?.aborted === true) {
+      panel.noteApproval(withdrawnLine(request));
       return {
         approved: false,
         reason: cancelReasonForModel(APPROVAL_WITHDRAWN),
@@ -232,7 +233,9 @@ export function createTuiApprovalHandler(
       };
     }
     if (result.key === "cancel") {
-      panel.noteApproval(rejectedLine(request, result.reason));
+      // 另有审批挂着（BUSY）时这个请求的审批块根本没出现：不去收起别人的块
+      if (result.reason !== APPROVAL_CANCEL_BUSY)
+        panel.noteApproval(rejectedLine(request, result.reason));
       return { approved: false, reason: cancelReasonForModel(result.reason) };
     }
     // 受保护路径：面板不收放权键；万一收到按批准一次处理，不建放权
@@ -244,19 +247,30 @@ export function createTuiApprovalHandler(
       return { approved: true };
     }
     if (result.key === "a" || result.key === "d") {
-      // 与 cli 版同一份放权作用域（approvals/handler.ts grantScopeFor）
+      // 放权作用域在 approvals/handler.ts（grantScopeFor）
       const scope = grantScopeFor(request, result.key, target);
       if (scope === null) {
         panel.noteApproval(approvedLine(request, " (once: no command to grant)"));
         return { approved: true };
       }
-      // 与 cli 版同一份放权语义：grant.created 事件先于运行态（store.create fail-closed）
-      target.create({
-        tool: request.toolName,
-        ...scope,
-        firstCall: { toolCallId: request.toolCallId, args: request.args },
-        ...(request.runId !== undefined ? { runId: request.runId } : {}),
-      });
+      // 放权语义：grant.created 事件先于运行态（store.create fail-closed）
+      try {
+        target.create({
+          tool: request.toolName,
+          ...scope,
+          firstCall: { toolCallId: request.toolCallId, args: request.args },
+          ...(request.runId !== undefined ? { runId: request.runId } : {}),
+        });
+      } catch (error) {
+        // 放权条目写不进去即不生效（fail-closed）：审批块照样收成一行，写明没建成
+        panel.noteApproval(
+          rejectedLine(
+            request,
+            `grant failed: ${error instanceof Error ? error.message : String(error)}`
+          )
+        );
+        throw error;
+      }
       panel.noteApproval(grantedLine(request, scope));
       return { approved: true };
     }

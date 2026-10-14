@@ -9,6 +9,7 @@ import type { SessionId } from "../state/ids.ts";
 import type { SessionView } from "../state/session-view.ts";
 import { isStatusMessage } from "../state/status-text.ts";
 import { hardenedGitArgs } from "../tools/git-hardening.ts";
+import { userTextParts } from "./history.ts";
 import { isReviewSession } from "./session-cost.ts";
 import { sessionDisplayName } from "./session-name.ts";
 import { sessionsDirOf } from "./workspace.ts";
@@ -30,9 +31,12 @@ const FIRST_INPUT_CHARS = 60;
 
 function firstInputOf(view: SessionView): string {
   for (const message of view.messages) {
-    // 决策 363：开工状态块（按消息上的标记认）不是人输入的话
+    // 决策 363：开工状态块（按消息上的标记认）不是人输入的话；程序送进对话的通知与附注同样不算，/orchestrate 发起的取人敲的
+    // 命令（同回看历史，见 history.ts 的 userTextParts）
     if (message.role !== "user" || isStatusMessage(message.raw)) continue;
-    const raw = message.blocks.map((block) => (block.type === "text" ? block.text : "")).join(" ");
+    const raw = message.blocks
+      .map((block) => (block.type === "text" ? (userTextParts(block.text).human ?? "") : ""))
+      .join(" ");
     const text = raw.replace(/\s+/g, " ").trim();
     if (text !== "") {
       return [...text].length > FIRST_INPUT_CHARS

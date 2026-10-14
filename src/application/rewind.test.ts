@@ -11,21 +11,33 @@ import type { SessionFileView } from "../persistence/session-reader.ts";
 import { pruneSeedFromEntries } from "../pi-runtime/context-prune.ts";
 import type { FakeReply } from "../pi-runtime/fixtures.ts";
 import { newSessionId } from "../state/ids.ts";
+import { TRUNCATION_RESUME_PROMPT } from "../state/runaway-config.ts";
 import { SessionEntryType } from "../state/session-entries.ts";
 import type { SettingsSnapshot } from "../state/settings.ts";
-import { previousJobsOfSession } from "./background-jobs.ts";
+import {
+  JOB_NOTICE_PREFIX,
+  LEGACY_JOB_NOTICE_PREFIX,
+  previousJobsOfSession,
+} from "./background-jobs.ts";
+import { PROGRAM_NOTE_PREFIX, worktreeContinueNotice } from "./enter-worktree-tool.ts";
 import { noMcpSession } from "./mcp.ts";
+import type { NamedWorktree } from "./named-worktree.ts";
+import { PEER_IDLE_NOTICE_PREFIX, wrapPeerMessage } from "./peer-messaging.ts";
 import {
   applyRewind,
   checkCode,
   classifyPlan,
+  humanInputText,
+  isHumanInput,
   loadRewindTree,
   planRewind,
   prepareRewind,
   prepareUndo,
   type RewindHost,
   type RewindNode,
+  rewindTree,
 } from "./rewind.ts";
+import { commandInputText } from "./script-texts.ts";
 import { sessionCostTally } from "./session-cost.ts";
 import { type OpenedSessionRuntime, openSessionRuntime } from "./session-runtime.ts";
 import { statusFromEntries } from "./status-block.ts";
@@ -953,4 +965,86 @@ test("撤销时写到一半出错的文件：现状与出错当时记下的一�
     classifyPlan(plan, trees, edited).conflicts.map((action) => action.path),
     ["b.txt"]
   );
+});
+
+test("消息树只列人发起的消息：/orchestrate 发起的列成人敲的命令、放回输入框的也是它；后台作业、跨会话、[Pigeon] 附注与续跑提示开头的不列，附注前缀的人话去掉附注", () => {
+  const worktree = {
+    name: "wt",
+    repoRoot: "/repo",
+    path: "/repo/.pigeon/wt/wt",
+    branch: "pigeon-wt/wt",
+    baseLabel: "HEAD",
+  } as NamedWorktree;
+  const note = `${PROGRAM_NOTE_PREFIX}The session did not move into the worktree /repo/.pigeon/wt/wt: the turn was interrupted.`;
+  const inputs = [
+    commandInputText("给各模块补测试"),
+    `${JOB_NOTICE_PREFIX}Job 1 exited with code 0: $ npm test`,
+    `${LEGACY_JOB_NOTICE_PREFIX}作业 1 已结束`,
+    wrapPeerMessage(
+      { sessionId: "sess_peer", name: "api-fix", cwd: "/other", mode: "approving" },
+      "改完了",
+      "0123456789abcdef"
+    ),
+    `${PEER_IDLE_NOTICE_PREFIX}api-fix is now idle.`,
+    worktreeContinueNotice(worktree, 0),
+    TRUNCATION_RESUME_PROMPT,
+    `${note}\n\n接着改`,
+    `${note}\n\n${commandInputText("拆分")}`,
+  ];
+  const entries: Array<Record<string, unknown>> = [];
+  let parentId: string | null = null;
+  const push = (entry: Record<string, unknown>) => {
+    const id = `e${entries.length + 1}`;
+    entries.push({
+      ...entry,
+      id,
+      parentId,
+      seq: entries.length + 1,
+      timestamp: entries.length + 1,
+    });
+    parentId = id;
+  };
+  inputs.forEach((text, index) => {
+    push({
+      type: "custom",
+      customType: SessionEntryType.RunStart,
+      data: { runId: `run_${index}` },
+    });
+    push({ type: "message", message: { role: "user", content: [{ type: "text", text }] } });
+    push({
+      type: "message",
+      message: { role: "assistant", content: [{ type: "text", text: "好" }] },
+    });
+    push({ type: "custom", customType: SessionEntryType.RunEnd, data: { runId: `run_${index}` } });
+  });
+  const file = {
+    path: "x",
+    header: { id: "sess_x" },
+    entries,
+    entriesById: new Map(entries.map((item) => [item.id as string, item])),
+    lanes: new Map([["main", parentId]]),
+    labels: new Map(),
+    warnings: [],
+  } as unknown as SessionFileView;
+  assert.deepEqual(
+    rewindTree(file)
+      .filter((node) => node.kind === "message")
+      .map((node) => [node.text, node.prefill]),
+    [
+      ["/orchestrate 给各模块补测试", "/orchestrate 给各模块补测试"],
+      ["接着改", "接着改"],
+      ["/orchestrate 拆分", "/orchestrate 拆分"],
+    ]
+  );
+  const user = (text: string) => ({ role: "user", content: [{ type: "text", text }] });
+  assert.equal(
+    humanInputText(user(commandInputText("给各模块补测试"))),
+    "/orchestrate 给各模块补测试"
+  );
+  assert.equal(humanInputText(user(`${note}\n\n接着改`)), "接着改");
+  for (const text of inputs.slice(1, 7)) {
+    assert.equal(isHumanInput(user(text)), false, text);
+  }
+  assert.equal(isHumanInput(user("看看 [Pigeon] 的输出")), true);
+  assert.equal(isHumanInput({ role: "assistant", content: "好" }), false);
 });

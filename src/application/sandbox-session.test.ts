@@ -102,7 +102,17 @@ test("pigeon run --sandbox：agent 在容器里改文件；返回前交回成分
     assert.equal(existsSync(join(repo, "made.txt")), false, "宿主工作目录不变");
     assert.equal(git(repo, "symbolic-ref", "--short", "HEAD"), "main");
     assert.match(result.sandboxNotice ?? "", /git diff main\.\.pigeon\/sandbox-/);
-    assert.ok(!logs.some((line) => line.includes("沙箱已就绪")), "就绪那一行不写（文档写明）");
+    // 就绪那一行不写（文档写明）：原先是"沙箱已就绪：容器 pigeon-sandbox-…（镜像 …）…"，改英文即
+    // "sandbox ready: container pigeon-sandbox-… (image …) …"——两种写法与容器名都不出现
+    assert.ok(
+      !logs.some(
+        (line) =>
+          /\bready\b/i.test(line) ||
+          line.includes("沙箱已就绪") ||
+          line.includes(`pigeon-sandbox-${sessionId}`)
+      ),
+      logs.join("｜")
+    );
     // 决策 252：不启动 MCP 服务；开沙箱时列出已配置却不可用的服务名
     assert.equal(mcp.counter.calls, 0, "沙箱里不启动 MCP 服务");
     assert.ok(

@@ -28,7 +28,7 @@ import { createEditFileTool, type EditFileParams } from "../tools/edit-file.ts";
 import { lineTag, snapshotTag } from "../tools/hashline.ts";
 import { createReadFileTool } from "../tools/read-file.ts";
 import { ToolRegistry } from "../tools/registry.ts";
-import { scriptedApprovalHandler } from "../tui/approval-fixtures.ts";
+import { REASON_PROMPT, scriptedApprovalHandler } from "../tui/approval-fixtures.ts";
 import { createToolGovernance } from "./governance.ts";
 import { type GrantsCommandContext, runGrantCommand } from "./grants.ts";
 import { grantEventSink } from "./session-store.ts";
@@ -254,7 +254,7 @@ test("端到端（会话生命周期）：[a] 建 grant → human:grant 免审 �
     assert.equal(run3.toolExecutions[0]?.decision?.reasonSource, "human");
     assert.equal(r.prompts.length, 3, "撤销后重新问人（按键 + 拒绝理由）");
     assert.ok(r.prompts[1]?.includes("[a] allow for this session"), r.prompts[1]);
-    assert.ok(r.prompts[2]?.startsWith("拒绝理由"), r.prompts[2]);
+    assert.equal(r.prompts[2], REASON_PROMPT);
     assert.ok(
       r.screen().includes("✗ rejected edit_file: a.ts (先别动这个文件)"),
       `拒绝结论带逐字理由\n${r.screen()}`

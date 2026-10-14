@@ -280,8 +280,8 @@ export function handleModalKey(host: ModalHost, data: string): { consume: true }
     }
     // [r] 拒绝并说明（决策 066）：打开理由行，不在此决议
     if (key === "r") {
+      // 理由行的提示写在状态行（不进消息区：审批答完收成一行之后不留残行）
       host.setReasonMode(true);
-      approvalLine(host, "reason:");
       host.updateStatus();
       host.render();
       return { consume: true };

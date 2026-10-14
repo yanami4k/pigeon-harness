@@ -169,13 +169,18 @@ test("TUI worker 命令：派出回显与状态行、清单、运行中拒绝恢
       screenFlat(term)
     );
     await submit(term, "/take");
-    assert.ok(screenFlat(term).includes("usage: /take <worker>"), screenFlat(term));
+    assert.ok(screenFlat(term).includes("usage: /take <worker|session>"), screenFlat(term));
 
     await submit(term, "/nope");
     assert.ok(screenFlat(term).includes("unknown command: /nope"), screenFlat(term));
 
     await submit(term, "/spawn");
-    assert.ok(screenFlat(term).includes("command failed: usage: /spawn"), screenFlat(term));
+    // 用法错误原样写出，不再叠一层 "command failed:"
+    const spawnUsage = screenFlat(term);
+    assert.ok(
+      spawnUsage.includes("usage: /spawn") && !spawnUsage.includes("command failed: usage"),
+      spawnUsage
+    );
   } finally {
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });

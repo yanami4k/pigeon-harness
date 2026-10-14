@@ -5,6 +5,7 @@
 //   重建失败即换回原工作区并说明；成功才记 pigeon.worktree 条目、递通知让 agent 接着做。
 // 不移时给模型的说明随人的下一条输入带上，不自动开新的一轮。
 // 同一轮里已有待移入的，再调即拒绝（工具经 blocked 如实回模型）。
+import { PROGRAM_NOTE_PREFIX } from "../application/enter-worktree-tool.ts";
 import type { NamedWorktree } from "../application/named-worktree.ts";
 
 export interface WorktreeSwitchDeps {
@@ -18,7 +19,8 @@ export interface WorktreeSwitchDeps {
   // 换成功之后：记为当前工作树、写 pigeon.worktree 条目
   adopt(worktree: NamedWorktree): void;
   // 消息区一行；递给模型的通知（空闲时开一轮）；随人的下一条输入带给模型的说明（不开新的一轮）
-  system(line: string): void;
+  // alert：没移成之类的报错，醒目显示
+  system(line: string, alert?: boolean): void;
   notify(text: string): void;
   noteForNextInput(text: string): void;
   // 换成功后递给模型接着做的通知
@@ -43,9 +45,9 @@ export function createWorktreeSwitch(deps: WorktreeSwitchDeps): WorktreeSwitch {
   ): Promise<void> {
     const { worktree } = target;
     const stay = (why: string, forModel: string): void => {
-      deps.system(`didn't move into worktree ${worktree.path}: ${why}; session stays here`);
+      deps.system(`didn't move into worktree ${worktree.path}: ${why}; session stays here`, true);
       deps.noteForNextInput(
-        `[Pigeon] The session did not move into the worktree ${worktree.path}: ${forModel}. It stays in ${deps.workspace()}; the worktree is kept. Call enter_worktree again if the move is still wanted.`
+        `${PROGRAM_NOTE_PREFIX}The session did not move into the worktree ${worktree.path}: ${forModel}. It stays in ${deps.workspace()}; the worktree is kept. Call enter_worktree again if the move is still wanted.`
       );
     };
     if (info.cancelled) {

@@ -48,7 +48,8 @@ function locationOf(ctx: MemoryCommandContext, layer: MemoryLayer): MemoryLocati
 }
 
 // 主目录下启动：项目级记忆与用户级是同一个文件，只有用户级一层
-const PROJECT_IS_USER_NOTE = "in the home directory, project memory is user memory";
+const PROJECT_IS_USER_NOTE =
+  "in the home directory, project memory is user memory; use /memory edit user";
 
 // 层名：project memory / user memory
 function layerLabel(layer: MemoryLayer): string {

@@ -16,9 +16,17 @@ import {
 } from "../state/runaway-config.ts";
 import type { ViewMessage } from "../state/session-view.ts";
 import { isStatusMessage, statusSummary } from "../state/status-text.ts";
+import { JOB_NOTICE_PREFIX, LEGACY_JOB_NOTICE_PREFIX } from "./background-jobs.ts";
+import { PROGRAM_NOTE_PREFIX } from "./enter-worktree-tool.ts";
 import { plural, summarizeArgs, workEndLine } from "./format.ts";
 import { LEGACY_LOOP_REMINDER_PREFIX, LOOP_REMINDER_PREFIX } from "./loop-guard.ts";
-import { LEGACY_SCRIPT_NOTICE_PREFIX, SCRIPT_NOTICE_PREFIX } from "./script-texts.ts";
+import { PEER_NOTICE_PREFIXES } from "./peer-messaging.ts";
+import { SCRIPT_COMMAND, SCRIPT_KEYWORD } from "./script-naming.ts";
+import {
+  commandInputText,
+  LEGACY_SCRIPT_NOTICE_PREFIX,
+  SCRIPT_NOTICE_PREFIX,
+} from "./script-texts.ts";
 import { LEGACY_WORKER_NOTICE_PREFIX, WORKER_NOTICE_PREFIX } from "./worker-notices.ts";
 
 export const DEFAULT_HISTORY_LIMIT = 500;
@@ -49,15 +57,18 @@ function clip(text: string, chars: number): string {
   return text.length <= chars ? text : `${text.slice(0, chars)}… (${text.length} chars)`;
 }
 
-// 进模型上下文的程序通知（打转提醒、worker 通知、脚本通知）以用户消息存下；回看时同实时一样显示成系统行。
-// 决策 428：新通知是英文前缀，旧会话里是中文前缀，两种都认
+// 进模型上下文的程序通知（打转提醒、worker 通知、脚本通知、后台作业通知、跨会话消息与回告）整条以用户消息存下；回看时同
+// 实时一样显示成系统行。决策 428：新通知是英文前缀，旧会话里是中文前缀，两种都认（跨会话通信生来就是英文）
 const PROGRAM_NOTICE_PREFIXES = [
   LOOP_REMINDER_PREFIX,
   WORKER_NOTICE_PREFIX,
   SCRIPT_NOTICE_PREFIX,
+  JOB_NOTICE_PREFIX,
+  ...PEER_NOTICE_PREFIXES,
   LEGACY_LOOP_REMINDER_PREFIX,
   LEGACY_WORKER_NOTICE_PREFIX,
   LEGACY_SCRIPT_NOTICE_PREFIX,
+  LEGACY_JOB_NOTICE_PREFIX,
 ];
 
 export function isProgramNotice(text: string): boolean {
@@ -70,6 +81,47 @@ const CONTINUATION_PROMPTS: ReadonlySet<string> = new Set([
   TRUNCATION_RESUME_PROMPT,
   ...PREVIOUS_TRUNCATION_RESUME_PROMPTS,
 ]);
+
+export function isContinuationPrompt(text: string): boolean {
+  return CONTINUATION_PROMPTS.has(text);
+}
+
+// /orchestrate 发起时交给模型的那段话是"固定的一句开头 + 换行 + 人写的任务"（script-texts.ts 的 commandInputText，开头取它
+// 给空任务时的输出）；旧会话里是决策 428 之前的中文原文。回看与回退时还原成人敲的命令
+const ORCHESTRATE_LEADS: readonly string[] = [
+  commandInputText(""),
+  `（人用 /${SCRIPT_COMMAND} 点名用${SCRIPT_KEYWORD}做这件事）\n`,
+];
+
+export interface UserTextParts {
+  // 程序送进来的部分：整条的通知，或随人的输入前缀给模型的程序附注（[Pigeon] 开头）；回看时显示成系统行
+  notices: string[];
+  // 人亲手输入的话（/orchestrate 发起的还原成 "/orchestrate <任务>"）；整条都是程序送进来的即没有
+  human?: string;
+}
+
+// 一条用户消息的正文分成程序送进来的部分与人输入的话（回看历史、回退的消息树与放回输入框的原文共用）
+export function userTextParts(text: string): UserTextParts {
+  if (isProgramNotice(text)) {
+    return { notices: [text] };
+  }
+  // 程序附注：附注之间、附注与人的输入之间空一行；整条只有附注的（移进工作树之后的通知）没有人话
+  const notices: string[] = [];
+  let rest = text;
+  while (rest.startsWith(PROGRAM_NOTE_PREFIX)) {
+    const end = rest.indexOf("\n\n");
+    notices.push(end < 0 ? rest : rest.slice(0, end));
+    rest = end < 0 ? "" : rest.slice(end + 2);
+  }
+  if (rest === "" && notices.length > 0) {
+    return { notices };
+  }
+  const lead = ORCHESTRATE_LEADS.find((prefix) => rest.startsWith(prefix));
+  return {
+    notices,
+    human: lead === undefined ? rest : `/${SCRIPT_COMMAND} ${rest.slice(lead.length)}`,
+  };
+}
 
 // 一条消息的正文渲染行（TUI 历史与 cli --with-content 共用）
 export function messageLines(
@@ -120,14 +172,22 @@ export function messageLines(
         lines.push({ kind: "notice", text: statusSummary(block.text) });
         continue;
       }
-      // 进模型上下文的程序通知（打转提醒、worker 通知、脚本通知）虽以用户消息存下，回看时同实时一样显示成系统行，不像人输入的话
-      if (message.role === "user" && isProgramNotice(block.text)) {
-        lines.push({ kind: "notice", text: clip(block.text, entryChars) });
-        continue;
-      }
-      // 撞上限续跑（决策 367）时运行面追加的提示：同样不是人输入的话；旧会话记录里的旧版提示照样认出
-      if (message.role === "user" && CONTINUATION_PROMPTS.has(block.text)) {
-        lines.push({ kind: "notice", text: `continuation prompt: ${block.text}` });
+      if (message.role === "user") {
+        // 进模型上下文的程序通知与附注虽以用户消息存下，回看时同实时一样显示成系统行，不像人输入的话（也不进 ↑ 召回）；
+        // /orchestrate 发起的显示人敲的命令
+        const parts = userTextParts(block.text);
+        for (const notice of parts.notices) {
+          lines.push({ kind: "notice", text: clip(notice, entryChars) });
+        }
+        if (parts.human === undefined) {
+          continue;
+        }
+        // 撞上限续跑（决策 367）时运行面追加的提示：同样不是人输入的话；旧会话记录里的旧版提示照样认出
+        if (isContinuationPrompt(parts.human)) {
+          lines.push({ kind: "notice", text: `continuation prompt: ${parts.human}` });
+          continue;
+        }
+        lines.push({ kind: "user", text: `${prefix}${clip(parts.human, entryChars)}` });
         continue;
       }
       lines.push({ kind: textKind, text: `${prefix}${clip(block.text, entryChars)}` });

@@ -114,7 +114,11 @@ export function buildParamsHelp(): string {
 // 给出可用的镜像名：要构建的先看本地有没有同标签的缓存，没有才构建
 export async function ensureSandboxImage(
   spec: SandboxImageSpec,
-  options: { docker?: readonly string[]; log?: (line: string) => void; timeoutMs?: number } = {}
+  options: {
+    docker?: readonly string[];
+    log?: (line: string, progress?: boolean) => void;
+    timeoutMs?: number;
+  } = {}
 ): Promise<string> {
   if (spec.kind === "image") {
     return spec.image;
@@ -124,7 +128,7 @@ export async function ensureSandboxImage(
   if (cached.exitCode === 0) {
     return spec.image;
   }
-  options.log?.(`building sandbox image ${spec.image} (first use, may take a few minutes)`);
+  options.log?.(`building sandbox image ${spec.image} (first use, may take a few minutes)`, true);
   const built = await dockerOnce(
     docker,
     [

@@ -32,7 +32,7 @@ export const SPAWN_USAGE =
   'usage: /spawn <explorer|implementer|tester> [--name <name> | --attempts <N>] "<task>"';
 
 // 决策 279：/take <worker 名> 把已收尾 worker 自己的改动叠进工作目录
-export const TAKE_USAGE = "usage: /take <worker>";
+export const TAKE_USAGE = "usage: /take <worker|session>";
 
 // raw = 去掉 "/spawn" 之后的原文；任务可带英文或中文引号，也可不带
 export function parseSpawnCommand(raw: string): {
@@ -141,7 +141,7 @@ export function renderWorkerOutcome(outcome: WorkerOutcome): string {
   // 决策 381：worker 新建却因过大不会进交回的树的文件
   if (result?.skippedFiles !== undefined && result.skippedFiles.length > 0) {
     lines.push(
-      `  large files skipped (${result.skippedFiles.length}): ${skippedFilesText(result.skippedFiles, true)}`
+      `  large files skipped (${result.skippedFiles.length}): ${skippedFilesText(result.skippedFiles)}`
     );
   }
   // 决策 279：起点快照与只取其自身改动的取用方式（与 spawn_worker 返回的那一行同一口径，取用入口为 /take）

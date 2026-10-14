@@ -1,7 +1,9 @@
 // resume 与历史渲染（决策 067 拆分自 shell.ts）：/resume <sessionId> 的续跑流程在 application/resume.ts
-// （报告将还原的对话上下文与悬空的工具调用 → 换绑运行面，运行面装配时还原上下文，决策 183）；enterRepl 钩子 = 换绑运行面续跑
-//（同 sessionId 续写会话文件）。历史投影在 application/history.ts（与 cli --with-content 同一份）。
+// （报告将还原的对话上下文与悬空的工具调用 → 换绑运行面，运行面装配时还原上下文，决策 183）；续会话入口（enter）= 经 rebind
+// 工厂换绑运行面续跑（同 sessionId 续写会话文件）。历史投影在 application/history.ts（与 cli 的 trace / replay --with-content
+// 同一份）。
 // 换绑产物对本模块不透明（泛型）：壳持有运行面类型，本模块只把它原样交回壳的换绑动作。
+import { failureLine } from "../application/format.ts";
 import { loadSessionHistory } from "../application/history.ts";
 import { runResumeFlow } from "../application/resume.ts";
 import { asSessionId, type SessionId } from "../state/ids.ts";
@@ -77,7 +79,7 @@ export function handleResumeCommand<Binding>(
   const finish = (error?: unknown): void => {
     host.setResuming(false);
     if (error !== undefined) {
-      host.addAlert(`resume failed: ${error instanceof Error ? error.message : String(error)}`);
+      host.addAlert(failureLine("resume", error));
     }
     host.updateStatus();
     host.render();

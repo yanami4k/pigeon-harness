@@ -9,7 +9,7 @@ import { SNAPSHOT_REF_ROOT, snapshotWorkdir } from "../execution/workdir-snapsho
 import { type OverlayResult, overlayWorkerChanges } from "../execution/worker-overlay.ts";
 import { isStatusMessage } from "../state/status-text.ts";
 import { plural } from "./format.ts";
-import { isHumanInput } from "./rewind.ts";
+import { humanInputText } from "./rewind.ts";
 
 export type PooledSessionState =
   | "waiting"
@@ -77,7 +77,13 @@ export interface PooledHooks {
 }
 
 export interface LocalSessionPoolOptions<Live> {
-  open(input: { name: string; task: string; hooks: PooledHooks }): Promise<PooledRuntime<Live>>;
+  // sharedDir：派出时判定的共用目录（决策 459；卡片与开会话同一个判定）
+  open(input: {
+    name: string;
+    task: string;
+    hooks: PooledHooks;
+    sharedDir?: boolean;
+  }): Promise<PooledRuntime<Live>>;
   now?: () => number;
   // 关掉时整体的时限（缺省 15 秒）
   closeTimeoutMs?: number;
@@ -239,7 +245,12 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
     entry.opening = (async () => {
       let runtime: PooledRuntime<Live>;
       try {
-        runtime = await this.#options.open({ name, task: text, hooks });
+        runtime = await this.#options.open({
+          name,
+          task: text,
+          hooks,
+          ...(entry.card.sharedDir === true ? { sharedDir: true } : {}),
+        });
       } catch (error) {
         if (entry.card.state !== "stopped") {
           this.#changed(entry, {
@@ -354,12 +365,16 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
       // 只列人说的话与回复：开工状态块、程序送进对话的通知、续跑提示都不是人说的
       .filter(
         (message) =>
-          (roleOf(message) === "user" && !isStatusMessage(message) && isHumanInput(message)) ||
+          (roleOf(message) === "user" &&
+            !isStatusMessage(message) &&
+            humanInputText(message) !== undefined) ||
           roleOf(message) === "assistant"
       )
       .slice(-4)
       .map((message) => {
-        const text = textOf(message).replace(/\s+/g, " ").trim();
+        // 人说的话只取人亲手输入的部分（/orchestrate 还原成命令，去掉程序附注）
+        const raw = roleOf(message) === "user" ? (humanInputText(message) ?? "") : textOf(message);
+        const text = raw.replace(/\s+/g, " ").trim();
         const clipped = text.length > 200 ? `${text.slice(0, 200)}…` : text;
         return `${roleOf(message) === "user" ? "> " : "  "}${clipped}`;
       })

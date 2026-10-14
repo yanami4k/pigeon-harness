@@ -1,5 +1,5 @@
 // 决策 456：会话名是会话自己的属性——/rename 改了即记进会话文件（上游会话的 name 事实，不属于任何分支，会话回退不影响），
-// 续接、/resume 换会话、标题栏、会话列表与本机会话名录都从这里取；没改过名的用缺省名（工作目录名加会话号末 4 位）。
+// 续接、/resume 换会话与列表、pigeon session list 与本机会话名录都从这里取（主视图不再有标题栏，决策 460）；没改过名的用缺省名（工作目录名加会话号末 4 位）。
 // 文件里记的名字不合名字规则（被手改过）的不认，按没改过名处理。只读，不写任何记录
 import { locateSessionFile, readSessionFile } from "../persistence/session-reader.ts";
 import { defaultPeerName, validPeerName } from "./peer-messaging.ts";

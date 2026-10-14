@@ -29,7 +29,7 @@
 //   状态栏（status-bar.ts：模型、上下文用量、本会话花费）；工具调用行下方显示结果（缺省收起，Ctrl+O
 //   展开或收起全部）；/resume 不带会话号弹出会话选择器（session-picker.ts）；运行期告警经 addWarning 落消息区。
 // - 斜杠命令（S3，决策 030）：/grants /revoke /grants save 走 application/grants.ts 的
-//   命令层（与 cli REPL 同一份），输出经 write 回调投影到消息区——零新增治理语义。
+//   命令层（application/grants.ts），输出经 write 回调投影到消息区——零新增治理语义。
 // - 收尾行（决策 452，取代 S5 的终态摘要）：一次工作（从人发出消息到 agent 干完，含 Stop 钩子拦下后接着跑的各轮）结束时落
 //   一行，如 "done · 1m 23s"，不写失败分类（措辞在 application/format.ts 的 workEndLine）；listenerErrors 非空时消息区
 //   增量警告（D2 可见化的 TUI 投影，措辞与增量报数口径同 cli repl：启动即查 + 每次 run 收尾复查）。
@@ -217,7 +217,7 @@ export interface TuiShellOptions {
   // pi-tui 崩溃/调试日志目录（行宽护栏 throw 时写 pi-crash.log）
   logDir?: string;
   // S3：grant 治理面投影——/grants /revoke /grants save 的命令上下文（命令层在
-  // application/grants.ts，与 cli REPL 同一份）；缺省 = 斜杠命令不可用
+  // application/grants.ts）；缺省 = 斜杠命令不可用
   grants?: TuiGrantsContext;
   // 会话目录所在的根（续接时从会话记录累计已有花费、子会话的花费用）；终端界面不再有 /sessions（看会话、切会话用 /resume）
   sessions?: { root: string };
@@ -279,7 +279,7 @@ export interface TuiShellOptions {
   onBusyChange?: (busy: boolean) => void;
   // 决策 450、456：/rename 改当前会话的名字（记进会话记录，名录跟着改）；返回给人看的一行。缺省 = 命令不可用
   renameSession?: (name: string) => string;
-  // 决策 456：会话的显示名（会话记录里记的，没改过名为缺省名）；标题栏与历史视图用。缺省 = 只显示会话号
+  // 决策 456：会话的显示名（会话记录里记的，没改过名为缺省名）；会话面板上当前会话的卡片与 /take 的说明用。缺省 = 会话号
   sessionName?: (sessionId: string) => string;
   // 决策 439：点链接时打开网址（缺省用系统缺省方式，见 alt-screen.ts）；测试注入
   openUrl?: (url: string) => void;
@@ -870,7 +870,9 @@ export class PigeonTuiShell
       this.pendingApprovalState !== null
         ? this.pendingApprovalState.peerMessage === true
           ? peerChoiceStatus(this.pendingApprovalState)
-          : ""
+          : this.reasonModeOn
+            ? "reason for rejecting (enter to send, esc to go back)"
+            : ""
         : this.resuming
           ? "resuming"
           : this.interrupting
@@ -911,8 +913,9 @@ export class PigeonTuiShell
       return;
     }
     if (this.isBusy()) {
-      // /orchestrate 是交给模型的一条输入：运行中与普通输入一样排队，空闲后再派发
-      if (value.startsWith("/") && slashTokens(value)[0] !== "orchestrate") {
+      // /orchestrate <任务> 是交给模型的一条输入：运行中与普通输入一样排队，空闲后再派发；它的 resume、stop、drop 与不带
+      // 参数的用法由程序直接做，照常立即执行
+      if (value.startsWith("/") && !isOrchestrateTask(value)) {
         // 运行中的斜杠命令不排队：放行的照常执行，改主会话状态或工作目录的拒绝并说明原因、输入留在输入框
         const rejection = rejectWhileRunning(value);
         if (rejection !== undefined) {
@@ -943,7 +946,7 @@ export class PigeonTuiShell
     // 决策 452：人的下一条输入或命令出现之前，先落上一次工作的收尾行（排队的输入在收尾时依次发出）
     this.renderWorkEnd();
     // S3 斜杠命令：grant 治理面投影（/grants /revoke /grants save）——命令层与
-    // cli REPL 同一份（application/grants.ts，决策 030），write 回调落消息区
+    // 命令层在 application/grants.ts（决策 030），write 回调落消息区
     if (value.startsWith("/")) {
       this.flow.addUserEcho(value);
       dispatchSlashCommand(this, value);
@@ -1131,6 +1134,8 @@ export class PigeonTuiShell
       if (inPanel) this.configPanel.setNote(line, true);
       else this.flow.addAlert(line);
     };
+    // 面板里上一次留下的报错：这次先清掉
+    if (inPanel) this.configPanel.setNote("");
     if (this.isBusy()) {
       say("running; change settings later");
       this.tui.requestRender();
@@ -2071,10 +2076,11 @@ export class PigeonTuiShell
     }
   }
 
+  // 结论压成一行（多行命令只取首行）；没有挂着的审批块（已收起，或块根本没出现）即不写
   settleApproval(line: string): void {
     const settlers = this.approvalSettlers.splice(0);
-    if (settlers.length === 0) this.addApprovalLine(line);
-    for (const settle of settlers) settle(line);
+    const one = oneLineConclusion(line);
+    for (const settle of settlers) settle(one);
     this.tui.requestRender();
   }
 
@@ -2334,17 +2340,25 @@ export class PigeonTuiShell
       this.running = true;
       this.updateStatus();
       this.tui.requestRender();
-      const finish = (lines: readonly string[]): void => {
+      const finish = (lines: readonly string[], failed = false): void => {
         this.running = false;
-        for (const line of lines) this.flow.addSystem(line);
+        for (const line of lines) {
+          if (failed) this.flow.addAlert(line);
+          else this.flow.addSystem(line);
+        }
         this.updateStatus();
         this.tui.requestRender();
         this.drainQueue();
       };
-      reload(args).then(finish, (error: unknown) =>
-        finish([
-          `reloading settings failed: ${error instanceof Error ? error.message : String(error)}`,
-        ])
+      reload(args).then(
+        (lines) => finish(lines),
+        (error: unknown) =>
+          finish(
+            [
+              `reloading settings failed: ${error instanceof Error ? error.message : String(error)}`,
+            ],
+            true
+          )
       );
     };
   }
@@ -2361,10 +2375,12 @@ export class PigeonTuiShell
     this.running = true;
     this.updateStatus();
     this.tui.requestRender();
-    const settleCompact = (line: string | undefined): void => {
+    // 没压成：压缩出错（failed）是报错，醒目；没有可压缩的等跳过的照常
+    const settleCompact = (line: string | undefined, failed = false): void => {
       this.running = false;
       if (line !== undefined) {
-        this.flow.addSystem(`[compact] ${line}`);
+        if (failed) this.flow.addAlert(`[compact] ${line}`);
+        else this.flow.addSystem(`[compact] ${line}`);
       }
       this.refreshContext();
       this.collectChildCosts();
@@ -2373,9 +2389,9 @@ export class PigeonTuiShell
       this.drainQueue();
     };
     runtime.compact(focus).then(
-      (outcome) => settleCompact(manualCompactionText(outcome)),
+      (outcome) => settleCompact(manualCompactionText(outcome), outcome.kind === "failed"),
       (error: unknown) =>
-        settleCompact(`failed: ${error instanceof Error ? error.message : String(error)}`)
+        settleCompact(`failed: ${error instanceof Error ? error.message : String(error)}`, true)
     );
   }
 
@@ -3234,4 +3250,20 @@ function isSandboxSession(root: string, sessionId: string): boolean {
   } catch {
     return false;
   }
+}
+
+// /orchestrate <任务>（交给模型的一条输入）；resume、stop、drop 与不带参数的不算
+function isOrchestrateTask(value: string): boolean {
+  const tokens = slashTokens(value);
+  return (
+    tokens[0] === "orchestrate" &&
+    tokens.length > 1 &&
+    !["resume", "stop", "drop"].includes(tokens[1] ?? "")
+  );
+}
+
+// 答完的审批收成的一行：多行（heredoc 一类的命令、多行理由）只取首行，后面写 …
+export function oneLineConclusion(line: string): string {
+  const lines = line.split(/\r?\n/);
+  return lines.length > 1 ? `${lines[0]} …` : line;
 }

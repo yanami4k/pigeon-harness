@@ -20,6 +20,7 @@ import type { WorkerOrchestrator, WorktreeRemovedReason } from "../orchestration
 import { isUnderPigeonDir } from "../state/paths.ts";
 import type { ToolRegistration } from "../tools/registry.ts";
 import type { PigeonAgentTool, PigeonToolResult } from "../tools/wrap.ts";
+import { plural } from "./format.ts";
 import {
   type SpawnWorkerSlot,
   skippedFilesForModel,
@@ -87,6 +88,46 @@ export const TAKE_WORKER_TEXTS = {
   readOnly: (name: string) =>
     `Worker ${name} is a read-only explorer and has no changes to take; its conclusions are in the returned summary.`,
 } as const;
+
+// 终端界面 /take 给人看的回话（决策 460、462：短句，与面板会话的 /take 同一口径）；各情形与 TAKE_WORKER_TEXTS 一一对应
+export const TAKE_WORKER_HUMAN_TEXTS: typeof TAKE_WORKER_TEXTS = {
+  taken: (name, result, view) =>
+    [
+      `took ${plural(result.applied.length, "file")} from worker ${name}${
+        result.applied.length > 0 ? `: ${fileList(result.applied)}` : ""
+      }`,
+      ...(result.conflicts.length > 0
+        ? [
+            `conflicts not written: ${fileList(result.conflicts)} (worker's version in ${view.worktree})`,
+          ]
+        : []),
+      ...(result.deletedByWorker.length > 0
+        ? [`deleted by the worker, not deleted here: ${fileList(result.deletedByWorker)}`]
+        : []),
+    ].join("; "),
+  noChanges: (name) => `worker ${name} has no changes`,
+  running: (name) => `worker ${name} is still running`,
+  unknown: (name) => `no worker named ${name}`,
+  worktreeGone: (name, reason) =>
+    reason === "unchanged"
+      ? `worker ${name} changed no files; nothing to take`
+      : reason === "taken"
+        ? `worker ${name}'s changes were already taken`
+        : `worker ${name}'s worktree is gone; nothing to take`,
+  removedAfterTake: () => "; worktree and branch removed",
+  noStart: (name) => `worker ${name} has no recorded base; can't take its changes`,
+  interrupted: (name) => `worker ${name} was interrupted in a previous run; can't take its changes`,
+  failed: (name, reason, applied) =>
+    `taking worker ${name}'s changes failed: ${reason}${applied.length > 0 ? `; applied: ${fileList(applied)}` : ""}`,
+  readOnly: (name) => `worker ${name} is read-only; nothing to take`,
+};
+
+// 给人看的：因过大没叠入的文件（留在 worker 的工作树里）
+function skippedLineForHuman(result: OverlayResult): string {
+  return result.skipped !== undefined && result.skipped.length > 0
+    ? `; too large, left in the worktree: ${result.skipped.map((file) => file.path).join(", ")}`
+    : "";
+}
 
 // 决策 381：worker 新建却因过大没写进树、因而没叠入的文件（附在叠入结果之后；不属定稿原文）
 export function overlaySkippedLine(result: OverlayResult): string {
@@ -156,50 +197,54 @@ export function takeWorkerChanges(
       Partial<Pick<WorkerOrchestrator, "untrackedLimits" | "discardWorkspace">>;
     workspaceRoot: string;
   },
-  worker: string
+  worker: string,
+  // 终端界面的 /take 给人看的短句；缺省给模型的整句（take_worker 工具）
+  audience: "model" | "human" = "model"
 ): { text: string; details: TakeWorkerDetails } {
+  const TEXTS = audience === "human" ? TAKE_WORKER_HUMAN_TEXTS : TAKE_WORKER_TEXTS;
+  const skippedLine = audience === "human" ? skippedLineForHuman : overlaySkippedLine;
   const name = worker.trim();
   const status = host.orchestrator.status().find((entry) => entry.name === name);
   if (status === undefined) {
     return {
-      text: TAKE_WORKER_TEXTS.unknown(name),
+      text: TEXTS.unknown(name),
       details: { worker: name, rejected: "unknown" },
     };
   }
   if (status.state === "running" || status.state === "queued") {
     return {
-      text: TAKE_WORKER_TEXTS.running(name),
+      text: TEXTS.running(name),
       details: { worker: name, rejected: "running" },
     };
   }
   if (status.previousRun === "interrupted") {
     return {
-      text: TAKE_WORKER_TEXTS.interrupted(name),
+      text: TEXTS.interrupted(name),
       details: { worker: name, rejected: "interrupted" },
     };
   }
   if (status.workspace.kind === "shared") {
     return {
-      text: TAKE_WORKER_TEXTS.readOnly(name),
+      text: TEXTS.readOnly(name),
       details: { worker: name, rejected: "read-only" },
     };
   }
   if (status.workspace.kind !== "git-worktree") {
     return {
-      text: TAKE_WORKER_TEXTS.failed(name, "this worker has no worktree", []),
+      text: TEXTS.failed(name, "this worker has no worktree", []),
       details: { worker: name, rejected: "failed" },
     };
   }
   const base = status.workspace.baseCommit;
   if (base === undefined) {
     return {
-      text: TAKE_WORKER_TEXTS.noStart(name),
+      text: TEXTS.noStart(name),
       details: { worker: name, rejected: "no-start" },
     };
   }
   if (!existsSync(status.workspace.path)) {
     return {
-      text: TAKE_WORKER_TEXTS.worktreeGone(name, status.worktreeRemoved),
+      text: TEXTS.worktreeGone(name, status.worktreeRemoved),
       details: { worker: name, rejected: "worktree-gone" },
     };
   }
@@ -216,11 +261,7 @@ export function takeWorkerChanges(
   } catch (error) {
     const applied = error instanceof OverlayError ? (error.partial?.applied ?? []) : [];
     return {
-      text: TAKE_WORKER_TEXTS.failed(
-        name,
-        error instanceof Error ? error.message : String(error),
-        applied
-      ),
+      text: TEXTS.failed(name, error instanceof Error ? error.message : String(error), applied),
       details: { worker: name, rejected: "failed" },
     };
   }
@@ -240,10 +281,10 @@ export function takeWorkerChanges(
   return {
     text:
       (empty
-        ? TAKE_WORKER_TEXTS.noChanges(name)
-        : TAKE_WORKER_TEXTS.taken(name, result, { worktree: status.workspace.path, base })) +
-      overlaySkippedLine(result) +
-      (removed ? TAKE_WORKER_TEXTS.removedAfterTake(name) : ""),
+        ? TEXTS.noChanges(name)
+        : TEXTS.taken(name, result, { worktree: status.workspace.path, base })) +
+      skippedLine(result) +
+      (removed ? TEXTS.removedAfterTake(name) : ""),
     details: { worker: name, result, ...(removed ? { worktreeRemoved: true } : {}) },
   };
 }

@@ -145,9 +145,15 @@ test("parallel 为屏障：全部结束才返回；pipeline 每项各自走完�
   gate("s2 y").resolve();
   const text = await notice;
   assert.deepEqual(returned(text), { out: ["s2 x", "s2 y"] });
-  // 开跑那一行不写（验收修改）
+  // 开跑那一行不写（验收修改）：原先的计划行是"[脚本] t（运行号 …）开跑：阶段 并行 → 流水线；…"，改英文即
+  // "[script] t (run …) started: phases 并行 → 流水线; …"——两种写法与阶段连写都不出现（log 行是 "[script t] …"，不受影响）
   assert.ok(
-    !harness.lines.some((line) => line.startsWith("[脚本] t（运行号")),
+    !harness.lines.some(
+      (line) =>
+        line.startsWith("[script] t") ||
+        line.startsWith("[脚本] t") ||
+        line.includes("并行 → 流水线")
+    ),
     harness.lines.join("\n")
   );
   // 树形视图：脚本与阶段两层，worker 按阶段列出

@@ -96,7 +96,10 @@ test("面板提示含 [r] 拒绝并说明；[r] 打开理由行，回车提交�
 
     term.input("r");
     await settle();
-    assert.ok(screenText(term).includes("reason:"), `[r] 应打开理由行\n${screenText(term)}`);
+    assert.ok(
+      screenText(term).includes("reason for rejecting"),
+      `[r] 应打开理由行（提示在状态行）\n${screenText(term)}`
+    );
 
     term.input("这个文件不该动");
     term.input("\r");

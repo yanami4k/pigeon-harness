@@ -39,8 +39,7 @@ import {
 import { storeActiveGrants, storeSessionView } from "../state/session-judge.ts";
 import { isStatusMessage } from "../state/status-text.ts";
 import { insideGitMetadata } from "../tools/paths.ts";
-import { JOB_NOTICE_PREFIX } from "./background-jobs.ts";
-import { isProgramNotice } from "./history.ts";
+import { isContinuationPrompt, userTextParts } from "./history.ts";
 import {
   grantCreatedEntry,
   grantRevokedEntry,
@@ -48,9 +47,6 @@ import {
   rewindStepEntry,
 } from "./session-store.ts";
 import { type StatusHashes, statusFromEntries } from "./status-block.ts";
-
-// 不是人输入的用户消息（程序送进对话的通知、续跑提示等）
-const PEER_MESSAGE_PREFIX = "[Cross-session message] ";
 
 function messageText(message: unknown): string {
   const content = (message as { content?: unknown }).content;
@@ -68,14 +64,17 @@ function messageText(message: unknown): string {
     .join("\n");
 }
 
+// 一条消息里人亲手输入的话：开工状态块、程序送进对话的通知（打转提醒、worker / 脚本 / 后台作业通知、跨会话消息与回告、
+// 只有 [Pigeon] 附注的）与续跑提示都不是（undefined）；随输入前缀的程序附注去掉，/orchestrate 发起的还原成人敲的
+// "/orchestrate <任务>"（回退时放回输入框的就是它，见 history.ts 的 userTextParts）
+export function humanInputText(message: unknown): string | undefined {
+  if ((message as { role?: unknown }).role !== "user" || isStatusMessage(message)) return undefined;
+  const human = userTextParts(messageText(message)).human;
+  return human === undefined || isContinuationPrompt(human) ? undefined : human;
+}
+
 export function isHumanInput(message: unknown): boolean {
-  if ((message as { role?: unknown }).role !== "user" || isStatusMessage(message)) return false;
-  const text = messageText(message);
-  return !(
-    isProgramNotice(text) ||
-    text.startsWith(JOB_NOTICE_PREFIX) ||
-    text.startsWith(PEER_MESSAGE_PREFIX)
-  );
+  return humanInputText(message) !== undefined;
 }
 
 function isCustom(entry: StoredEntry, customType: string): boolean {
@@ -136,7 +135,7 @@ function humanMessageOf(
       const message = at.message;
       if ((message as { role?: unknown }).role !== "user") return undefined;
       if (isStatusMessage(message)) continue;
-      return isHumanInput(message) ? messageText(message) : undefined;
+      return humanInputText(message);
     }
     if (isCustom(at, SessionEntryType.RunStart)) return undefined;
   }
