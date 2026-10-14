@@ -97,7 +97,8 @@ test("pigeon run --sandbox：agent 在容器里改文件；返回前交回成分
       }
     );
     assert.equal(result.status, "completed", result.errorMessage);
-    assert.equal(result.sandbox?.branch, `pigeon/sandbox-${sessionId}`);
+    // 交回失败时 sandbox 缺省，原因在 sandboxNotice：带上它，失败时直接看到原因
+    assert.equal(result.sandbox?.branch, `pigeon/sandbox-${sessionId}`, result.sandboxNotice);
     assert.equal(git(repo, "show", `pigeon/sandbox-${sessionId}:made.txt`), "ok");
     assert.equal(existsSync(join(repo, "made.txt")), false, "宿主工作目录不变");
     assert.equal(git(repo, "symbolic-ref", "--short", "HEAD"), "main");

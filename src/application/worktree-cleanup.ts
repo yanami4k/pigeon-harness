@@ -24,7 +24,7 @@ import {
 import { sessionFileHolder } from "../persistence/session-lock.ts";
 import { locateSessionFile, readSessionHeader } from "../persistence/session-reader.ts";
 import { worktreeInUse } from "../persistence/worktree-in-use.ts";
-import { namedWorktreesDirOf, sessionsDirOf, worktreesDirOf } from "../state/paths.ts";
+import { namedWorktreesDirOf, pigeonRel, sessionsDirOf, worktreesDirOf } from "../state/paths.ts";
 import { plural } from "./format.ts";
 import { namedWorktreeBase, namedWorktreeBranch } from "./named-worktree.ts";
 
@@ -209,13 +209,13 @@ function workerFacts(
   return facts;
 }
 
-// 当前目录在 worker 工作树里（.pigeon/state/worktrees 之下）时拒绝：比较与删除都要从主检出做
-function assertNotInWorkerWorktree(scope: WorktreeScope, governanceRoot: string): void {
+// 当前目录在 .pigeon/state/worktrees 之下的工作树里时拒绝：比较与删除都要从主检出做
+function assertNotInStateWorktree(scope: WorktreeScope, governanceRoot: string): void {
   const here = realOrResolved(scope.workspaceRoot);
   const stateDir = realOrResolved(worktreesDirOf(governanceRoot));
   if (isInside(stateDir, here) || samePath(stateDir, here)) {
     throw new WorktreeCleanupError(
-      "not available inside a worktree under .pigeon/state/worktrees; run from the main checkout"
+      `not available inside a worktree under ${pigeonRel("state", "worktrees")}; run from the main checkout`
     );
   }
 }
@@ -223,7 +223,7 @@ function assertNotInWorkerWorktree(scope: WorktreeScope, governanceRoot: string)
 export function listLeftoverWorktrees(scope: WorktreeScope): LeftoverWorktree[] {
   const repoRoot = mainRepoRoot(scope.workspaceRoot);
   const governanceRoot = scope.governanceRoot ?? repoRoot;
-  assertNotInWorkerWorktree(scope, governanceRoot);
+  assertNotInStateWorktree(scope, governanceRoot);
   // 未取走的改动一律与主检出比（工作树里的路径相对仓库顶层，主检出的根即仓库顶层）
   const mainRoot = realOrResolved(repoRoot);
   const stateDir = realOrResolved(worktreesDirOf(governanceRoot));
