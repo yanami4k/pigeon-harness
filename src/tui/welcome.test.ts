@@ -22,20 +22,20 @@ const ESC = "\u001b";
 const SGR = new RegExp(`${ESC}\\[[0-9;]*m`, "g");
 const plain = (line: string): string => line.replace(SGR, "");
 
-test("欢迎头：鸽子 11 列 × 5 行在左，三行字在右与鸽子纵向居中；名字与版本加粗，模型与目录弱化；鸽子不上色", () => {
+test("欢迎头：鸽子 11 列 × 4 行在左，三行字在右与鸽子纵向居中；名字与版本加粗，模型与目录弱化；鸽子不上色", () => {
   const lines = welcomeLines(INFO, 80);
-  // 上下各一行空行，中间 5 行
-  assert.equal(lines.length, 7);
+  // 上下各一行空行，中间 4 行
+  assert.equal(PIGEON_LOGO.length, 4);
+  assert.equal(lines.length, 6);
   assert.equal(lines[0], "");
-  assert.equal(lines[6], "");
-  const rows = lines.slice(1, 6);
+  assert.equal(lines[5], "");
+  const rows = lines.slice(1, 5);
   for (const [index, logo] of PIGEON_LOGO.entries()) {
     assert.equal(visibleWidth(logo), 11);
     assert.ok(plain(rows[index] ?? "").startsWith(` ${logo.trimEnd()}`), rows[index]);
   }
-  // 5 行里放 3 行字：第 2 至第 4 行，文字从同一列起
+  // 4 行里放 3 行字：第 2 至第 4 行（头顶那一行只有鸽子），文字从同一列起
   assert.equal(plain(rows[0] ?? ""), ` ${PIGEON_LOGO[0]?.trimEnd()}`);
-  assert.equal(plain(rows[4] ?? ""), ` ${PIGEON_LOGO[4]?.trimEnd()}`);
   assert.equal(plain(rows[1] ?? "").slice(14), "Pigeon v0.9.1");
   assert.equal(plain(rows[2] ?? "").slice(14), "deepseek-flash · deepseek");
   assert.equal(plain(rows[3] ?? "").slice(14), "~/code/demo");
@@ -50,7 +50,7 @@ test("欢迎头：鸽子 11 列 × 5 行在左，三行字在右与鸽子纵向�
 });
 
 test("欢迎头：没有模型名时两行字仍居中；窄终端只留文字、按宽度截断，不折行不错位", () => {
-  const noModel = welcomeLines({ version: "0.9.1", cwd: "~" }, 80).slice(1, 6).map(plain);
+  const noModel = welcomeLines({ version: "0.9.1", cwd: "~" }, 80).slice(1, 5).map(plain);
   assert.equal(noModel[1]?.slice(14), "Pigeon v0.9.1");
   assert.equal(noModel[2]?.slice(14), "~");
 

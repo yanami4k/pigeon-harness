@@ -1,4 +1,4 @@
-// 决策 451：终端界面的欢迎头——启动时放在对话流最上方，随消息一起往上滚（不常驻）。左边像素鸽子（四分块字符 11 列 × 5 行，
+// 决策 451：终端界面的欢迎头——启动时放在对话流最上方，随消息一起往上滚（不常驻）。左边像素鸽子（四分块字符 11 列 × 4 行，长宽比接近 1:1，
 // 不上色，用终端缺省前景色，深浅背景都看得见），右边三行字：Pigeon v版本（加粗）、所用模型、当前目录（主目录缩写为 ~），
 // 与鸽子纵向居中。窄终端放不下时只留文字（各行按宽度截断），不折行、不错位。
 // 决策 453：模型取运行面的模型信息（接入模块声明的优先，其次启动参数）；只有占位标签时没有真名字，不写这一行
@@ -7,12 +7,11 @@ import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/p
 import { promptModelName } from "../application/system-prompt.ts";
 import { bold, secondary } from "./style.ts";
 
-// 鸽子：每格 2×2 小块，取样框宽高比 1:2，覆盖率过半记为实（由透明背景的原图量化）
+// 鸽子：每格 2×2 小块，由透明背景的原图量化（11 列 × 4 行，覆盖率门槛 0.4）
 export const PIGEON_LOGO: readonly string[] = [
-  "     ▄█▀█▄ ",
-  "     ████ ▀",
-  "▀█▄ ▟███▄  ",
-  " ▝█▙█████  ",
+  "    ▗▟█▜█▄ ",
+  "▄▄  ▐████ ▀",
+  " ▀█▙█████  ",
   "  ██████▀  ",
 ];
 
@@ -60,7 +59,8 @@ export function welcomeLines(info: WelcomeInfo, width: number): string[] {
   const room = width - LEFT_PAD - LOGO_WIDTH - GAP;
   const pad = " ".repeat(LEFT_PAD);
   if (room >= Math.max(headWidth, Math.min(cwdWidth, MIN_TEXT_WIDTH))) {
-    const top = Math.floor((PIGEON_LOGO.length - texts.length) / 2);
+    // 4 行鸽子放 3 行（或 2 行）字：多出的一行留在上面（头顶那一行），字与身子对齐
+    const top = Math.ceil((PIGEON_LOGO.length - texts.length) / 2);
     const rows = PIGEON_LOGO.map((logo, row) => {
       const text = texts[row - top];
       if (text === undefined) return `${pad}${logo}`.trimEnd();
