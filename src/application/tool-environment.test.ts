@@ -37,7 +37,6 @@ const backend = { id: "fake", search: async () => ({ backend: "fake", query: "",
 // 联网一节）与冻结内容
 async function assemble(env: typeof ALL, frozenPrompt?: FrozenSessionPrompt) {
   const root = mkdtempSync(join(tmpdir(), "pigeon-tool-env-"));
-  const bin = mkdtempSync(join(tmpdir(), "pigeon-tool-env-bin-"));
   try {
     if (env.git) execFileSync("git", ["init", "-q"], { cwd: root });
     const sessionId = newSessionId();
@@ -80,7 +79,6 @@ async function assemble(env: typeof ALL, frozenPrompt?: FrozenSessionPrompt) {
         fetch: { timeoutMs: 1000, maxBytes: 1000, maxChars: 1000 },
         distillMaxTokens: 100,
       },
-      env: { PATH: bin },
       ...(frozenPrompt !== undefined ? { frozenPrompt } : {}),
     });
     const advertised = bundle.adapter.snapshot().tools.advertised;
@@ -98,7 +96,7 @@ async function assemble(env: typeof ALL, frozenPrompt?: FrozenSessionPrompt) {
       frozen: bundle.frozenPrompt,
     };
   } finally {
-    for (const dir of [root, bin]) rmSync(dir, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
   }
 }
 
@@ -145,7 +143,6 @@ test("一次会话内工具清单固定：/reload 沿用开局的检查结果，
 test("治理根与工作区根分开（--governance-root）时，git 工作区探针看工作区根：工作区是 git 仓库、治理根不是，派 worker 一组照注册", async () => {
   const workspace = mkdtempSync(join(tmpdir(), "pigeon-tool-env-ws-"));
   const gov = mkdtempSync(join(tmpdir(), "pigeon-tool-env-gov-"));
-  const bin = mkdtempSync(join(tmpdir(), "pigeon-tool-env-bin-"));
   try {
     execFileSync("git", ["init", "-q"], { cwd: workspace });
     const streamFn = createFakeStreamFn({ replies: [{ text: "好" }] });
@@ -164,7 +161,6 @@ test("治理根与工作区根分开（--governance-root）时，git 工作区�
         fetch: { timeoutMs: 1000, maxBytes: 1000, maxChars: 1000 },
         distillMaxTokens: 100,
       },
-      env: { PATH: bin },
     });
     const advertised = bundle.adapter.snapshot().tools.advertised;
     await bundle.adapter.run("你好").finally(() => disposeRuntime(bundle));
@@ -172,6 +168,6 @@ test("治理根与工作区根分开（--governance-root）时，git 工作区�
       assert.ok(advertised.includes(tool), `${tool} 应注册`);
     }
   } finally {
-    for (const dir of [workspace, gov, bin]) rmSync(dir, { recursive: true, force: true });
+    for (const dir of [workspace, gov]) rmSync(dir, { recursive: true, force: true });
   }
 });

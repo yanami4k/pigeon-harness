@@ -157,8 +157,8 @@ export class WorkerNotices {
   }
 
   // 决策 363：通知进用户消息的正文，里面的 worker 摘要等与开工状态块同一转义，伪造不出 pigeon 标签
-  #deliver(text: string, prefix = WORKER_NOTICE_PREFIX): string {
-    const full = `${prefix}${escapeStatusText(text)}`;
+  #deliver(text: string): string {
+    const full = `${WORKER_NOTICE_PREFIX}${escapeStatusText(text)}`;
     const key = this.#options.target.notify(full);
     this.#options.onNotice?.(full);
     for (const listener of this.#listeners) {

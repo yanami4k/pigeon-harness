@@ -359,8 +359,6 @@ export interface RuntimeDeps {
   // 决策 340：/reload 重建时沿用旧运行面开局读到的人写说明（AGENTS.md）、推送的记忆与本地 Skill 扫描结果（不重读文件）
   // 与系统提示（决策 363：/reload 后系统提示逐字节不变）
   frozenPrompt?: FrozenSessionPrompt;
-  // 决策 359：查 PATH 用的环境变量（缺省 process.env；测试注入）
-  env?: NodeJS.ProcessEnv;
   // 决策 363：续跑沿用会话记录里最后一个 Run 开始条目记下的系统提示（不重新生成）；缺省按本会话现拼
   systemPrompt?: string;
   // 决策 430：生成上面这份系统提示时所用模型的身份（同一 Run 开始条目记下的模型信息）；与本次不同即按新模型重建。

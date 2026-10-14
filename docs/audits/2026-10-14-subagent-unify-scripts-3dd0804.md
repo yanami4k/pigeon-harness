@@ -83,3 +83,16 @@
 
 - 本机：`tsc --noEmit`、`biome check`、`dependency-cruiser` 通过；受影响的测试分两批跑过（history、rewind、tool-environment、git-head-record、take-worker-tool、hooks-stop、keybindings；orchestration-ui、review-fixes、settings、input-queue、orchestration-wiring、approval 各测试、headless），另跑了 `src/tui` 全部测试。
 - 全量测试与打包冒烟在服务器上跑。
+
+## 六、独立审查
+
+对提交 5a72de4 另派审查（只读，在提交的快照上跑 tsc 与相关测试）。没有发现正确性问题：旧会话的三种 `/orchestrate` 包装与两种通知前缀与 3dd0804 的原文逐字一致，模块常量没有先用后定义，运行中输入斜杠命令一律按命令表判定（`/orchestrate` 现在是未知命令），旧设置里绑了 `pigeon.approval.scriptKind` 的只提示一行、不挡开局；没有 CR 换行。
+
+指出的残留与处理（另一提交）：
+
+- `RuntimeDeps.env`（只为查 docker 的 PATH）已无人读：删掉，`tool-environment.test.ts` 里为它建的临时目录一并删掉。上文"开局不再查 PATH"至此才完全属实。
+- `submitNow` 的 `echo` 参数、`WorkerNotices` 内部 `#deliver` 的 `prefix` 参数已无人用：删掉。
+- `previous-workers.ts` 文件头引用了已删的 `script-host.ts`、`approval.ts` 有一句注释仍提"同类都允许"：改掉（上文第三节说 `approval.ts` 的注释已清，此前漏了这一句）。
+- `ROADMAP.md`：第 4 节标题、M11 标题补上删除标注，交付表"脚本编排"一行改成与相邻行相同的〔…〕写法。
+- 写了 `orchestration.script` 的设置文件在本提交之后按"未知键"报错：下一块把整个 `orchestration` 列进已删的节（决策 478），报错改为写明已删、请删掉。
+- worker 编排器内部的脚本残留（审批请求上经展开带出的 `script: { runId }`、只剩脚本用过的 `subscribe` 的 `eventsOnly` 选项）留给下一块随编排器一起删。

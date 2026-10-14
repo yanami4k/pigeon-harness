@@ -123,7 +123,7 @@ export function approvalBlockText(
   }
   lines.push(
     approvalKeyLabels(
-      // 决策 326 ①：受保护路径的请示只有批准一次或拒绝，不提供放权键与"同类都允许"
+      // 决策 326 ①：受保护路径的请示只有批准一次或拒绝，不提供放权键
       request.protectedPath !== undefined
         ? APPROVAL_KEYS_BASE
         : request.host !== undefined

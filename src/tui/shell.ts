@@ -988,8 +988,8 @@ export class PigeonTuiShell
     return this.running || this.resuming || this.rewinding;
   }
 
-  // 立即提交一条输入（空闲时的回车，或空闲后从队列取出的一条）；echo 为 false 时不回显
-  private submitNow(value: string, echo = true): void {
+  // 立即提交一条输入（空闲时的回车，或空闲后从队列取出的一条）
+  private submitNow(value: string): void {
     // 决策 452：人的下一条输入或命令出现之前，先落上一次工作的收尾行（排队的输入在收尾时依次发出）
     this.renderWorkEnd();
     // S3 斜杠命令：grant 治理面投影（/grants /revoke /grants save）——命令层与
@@ -1000,7 +1000,7 @@ export class PigeonTuiShell
       this.tui.requestRender();
       return;
     }
-    if (echo) this.flow.addUserEcho(value);
+    this.flow.addUserEcho(value);
     this.running = true;
     this.runCancelled = false;
     this.beginWork();
