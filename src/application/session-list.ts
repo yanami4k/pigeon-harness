@@ -29,19 +29,10 @@ export function runSessionListCommand(options: SessionListCommandOptions): strin
     // 时间渲染：UTC（ISO 切片），跨时区确定——测试文本比对与 grep 友好
     // M5 S5（决策 044）：有 usage 的会话追加总 token；决策 476：不写金额，写法同状态栏
     const usage = summary.totalTokens > 0 ? `  ${compactNumber(summary.totalTokens)} tokens` : "";
-    // M5.5 S4（决策 040）：父子关系安静后缀
-    const lineage =
-      summary.worker !== undefined
-        ? `  worker ${summary.worker.name} (${summary.worker.role}) ← parent session ${summary.worker.parentSessionId}`
-        : "";
-    const children =
-      summary.children !== undefined
-        ? `  spawned ${plural(summary.children.count, "worker")}${summary.children.unsettled > 0 ? ` (${summary.children.unsettled} unfinished)` : ""}`
-        : "";
     // 决策 456：会话名（没改过名的显示缺省名：工作目录名加会话号末 4 位）
     const name = sessionDisplayName(summary.name, summary.cwd ?? options.root, summary.sessionId);
     lines.push(
-      `${new Date(summary.createdAt).toISOString().slice(0, 16).replace("T", " ")}  ${name}  ${plural(summary.runCount, "run")}  ${summary.sessionId}${usage}${lineage}${children}`
+      `${new Date(summary.createdAt).toISOString().slice(0, 16).replace("T", " ")}  ${name}  ${plural(summary.runCount, "run")}  ${summary.sessionId}${usage}`
     );
   }
   if (notice !== undefined) {

@@ -23,7 +23,6 @@ import {
   SessionEntryType,
   type SessionHeaderMetadata,
   type VerificationData,
-  type WorkerData,
 } from "./session-entries.ts";
 import { addTurnUsage, toolResultModelUsage } from "./tool-usage.ts";
 
@@ -91,7 +90,6 @@ export interface StoreSessionView {
   runs: StoreRun[];
   verifications: StoreRecord<VerificationData>[];
   forks: StoreRecord<ForkData>[];
-  workers: StoreRecord<WorkerData>[];
   grants: StoreRecord<GrantData>[];
 }
 
@@ -175,7 +173,6 @@ export function storeSessionView(input: {
   const runs: StoreRun[] = [];
   const verifications: StoreRecord<VerificationData>[] = [];
   const forks: StoreRecord<ForkData>[] = [];
-  const workers: StoreRecord<WorkerData>[] = [];
   const grants: StoreRecord<GrantData>[] = [];
   const own = input.entries.slice(copiedPrefixLength(input.entries, metadata));
   for (const entry of own) {
@@ -242,11 +239,6 @@ export function storeSessionView(input: {
       forks.push({ entryId: entry.id, data: fork });
       continue;
     }
-    const worker = customData<WorkerData>(entry, SessionEntryType.Worker);
-    if (worker !== undefined) {
-      workers.push({ entryId: entry.id, data: worker });
-      continue;
-    }
     const grant = customData<GrantData>(entry, SessionEntryType.Grant);
     if (grant !== undefined) {
       grants.push({ entryId: entry.id, data: grant });
@@ -261,7 +253,6 @@ export function storeSessionView(input: {
     runs,
     verifications,
     forks,
-    workers,
     grants,
   };
 }
@@ -762,19 +753,6 @@ export function storeActiveGrants(view: StoreSessionView): ActiveGrant[] {
     });
   }
   return active.sort((a, b) => a.createdAt - b.createdAt);
-}
-
-// 父会话里派出某个 worker 的记录
-export function storeWorkerSpawned(
-  view: StoreSessionView,
-  childSessionId: SessionId
-): Extract<WorkerData, { event: "spawned" }> | undefined {
-  for (const { data } of view.workers) {
-    if (data.event === "spawned" && data.childSessionId === childSessionId) {
-      return data;
-    }
-  }
-  return undefined;
 }
 
 // 分叉点之前最近的代码快照的查找结果：拍成的快照（或改前基线）；没拍成的那一次的拍摄标记；或者该点早于首次改动、

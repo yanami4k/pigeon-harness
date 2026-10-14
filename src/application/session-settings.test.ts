@@ -130,11 +130,11 @@ test("信任目录：项目在用户级 trustedDirectories 之下免于确认", 
   assert.equal(keys(root, home).length, 3);
 });
 
-test("本次不用：去掉未确认的短名（连同角色清单里的引用）、沙箱一节与 MCP 服务，不记指纹", async () => {
+test("本次不用：去掉未确认的短名、沙箱一节与 MCP 服务，不记指纹", async () => {
   const { root, home } = setup();
   write(projectSettingsPath(root), {
     ...PROJECT,
-    commands: { commands: { test: "npm test" }, roles: { tester: ["test"] } },
+    commands: { commands: { test: "npm test" } },
   });
   const notices: string[] = [];
   const used = await confirmSessionConfig(loadSettings(root, { homeDir: home }), {
@@ -142,7 +142,7 @@ test("本次不用：去掉未确认的短名（连同角色清单里的引用�
     confirmation: asker("skip"),
     notice: (line) => notices.push(line),
   });
-  assert.deepEqual(commandsConfigOf(used), { commands: {}, roles: { tester: [] } });
+  assert.deepEqual(commandsConfigOf(used), { commands: {} });
   assert.deepEqual(sandboxConfigOf(used), {});
   assert.deepEqual(mcpConfigOf(used).servers, []);
   assert.equal(notices.length, 1);

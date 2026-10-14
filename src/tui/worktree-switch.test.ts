@@ -15,17 +15,15 @@ const WT: NamedWorktree = {
   created: true,
 };
 
-function harness(options: { busy?: string; rebuildFails?: boolean } = {}) {
+function harness(options: { rebuildFails?: boolean } = {}) {
   const log: string[] = [];
   let workspace = "/repo";
-  let busy = options.busy;
   const deps: WorktreeSwitchDeps = {
     workspace: () => workspace,
     setWorkspace: (root) => {
       workspace = root;
       log.push(`workspace ${root}`);
     },
-    workersBusy: () => busy,
     rebuild: async () => {
       log.push(`rebuild in ${workspace}`);
       if (options.rebuildFails === true) throw new Error("boom");
@@ -40,9 +38,6 @@ function harness(options: { busy?: string; rebuildFails?: boolean } = {}) {
     log,
     sw: createWorktreeSwitch(deps),
     workspace: () => workspace,
-    setBusy: (value: string | undefined) => {
-      busy = value;
-    },
   };
 }
 
@@ -71,13 +66,11 @@ test("成功：先换工作区再重建（重建按工作树），之后记条�
   assert.equal(h.sw.pending(), false);
 });
 
-test("同一轮再调即拒绝；有 worker 在跑时工具也拒绝", () => {
+test("同一轮再调即拒绝", () => {
   const h = harness();
   assert.equal(h.sw.blocked(), undefined);
   h.sw.entered(WT, 0);
   assert.match(h.sw.blocked() ?? "", /already pending this turn/);
-  const busy = harness({ busy: "workers are still running or waiting for approval" });
-  assert.match(busy.sw.blocked() ?? "", /workers are still running/);
 });
 
 test("本轮被中止（Esc）：不移、不重建、不记条目，告诉人与模型，工作树留着", async () => {
@@ -91,16 +84,6 @@ test("本轮被中止（Esc）：不移、不重建、不记条目，告诉人�
   );
   assert.ok(h.log.some((line) => /^note .*the turn was interrupted.*stays in \/repo/.test(line)));
   assert.equal(h.sw.pending(), false);
-});
-
-test("收尾时有 worker 在跑或等补批：不移并说明", async () => {
-  const h = harness();
-  h.sw.entered(WT, 0);
-  h.setBusy("workers are still running or waiting for approval");
-  await h.sw.afterTurn({ cancelled: false });
-  assert.equal(h.workspace(), "/repo");
-  assert.ok(!h.log.some((line) => line.startsWith("rebuild")));
-  assert.ok(h.log.some((line) => /^note .*workers are still running/.test(line)));
 });
 
 test("重建失败：工作区换回原处、不记条目，告诉人与模型", async () => {

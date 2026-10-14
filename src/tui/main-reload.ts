@@ -1,38 +1,29 @@
-// 终端界面主会话的 /reload 重建（决策 340）：按新快照在同一会话上重开运行面。编排设定、打转检测与联网工具按新快照重算，
+// 终端界面主会话的 /reload 重建（决策 340）：按新快照在同一会话上重开运行面。任务清单开关、打转检测与联网工具按新快照重算，
 // 有人对话入口的记忆写入照常带上（决策 331，重建后 update_memory 仍注册），/memory 的上限随新快照更新。
-// 先建后换：重建失败时抛出，调用方的快照、编排设定与旧运行面都不变（/memory 的上限也只在重建成功后才更新）。
+// 先建后换：重建失败时抛出，调用方的快照与旧运行面都不变（/memory 的上限也只在重建成功后才更新）。
 // 从 main.ts 抽出，使 /reload 的实际装配路径可测。
 
 import type { EnterWorktreeSlot } from "../application/enter-worktree-tool.ts";
-import { type LaunchFlags, orchestrationSettingsOf } from "../application/launch-flags.ts";
+import type { LaunchFlags } from "../application/launch-flags.ts";
 import type { ApprovalModeCell, MemoryWriteConfig, RuntimeBundle } from "../application/runtime.ts";
 import {
   type OpenedSessionRuntime,
   type OpenSessionRuntimeRequest,
   openSessionRuntime,
 } from "../application/session-runtime.ts";
-import { SpawnWorkerSlot, spawnWorkerSettingsOf } from "../application/spawn-worker-tool.ts";
 import type { StatusFacts } from "../application/status-sources.ts";
 import type { WebToolsConfig } from "../application/web-tools.ts";
 import type { StreamFn } from "../pi-runtime/index.ts";
 import type { SessionId } from "../state/ids.ts";
 import type { LoopGuardSettings } from "../state/loop-guard-config.ts";
 import type { MemoryLimits } from "../state/memory-config.ts";
-import type { OrchestrationSettings } from "../state/orchestration-config.ts";
-import { loopGuardSettingsOf, memoryLimitsOf, type SettingsSnapshot } from "../state/settings.ts";
+import {
+  loopGuardSettingsOf,
+  memoryLimitsOf,
+  type SettingsSnapshot,
+  taskListEnabledOf,
+} from "../state/settings.ts";
 import type { WorkspaceHost } from "../tools/workspace-host.ts";
-
-// 决策 264–267：派 worker 开着时每个打开的会话一个工具槽（只给主会话注册，沙箱与 worker 会话由装配层略过）
-export function spawnWorkerOption(
-  flags: LaunchFlags,
-  orchestration: OrchestrationSettings
-): { spawnWorker?: SpawnWorkerSlot } {
-  return flags.spawnWorkers
-    ? {
-        spawnWorker: new SpawnWorkerSlot(spawnWorkerSettingsOf(orchestration)),
-      }
-    : {};
-}
 
 // 重建所需的、跨快照不变的部分（入口在开局时备好）
 export interface MainReloadContext {
@@ -65,7 +56,6 @@ export interface MainReloadContext {
 
 export interface MainReloaded {
   opened: OpenedSessionRuntime;
-  orchestration: OrchestrationSettings;
   loopGuard: LoopGuardSettings;
   webTools: { webTools?: WebToolsConfig };
 }
@@ -75,7 +65,6 @@ export async function reopenMainSessionForReload(
   snapshot: SettingsSnapshot,
   current: { sessionId: SessionId; bundle: RuntimeBundle }
 ): Promise<MainReloaded> {
-  const orchestration = orchestrationSettingsOf(context.flags, snapshot);
   const loopGuard = loopGuardSettingsOf(snapshot);
   const webTools = context.webToolsFor(snapshot);
   await current.bundle.sessionStore.flush();
@@ -93,8 +82,7 @@ export async function reopenMainSessionForReload(
     flags: context.flags,
     ...(context.workspaceHost !== undefined ? { workspaceHost: context.workspaceHost } : {}),
     ...(context.statusFacts !== undefined ? { statusFacts: context.statusFacts } : {}),
-    ...spawnWorkerOption(context.flags, orchestration),
-    taskList: orchestration.taskList,
+    taskList: taskListEnabledOf(snapshot),
     ...webTools,
     warn: context.warn,
     loopGuard,
@@ -110,5 +98,5 @@ export async function reopenMainSessionForReload(
   });
   // /memory 的上限按新快照更新（重建成功之后）
   context.memoryContext.limits = memoryLimitsOf(snapshot);
-  return { opened, orchestration, loopGuard, webTools };
+  return { opened, loopGuard, webTools };
 }

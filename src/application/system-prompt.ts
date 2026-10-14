@@ -16,8 +16,6 @@ export interface SystemPromptBaseInput {
   backgroundJobs: boolean;
   // 会话检索三件工具都在
   sessionSearch: boolean;
-  // worker 的作用范围说明；没有为空串
-  scopeSentence: string;
 }
 
 // 决策 429：模型名取模型信息里的 id；身份只有启动参数的占位标签（custom）时没有真名字，省掉
@@ -156,7 +154,6 @@ function toolNotes(input: SystemPromptBaseInput): string[] {
     ...(input.offered("edit_file") ? [TRUNCATION_GUIDANCE] : []),
     ...(input.offered("run_command") ? [input.runCommandSentence] : []),
     ...(input.sessionSearch ? [SESSION_SEARCH_SENTENCE] : []),
-    ...(input.scopeSentence !== "" ? [input.scopeSentence] : []),
   ];
 }
 

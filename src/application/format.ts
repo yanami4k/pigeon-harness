@@ -13,10 +13,9 @@ import type { ToolExecutionDecision } from "../state/tool-execution.ts";
 // 参数摘要上限（字符）；超出截断并标注原长，防大参数刷屏
 const ARGS_SUMMARY_LIMIT = 160;
 
-// 审批来源行（M5.5 S3，决策 040）：worker 的审批汇聚到父级时标明来源；主会话自己的请求无来源行（终端界面的审批块用）
+// 审批来源行（M5.5 S3，决策 040）：别的会话的审批汇聚到同一面板时标明来源；主会话自己的请求无来源行（终端界面的审批块用）
 export function approvalSourceLine(request: {
   readonly sessionId?: string;
-  readonly worker?: { readonly name: string; readonly role: string };
   readonly pooled?: { readonly name: string };
 }): string | undefined {
   // 决策 443：会话面板派出的会话
@@ -26,13 +25,7 @@ export function approvalSourceLine(request: {
       (request.sessionId !== undefined ? ` | session ID ${shortId(request.sessionId)}` : "")
     );
   }
-  if (request.worker === undefined) {
-    return undefined;
-  }
-  return (
-    `source: worker ${request.worker.name} (${request.worker.role})` +
-    (request.sessionId !== undefined ? ` | session ID ${shortId(request.sessionId)}` : "")
-  );
+  return undefined;
 }
 
 // 稳定 id 短哈希：`exec_` 等前缀 + ULID 前 8 位 + 省略号；非稳定 id（toolCallId 等）原样

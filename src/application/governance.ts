@@ -1,10 +1,3 @@
-// 工具调用治理（M5.5 S0，决策 049）：审批闸整族逻辑自 PiRuntimeAdapter 原样搬入 Controller 层，
-// 零行为变化。M3 治理闭环：策略判定 → 人工审批 / 自动放行 → block + ToolExecution 账本 + 熔断
-// （决策 1/2/4，spike S2a/S4/S5）；M4 S6 grant 求值排律。账本只在内存里：意图、决定、回执与熔断记录随 184 停写，
-// 审批决定与错误归类由 Adapter 挂在工具结果消息上记进会话存储。
-// 上游拦截（幽灵工具名 not-found / 已广告但参数校验失败）hook 不可见：上游 prepareToolCall
-// 在 hook 前拦截，事件级连续计数熔断兜底（探针实证 tool_execution_end 照常到达）。
-import path from "node:path";
 import { Value } from "typebox/value";
 import type { ApprovalHandler } from "../approvals/handler.ts";
 import type {
@@ -21,7 +14,6 @@ import { type BreakerScope, breakerCountKey, InterceptStreak } from "../state/br
 import type { ConfigGrantRule } from "../state/grants.ts";
 import type { ToolSettledPayload } from "../state/runtime-events.ts";
 import { FAIL_CLOSED_APPROVAL_REASON } from "../state/session-judge.ts";
-import type { ToolScope } from "../state/session-payloads.ts";
 import {
   advanceToolExecution,
   proposeToolExecution,
@@ -35,7 +27,6 @@ import { evaluateToolPolicy } from "../tools/policy.ts";
 import type { OutsideReadTool } from "../tools/read-file.ts";
 import { ToolRegistry } from "../tools/registry.ts";
 import type { CommandInspection, ExecCommandTool } from "../tools/run-command.ts";
-import { scopeViolation } from "../tools/tool-scope.ts";
 
 // M4 S6（决策 3）：会话 grant 匹配注入面——approvals/grant-store.ts 的 SessionGrantStore
 // 满足该结构；测试可注入假实现。match 纯求值（无副作用）；命中计数在放行实际生效后
@@ -66,36 +57,18 @@ export interface ToolGovernanceOptions {
   workspaceRoot?: string;
   // 熔断阈值：同一 工具名+参数指纹 在同一 Run 内被阻断的次数上限（spike S4：上游无循环护栏）
   circuitBreakerThreshold?: number;
-  // 决策 302：worker 用写层文件工具改工作区根（它自己的工作树）内的文件默认放行——排在 deny、放权、免审、yolo、只读之后，
-  // 原本要问人时生效；跑命令、读网页等其余动作照旧请示。只由 worker 装配时给
-  ownWorkspaceWrites?: boolean;
-  // 决策 326 ①：受保护路径判定（项目的 .pigeon 目录）。写入类文件工具的 path 落在其上时：会话放权与配置放权都不放行、
-  // worker 自己工作树内的默认放行也不适用，须人逐次批准（yolo 下放行，拒绝名单照常优先）。缺省不判定
+  // 决策 326 ①：受保护路径判定（项目的 .pigeon 目录）。写入类文件工具的 path 落在其上时：会话放权与配置放权都不放行，
+  // 须人逐次批准（yolo 下放行，拒绝名单照常优先）。缺省不判定
   protectedPath?: (target: string) => string | undefined | Promise<string | undefined>;
   // 决策 323 / 324：PreToolUse 钩子（在审批之前执行）。拒绝 > 要人确认 > 放行；放行只免掉人工审批这一步
   // （拒绝名单、路径围栏与受保护路径照常生效）；改过的参数重新经过全部检查并以新参数执行
   preToolUseHooks?: ToolHookPort["preToolUse"];
-  // 决策 360：worker 各工具的作用范围（委派策略里有才给）——越界的调用与拒绝名单同样绝对地拒绝，放权、yolo、钩子放行都不豁免
-  scopes?: readonly ToolScope[];
 }
-
-// 决策 302 所说的写层文件工具：改文件的内置工具（两种编辑模式都叫 edit_file）
-const OWN_WORKSPACE_WRITE_TOOLS: ReadonlySet<string> = new Set(["edit_file"]);
 
 // 调用的 path 参数（字符串才算）
 function pathArgOf(args: unknown): string | undefined {
   const target = (args as { path?: unknown } | null)?.path;
   return typeof target === "string" && target !== "" ? target : undefined;
-}
-
-// 调用的 path 参数落在工作区根之内（词法判定；工具自身另有工作区限定）
-function withinWorkspace(root: string, args: unknown): boolean {
-  const target = (args as { path?: unknown } | null)?.path;
-  if (typeof target !== "string" || target === "") {
-    return false;
-  }
-  const relative = path.relative(path.resolve(root), path.resolve(root, target));
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 // 装配根组装治理后交给 Adapter；Adapter 构造时绑定宿主能力，一个 Adapter 一份实例
@@ -113,14 +86,11 @@ class GovernedToolCalls implements ToolGovernance {
   readonly #sessionGrants: SessionGrantMatcher | undefined;
   readonly #configGrants: readonly ConfigGrantRule[];
   readonly #workspaceRoot: string | undefined;
-  readonly #ownWorkspaceWrites: boolean;
   readonly #protectedPath:
     | ((target: string) => string | undefined | Promise<string | undefined>)
     | undefined;
   // 决策 324：PreToolUse 钩子（在审批之前执行）
   readonly #preToolUseHooks: ToolHookPort["preToolUse"] | undefined;
-  // 决策 360：worker 各工具的作用范围
-  readonly #scopes: readonly ToolScope[];
   // ToolExecution 账本：toolCallId → 记录
   readonly #executions = new Map<string, ToolExecution>();
   // key 带粒度前缀——`tool\n<名字>`：policy:deny 系绝对拒绝（deny 清单 / 无审批通道
@@ -149,10 +119,8 @@ class GovernedToolCalls implements ToolGovernance {
     this.#sessionGrants = options.sessionGrants;
     this.#configGrants = options.configGrants ?? [];
     this.#workspaceRoot = options.workspaceRoot;
-    this.#ownWorkspaceWrites = options.ownWorkspaceWrites === true;
     this.#protectedPath = options.protectedPath;
     this.#preToolUseHooks = options.preToolUseHooks;
-    this.#scopes = options.scopes ?? [];
     // 广告了未在注册表登记的工具 = 配置错误，构造期 fail-fast
     for (const name of host.tools.keys()) {
       if (!this.#registry.has(name)) {
@@ -299,32 +267,11 @@ class GovernedToolCalls implements ToolGovernance {
     // 048 修订：exec 工具只读判定这条命令是否需 shell——需 shell 时只有带 shell 标记的放权能免审
     const inspection = this.#inspectCommand(toolName, rawArgs);
     const needsShell = inspection?.needsShell === true;
-    // 决策 360：越出 worker 的作用范围即拒（按参数指纹计熔断：改到范围内重提照常判定）
-    const scope = this.#scopes.find((candidate) => candidate.tool === toolName);
-    const outOfScope =
-      scope !== undefined
-        ? scopeViolation(scope, {
-            ...(this.#workspaceRoot !== undefined ? { workspaceRoot: this.#workspaceRoot } : {}),
-            args: rawArgs,
-            ...(inspection !== undefined ? { inspection } : {}),
-          })
-        : undefined;
-    if (outOfScope !== undefined) {
-      record = recordDecision(record, {
-        outcome: "rejected",
-        approvedBy: "policy:deny",
-        reason: outOfScope,
-        reasonSource: "system-default",
-        decidedAt: Date.now(),
-      });
-      this.#executions.set(toolCallId, record);
-      return this.#blockWithBreaker(toolName, rawArgs, outOfScope, "fingerprint");
-    }
     // 决策 290：网络档工具只读判定这次调用要访问的主机——审批面板显示它，[a] 建按网站的放权
     const host = this.#inspectHost(toolName, rawArgs);
     // 决策 355：读档工具这次要读工作区以外的文件（真实路径）——read 层不自动放行，放行时按调用授予工具
     const outsidePath = await this.#inspectOutsideRead(toolName, rawArgs);
-    // 决策 326 ①：写入类文件工具写受保护路径——放权（会话与配置）一概不参与求值，worker 的默认放行也不适用
+    // 决策 326 ①：写入类文件工具写受保护路径——放权（会话与配置）一概不参与求值
     const protectedTarget = await this.#protectedTargetOf(toolName, rawArgs);
     const grantHit =
       protectedTarget !== undefined
@@ -340,21 +287,6 @@ class GovernedToolCalls implements ToolGovernance {
     let decision = evaluateToolPolicy(this.#registry, toolName, policy, grantHit ?? undefined, {
       outsideWorkspaceRead: outsidePath !== undefined,
     });
-    // 决策 302：worker 改自己工作树内的文件，原本要问人的改为放行（记 policy:auto）
-    if (
-      decision.kind === "prompt" &&
-      protectedTarget === undefined &&
-      this.#ownWorkspaceWrites &&
-      this.#workspaceRoot !== undefined &&
-      OWN_WORKSPACE_WRITE_TOOLS.has(toolName) &&
-      this.#registry.get(toolName)?.tier === "write" &&
-      withinWorkspace(this.#workspaceRoot, rawArgs)
-    ) {
-      decision = {
-        kind: "auto-allow",
-        reason: `worker writing in its own worktree: ${toolName}`,
-      };
-    }
     // 决策 324：钩子要人确认——跳过一切自动放行，直接进人工审批（无审批通道即 fail-closed，与 prompt 档同一口径）；
     // 只收紧不放行：deny 清单的拒绝是绝对的，ask 不覆盖
     if (hookDecision?.decision === "ask" && decision.kind !== "deny") {
@@ -525,7 +457,7 @@ class GovernedToolCalls implements ToolGovernance {
 
   // 写入类文件工具（写档、按工作区限定路径）的 path 落在受保护路径上时返回其展示写法
   async #protectedTargetOf(toolName: string, args: unknown): Promise<string | undefined> {
-    // 决策 340：叠回 worker 改动的工具（take_worker）会写到 .pigeon 下时同样按受保护路径处理，请示里列出这些路径
+    // 决策 340：工具自己声明会写到 .pigeon 下的路径时同样按受保护路径处理，请示里列出这些路径
     const tool = this.#host.tools.get(toolName);
     if (
       tool !== undefined &&

@@ -8,22 +8,16 @@
 // rebind 工厂——按 cli resume 同一配方（restoredGrants 种子 + buildRuntime + 旧运行面
 // 释放）装配目标会话运行面，壳换绑后同 sessionId 续跑（重启 TUI 恢复已有会话的路径：
 // 重启后进 /resume）。
-// M5.5 S4（决策 040）：主会话与各 worker 的审批经同一队列汇聚到面板（一次一个）；每个会话运行面
-// 配一个编排器（/spawn /cancel /workers）；恢复 worker 会话时回到它自己的工作树与委派策略，
-// 且其编排器按深度 1 拒绝再派。一个窗口一个进程：退出时先取消在跑的 worker 并等其收尾记录落盘。
-// 决策 264–268：主会话另给主 agent 注册 spawn_worker（--no-spawn-workers 关掉；沙箱里不派 worker），与 /spawn 共用同一个
-// 编排器——同时在跑的上限对人派的与 agent 派的一并计算；agent 派出的个数按每条输入（一次运行）计。
+// M5.5 S4（决策 040）：主会话与面板会话的审批经同一队列汇聚到面板（一次一个）。
 // 决策 267：pigeon 不带子命令即启动本界面（决策 461：命令行对话已去掉）。
 // 决策 286：pigeon --continue 接本项目最近的主会话、--resume <id> 接指定会话（启动时直接打开，不另建空会话），
 // --resume 不带会话号开壳后弹出会话选择器；运行期告警在壳接管终端期间落消息区（之前与之后照旧写标准错误输出）；
 // 输入历史按项目存在 .pigeon/state/tui-history.json。
-// 决策 301：编排面接上编排器的只读观察口、发消息与续做（编排面板、树形视图、进入 worker 会话），树形视图按任务清单标注。
 
 import { homedir } from "node:os";
 import { createInterface } from "node:readline/promises";
 import { pathToFileURL } from "node:url";
 import { ProcessTerminal } from "@earendil-works/pi-tui";
-import { createSessionAttemptRunner } from "../application/attempt-group.ts";
 import type { CheckpointAttachment } from "../application/checkpoints.ts";
 import {
   configView,
@@ -40,7 +34,6 @@ import { runForkCommand } from "../application/fork-command.ts";
 import { pigeonVersion } from "../application/harness-ref.ts";
 import {
   type LaunchFlags,
-  orchestrationSettingsOf,
   parseLaunchFlags,
   resolveStreamFnSpec,
   webToolsOptionOf,
@@ -58,7 +51,6 @@ import {
   openNamedWorktree,
   reopenNamedWorktree,
 } from "../application/named-worktree.ts";
-import { restoreSessionWorkers } from "../application/previous-workers.ts";
 import { promptHistoryStore } from "../application/prompt-history.ts";
 import {
   applyRewind,
@@ -96,12 +88,8 @@ import {
   trustPromptText,
 } from "../application/session-settings.ts";
 import { createSettingsReloader } from "../application/settings-reload.ts";
-import { bindSpawnWorkers } from "../application/spawn-worker-host.ts";
-import { takeWorkerChanges } from "../application/take-worker-tool.ts";
 import { renderTaskList } from "../application/task-list-tool.ts";
 import { closeTuiSession } from "../application/tui-exit.ts";
-import type { WorkerNotices } from "../application/worker-notices.ts";
-import { createSessionWorkers } from "../application/workers.ts";
 import { prepareWorkspace } from "../application/workspace.ts";
 import { createTuiWorktreesFace, isGitWorkspace } from "../application/worktree-cleanup.ts";
 import type { SessionGrantStore } from "../approvals/grant-store.ts";
@@ -115,6 +103,7 @@ import {
   keybindingsSectionOf,
   loopGuardSettingsOf,
   memoryLimitsOf,
+  taskListEnabledOf,
   withHooksDisabled,
   worktreeSectionOf,
 } from "../state/settings.ts";
@@ -127,25 +116,18 @@ import { findFdPath } from "./fd-path.ts";
 import { keybindingRows } from "./keybindings.ts";
 import { guardTuiAgent } from "./loop-guard-view.ts";
 import { createSessionPool } from "./main-pool.ts";
-import {
-  type MainReloadContext,
-  reopenMainSessionForReload,
-  spawnWorkerOption,
-} from "./main-reload.ts";
-import { PigeonTuiShell, type TuiShellOptions, type TuiWorkersFace } from "./shell.ts";
+import { type MainReloadContext, reopenMainSessionForReload } from "./main-reload.ts";
+import { PigeonTuiShell, type TuiShellOptions } from "./shell.ts";
 import { installTerminalReset } from "./terminal-reset.ts";
 import { switchableWarn } from "./warn-sink.ts";
 import { modelLabelOf, tildePath } from "./welcome.ts";
 import { takeWorktreeFlag } from "./worktree-flag.ts";
 import { createWorktreeSwitch } from "./worktree-switch.ts";
 
-// 退出时等 worker 收尾记录落盘的上限（毫秒）：超时仍退出，缺 settled 由冷侧如实标注
-const WORKER_SHUTDOWN_GRACE_MS = 5000;
-
 // 参数解析与装配都在 application 层（决策 067）：启动参数在 launch-flags.ts（与 cli、headless 同一份、
 // 同一批缺省），会话运行面在 session-runtime.ts（作用域、grant 种子、MCP 启动、装配失败关 server）
 const USAGE =
-  "usage: pigeon [--yolo] [--no-persist-thinking] [--no-pushed-memory] [--no-hooks] [--no-web] [--no-spawn-workers] [--worker-concurrency <n>] [--worker-limit <n>] [--history-limit <n>] [--root <dir>] --stream-fn <module> " +
+  "usage: pigeon [--yolo] [--no-persist-thinking] [--no-pushed-memory] [--no-hooks] [--no-web] [--no-subagents] [--history-limit <n>] [--root <dir>] --stream-fn <module> " +
   "[--provider <name>] [--model <id>] [--thinking <level>] [--max-output-tokens <n>] [--context-window <n>] [--compact-threshold <n>] [--compact-keep <n>] " +
   "[--sandbox [--sandbox-network on|off] [--sandbox-approval yolo|prompt] [--sandbox-from-head]] [--continue | --resume [sessionId]]";
 
@@ -190,7 +172,7 @@ export async function main(argv: string[]): Promise<void> {
     pushedMemory: true,
     sessionSearch: true,
     sandbox: true,
-    spawnWorkers: true,
+    subagents: true,
   });
   const streamFn = await loadStreamFn(resolveStreamFnSpec(flags, USAGE));
   // 工作区准备（决策 034）：realpath 规范化，与 cli 入口同一份；
@@ -205,7 +187,7 @@ export async function main(argv: string[]): Promise<void> {
   const governanceRoot =
     worktreeFlag.name !== undefined ? namedWorktreeRepoRoot(launchRoot) : launchRoot;
   // 决策 325、326：旧布局检查、读三层设置成本会话快照、确认会执行命令的条目（壳接管终端之前，行内问答）。
-  // 本进程内的会话（含 /resume 换绑、worker、沙箱会话）都用这一份快照，直到 /reload 换上新快照（决策 340）
+  // 本进程内的会话（含 /resume 换绑、沙箱会话）都用这一份快照，直到 /reload 换上新快照（决策 340）
   let settings = await openSessionSettings(governanceRoot, {
     confirmation: { kind: "interactive", ask: askTrustOnStderr },
     notice: (line) => console.error(line),
@@ -226,7 +208,7 @@ export async function main(argv: string[]): Promise<void> {
   if (namedWorktree?.created === true && namedWorktree.fetchFailed === true) {
     early.push({ line: `worktree base: ${namedWorktree.baseLabel}`, alert: true });
   }
-  // 决策 446：会话移进工作树后换成工作树（worker 编排、取用等闭包按它取）
+  // 决策 446：会话移进工作树后换成工作树
   let workspaceRoot = namedWorktree?.path ?? governanceRoot;
   // 决策 445、446：本会话当前所在的独立工作树（退出时按它清理）
   let activeWorktree: NamedWorktree | undefined = namedWorktree;
@@ -234,8 +216,6 @@ export async function main(argv: string[]): Promise<void> {
   let releaseWorktreeUse: (() => void) | undefined =
     namedWorktree !== undefined ? holdWorktreeInUse(namedWorktree.path) : undefined;
   const enterWorktreeSlot = new EnterWorktreeSlot();
-  // 决策 297–303：编排设定——设置的 orchestration 一节（缺失取缺省），--worker-concurrency 与 --worker-limit 优先
-  let orchestration = orchestrationSettingsOf(flags, settings);
   // 决策 308：打转检测——设置的 loopGuard 一节（缺失取缺省即开着）
   let loopGuard = loopGuardSettingsOf(settings);
   // 决策 287–291、346：联网工具——--no-web、web.enabled 为 false、沙箱断网档任一成立就不给；配置畸形在此响亮失败。
@@ -255,11 +235,11 @@ export async function main(argv: string[]): Promise<void> {
   // S3 面板版审批 handler：face 晚绑定——buildRuntime 收 handler 工厂时壳尚未构造；
   // 壳未就位即收到审批请求属装配级故障，工厂内 fail-closed 按拒绝处理
   const faceHolder: { current: TuiApprovalFace | undefined } = { current: undefined };
-  // M5.5 S3：主会话与各 worker 的审批经同一队列，一次一个
+  // M5.5 S3：主会话与面板会话的审批经同一队列，一次一个
   const approvalQueue = createApprovalQueue();
   const createHandler = (grants: SessionGrantStore) =>
     approvalQueue.wrap(createTuiApprovalHandler(grants, () => faceHolder.current));
-  // 决策 297：worker 完成通知显示在消息区、空闲时叫醒主 agent——壳晚于编排器构造，晚绑定
+  // 壳晚于运行面构造，晚绑定
   const shellHolder: { current: PigeonTuiShell | undefined } = { current: undefined };
   // 决策 331：有人对话，带记忆工具（写入的内容在工具调用行里，消息区不另写一行）
   const memoryWrite: MemoryWriteConfig = { source: "tui" };
@@ -272,104 +252,25 @@ export async function main(argv: string[]): Promise<void> {
   };
   // 决策 331、332：/memory 的上下文（两层上限取本会话的设置快照）
   const memoryContext = { governanceRoot: governanceRoot, limits: memoryLimitsOf(settings) };
-  const workersFor = (
-    opened: OpenedSessionRuntime,
-    parentSessionId?: SessionId
-  ): TuiWorkersFace => {
-    const { bundle } = opened;
-    // 决策 446：worker 编排与取用一律按这个运行面自己的工作区（移进独立工作树后即工作树），不读外层可变的工作区
-    const workspaceRoot = opened.scope.workspaceRoot;
-    const deps = {
-      governanceRoot: governanceRoot,
-      workspaceRoot,
-      bundle,
-      // worker 请求自带其会话的放权落点；此处绑定的父会话存储只是缺省
-      approvals: createHandler(bundle.grantStore),
-      streamFn,
-      provider: flags.provider,
-      modelId: flags.modelId,
-      persistThinking: flags.persistThinking,
-      ...(flags.thinkingLevel !== undefined ? { thinkingLevel: flags.thinkingLevel } : {}),
-      ...(parentSessionId !== undefined ? { parentSessionId } : {}),
-      // 决策 297–303：编排设定；同时在跑的上限对人用 /spawn 派的与 agent 派的一并计算
-      settings: orchestration,
-      // 决策 287–291：worker 与主会话同样拿到联网工具
-      ...webToolsOption,
-      storeWarn: warn,
-      // 决策 307：worker 打转以 looping 失败交回并通知主 agent
-      loopGuard,
-    };
-    const orchestrator = createSessionWorkers(deps);
-    // 权威链审计 ②、③：续接的主会话从会话记录找回之前运行的 worker，补递没递出的完成通知（有通知队列时）
-    let notices: WorkerNotices | undefined;
-    // 决策 264：主会话注册了 spawn_worker 时绑定编排器；agent 派出的个数按一次运行（每条输入）计
-    if (opened.spawnWorker !== undefined && parentSessionId === undefined) {
-      let runKey: string | undefined;
-      bundle.adapter.subscribe((event) => {
-        runKey = event.runId;
-      });
-      const bound = bindSpawnWorkers({
-        slot: opened.spawnWorker,
-        orchestrator,
-        workspaceRoot,
-        hostSessionId: bundle.adapter.sessionId,
-        runKey: () => runKey,
-        // 决策 297：完成通知进主 agent 的下一轮，空闲时叫醒它（通知是给模型的原文，不显示在消息区）
-        target: bundle.adapter,
-        wake: () => shellHolder.current?.runNotices(),
-        onNotice: () => shellHolder.current?.render(),
-      });
-      notices = bound.notices;
-    }
-    if (opened.restored !== undefined && parentSessionId === undefined) {
-      restoreSessionWorkers({
-        orchestrator,
+  // M7（决策 079）：/fork 手动分叉——分支在独立工作树里续跑，跑完回报（按这个运行面）
+  const forkFor =
+    (opened: OpenedSessionRuntime) =>
+    (args: string): Promise<string> =>
+      runForkCommand({
         governanceRoot: governanceRoot,
-        sessionId: bundle.adapter.sessionId,
-        ...(notices !== undefined ? { notices } : {}),
-        ...(opened.spawnWorker !== undefined ? { settings: opened.spawnWorker.settings } : {}),
+        opened,
+        args,
+        run: {
+          streamFn,
+          provider: flags.provider,
+          modelId: flags.modelId,
+          yolo: flags.yolo,
+          persistThinking: flags.persistThinking,
+          ...(flags.thinkingLevel !== undefined ? { thinking: flags.thinkingLevel } : {}),
+          ...(flags.compaction !== undefined ? { compaction: flags.compaction } : {}),
+          ...pushedMemoryRunOptions(flags),
+        },
       });
-    }
-    return {
-      // 人用 /spawn 派出的：收尾显示在消息区，不另发完成通知
-      spawn: (request) => orchestrator.spawn({ ...request, origin: "human" }),
-      // 决策 294、301：生命周期事件驱动编排面板；只读观察口给面板、树形视图与进入的 worker 会话
-      subscribe: (listener) => orchestrator.subscribe((event) => listener(event)),
-      observe: (listener) => orchestrator.observe(listener),
-      // 决策 301：进入 worker 会话后发消息、补批续做
-      send: (id, text) => orchestrator.send(id, text),
-      resume: (id, options) => orchestrator.resume(id, options),
-      cancel: (id) => orchestrator.cancel(id),
-      status: () => orchestrator.status(),
-      awaitResult: (id) => orchestrator.awaitResult(id),
-      // M7（决策 069）：并行同任务派发只在主会话提供（worker 会话按深度 1 不能再派）
-      ...(parentSessionId === undefined
-        ? {
-            // 决策 279：/take 与 take_worker 同一套逻辑与文字
-            take: async (name: string) =>
-              takeWorkerChanges({ orchestrator, workspaceRoot }, name, "human").text,
-            spawnAttempts: createSessionAttemptRunner({ orchestrator }),
-            // M7（决策 079）：/fork 手动分叉
-            fork: (args: string) =>
-              runForkCommand({
-                governanceRoot: governanceRoot,
-                opened,
-                args,
-                run: {
-                  streamFn,
-                  provider: flags.provider,
-                  modelId: flags.modelId,
-                  yolo: flags.yolo,
-                  persistThinking: flags.persistThinking,
-                  ...(flags.thinkingLevel !== undefined ? { thinking: flags.thinkingLevel } : {}),
-                  ...(flags.compaction !== undefined ? { compaction: flags.compaction } : {}),
-                  ...pushedMemoryRunOptions(flags),
-                },
-              }),
-          }
-        : {}),
-    };
-  };
   // 壳尚未接管终端：启动问题（单个 server 起不来不挡会话）与注解配置冲突（052）直接打到 stderr，
   // 冷侧另见 Run 开始条目 的工具集摘要与 server 状态
   // 决策 237：--sandbox 先开容器（壳尚未接管终端，提示打到 stderr）；与沙箱不相容的参数在起容器之前报错
@@ -431,8 +332,7 @@ export async function main(argv: string[]): Promise<void> {
     ...(sandbox !== undefined
       ? { workspaceHost: sandbox.host, statusFacts: sandboxStatusFacts(sandbox) }
       : {}),
-    ...spawnWorkerOption(flags, orchestration),
-    taskList: orchestration.taskList,
+    taskList: taskListEnabledOf(settings),
     ...webToolsOption,
     warn,
     memoryWrite,
@@ -451,20 +351,18 @@ export async function main(argv: string[]): Promise<void> {
   // 决策 445、446：续接的会话开在独立工作树里（--continue、--resume）：工作区与退出清理跟着它
   adoptWorkspace(mainOpened.scope.workspaceRoot);
   guardMainAgent(mainBundle);
-  // 当前运行面持有格（S4）：/resume 换绑整体替换；进程退出只释放当前格。沙箱里不派 worker（会越出容器）
+  // 当前运行面持有格（S4）：/resume 换绑整体替换；进程退出只释放当前格。沙箱里不提供 /fork
   // 决策 350：checkpoints 为本格的快照挂载，换走本格之前先等它未完成的快照
   let slot: {
     sessionId: SessionId;
     bundle: RuntimeBundle;
-    workers?: TuiWorkersFace;
+    fork?: (args: string) => Promise<string>;
     checkpoints?: CheckpointAttachment;
   } = {
     sessionId,
     bundle: mainBundle,
     ...(mainOpened.checkpoints !== undefined ? { checkpoints: mainOpened.checkpoints } : {}),
-    ...(sandbox === undefined
-      ? { workers: workersFor(mainOpened, mainOpened.scope.parentSessionId) }
-      : {}),
+    ...(sandbox === undefined ? { fork: forkFor(mainOpened) } : {}),
   };
   // 决策 456：当前会话的名字（会话记录里记的，没改过名为缺省名）；/rename 改它并记进会话记录，换会话时换成目标会话自己的
   let sessionName = sessionNameOf(governanceRoot, slot.sessionId, workspaceRoot);
@@ -536,13 +434,6 @@ export async function main(argv: string[]): Promise<void> {
             )
           : setUserConfig(governanceRoot, id, value),
       keys: () => keybindingRows(userKeybindings(governanceRoot)),
-      // 有 worker 在跑或排队时重建不了运行面（与 /reload 同一口径）：先不改，免得写了不生效
-      busy: () =>
-        slot.workers
-          ?.status()
-          .some((worker) => worker.state === "running" || worker.state === "queued") === true
-          ? "workers are running; wait for them to finish or /cancel them"
-          : undefined,
     },
     // 决策 439：输入框补全，路径与 @ 引用以工作区为根
     autocomplete: { basePath: workspaceRoot, fdPath: findFdPath() },
@@ -580,8 +471,10 @@ export async function main(argv: string[]): Promise<void> {
     sessions: { root: governanceRoot },
     // M5 S2（决策 045）：/resume 历史渲染上限
     ...(flags.historyLimit !== undefined ? { historyLimit: flags.historyLimit } : {}),
-    // M5.5 S4：/spawn /cancel /workers（沙箱里不提供）
-    ...(slot.workers !== undefined ? { workers: slot.workers } : {}),
+    // M7（决策 079）：/fork（沙箱里不提供；换绑后取当前格的）
+    ...(sandbox === undefined
+      ? { fork: (args: string) => slot.fork?.(args) ?? Promise.resolve("") }
+      : {}),
     // 决策 245：沙箱会话的 /export 手动交回
     ...(sandbox !== undefined
       ? { sandbox: { exportChanges: () => exportSandbox(sandbox, slot.bundle.jobs) } }
@@ -597,12 +490,6 @@ export async function main(argv: string[]): Promise<void> {
       current: () => settings,
       // 决策 324：--no-hooks 是本次运行的进程级开关，/reload 重读出的新快照同样停用钩子
       ...(flags.noHooks ? { hooksDisabled: true } : {}),
-      busy: () =>
-        slot.workers
-          ?.status()
-          .some((worker) => worker.state === "running" || worker.state === "queued") === true
-          ? "workers are running; wait for them to finish or /cancel them"
-          : undefined,
       sandboxSessionId: () => (sandbox !== undefined ? slot.sessionId : undefined),
       apply: (snapshot) => rebuildMain(snapshot),
     }),
@@ -611,8 +498,6 @@ export async function main(argv: string[]): Promise<void> {
       const list = slot.bundle.taskList;
       return list !== undefined ? renderTaskList(list.items()) : undefined;
     },
-    // 决策 301：树形视图按标签标出清单项（换绑后跟着当前会话）
-    taskItems: () => slot.bundle.taskList?.items(),
     // 决策 331：/memory 查看与编辑两层记忆（编辑时暂停界面打开 $VISUAL / $EDITOR）
     memory: {
       view: () => memoryViewText(memoryContext),
@@ -642,25 +527,9 @@ export async function main(argv: string[]): Promise<void> {
     // 决策 456：会话名（面板上当前会话的卡片、/take 的说明用）
     sessionName: (id: string) =>
       id === slot.sessionId ? sessionName : sessionNameOf(governanceRoot, id, workspaceRoot),
-    // 决策 448：/worktrees 列出与删除留下的 worker 工作树（git 仓库、不在沙箱里才有）
+    // 决策 448：/worktrees 列出与删除留下的工作树（git 仓库、不在沙箱里才有）
     ...(sandbox === undefined && isGitWorkspace(governanceRoot)
-      ? {
-          worktrees: createTuiWorktreesFace({
-            workspaceRoot: governanceRoot,
-            // 本进程里仍可能用到工作树的 worker：在跑、排队、等补批续做
-            liveWorkers: () =>
-              new Set(
-                (slot.workers?.status() ?? [])
-                  .filter(
-                    (status) =>
-                      status.state === "running" ||
-                      status.state === "queued" ||
-                      status.outcome?.recoverable === true
-                  )
-                  .map((status) => status.sessionId)
-              ),
-          }),
-        }
+      ? { worktrees: createTuiWorktreesFace({ workspaceRoot: governanceRoot }) }
       : {}),
     // S5+（裁决 033）：双击 Ctrl+C / /quit 的真实退出路径——壳内已先 stop()
     //（dispose 对称、挂起审批 fail-closed），此处只释放当前运行面并退进程
@@ -685,27 +554,24 @@ export async function main(argv: string[]): Promise<void> {
   }
   // 决策 340：/reload 的先建后换；决策 446：会话移进工作树时同样按这条路重建（reloadContext.workspaceRoot 先换成工作树）
   async function rebuildMain(snapshot: typeof settings): Promise<void> {
-    // 先建后换（复审 P2）：重建成功才换上这些闭包变量；重建失败时旧快照、旧编排设定与旧运行面都保持不变，
+    // 先建后换（复审 P2）：重建成功才换上这些闭包变量；重建失败时旧快照与旧运行面都保持不变，
     // /reload 会照当前快照重新列出待确认条目、可重试
     const reloaded = await reopenMainSessionForReload(reloadContext, snapshot, slot);
     const opened = reloaded.opened;
     settings = snapshot;
     // 决策 439：键位随新快照重装
     shellHolder.current?.applyKeybindings(keybindingsSectionOf(snapshot));
-    orchestration = reloaded.orchestration;
     loopGuard = reloaded.loopGuard;
     webToolsOption = reloaded.webTools;
     const bundle = opened.bundle;
     guardMainAgent(bundle);
-    const workers =
-      sandbox === undefined ? workersFor(opened, opened.scope.parentSessionId) : undefined;
     const previous = slot;
     // 决策 350：换走旧运行面之前先等它未完成的快照拍完（新运行面在同一工作区上接着改文件）
     await previous.checkpoints?.settle();
     slot = {
       sessionId: previous.sessionId,
       bundle,
-      ...(workers !== undefined ? { workers } : {}),
+      ...(sandbox === undefined ? { fork: forkFor(opened) } : {}),
       ...(opened.checkpoints !== undefined ? { checkpoints: opened.checkpoints } : {}),
     };
     // 决策 323、324：换走旧运行面前跑旧会话的 SessionEnd（reason "switch"），记录落在本会话文件；
@@ -720,7 +586,6 @@ export async function main(argv: string[]): Promise<void> {
         configRules: bundle.configGrants,
         layeredRules: bundle.settings.grants,
       },
-      ...(workers !== undefined ? { workers } : {}),
       hooks: bundle.hooks,
     });
   }
@@ -729,8 +594,7 @@ export async function main(argv: string[]): Promise<void> {
     return {
       root: governanceRoot,
       rebind: async (targetId) => {
-        // M5.5 S4：worker 会话回到它自己的工作树与委派策略（父会话或工作树缺失时响亮失败）；
-        // 决策 3b：会话 grant 种子还原。两者与 MCP 启动一并在 session-runtime.ts（与 cli resume 同一份）
+        // 分支会话回到它的工作树（工作树缺失时响亮失败）；决策 3b：会话 grant 种子还原。两者与 MCP 启动一并在 session-runtime.ts（与 cli resume 同一份）
         const opened = await openSessionRuntime({
           approvalModeCell: mainModeCell,
           governanceRoot: governanceRoot,
@@ -744,8 +608,7 @@ export async function main(argv: string[]): Promise<void> {
             : {}),
           streamFn,
           flags,
-          ...spawnWorkerOption(flags, orchestration),
-          taskList: orchestration.taskList,
+          taskList: taskListEnabledOf(settings),
           ...webToolsOption,
           warn,
           memoryWrite,
@@ -763,14 +626,13 @@ export async function main(argv: string[]): Promise<void> {
         }
         if (bundle.toolsNotice !== undefined) shellHolder.current?.addSystem(bundle.toolsNotice);
         guardMainAgent(bundle);
-        const workers = workersFor(opened, opened.scope.parentSessionId);
         const previous = slot;
         // 决策 350：换走旧会话之前先等它未完成的快照拍完（新会话在同一工作区上接着改文件）
         await previous.checkpoints?.settle();
         slot = {
           sessionId: targetId,
           bundle,
-          workers,
+          fork: forkFor(opened),
           ...(opened.checkpoints !== undefined ? { checkpoints: opened.checkpoints } : {}),
         };
         sessionName = targetName;
@@ -787,31 +649,17 @@ export async function main(argv: string[]): Promise<void> {
             configRules: bundle.configGrants,
             layeredRules: bundle.settings.grants,
           },
-          workers,
           hooks: bundle.hooks,
         };
       },
     };
   }
-  // 有 worker 在跑、排队或等补批续做时不换运行面（与 /reload 同一口径）
-  const workersBusy = (): string | undefined =>
-    slot.workers
-      ?.status()
-      .some(
-        (worker) =>
-          worker.state === "running" ||
-          worker.state === "queued" ||
-          worker.outcome?.recoverable === true
-      ) === true
-      ? "workers are still running or waiting for approval"
-      : undefined;
   const worktreeSwitch = createWorktreeSwitch({
     workspace: () => workspaceRoot,
     setWorkspace: (root) => {
       workspaceRoot = root;
       reloadContext.workspaceRoot = root === governanceRoot ? undefined : root;
     },
-    workersBusy,
     rebuild: () => rebuildMain(settings),
     adopt: (worktree) => {
       setActiveWorktree(worktree);
@@ -888,8 +736,7 @@ export async function main(argv: string[]): Promise<void> {
   } else if (target.picker) {
     shell.openSessionPicker();
   }
-  // 进程级退出（283）：立即收尾——取消在跑的 worker 并等其收尾记录落盘（有上限），释放当前运行面，沙箱会话交回，退进程。
-  // 壳已停止，worker 排队中的审批按拒绝处理，不会吊住取消
+  // 进程级退出（283）：立即收尾——释放当前运行面，沙箱会话交回，退进程
   function release(): void {
     // 壳已正常停下（pi-tui 已复位终端）：之后的退出不再写复位序列
     terminalReset.markClean();
@@ -908,8 +755,6 @@ export async function main(argv: string[]): Promise<void> {
         governanceRoot: governanceRoot,
         sessionId: current.sessionId,
         bundle: current.bundle,
-        ...(current.workers !== undefined ? { workers: current.workers } : {}),
-        workerGraceMs: WORKER_SHUTDOWN_GRACE_MS,
         // 决策 245：会话结束时自动交回一次、删除容器；壳已停，分支名与查看命令打到标准输出
         ...(sandbox !== undefined ? { closeSandbox: () => closeSandbox(sandbox) } : {}),
         log: (line) => console.log(`[sandbox] ${line}`),

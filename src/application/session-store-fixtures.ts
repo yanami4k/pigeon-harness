@@ -40,7 +40,13 @@ import {
   SessionEntryType,
   type SessionHeaderMetadata,
 } from "../state/session-entries.ts";
-import type { ChildSettledStatus, ForkTrigger, WorkerRole } from "../state/session-payloads.ts";
+import type { ForkTrigger } from "../state/session-payloads.ts";
+
+// 决策 457、477：旧会话里 worker 的派出与收尾条目与 worker 会话文件头（新版本不再写、读到即跳过），夹具照旧样子写，
+// 供读者测试"旧会话照样能读、这些条目被跳过"
+const LEGACY_WORKER_ENTRY = "pigeon.worker";
+type LegacyWorkerRole = "explorer" | "implementer" | "tester";
+type LegacyWorkerStatus = "completed" | "failed" | "cancelled";
 
 const ZERO_USAGE = {
   input: 0,
@@ -119,16 +125,17 @@ export interface FixtureSession {
   }): void;
   grantCreated(input?: { tool?: string; pathPrefix?: string }): string;
   grantRevoked(grantId: string): void;
+  // 旧会话的 worker 派出与收尾条目（决策 477：新版本读到即跳过）
   workerSpawned(input: {
     childSessionId: SessionId;
     name: string;
-    role?: WorkerRole;
+    role?: LegacyWorkerRole;
     task: string;
   }): void;
   workerSettled(input: {
     childSessionId: SessionId;
     name: string;
-    status?: ChildSettledStatus;
+    status?: LegacyWorkerStatus;
     turns?: number;
   }): void;
   // 任意自定义条目（schema 之外的形状也照写，用于读者的容错测试）
@@ -347,7 +354,7 @@ export function createFixtureSession(options: FixtureSessionOptions): FixtureSes
       }),
     workerSpawned: (input) =>
       writer.append({
-        customType: SessionEntryType.Worker,
+        customType: LEGACY_WORKER_ENTRY,
         data: {
           version: SESSION_ENTRY_VERSION,
           event: "spawned",
@@ -361,10 +368,10 @@ export function createFixtureSession(options: FixtureSessionOptions): FixtureSes
           workspace: { kind: "git-worktree", path: `/worktrees/${input.name}`, branch: input.name },
           spawnedAt: Date.now(),
         },
-      }),
+      } as unknown as SessionCustomEntry),
     workerSettled: (input) =>
       writer.append({
-        customType: SessionEntryType.Worker,
+        customType: LEGACY_WORKER_ENTRY,
         data: {
           version: SESSION_ENTRY_VERSION,
           event: "settled",
@@ -381,7 +388,7 @@ export function createFixtureSession(options: FixtureSessionOptions): FixtureSes
           turns: input.turns ?? 1,
           settledAt: Date.now(),
         },
-      }),
+      } as unknown as SessionCustomEntry),
     append: (entry) => writer.append(entry),
     currentRunId: () => runId,
     close: async () => {
@@ -396,11 +403,11 @@ export function createFixtureSession(options: FixtureSessionOptions): FixtureSes
   return session;
 }
 
-// worker 子会话：父会话记派出（父会话须有进行中的 Run 时带上 runId），子会话文件头记父会话号与来历；
-// 子会话由调用方写完后 close，收尾记录由调用方在父会话上写（parent.workerSettled）
+// 旧会话的 worker 子会话（决策 477）：父会话记派出（父会话须有进行中的 Run 时带上 runId），子会话文件头记父会话号与旧的 worker
+// 来历；子会话由调用方写完后 close，收尾记录由调用方在父会话上写（parent.workerSettled）
 export function spawnFixtureWorker(
   parent: FixtureSession,
-  input: { sessionsDir: string; name: string; role?: WorkerRole; task: string; cwd?: string }
+  input: { sessionsDir: string; name: string; role?: LegacyWorkerRole; task: string; cwd?: string }
 ): FixtureSession {
   const childSessionId = newSessionId();
   const role = input.role ?? "implementer";
@@ -420,7 +427,7 @@ export function spawnFixtureWorker(
         workspace: { kind: "git-worktree", path: `/worktrees/${input.name}`, branch: input.name },
         startedAt: Date.now(),
       },
-    },
+    } as unknown as SessionHeaderMetadata,
   });
 }
 

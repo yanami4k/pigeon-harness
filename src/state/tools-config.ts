@@ -1,6 +1,6 @@
 // 工具的上限类设置：settings.json 的 tools 一节，按工具分子键（小驼峰）。grep、glob 的结果条数上限（决策 368），
 // read_file 的单次字节与单行字符上限（决策 357），run_command 的输出头尾与落盘总量（决策 356）、单次超时与后台作业
-// （决策 365）；不给的取缺省。
+// （决策 365）；任务清单两件工具的开关 taskList（决策 294 B1，缺省开）。不给的取缺省。
 import { type Static, Type } from "typebox";
 
 export const DEFAULT_GREP_MAX_RESULTS = 200;
@@ -29,6 +29,7 @@ const MaxResultsSchema = Type.Object(
 
 export const ToolsSectionSchema = Type.Object(
   {
+    taskList: Type.Optional(Type.Boolean()),
     grep: Type.Optional(MaxResultsSchema),
     glob: Type.Optional(MaxResultsSchema),
     readFile: Type.Optional(
@@ -68,6 +69,11 @@ export const ToolsSectionSchema = Type.Object(
   Closed
 );
 export type ToolsSection = Static<typeof ToolsSectionSchema>;
+
+// 决策 294 B1：任务清单（update_tasks、list_tasks）开不开，缺省开
+export function taskListEnabled(section: ToolsSection | undefined): boolean {
+  return section?.taskList ?? true;
+}
 
 export interface SearchLimits {
   grepMaxResults: number;

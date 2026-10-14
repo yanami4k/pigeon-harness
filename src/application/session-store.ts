@@ -31,12 +31,9 @@ import {
 } from "../state/session-entries.ts";
 import type {
   BranchHeaderInput,
-  ChildSettledInput,
-  ChildSpawnedInput,
   GrantCreatedInput,
   GrantRevokedInput,
   SessionForkedInput,
-  SessionHeaderInput,
 } from "../state/session-payloads.ts";
 import { dedupedWarner, failureDetail, type WarnSink } from "./warnings.ts";
 
@@ -52,7 +49,6 @@ export function storeFaultWarner(sink?: WarnSink): StoreFaultHandler {
 
 // worker 与分支会话的来历（新建会话文件时写进文件头）
 export interface StoreLineage {
-  worker?: SessionHeaderInput;
   branch?: BranchHeaderInput;
 }
 
@@ -60,29 +56,13 @@ function headerOf(lineage: StoreLineage | undefined): {
   parentSessionId?: string;
   metadata?: SessionHeaderMetadata;
 } {
-  const worker = lineage?.worker;
   const branch = lineage?.branch;
-  if (worker === undefined && branch === undefined) {
+  if (branch === undefined) {
     return {};
   }
-  const parentSessionId = worker?.parentSessionId ?? branch?.sourceSessionId;
   return {
-    ...(parentSessionId !== undefined ? { parentSessionId } : {}),
-    metadata: {
-      version: SESSION_ENTRY_VERSION,
-      ...(worker !== undefined
-        ? {
-            worker: {
-              ...(worker.parentRunId !== undefined ? { parentRunId: worker.parentRunId } : {}),
-              name: worker.worker.name,
-              role: worker.worker.role,
-              workspace: worker.workspace,
-              startedAt: worker.startedAt,
-            },
-          }
-        : {}),
-      ...(branch !== undefined ? { branch: branchMetadata(branch) } : {}),
-    },
+    parentSessionId: branch.sourceSessionId,
+    metadata: { version: SESSION_ENTRY_VERSION, branch: branchMetadata(branch) },
   };
 }
 
@@ -228,57 +208,6 @@ export function checkpointMarkEntry(
   };
 }
 
-export function workerSpawnedEntry(input: ChildSpawnedInput): SessionCustomEntry {
-  return {
-    customType: SessionEntryType.Worker,
-    data: {
-      version: SESSION_ENTRY_VERSION,
-      event: "spawned",
-      ...(input.runId !== undefined ? { runId: input.runId } : {}),
-      childSessionId: input.childSessionId,
-      name: input.name,
-      role: input.role,
-      task: input.task,
-      ...(input.label !== undefined ? { label: input.label } : {}),
-      policy: input.policy,
-      limits: input.limits,
-      workspace: input.workspace,
-      spawnedAt: input.spawnedAt,
-      ...(input.script !== undefined ? { script: input.script } : {}),
-    },
-  };
-}
-
-export function workerSettledEntry(input: ChildSettledInput): SessionCustomEntry {
-  const result = input.result;
-  return {
-    customType: SessionEntryType.Worker,
-    data: {
-      version: SESSION_ENTRY_VERSION,
-      event: "settled",
-      ...(input.runId !== undefined ? { runId: input.runId } : {}),
-      childSessionId: input.childSessionId,
-      name: input.name,
-      status: input.status,
-      ...(input.error !== undefined ? { error: input.error } : {}),
-      ...(input.errorKind !== undefined ? { errorKind: input.errorKind } : {}),
-      ...(result !== undefined
-        ? {
-            result: {
-              ...(result.branch !== undefined ? { branch: result.branch } : {}),
-              ...(result.changedFiles !== undefined ? { changedFiles: result.changedFiles } : {}),
-              summary: result.summary,
-              summaryTruncated: result.summaryTruncated,
-            },
-          }
-        : {}),
-      turns: input.turns,
-      settledAt: input.settledAt,
-      ...(input.script !== undefined ? { script: input.script } : {}),
-    },
-  };
-}
-
 export function forkEntry(
   input: SessionForkedInput & { runId: RunId },
   forkEntryId: string | undefined
@@ -340,17 +269,6 @@ export function grantEventSink(store: SessionEntrySink): {
   return {
     appendGrantCreated: (input) => store.append(grantCreatedEntry(input)),
     appendGrantRevoked: (input) => store.append(grantRevokedEntry(input)),
-  };
-}
-
-// worker 派出与收尾（orchestration/workers.ts 的父会话落盘口）
-export function childFamilySink(store: SessionEntrySink): {
-  appendChildSpawned(input: ChildSpawnedInput): void;
-  appendChildSettled(input: ChildSettledInput): void;
-} {
-  return {
-    appendChildSpawned: (input) => store.append(workerSpawnedEntry(input)),
-    appendChildSettled: (input) => store.append(workerSettledEntry(input)),
   };
 }
 

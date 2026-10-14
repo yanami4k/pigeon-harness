@@ -16,7 +16,7 @@ import {
   sessionDirectoryName,
 } from "../persistence/session-reader.ts";
 import { createFakeStreamFn } from "../pi-runtime/fixtures.ts";
-import { asRunId, newSessionId } from "../state/ids.ts";
+import { newSessionId } from "../state/ids.ts";
 import {
   type ForkData,
   type GrantData,
@@ -24,14 +24,13 @@ import {
   type RunStartData,
   type SessionCustomEntry,
   SessionEntryType,
-  type WorkerData,
 } from "../state/session-entries.ts";
 import { runForkBranch } from "./fork.ts";
 import { runHeadless } from "./headless-core.ts";
 import type { McpSession } from "./mcp.ts";
 import { buildRuntime, disposeRuntime } from "./runtime.ts";
 import { openSessionRuntime } from "./session-runtime.ts";
-import { childFamilySink, grantEventSink } from "./session-store.ts";
+import { grantEventSink } from "./session-store.ts";
 import { writeLegacySessionFile } from "./session-view-fixtures.ts";
 import { isStatusText } from "./status-fixtures.ts";
 
@@ -203,11 +202,10 @@ test("撞轮数上限的 Run 收尾条目记轮数上限（原因随中止请求
   }
 });
 
-test("授权建立与撤销写进会话存储；worker 会话的来历写进文件头", async () => {
+test("授权建立与撤销写进会话存储", async () => {
   const root = mkdtempSync(join(tmpdir(), "pigeon-store-grant-"));
   try {
     const sessionId = newSessionId();
-    const parentRunId = asRunId("run_01J5Z7K8W9ABCDEFGHJKMNPQRS");
     const bundle = buildRuntime({
       streamFn: createFakeStreamFn({ replies: [{ text: "好" }] }),
       workspaceRoot: root,
@@ -216,15 +214,6 @@ test("授权建立与撤销写进会话存储；worker 会话的来历写进文�
       provider: "custom",
       modelId: "custom",
       homeDir: root,
-      storeLineage: {
-        worker: {
-          parentSessionId: newSessionId(),
-          parentRunId,
-          worker: { name: "implementer-1", role: "implementer" },
-          workspace: { kind: "none" },
-          startedAt: 7,
-        },
-      },
     });
     const grant = bundle.grantStore.create({
       tool: "edit_file",
@@ -248,18 +237,12 @@ test("授权建立与撤销写进会话存储；worker 会话的来历写进文�
     assert.equal(created.pathPrefix, "src");
     // 值为 undefined 的键在写入前剥掉
     assert.deepEqual(created.firstCall, { toolCallId: "tc-1", args: { path: "src/a.ts" } });
-    const header = view.header.metadata?.pigeon as {
-      worker?: { name: string; parentRunId?: string };
-    };
-    assert.equal(header.worker?.name, "implementer-1");
-    assert.equal(header.worker?.parentRunId, parentRunId);
-    assert.ok(typeof view.header.parentSessionId === "string");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("转接：授权与 worker 两族的落盘口把输入转成会话存储条目；无读者的字段不写", () => {
+test("转接：授权的落盘口把输入转成会话存储条目；无读者的字段不写", () => {
   const written: SessionCustomEntry[] = [];
   const store = { append: (entry: SessionCustomEntry) => written.push(entry) };
   const grantInput = {
@@ -286,50 +269,6 @@ test("转接：授权与 worker 两族的落盘口把输入转成会话存储条
     firstCall: { toolCallId: "tc", args: {} },
     createdAt: 1,
   });
-  written.length = 0;
-  const spawned = {
-    childSessionId: newSessionId(),
-    name: "tester-1",
-    role: "tester" as const,
-    task: "测",
-    taskKey: "k",
-    policy: { allow: [], deny: [], approvalMode: "yolo" as const },
-    limits: { maxTurns: 1, wallClockMs: 1 },
-    workspace: { kind: "none" as const },
-    spawnedAt: 1,
-  };
-  const family = childFamilySink(store);
-  family.appendChildSpawned(spawned);
-  family.appendChildSettled({
-    childSessionId: spawned.childSessionId,
-    name: "tester-1",
-    status: "completed",
-    result: {
-      branch: "b",
-      changedFiles: ["a"],
-      summary: "好",
-      summaryTruncated: false,
-      structured: { x: 1 },
-    },
-    turns: 2,
-    settledAt: 3,
-  });
-  const worker = written.filter((entry) => entry.customType === SessionEntryType.Worker);
-  assert.equal(worker.length, written.length);
-  assert.deepEqual(
-    worker.map((entry) => (entry.data as WorkerData).event),
-    ["spawned", "settled"]
-  );
-  assert.equal("taskKey" in (worker[0]?.data ?? {}), false, "无读者的 taskKey 不写");
-  assert.deepEqual(
-    (worker[1]?.data as Extract<WorkerData, { event: "settled" }> | undefined)?.result,
-    {
-      branch: "b",
-      changedFiles: ["a"],
-      summary: "好",
-      summaryTruncated: false,
-    }
-  );
 });
 
 test("会话存储建不起文件时向标准错误输出告警一次，运行照常完成", async () => {

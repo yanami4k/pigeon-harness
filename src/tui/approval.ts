@@ -41,8 +41,6 @@ import { keyLabelsOf } from "./keybindings.ts";
 export const APPROVAL_CANCEL_CLOSED = "terminal UI stopped";
 export const APPROVAL_CANCEL_DETACHED = "no approval panel attached";
 export const APPROVAL_CANCEL_BUSY = "another approval in progress";
-// 决策 303：worker 的请求等满时限无人批，面板撤下（显示给人，交给模型的见下表）
-export const APPROVAL_WITHDRAWN = "approval timed out and was withdrawn";
 // 决策 428、455：同一理由交给模型（成为工具的错误结果）时用完整的句子
 const CANCEL_REASON_FOR_MODEL: Readonly<Record<string, string>> = {
   [APPROVAL_CANCEL_CLOSED]:
@@ -51,8 +49,6 @@ const CANCEL_REASON_FOR_MODEL: Readonly<Record<string, string>> = {
     "No approval panel is attached to the terminal UI, so this call is treated as rejected.",
   [APPROVAL_CANCEL_BUSY]:
     "Another approval is already in progress, so this call is treated as rejected.",
-  [APPROVAL_WITHDRAWN]:
-    "The approval request timed out and was withdrawn, so this call is treated as rejected. This worker stops and hands back; it can continue after a later approval.",
 };
 
 export function cancelReasonForModel(reason: string): string {
@@ -251,7 +247,7 @@ function subjectOf(request: ApprovalRequest): string {
 }
 
 function sourceOf(request: ApprovalRequest): string {
-  const name = request.pooled?.name ?? request.worker?.name;
+  const name = request.pooled?.name;
   return name !== undefined ? `[${name}] ` : "";
 }
 
@@ -273,15 +269,7 @@ function grantedLine(
     scope.command ??
     scope.host ??
     (scope.pathPrefix !== undefined ? `in ${scope.pathPrefix}` : undefined);
-  const only = request.worker !== undefined ? ` (worker ${request.worker.name} only)` : "";
-  return `${sourceOf(request)}✓ allowed for this session: ${request.toolName}${what !== undefined ? ` ${what}` : ""}${only}`;
-}
-
-// 决策 303：worker 的请求等满时限无人批、面板撤下时那一行
-export function withdrawnLine(request: ApprovalRequest): string {
-  return `${sourceOf(request)}✗ approval timed out: ${request.toolName}${
-    request.worker !== undefined ? ` (worker ${request.worker.name} stopped)` : ""
-  }`;
+  return `${sourceOf(request)}✓ allowed for this session: ${request.toolName}${what !== undefined ? ` ${what}` : ""}`;
 }
 
 // 面板版 handler 工厂（决策 025 的注入形态：装配根先建 grantStore，[a]/[d] 放权键需要它）
@@ -294,19 +282,10 @@ export function createTuiApprovalHandler(
     if (panel === undefined) {
       return { approved: false, reason: cancelReasonForModel(APPROVAL_CANCEL_DETACHED) };
     }
-    // 放权落点跟随请求来源——worker 请求自带其会话存储
+    // 放权落点跟随请求来源——别的会话的请求自带其会话存储
     const target = request.grants ?? grants;
     // 不能建目录放权的会话（日常沙箱，决策 253）不提供 [d]
     const result = await panel.askApproval(request, offersDirectoryGrant(request, target));
-    // 决策 303：请求已撤回，这次决定不被采用；审批块收成撤回的那一行（撤回时已收起的，这里不再重复）
-    if (request.signal?.aborted === true) {
-      panel.noteApproval(withdrawnLine(request));
-      return {
-        approved: false,
-        reason: cancelReasonForModel(APPROVAL_WITHDRAWN),
-        reasonSource: "system-default",
-      };
-    }
     if (result.key === "cancel") {
       // 另有审批挂着（BUSY）时这个请求的审批块根本没出现：不去收起别人的块
       if (result.reason !== APPROVAL_CANCEL_BUSY)

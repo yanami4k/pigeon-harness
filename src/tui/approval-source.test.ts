@@ -1,5 +1,5 @@
-// TUI 审批面板的来源与排队（M5.5 S3，决策 040）：worker 请求标明来源；经审批队列时面板一次只弹一个，
-// 前一个决议后才弹下一个；[a] 放权写进 worker 自己的存储，主会话存储不动。
+// TUI 审批面板的来源与排队（M5.5 S3，决策 040）：别的会话的请求标明来源；经审批队列时面板一次只弹一个，
+// 前一个决议后才弹下一个；[a] 放权写进请求来源会话自己的存储，主会话存储不动。
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -32,7 +32,7 @@ class StubRuntime implements TuiRuntimeFace {
   }
 }
 
-test("TUI 审批：worker 请求标明来源，排队一次只弹一个；[a] 放权只进 worker 存储", async () => {
+test("TUI 审批：别的会话的请求标明来源，排队一次只弹一个；[a] 放权只进它自己的存储", async () => {
   const root = mkdtempSync(join(tmpdir(), "pigeon-tui-source-"));
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-log-"));
   const term = new MockTerminal(100, 40);
@@ -56,7 +56,7 @@ test("TUI 审批：worker 请求标明来源，排队一次只弹一个；[a] �
       toolCallId: "tc-1",
       args: { path: "src/first.ts" },
       sessionId: newSessionId(),
-      worker: { name: "fix-a", role: "implementer" },
+      pooled: { name: "fix-a" },
       grants: storeA,
     });
     const second = handler({
@@ -64,12 +64,12 @@ test("TUI 审批：worker 请求标明来源，排队一次只弹一个；[a] �
       toolCallId: "tc-2",
       args: { path: "src/second.ts" },
       sessionId: newSessionId(),
-      worker: { name: "fix-b", role: "implementer" },
+      pooled: { name: "fix-b" },
       grants: storeB,
     });
     await settle();
     let text = screenText(term);
-    assert.ok(text.includes("source: worker fix-a (implementer)"), text);
+    assert.ok(text.includes("source: session fix-a"), text);
     assert.equal(text.includes("src/second.ts"), false, `第二个请求在排队，未弹出\n${text}`);
 
     term.input("a");
@@ -78,8 +78,8 @@ test("TUI 审批：worker 请求标明来源，排队一次只弹一个；[a] �
     assert.equal(storeA.list().length, 1);
     assert.equal(parentStore.list().length, 0);
     text = screenText(term);
-    assert.ok(text.includes("(worker fix-a only)"), text);
-    assert.ok(text.includes("source: worker fix-b (implementer)"), text);
+    assert.ok(text.includes("[fix-a] ✓ allowed for this session"), text);
+    assert.ok(text.includes("source: session fix-b"), text);
     assert.ok(text.includes("src/second.ts"), text);
 
     term.input("n");

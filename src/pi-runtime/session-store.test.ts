@@ -80,7 +80,7 @@ test("写者：照 pi 原生布局以 Pigeon 会话号建文件，文件头带�
             workspace: { kind: "none" },
             startedAt: 5,
           },
-        },
+        } as never,
       })
     );
     writer.appendMessage(userMessage("你好"));

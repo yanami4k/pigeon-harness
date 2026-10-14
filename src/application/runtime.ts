@@ -105,7 +105,6 @@ import type {
 } from "../state/runaway-config.ts";
 import type { ThinkingLevel } from "../state/runtime-events.ts";
 import { SESSION_ENTRY_VERSION, SessionEntryType } from "../state/session-entries.ts";
-import type { ToolScope, WorkerRole } from "../state/session-payloads.ts";
 import {
   backgroundJobLimitsOf,
   commandsConfigOf,
@@ -168,7 +167,6 @@ import {
   READ_ONLY_SEARCH_TOOLS,
   searchToolRegistrations,
 } from "../tools/search-tools.ts";
-import { scopePromptSentence } from "../tools/tool-scope.ts";
 import type { WorkspaceHost } from "../tools/workspace-host.ts";
 import {
   createWriteFileTool,
@@ -199,14 +197,6 @@ import {
 import { createToolGovernance } from "./governance.ts";
 import { SessionHooks } from "./hooks.ts";
 import type { McpSession } from "./mcp.ts";
-import {
-  createOrchestrationTools,
-  MESSAGE_WORKER_TOOL,
-  orchestrationToolRegistrations,
-  STOP_WORKER_TOOL,
-  WAIT_WORKERS_TOOL,
-  WORKER_STATUS_TOOL,
-} from "./orchestration-tools.ts";
 import { outputAncestors } from "./output-ancestors.ts";
 import { createHostProtectedPathResolver, createProtectedPathResolver } from "./protected-paths.ts";
 import {
@@ -216,12 +206,6 @@ import {
   type StoreLineage,
   storeFaultWarner,
 } from "./session-store.ts";
-import {
-  createSpawnWorkerTool,
-  SPAWN_WORKER_TOOL,
-  type SpawnWorkerSlot,
-  spawnWorkerRegistration,
-} from "./spawn-worker-tool.ts";
 import {
   escapeStatusText,
   STATUS_AUTHORITY_SENTENCE,
@@ -242,11 +226,6 @@ import {
   type StatusFacts,
 } from "./status-sources.ts";
 import { promptModelName, sameModelIdentity, systemPromptBase } from "./system-prompt.ts";
-import {
-  createTakeWorkerTool,
-  TAKE_WORKER_TOOL,
-  takeWorkerRegistration,
-} from "./take-worker-tool.ts";
 import {
   createTaskListTools,
   LIST_TASKS_TOOL,
@@ -277,9 +256,8 @@ export interface RuntimeDeps {
   // M5.5 S1（决策 040）：治理根——.pigeon/（设置、程序状态、Skill）所在；
   // 缺省同工作区根。worker 的工作区根是自己的 git 工作树，治理根恒为主仓库根
   governanceRoot?: string;
-  // M5.5 S2（决策 040）：委派策略（worker）——在场时 allow 与已注册工具取交、deny 与审批模式照搬，
-  // yolo 旗标不再参与；缺省按 yolo 旗标给全部内置工具。决策 360：另可带各工具的作用范围（交治理层逐调用判定）
-  toolPolicy?: ToolPolicyLike & { readonly scopes?: readonly ToolScope[] };
+  // 工具策略——在场时 allow 与已注册工具取交、deny 与审批模式照搬，yolo 旗标不再参与；缺省按 yolo 旗标给全部内置工具
+  toolPolicy?: ToolPolicyLike;
   sessionId: SessionId;
   yolo: boolean;
   // 决策 469：主会话的审批模式单元（会话中途可切换；/reload 等重建运行面时沿用同一个单元）。缺省 = 按 yolo 旗标新建；
@@ -306,9 +284,6 @@ export interface RuntimeDeps {
   // M5.5 S5（决策 050）：推理档位——Actor 传启动参数全局值，worker 装配按角色配置覆盖。没给时取设置的 thinking 一节，
   // 设置也没写即按模型信息：支持推理的模型 high，不支持或不知道的 off（决策 390，见 state/thinking-config.ts）
   thinkingLevel?: ThinkingLevel;
-  // M5.5 S5（决策 048）：worker 角色——设置的 commands 一节为该角色登记了命令时，run_command 只接受登记的命令
-  // （决策 360：作额外限制；没登记的角色与主会话同一规则）；主会话缺省，不受清单限制
-  commandRole?: WorkerRole;
   // M5.7 S3（决策 041 / 051 / 052）：已启动的 MCP 会话（Actor 在装配前异步启动，worker 按其工作树各起一份）；
   // 缺省 = 本会话没有外部工具
   mcp?: McpSession;
@@ -377,17 +352,11 @@ export interface RuntimeDeps {
   previousJobs?: PreviousJobs;
   // 无人值守收尾等后台作业的总时限（缺省取设置的 tools.runCommand.backgroundCloseoutSeconds；跑批器显式给出）
   jobCloseoutMs?: number;
-  // 决策 264–267：派 worker 的开关。在场即给主 agent 注册 spawn_worker（编排器建好后由装配方绑定到这个槽上）；缺省关着
-  // （装配层缺省；终端界面与 pigeon run 由启动参数缺省打开，跑批器各条件明确关掉）。委派策略在场（worker 自己，深度 1）或
-  // 注入了执行端（沙箱）时一律不注册
-  spawnWorker?: SpawnWorkerSlot;
   // 决策 446：模型建工作树并把会话移进去的工具（终端界面主会话给；绑定由终端界面做）。worker、沙箱与非 git 工作区不注册
   enterWorktree?: EnterWorktreeSlot;
   // 决策 294 B1：任务清单工具（update_tasks、list_tasks）。缺省关着（装配层缺省；终端界面与 pigeon run 按编排配置缺省打开，
   // 跑批器各条件不给）；只给主会话（委派策略在场时不注册）
   taskList?: boolean;
-  // 决策 302：worker 用写层文件工具改它自己工作区根（工作树）内的文件默认放行（不开放手模式时）；只由 worker 装配时给
-  ownWorkspaceWrites?: boolean;
   // 决策 287–291：联网工具的配置。在场即注册 web_search 与 web_fetch；缺省不注册（装配层缺省；交互入口与 pigeon run 由启动参数
   // 缺省给出，--sandbox-network off 不给，跑批器各条件不给）。worker 与主会话同样拿到（父策略里有才带）
   webTools?: WebToolsConfig;
@@ -637,11 +606,8 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
       );
     }
   }
-  // M5.5 S5（决策 048）：可选的命令短名与角色允许清单（取自设置快照的 commands 一节）；
-  // 决策 360：为该角色登记了才限定，没登记的不限（tester 缺省即可跑命令，与主会话同一审批规则）
+  // M5.5 S5（决策 048）：可选的命令短名（取自设置快照的 commands 一节）
   const commandsConfig = commandsConfigOf(settings);
-  const roleAllowlist =
-    deps.commandRole !== undefined ? commandsConfig.roles[deps.commandRole] : undefined;
   // 会话存储写者在配置校验之后打开（装配早期抛错时不留下空的会话文件）
   const sessionStore = openSessionStore({
     sessionsDir,
@@ -766,9 +732,8 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
   for (const registration of searchToolRegistrations()) {
     registry.register(registration);
   }
-  // 决策 339：检索与目录排除当前会话所在的整棵会话树（父会话取本会话的来历：worker 的派出方、分支的来源）
-  const lineageParent =
-    deps.storeLineage?.worker?.parentSessionId ?? deps.storeLineage?.branch?.sourceSessionId;
+  // 决策 339：检索与目录排除当前会话所在的整棵会话树（父会话取本会话的来历：分支的来源）
+  const lineageParent = deps.storeLineage?.branch?.sourceSessionId;
   const current = {
     sessionId: deps.sessionId,
     ...(lineageParent !== undefined ? { parentSessionId: lineageParent } : {}),
@@ -834,47 +799,6 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
         ...(deps.homeDir !== undefined ? { homeDir: deps.homeDir } : {}),
       })
     );
-  }
-  // 决策 264–267：派 worker 的工具——只给主会话；沙箱（执行端在场）不注册。worker 自己（委派策略在场）只在层数放开、
-  // 它还没到最底层时由装配方给一个本层的槽（299：槽的派出方所在层大于 0），此时不给 take_worker（叠加只往主工作目录）
-  const nestedSlot =
-    deps.spawnWorker !== undefined && deps.spawnWorker.settings.depth > 0
-      ? deps.spawnWorker
-      : undefined;
-  const spawnCandidate =
-    deps.workspaceHost === undefined
-      ? deps.toolPolicy === undefined
-        ? deps.spawnWorker
-        : nestedSlot
-      : undefined;
-  // 决策 359：工作区不是 git 仓库时整组不注册
-  const spawnSlot =
-    spawnCandidate !== undefined &&
-    (environment.check("gitWorkspace") ||
-      skip(
-        [
-          SPAWN_WORKER_TOOL,
-          WAIT_WORKERS_TOOL,
-          WORKER_STATUS_TOOL,
-          MESSAGE_WORKER_TOOL,
-          STOP_WORKER_TOOL,
-          ...(nestedSlot === undefined ? [TAKE_WORKER_TOOL] : []),
-        ],
-        "workspace is not a git repository"
-      ))
-      ? spawnCandidate
-      : undefined;
-  const takeSlot = spawnSlot !== undefined && nestedSlot === undefined ? spawnSlot : undefined;
-  if (spawnSlot !== undefined) {
-    registry.register(spawnWorkerRegistration());
-    // 决策 297：等待、状态、发消息、停止四件积木与派 worker 同槽同范围
-    for (const registration of orchestrationToolRegistrations(spawnSlot.settings)) {
-      registry.register(registration);
-    }
-  }
-  if (takeSlot !== undefined) {
-    // 决策 279：取用 worker 自身改动的工具与派 worker 同槽同范围（写档，按写操作审批）
-    registry.register(takeWorkerRegistration());
   }
   // 决策 446：enter_worktree——只给终端界面的主会话，git 工作区才注册（写档）
   const enterWorktreeSlot =
@@ -945,7 +869,7 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
           report: memoryReport,
         }))
       : undefined;
-  // 决策 360：worker（委派策略在场）的提示只介绍它有的工具，并交代作用范围；主会话的工具一律在场，提示不变
+  // 决策 360：工具策略在场时提示只介绍它有的工具；缺省工具一律在场，提示不变
   const delegatedAllow = deps.toolPolicy?.allow;
   const offered = (...names: string[]): boolean =>
     delegatedAllow === undefined || names.every((name) => delegatedAllow.includes(name));
@@ -960,7 +884,6 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     backgroundJobs: jobs.available,
     sessionSearch:
       sessionSearch && offered(SEARCH_SESSIONS_TOOL, READ_SESSION_ENTRY_TOOL, LIST_SESSIONS_TOOL),
-    scopeSentence: scopePromptSentence(deps.toolPolicy?.scopes ?? []),
   });
   // M5 S4（决策 043）：会话开始登记 Skill Catalog——决策 363 起目录段进开工状态块（会话中增删改时重新登记、整段追加），
   // 哈希清单进快照；有 Skill 才注册并广告 load_skill（无 Skill 时不占工具广告）
@@ -1003,16 +926,6 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     ...(memoryWrite !== undefined ? [UPDATE_MEMORY_TOOL] : []),
     ...(hasSkills ? [LOAD_SKILL_TOOL] : []),
     ...mcpTools.map((bridged) => bridged.name),
-    ...(spawnSlot !== undefined
-      ? [
-          SPAWN_WORKER_TOOL,
-          WAIT_WORKERS_TOOL,
-          WORKER_STATUS_TOOL,
-          MESSAGE_WORKER_TOOL,
-          STOP_WORKER_TOOL,
-        ]
-      : []),
-    ...(takeSlot !== undefined ? [TAKE_WORKER_TOOL] : []),
     ...(enterWorktreeSlot !== undefined ? [ENTER_WORKTREE_TOOL] : []),
     ...(taskList !== undefined ? [UPDATE_TASKS_TOOL, LIST_TASKS_TOOL] : []),
     ...(webTools !== undefined ? [...(webSearch ? [WEB_SEARCH_TOOL] : []), WEB_FETCH_TOOL] : []),
@@ -1348,11 +1261,6 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
           store: outputStore,
         },
         commands: commandsConfig.commands,
-        ...(roleAllowlist !== undefined ? { allowlist: roleAllowlist } : {}),
-        // 决策 360：带命令前缀范围时程序只按 PATH 解析
-        ...(delegated?.scopes?.some((scope) => scope.tool === RUN_COMMAND_TOOL) === true
-          ? { pathOnly: true }
-          : {}),
         // 决策 365：单次超时的缺省与上限、后台作业
         timeoutMs: commandTimeouts.defaultSeconds * 1000,
         maxTimeoutMs: commandTimeouts.maxSeconds * 1000,
@@ -1393,10 +1301,6 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
       ...mcpTools.map((bridged) =>
         readOptions.imageInput ? withImageGate(bridged.tool, photonPreparer) : bridged.tool
       ),
-      ...(spawnSlot !== undefined
-        ? [createSpawnWorkerTool(spawnSlot, policy.allow), ...createOrchestrationTools(spawnSlot)]
-        : []),
-      ...(takeSlot !== undefined ? [createTakeWorkerTool(takeSlot)] : []),
       ...(enterWorktreeSlot !== undefined ? [createEnterWorktreeTool(enterWorktreeSlot)] : []),
       ...(taskList !== undefined ? createTaskListTools(taskList) : []),
       ...webToolset,
@@ -1413,10 +1317,6 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
       sessionGrants: grantStore,
       configGrants,
       workspaceRoot: deps.workspaceRoot,
-      // 决策 302：worker 改自己工作树内的文件默认放行
-      ...(deps.ownWorkspaceWrites === true ? { ownWorkspaceWrites: true } : {}),
-      // 决策 360：worker 各工具的作用范围
-      ...(delegated?.scopes !== undefined ? { scopes: delegated.scopes } : {}),
       // 决策 324：PreToolUse 钩子——在审批之前执行；拒绝 > 要人确认 > 放行；放行只免人工审批这一步，
       // 改过的参数重新经过全部检查（交付给执行侧替换）
       preToolUseHooks: async (input) => {

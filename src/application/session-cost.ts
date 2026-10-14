@@ -136,10 +136,10 @@ export function isReviewSession(view: SessionView): boolean {
 
 // 从某会话分叉出的复盘会话：文件头记着来源会话，且带复盘标记
 export function isReviewForkOf(view: SessionView, sessionId: string): boolean {
-  return view.parentSessionId === sessionId && view.worker === undefined && isReviewSession(view);
+  return view.parentSessionId === sessionId && isReviewSession(view);
 }
 
-// 续接会话时的已有花费：主会话 + 它派出的 worker + 从它分叉出的复盘
+// 续接会话时的已有花费：主会话 + 从它分叉出的复盘（旧 worker 会话不再计入，决策 457）
 export function accumulatedSessionCost(sessionsRoot: string, sessionId: string): CostTally {
   const tally = emptyCostTally();
   for (const ref of listSessionRefs(sessionsRoot)) {
@@ -149,7 +149,7 @@ export function accumulatedSessionCost(sessionsRoot: string, sessionId: string):
       if (view === undefined || view.parentSessionId !== sessionId) {
         continue;
       }
-      if (view.worker !== undefined || isReviewForkOf(view, sessionId)) {
+      if (isReviewForkOf(view, sessionId)) {
         mergeCostTally(tally, costTallyOfView(view));
       }
       continue;
@@ -194,9 +194,7 @@ export class ChildSessionCosts {
       }
       const view = readSessionView(ref);
       if (view === undefined) continue;
-      const child =
-        view.parentSessionId === this.parentId &&
-        (view.worker !== undefined || isReviewForkOf(view, this.parentId));
+      const child = view.parentSessionId === this.parentId && isReviewForkOf(view, this.parentId);
       if (!child) {
         // 文件头已写全（有 Run）仍不是子会话即永久排除；还没有 Run 的复盘分叉可能尚未写入标记，下次再看
         if (view.parentSessionId !== this.parentId || view.runs.length > 0) this.ignored.add(id);

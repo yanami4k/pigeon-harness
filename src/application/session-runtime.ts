@@ -1,5 +1,5 @@
-// 会话运行面装配（决策 067）：新建与 resume 走同一条路——作用域解析（worker 会话回到它自己的
-// 工作树与委派策略）、会话 grant 种子还原、MCP 会话启动与启动提示、运行面构建。
+// 会话运行面装配（决策 067）：新建与 resume 走同一条路——作用域解析（分支与开在独立工作树里的会话回到它的
+// 工作树）、会话 grant 种子还原、MCP 会话启动与启动提示、运行面构建。
 // 续跑（决策 183）：运行面打开会话文件之后，用 pi 的 buildSessionContext 还原对话上下文交给 Agent；末条助手消息里
 // 悬空的工具调用各补一条"进程中断、结果未知、请自行核实"的工具结果并写进会话，由 agent 自行核对。
 // cli 与 tui 此前各写一份 buildWithMcp 与 resume 配方，缺省与提示口径不一；此处收成一份。
@@ -31,12 +31,11 @@ import {
   type RuntimeBundle,
   type RuntimeDeps,
 } from "./runtime.ts";
-import type { SpawnWorkerSlot } from "./spawn-worker-tool.ts";
+import { type SessionRuntimeScope, sessionRuntimeScope } from "./session-scope.ts";
 import { statusFromEntries } from "./status-block.ts";
 import type { StatusFacts } from "./status-sources.ts";
 import type { WarnSink } from "./warnings.ts";
 import type { WebToolsConfig } from "./web-tools.ts";
-import { type SessionRuntimeScope, sessionRuntimeScope } from "./worker-scope.ts";
 import { restoreGrantSeed, sessionsDirOf } from "./workspace.ts";
 
 // 装配需要的运行参数（launch-flags.ts 的子集：解析出来直接传进来）
@@ -87,9 +86,9 @@ export interface OpenSessionRuntimeRequest {
   resume?: boolean;
   // 决策 432：新开的会话等第一次真要落盘时才建会话文件（终端界面新开会话时给）
   deferSessionFile?: boolean;
-  // 决策 445、446：主会话的工作区根（独立工作树）；缺省按会话推导（新会话即治理根）。worker 会话不受它影响
+  // 决策 445、446：主会话的工作区根（独立工作树）；缺省按会话推导（新会话即治理根）
   workspaceRoot?: string;
-  // 决策 446：enter_worktree 的工具槽（终端界面主会话给）；worker 会话与沙箱不注册
+  // 决策 446：enter_worktree 的工具槽（终端界面主会话给）；沙箱不注册
   enterWorktree?: EnterWorktreeSlot;
   // MCP 启动提示（启动问题与注解配置冲突）：cli 打 stdout、tui 打 stderr，由调用方决定
   onMcpNote?: (note: string) => void;
@@ -110,8 +109,6 @@ export interface OpenSessionRuntimeRequest {
   workspaceHost?: WorkspaceHost;
   // 决策 354：入口给出的确知事实（沙箱档位、网络能否用），写进开工状态块的环境一节
   statusFacts?: StatusFacts;
-  // 决策 264–267：派 worker 的工具槽（终端界面给）。只给主会话注册：worker 会话（深度 1）与沙箱会话不注册
-  spawnWorker?: SpawnWorkerSlot;
   // 决策 294 B1：任务清单（终端界面按编排配置给，缺省开）；只给主会话注册，续聊时从会话还原
   taskList?: boolean;
   // 决策 287–291：联网工具的配置（在场即注册两件工具）；--sandbox-network off 时调用方不给
@@ -133,8 +130,6 @@ export interface OpenedSessionRuntime {
   checkpoints?: CheckpointAttachment;
   // 续跑时在场：还原了几条消息、为几个悬空的工具调用补了结果
   restored?: { messages: number; interrupted: number };
-  // 注册了 spawn_worker 时在场：调用方建好编排器后绑定到这个槽上
-  spawnWorker?: SpawnWorkerSlot;
 }
 
 // 续跑：等写者打开会话文件，读主分支还原上下文；悬空调用补的工具结果先写进会话，再连同还原的消息交给 Agent。
@@ -167,11 +162,10 @@ export async function openSessionRuntime(
   request: OpenSessionRuntimeRequest
 ): Promise<OpenedSessionRuntime> {
   const settings = request.settings ?? emptySettingsSnapshot(request.governanceRoot);
-  // M5.5 S4（决策 040）：worker 会话回到它自己的工作树与委派策略；新建会话与主会话即治理根。
-  // 决策 445、446：主会话另给了工作区根（独立工作树）时用它；治理根照旧是主仓库
+  // 分支会话回到它的工作树；新建会话与主会话即治理根。决策 445、446：另给了工作区根（独立工作树）时用它；治理根照旧是主仓库
   const derived = sessionRuntimeScope(request.governanceRoot, request.sessionId);
   const scope =
-    request.workspaceRoot !== undefined && derived.worker === undefined
+    request.workspaceRoot !== undefined
       ? { ...derived, workspaceRoot: request.workspaceRoot }
       : derived;
   const restoredGrants =
@@ -228,10 +222,6 @@ export async function openSessionRuntime(
         ? pruneSeedFromEntries(recorded.main)
         : undefined;
   const learnedMemory = interactiveLearnedMemory(request.flags, request.memoryWrite);
-  const spawnWorker =
-    scope.parentSessionId === undefined && request.workspaceHost === undefined
-      ? request.spawnWorker
-      : undefined;
   for (const note of describeMcpStartup(mcp)) {
     request.onMcpNote?.(note);
   }
@@ -241,7 +231,6 @@ export async function openSessionRuntime(
       workspaceRoot: scope.workspaceRoot,
       governanceRoot: request.governanceRoot,
       settings,
-      ...(scope.toolPolicy !== undefined ? { toolPolicy: scope.toolPolicy } : {}),
       sessionId: request.sessionId,
       ...(request.deferSessionFile === true ? { deferSessionFile: true } : {}),
       yolo: request.flags.yolo,
@@ -274,8 +263,7 @@ export async function openSessionRuntime(
       ...(request.workspaceHost !== undefined
         ? { workspaceHost: request.workspaceHost, pathScopedGrants: false }
         : {}),
-      ...(spawnWorker !== undefined ? { spawnWorker } : {}),
-      // 决策 446：只给主会话（worker 会话与沙箱不注册）
+      // 决策 446：沙箱不注册
       ...(request.enterWorktree !== undefined &&
       scope.parentSessionId === undefined &&
       request.workspaceHost === undefined
@@ -324,7 +312,7 @@ export async function openSessionRuntime(
       request.reloadFrom.jobNotices = undefined;
       request.reloadFrom.jobs = undefined;
     }
-    // M7（决策 078）：主会话在 git 工作区里打快照（写或命令确实改变文件后）；worker 会话不挂
+    // M7（决策 078）：主会话在 git 工作区里打快照（写或命令确实改变文件后）
     // 执行端另一侧的工作区（沙箱）不在宿主上打快照
     const checkpoints =
       scope.parentSessionId === undefined && request.workspaceHost === undefined
@@ -344,7 +332,6 @@ export async function openSessionRuntime(
       scope,
       ...(checkpoints !== undefined ? { checkpoints } : {}),
       ...(restored !== undefined ? { restored } : {}),
-      ...(spawnWorker !== undefined ? { spawnWorker } : {}),
     };
   } catch (error) {
     // 装配失败：已启动的 server 必须关掉，否则留下孤儿进程（先建后换的收口约束）

@@ -3,14 +3,7 @@
 // pigeon.worktree 条目回到工作树（目录不在即回主检出）；按工作树重建运行面。全局配置与 XDG 由测试总装指到临时位置。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "vitest";
@@ -26,12 +19,10 @@ import {
   recordWorktreeEntry,
 } from "./enter-worktree-tool.ts";
 import { noMcpSession } from "./mcp.ts";
-import { openNamedWorktree, removeNamedWorktree, reopenNamedWorktree } from "./named-worktree.ts";
+import { removeNamedWorktree, reopenNamedWorktree } from "./named-worktree.ts";
 import { disposeRuntime } from "./runtime.ts";
 import { openSessionRuntime } from "./session-runtime.ts";
-import { takeWorkerChanges } from "./take-worker-tool.ts";
-import { sessionRuntimeScope } from "./worker-scope.ts";
-import { createSessionWorkers } from "./workers.ts";
+import { sessionRuntimeScope } from "./session-scope.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -205,49 +196,4 @@ test("续接按主分支最后一条 pigeon.worktree 回到工作树；按工作
   assert.ok(worktree !== undefined);
   removeNamedWorktree(worktree);
   assert.equal(sessionRuntimeScope(root, sessionId).workspaceRoot, root);
-});
-
-test("移进工作树之后：worker 从工作树开工（带上工作树里未提交的改动），/take 把改动写进工作树而不是主检出", async () => {
-  const root = repo();
-  const home = realpathSync.native(mkdtempSync(join(tmpdir(), "pigeon-enter-wt-home-")));
-  dirs.push(home);
-  const worktree = openNamedWorktree({ cwd: root, name: "moved", baseMode: "head" });
-  writeFileSync(join(worktree.path, "wt-only.txt"), "only in the worktree\n");
-  // 与终端界面重建时一样：按工作树打开运行面，worker 编排按运行面自己的工作区
-  const opened = await open(root, { workspaceRoot: worktree.path });
-  try {
-    assert.equal(opened.scope.workspaceRoot, worktree.path);
-    const orchestrator = createSessionWorkers({
-      governanceRoot: root,
-      workspaceRoot: opened.scope.workspaceRoot,
-      bundle: opened.bundle,
-      approvals: async () => ({ approved: true }),
-      streamFn: createFakeStreamFn({
-        replies: [
-          {
-            text: "写",
-            toolCalls: [{ name: "write_file", args: { path: "w.txt", content: "from worker\n" } }],
-          },
-          { text: "好了" },
-        ],
-      }),
-      provider: "custom",
-      modelId: "custom",
-      homeDir: home,
-    });
-    const id = orchestrator.spawn({ role: "implementer", task: "写一个文件", name: "w1" });
-    const outcome = await orchestrator.awaitResult(id);
-    assert.equal(outcome.status, "completed", JSON.stringify(outcome));
-    const workerPath = (outcome.workspace as { path: string }).path;
-    assert.ok(existsSync(join(workerPath, "wt-only.txt")), "worker 的起点是工作树的快照");
-    const taken = takeWorkerChanges(
-      { orchestrator, workspaceRoot: opened.scope.workspaceRoot },
-      "w1"
-    );
-    assert.equal(taken.details.rejected, undefined, taken.text);
-    assert.equal(readFileSync(join(worktree.path, "w.txt"), "utf8"), "from worker\n");
-    assert.equal(existsSync(join(root, "w.txt")), false, "主检出不动");
-  } finally {
-    await disposeRuntime(opened.bundle);
-  }
 });

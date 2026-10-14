@@ -19,7 +19,6 @@ import { sessionFileLockPath } from "../persistence/session-lock.ts";
 import { sessionDirectoryName, sessionFileName } from "../persistence/session-reader.ts";
 import { newSessionId, type SessionId } from "../state/ids.ts";
 import { sessionsDirOf } from "../state/paths.ts";
-import { childFamilySink, openSessionStore } from "./session-store.ts";
 import {
   createTuiWorktreesFace,
   formatLeftoverList,
@@ -264,40 +263,6 @@ test("起点取不到（没有引用日志、也没有派出记录）：未取�
   assert.equal(item.untaken, "unknown");
   assert.deepEqual(planClean(items, []).remove, []);
   assert.match(formatLeftoverList(items), /untaken changes: unknown/);
-});
-
-test("起点优先取派出记录：没有引用日志时按派出记录里的起点比，算得出未取走的改动", async () => {
-  const repo = makeRepo();
-  git(repo, ["config", "core.logAllRefUpdates", "false"]);
-  const base = git(repo, ["rev-parse", "HEAD"]);
-  const owner = newSessionId();
-  const workerId = newSessionId();
-  const w = addWorktree({ repoRoot: repo, sessionId: workerId, name: "recorded" });
-  writeFileSync(join(w.path, "a.txt"), "worker\n");
-  git(w.path, ["commit", "-q", "-am", "worker"]);
-  writeWorkerSession(repo, workerId, owner);
-  const store = openSessionStore({
-    sessionsDir: sessionsDirOf(repo),
-    sessionId: owner,
-    cwd: repo,
-    onFault: (fault) => {
-      throw fault;
-    },
-  });
-  childFamilySink(store).appendChildSpawned({
-    childSessionId: workerId,
-    name: "recorded",
-    role: "implementer",
-    task: "改",
-    policy: { allow: ["read_file"], deny: [], approvalMode: "prompt" },
-    limits: { maxTurns: 1, wallClockMs: 1000 },
-    workspace: { kind: "git-worktree", path: w.path, branch: w.branch, baseCommit: base },
-    spawnedAt: Date.now(),
-  });
-  await store.close();
-  const item = byName(listLeftoverWorktrees({ workspaceRoot: repo, now: later }), "recorded");
-  assert.equal(item.ownerSessionId, owner);
-  assert.equal(item.untaken, 1);
 });
 
 test("按名字点名：同名多项时不删，要求给编号或完整分支名；完整分支名可用", () => {

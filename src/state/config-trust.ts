@@ -218,16 +218,7 @@ export function withoutTrustEntries(
     const commands = Object.fromEntries(
       Object.entries(merged.commands.commands ?? {}).filter(([name]) => !commandNames.has(name))
     );
-    const roles = Object.fromEntries(
-      Object.entries(merged.commands.roles ?? {}).map(([role, names]) => [
-        role,
-        names.filter((name) => !commandNames.has(name)),
-      ])
-    );
-    merged.commands = {
-      commands,
-      ...(merged.commands.roles !== undefined ? { roles } : {}),
-    };
+    merged.commands = { commands };
   }
   if (dropSandbox) {
     delete merged.sandbox;

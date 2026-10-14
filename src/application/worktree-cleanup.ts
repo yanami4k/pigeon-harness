@@ -3,7 +3,7 @@
 // pigeon/ 分支（以前留下的旧分支等）、该目录下 git 不认的残留目录。每项给所属会话（派出它的会话，读 worker 会话文件头）、
 // 是否在用、未取走的改动（worker 相对起点改过、内容又与主检出不同的文件数）与占用大小。
 // - 比较的基准一律是主检出（不是当前目录）；当前目录在 worker 工作树里时拒绝列出与删除。
-// - 起点优先取派出记录里的起点提交，其次分支引用日志里最早的一条；都取不到记为"不明"，按有改动对待。
+// - 起点取分支引用日志里最早的一条；取不到记为"不明"，按有改动对待。
 // - 在用：worker 会话正被一个仍在的进程打开；所属会话正被另一个仍在的进程打开；刚建、还没有 worker 会话记录（10 分钟内）；
 //   终端界面另给本进程里仍可能用到它的 worker（在跑、排队、等补批）。读锁出错也按在用算。
 // 删除缺省只删没有未取走改动的；点名或 --all 才删有改动的，并明说会丢。在用的一律不删。删之前重新核一遍：
@@ -21,7 +21,6 @@ import {
   removeWorktreeAndBranch,
   WORKER_BRANCH_PREFIX,
 } from "../orchestration/worktree.ts";
-import { loadSessionView } from "../persistence/session-catalog.ts";
 import { sessionFileHolder } from "../persistence/session-lock.ts";
 import { locateSessionFile, readSessionHeader } from "../persistence/session-reader.ts";
 import { worktreeInUse } from "../persistence/worktree-in-use.ts";
@@ -142,13 +141,8 @@ function sameContent(a: string, b: string): boolean {
   }
 }
 
-// 起点：派出记录里的起点提交优先，其次分支引用日志里最早的一条；都取不到为 undefined（不退回工作树当前 HEAD）
-function startCommitOf(
-  repoRoot: string,
-  facts: WorkerFacts,
-  branch: string | undefined
-): string | undefined {
-  if (facts.baseCommit !== undefined) return facts.baseCommit;
+// 起点：分支引用日志里最早的一条；取不到为 undefined（不退回工作树当前 HEAD）
+function startCommitOf(repoRoot: string, branch: string | undefined): string | undefined {
   return branch !== undefined ? branchCreationCommit(repoRoot, branch) : undefined;
 }
 
@@ -169,11 +163,10 @@ function untakenFiles(
 
 interface WorkerFacts {
   ownerSessionId?: string;
-  baseCommit?: string;
   inUseReason?: string;
 }
 
-// 一个 worker 的事实：所属会话、派出记录里的起点、是否在用
+// 一个 worker 的事实：所属会话、是否在用
 function workerFacts(
   scope: WorktreeScope,
   governanceRoot: string,
@@ -210,17 +203,6 @@ function workerFacts(
       const holder = sessionFileHolder(ownerFile.path);
       if (holder !== undefined && holder !== process.pid) {
         facts.inUseReason = "owner session is open";
-      }
-      try {
-        const view = loadSessionView(sessionsDir, owner);
-        const spawned = view?.children.find(
-          (child) => child.spawned.childSessionId === workerSessionId
-        )?.spawned.workspace;
-        if (spawned?.kind === "git-worktree" && spawned.baseCommit !== undefined) {
-          facts.baseCommit = spawned.baseCommit;
-        }
-      } catch {
-        // 读不出派出记录：退到引用日志
       }
     }
   }
@@ -259,7 +241,7 @@ export function listLeftoverWorktrees(scope: WorktreeScope): LeftoverWorktree[] 
     const name = match?.[2] ?? dirName;
     const present = existsSync(path);
     const facts = workerFacts(scope, governanceRoot, workerSessionId, present ? path : undefined);
-    const base = startCommitOf(repoRoot, facts, entry.branch);
+    const base = startCommitOf(repoRoot, entry.branch);
     items.push({
       kind: present ? "worktree" : "missing-dir",
       name,

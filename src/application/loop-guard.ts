@@ -1,7 +1,6 @@
 // 打转检测的装配（决策 305–308）：把判定挂到运行面的整轮观察口上。提醒作一条用户消息进模型的下一轮（经运行面的通知队列，
 // 本轮结束时转入上游的 steer 队列，会话记录里留作一条用户消息）；叫停交给调用方（各入口按 307 各自交代）。
 // 提醒与各入口的说明文字在此一处。
-import type { WorkerWatcherFactory } from "../orchestration/workers.ts";
 import type { TurnRoundNotice } from "../pi-runtime/adapter.ts";
 import { type ComparedRound, LoopDetector, type LoopVerdict } from "../state/loop-guard.ts";
 import type { LoopGuardSettings } from "../state/loop-guard-config.ts";
@@ -84,8 +83,8 @@ export const LOOP_GUARD_TEXTS = {
   // 终端界面：消息区的叫停说明（一行，怎么接着做写在文档里）
   tuiStopped: (stop: LoopStop) =>
     `[loop] stopped after ${stop.count} rounds of the same tool calls and results: ${loopCallsSummary(stop)}`,
-  // worker：交回与通知里的失败原因（套 271 定稿的失败文字："worker X（角色）失败：<原因>。分支 … 上可能有部分改动。"）
-  workerReason: (stop: LoopStop) =>
+  // 子 agent：完成通知里的叫停原因
+  agentReason: (stop: LoopStop) =>
     `stuck in a loop: the same tool calls and results repeated for ${stop.count} consecutive rounds, so it was stopped. Repeated calls: ${loopCallsSummary(stop)}`,
   // pigeon run：收尾说明（终态一行之后）
   runStopped: (stop: LoopStop) =>
@@ -159,19 +158,4 @@ export function attachLoopGuard(
         return;
     }
   });
-}
-
-// worker 的打转观察者（307）：经编排器的观察者接入点挂上；提醒经 worker 的通知进它的下一轮，叫停以 looping 失败交回
-// （原因写明重复的调用；分支上可能有部分改动由失败文字交代），不自动重试。运行面不提供整轮观察口或通知时不起作用
-export function loopGuardWatcher(settings: LoopGuardSettings): WorkerWatcherFactory {
-  return (_worker, control, runtime) => {
-    const target = loopGuardTargetOf(runtime);
-    if (target === undefined) {
-      return { observe: () => {} };
-    }
-    const detach = attachLoopGuard(target, settings, (stop) =>
-      control.stop("looping", LOOP_GUARD_TEXTS.workerReason(stop))
-    );
-    return { observe: () => {}, dispose: detach };
-  };
 }

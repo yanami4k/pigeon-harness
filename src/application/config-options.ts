@@ -443,7 +443,7 @@ export const CONFIG_OPTIONS: readonly ConfigOption[] = [
     "tools.runCommand.maxBackgroundJobsTotal",
     "tools",
     "background jobs total",
-    "concurrent background jobs including workers",
+    "concurrent background jobs across all sessions in this process",
     "8",
     1
   ),

@@ -17,13 +17,10 @@ import {
   WEB_FETCH_SENTENCE,
   WEB_TOOLS_SENTENCE,
 } from "./runtime.ts";
-import { SpawnWorkerSlot } from "./spawn-worker-tool.ts";
 import { statusTextOf } from "./status-fixtures.ts";
 
-const SPAWN =
-  "spawn_worker wait_workers worker_status message_worker stop_worker take_worker".split(" ");
 const SESSIONS = ["search_sessions", "read_session_entry", "list_sessions"];
-const TOOLS = [...SPAWN, "web_search", "web_fetch", ...SESSIONS];
+const TOOLS = ["web_search", "web_fetch", ...SESSIONS];
 // history：other 为会话树外有会话，family 为只有本会话派出的子会话，empty 为只有空的会话文件，
 // headerOnly 为会话树外只有从没开始过对话（只有文件头）的会话（决策 432）
 const ALL = {
@@ -71,7 +68,6 @@ async function assemble(env: typeof ALL, frozenPrompt?: FrozenSessionPrompt) {
       yolo: true,
       provider: "fake-provider",
       modelId: "fake-model-1",
-      spawnWorker: new SpawnWorkerSlot(),
       webTools: {
         search: env.key
           ? { backend, defaultMaxResults: 5 }
@@ -83,15 +79,10 @@ async function assemble(env: typeof ALL, frozenPrompt?: FrozenSessionPrompt) {
     });
     const advertised = bundle.adapter.snapshot().tools.advertised;
     await bundle.adapter.run("你好").finally(() => disposeRuntime(bundle));
-    const tools = (streamFn.calls[0]?.context.tools ?? []) as Array<{
-      name: string;
-      description: string;
-    }>;
     return {
       absent: TOOLS.filter((tool) => !advertised.includes(tool)).sort(),
       skipped: loadStoreSession(sessionsDirOf(root), sessionId)?.view.runs[0]?.start.skippedTools,
       status: statusTextOf(streamFn.calls[0]),
-      spawnText: tools.find((tool) => tool.name === "spawn_worker")?.description ?? "",
       notice: bundle.toolsNotice,
       frozen: bundle.frozenPrompt,
     };
@@ -102,7 +93,6 @@ async function assemble(env: typeof ALL, frozenPrompt?: FrozenSessionPrompt) {
 
 const CASES: Array<[string, Partial<typeof ALL>, string[]]> = [
   ["环境齐全：各组都注册、不带没注册的记录", {}, []],
-  ["不是 git 仓库：不注册派 worker 一组", { git: false }, SPAWN],
   [
     "缺搜索 key：不注册 web_search，提示换成 web_fetch 那句并在终端提示",
     { key: false },
@@ -130,7 +120,6 @@ for (const [label, lacking, missing] of CASES) {
       ],
       [web, !web, !web]
     );
-    assert.equal(got.spawnText.includes("web_search"), web && !missing.includes("spawn_worker"));
   });
 }
 
@@ -138,36 +127,4 @@ test("一次会话内工具清单固定：/reload 沿用开局的检查结果，
   const first = await assemble({ ...ALL, key: false });
   const reloaded = await assemble(ALL, first.frozen);
   assert.deepEqual([reloaded.absent, reloaded.notice !== undefined], [["web_search"], true]);
-});
-
-test("治理根与工作区根分开（--governance-root）时，git 工作区探针看工作区根：工作区是 git 仓库、治理根不是，派 worker 一组照注册", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "pigeon-tool-env-ws-"));
-  const gov = mkdtempSync(join(tmpdir(), "pigeon-tool-env-gov-"));
-  try {
-    execFileSync("git", ["init", "-q"], { cwd: workspace });
-    const streamFn = createFakeStreamFn({ replies: [{ text: "好" }] });
-    const bundle = buildRuntime({
-      streamFn,
-      workspaceRoot: workspace,
-      governanceRoot: gov,
-      homeDir: workspace,
-      sessionId: newSessionId(),
-      yolo: true,
-      provider: "fake-provider",
-      modelId: "fake-model-1",
-      spawnWorker: new SpawnWorkerSlot(),
-      webTools: {
-        search: { backend, defaultMaxResults: 5 },
-        fetch: { timeoutMs: 1000, maxBytes: 1000, maxChars: 1000 },
-        distillMaxTokens: 100,
-      },
-    });
-    const advertised = bundle.adapter.snapshot().tools.advertised;
-    await bundle.adapter.run("你好").finally(() => disposeRuntime(bundle));
-    for (const tool of SPAWN) {
-      assert.ok(advertised.includes(tool), `${tool} 应注册`);
-    }
-  } finally {
-    for (const dir of [workspace, gov]) rmSync(dir, { recursive: true, force: true });
-  }
 });

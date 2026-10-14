@@ -135,7 +135,7 @@ test("豁免工具去掉后为空的轮：不计也不清零", () => {
     d,
     repeat(3, () => RUN("ls", "a"))
   );
-  const waiting = d.observe(round(["wait_workers", { timeoutSeconds: 60 }, "仍在跑"]));
+  const waiting = d.observe(round(["job_output", { timeoutSeconds: 60 }, "仍在跑"]));
   assert.equal(waiting.count, 2);
   assert.equal(waiting.action, undefined);
   // 等待之后接着同样的轮，照常接着计
@@ -144,24 +144,24 @@ test("豁免工具去掉后为空的轮：不计也不清零", () => {
   const idle = detector();
   const waits = feed(
     idle,
-    repeat(30, () => round(["wait_workers", {}, "仍在跑"]))
+    repeat(30, () => round(["job_output", {}, "仍在跑"]))
   );
   assert.ok(waits.every((v) => v.count === 0 && v.action === undefined));
 });
 
 test("豁免与非豁免调用混在一轮时只比非豁免的", () => {
   const verdicts = feed(detector(), [
-    round(["wait_workers", {}, "仍在跑 3 个"], ["worker_status", {}, "w1 running"]),
+    round(["job_output", {}, "仍在跑 3 个"], ["list_tasks", {}, "1. [in progress] a"]),
     round(
-      ["wait_workers", { timeoutSeconds: 5 }, "仍在跑 2 个"],
-      ["worker_status", {}, "w1 running"]
+      ["job_output", { timeoutSeconds: 5 }, "仍在跑 2 个"],
+      ["list_tasks", {}, "1. [in progress] a"]
     ),
   ]);
   assert.equal(verdicts[1]?.count, 1);
-  // 查看 worker 状态不豁免：结果变了即不计
+  // 查看任务清单不豁免：结果变了即不计
   const changed = feed(detector(), [
-    round(["worker_status", {}, "w1 running"]),
-    round(["worker_status", {}, "w1 completed"]),
+    round(["list_tasks", {}, "1. [in progress] a"]),
+    round(["list_tasks", {}, "1. [done] a"]),
   ]);
   assert.equal(changed[1]?.count, 0);
 });
@@ -228,7 +228,7 @@ test("追加的豁免与缺省豁免合并", () => {
   assert.ok(verdicts.every((v) => v.count === 0));
 });
 
-test("配置缺省：开着、5/10/20、豁免等 worker 与读后台作业的工具；轮数不递增报出问题", () => {
+test("配置缺省：开着、5/10/20、豁免读后台作业的工具；轮数不递增报出问题", () => {
   const resolved = loopGuardSettings(undefined);
   assert.ok("settings" in resolved);
   assert.deepEqual(resolved.settings, {
@@ -236,7 +236,7 @@ test("配置缺省：开着、5/10/20、豁免等 worker 与读后台作业的�
     remindAt: 5,
     warnAt: 10,
     stopAt: 20,
-    exemptTools: ["wait_workers", "job_output"],
+    exemptTools: ["job_output"],
   });
   const bad = loopGuardSettings({ warnAt: 5 });
   assert.ok("problem" in bad);

@@ -1,5 +1,5 @@
 // 会话原生视图（决策 180）：把新会话存储里一个会话文件的主分支条目投影成读者直接用的结构——按 Run 切段的消息
-// （带 Run 内序号）、七种自定义条目、worker 父子关系、Run 级与工具级失败分类。搜索与各显示读者（会话列表、trace、replay、
+// （带 Run 内序号）、各种自定义条目、Run 级与工具级失败分类。搜索与各显示读者（会话列表、trace、replay、
 // 历史）共用这一份。纯函数、无 IO：输入按结构读取（persistence/session-reader.ts 的读取结果
 // 满足它），state 不依赖 persistence。
 // 切段口径：Run 开始条目之后、下一个 Run 开始之前的消息属于它，Run 内序号从 1 起、每条消息占一个（同 messageEntryAt）；
@@ -32,7 +32,6 @@ import {
   type SessionHeaderMetadata,
   SessionHeaderMetadataSchema,
   type VerificationData,
-  type WorkerData,
 } from "./session-entries.ts";
 import {
   runFailureOf,
@@ -120,7 +119,6 @@ export type ViewItem =
   | { kind: "checkpoint"; entryId: string; timestamp: number; data: CheckpointData }
   // 决策 350：快照的拍摄标记
   | { kind: "checkpoint-mark"; entryId: string; timestamp: number; data: CheckpointMarkData }
-  | { kind: "worker"; entryId: string; timestamp: number; data: WorkerData }
   | { kind: "fork"; entryId: string; timestamp: number; data: ForkData }
   | { kind: "grant"; entryId: string; timestamp: number; data: GrantData }
   | { kind: "hook"; entryId: string; timestamp: number; data: HookRunData }
@@ -165,20 +163,11 @@ export interface ViewRun {
   failure: FailureClass | null;
 }
 
-type WorkerSpawned = Extract<WorkerData, { event: "spawned" }>;
-type WorkerSettled = Extract<WorkerData, { event: "settled" }>;
-
-export interface ViewChild {
-  spawned: WorkerSpawned;
-  settled?: WorkerSettled;
-}
-
 export interface SessionView {
   sessionId: SessionId;
   createdAt: number;
   parentSessionId?: SessionId;
-  // 文件头 metadata 里的来历（worker 会话与分支会话）
-  worker?: NonNullable<SessionHeaderMetadata["worker"]>;
+  // 文件头 metadata 里的来历（分支会话）
   branch?: NonNullable<SessionHeaderMetadata["branch"]>;
   // 文件开头从来源会话复制来的条目数（非分支会话为 0）
   copiedEntries: number;
@@ -189,9 +178,6 @@ export interface SessionView {
   sessionItems: ViewItem[];
   // 本会话自己的全部消息（跳过复制段；不在任何 Run 之后的消息不计入）
   messages: ViewMessage[];
-  children: ViewChild[];
-  // 有收尾无派出的 worker 收尾条目
-  orphanSettleds: WorkerSettled[];
   // 工具级失败分类（逐个调用，按出现顺序）：判定类读者的同一现算口径（session-judge.ts 的 storeToolOutcomes）
   toolOutcomes: StoreToolOutcome[];
   // 数据不合 schema、版本不认识而被跳过的自定义条目说明
@@ -335,7 +321,6 @@ const CUSTOM_KINDS = {
   [SessionEntryType.Verification]: "verification",
   [SessionEntryType.Checkpoint]: "checkpoint",
   [SessionEntryType.CheckpointMark]: "checkpoint-mark",
-  [SessionEntryType.Worker]: "worker",
   [SessionEntryType.Fork]: "fork",
   [SessionEntryType.Grant]: "grant",
   [SessionEntryType.Hook]: "hook",
@@ -508,42 +493,18 @@ export function buildSessionView(input: SessionFileInput): SessionView {
     }
     run.failure = classifyRun(run);
   }
-  const children: ViewChild[] = [];
-  const childById = new Map<string, ViewChild>();
-  const orphanSettleds: WorkerSettled[] = [];
-  for (const item of items) {
-    if (item.kind !== "worker") {
-      continue;
-    }
-    if (item.data.event === "spawned") {
-      const child: ViewChild = { spawned: item.data };
-      children.push(child);
-      childById.set(item.data.childSessionId, child);
-    } else {
-      const child = childById.get(item.data.childSessionId);
-      if (child === undefined) {
-        orphanSettleds.push(item.data);
-      } else {
-        // 决策 303：补批续做的 worker 再收尾一次，后到的收尾记录为准
-        child.settled = item.data;
-      }
-    }
-  }
   return {
     sessionId: input.header.id as SessionId,
     createdAt: createdAtOf(input.header),
     ...(input.header.parentSessionId !== undefined
       ? { parentSessionId: input.header.parentSessionId as SessionId }
       : {}),
-    ...(metadata?.worker !== undefined ? { worker: metadata.worker } : {}),
     ...(metadata?.branch !== undefined ? { branch: metadata.branch } : {}),
     copiedEntries,
     items,
     sessionItems,
     runs,
     messages,
-    children,
-    orphanSettleds,
     toolOutcomes: storeToolOutcomes(
       storeSessionView({
         sessionId: input.header.id as SessionId,
@@ -611,23 +572,6 @@ export function summarizeSessionView(view: SessionView): SessionViewSummary {
     totalCost,
     ...(view.name !== undefined ? { name: view.name } : {}),
     ...(view.cwd !== undefined ? { cwd: view.cwd } : {}),
-    ...(view.worker !== undefined && view.parentSessionId !== undefined
-      ? {
-          worker: {
-            name: view.worker.name,
-            role: view.worker.role,
-            parentSessionId: view.parentSessionId,
-          },
-        }
-      : {}),
-    ...(view.children.length > 0
-      ? {
-          children: {
-            count: view.children.length,
-            unsettled: view.children.filter((child) => child.settled === undefined).length,
-          },
-        }
-      : {}),
   };
 }
 

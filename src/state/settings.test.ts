@@ -58,32 +58,32 @@ function snapshotOf(layers: Partial<Record<SettingsLayer, unknown>>): SettingsSn
 test("合并优先级：项目个人 > 项目共享 > 用户级；对象按键逐层合并，标量与数组由高优先层整体替换", () => {
   const { merged, sectionSources, commandSources } = snapshotOf({
     user: {
-      orchestration: { maxConcurrent: 2, worker: { maxTurns: 10, wallClockMinutes: 5 } },
+      tools: { grep: { maxResults: 2 }, readFile: { maxBytes: 10, maxLineChars: 5 } },
       loopGuard: { exemptTools: ["a", "b"], remindAt: 3 },
       commands: { commands: { test: "npm test", lint: "npm run lint" } },
       web: { search: { backend: "tavily", maxResults: 3 } },
     },
     project: {
-      orchestration: { maxConcurrent: 4, worker: { maxTurns: 20 } },
+      tools: { grep: { maxResults: 4 }, readFile: { maxBytes: 20 } },
       loopGuard: { exemptTools: ["c"] },
       commands: { commands: { test: "node --test" } },
     },
     local: {
-      orchestration: { maxDepth: 2 },
+      tools: { glob: { maxResults: 2 } },
       web: { search: { maxResults: 7 } },
     },
   });
-  // 标量：高优先层替换；对象：按键合并（worker.wallClockMinutes 来自用户级，maxTurns 来自项目共享）
-  assert.deepEqual(merged.orchestration, {
-    maxConcurrent: 4,
-    maxDepth: 2,
-    worker: { maxTurns: 20, wallClockMinutes: 5 },
+  // 标量：高优先层替换；对象：按键合并（readFile.maxLineChars 来自用户级，maxBytes 来自项目共享）
+  assert.deepEqual(merged.tools, {
+    grep: { maxResults: 4 },
+    glob: { maxResults: 2 },
+    readFile: { maxBytes: 20, maxLineChars: 5 },
   });
   // 数组整体替换（不拼接）
   assert.deepEqual(merged.loopGuard, { exemptTools: ["c"], remindAt: 3 });
   assert.deepEqual(merged.commands?.commands, { test: "node --test", lint: "npm run lint" });
   assert.deepEqual(merged.web, { search: { backend: "tavily", maxResults: 7 } });
-  assert.deepEqual(sectionSources.orchestration, ["user", "project", "local"]);
+  assert.deepEqual(sectionSources.tools, ["user", "project", "local"]);
   assert.deepEqual(commandSources, { test: "project", lint: "user" });
 });
 
@@ -168,25 +168,19 @@ test("trustedDirectories 只能写在用户级：项目共享与项目个人写�
   assert.deepEqual(merged.trustedDirectories, ["/work"]);
 });
 
-test("合并后的组合判据：角色引用了各层都没有的短名、轮数不递增、image 与 dockerfile 同给、MCP 语义不明一律列出", () => {
+test("合并后的组合判据：轮数不递增、image 与 dockerfile 同给、MCP 语义不明一律列出", () => {
   const { merged } = snapshotOf({
     user: { sandbox: { image: "a" }, loopGuard: { remindAt: 15 } },
     project: {
-      commands: { roles: { tester: ["test"] } },
       sandbox: { dockerfile: "Dockerfile" },
       mcp: { servers: { ghost: { defaultTier: "read" } } },
     },
   });
   const problems = mergedSettingsProblems(merged).join("\n");
-  assert.match(problems, /role tester references unknown short name: test/);
   assert.match(problems, /turn counts must increase/);
   assert.match(problems, /image and dockerfile can't both be set/);
   assert.match(problems, /ghost has no launch definition/);
-  // 短名在用户级登记、角色在项目级引用：合并后成立
-  const ok = snapshotOf({
-    user: { commands: { commands: { test: "npm test" } } },
-    project: { commands: { roles: { tester: ["test"] } } },
-  });
+  const ok = snapshotOf({ user: { commands: { commands: { test: "npm test" } } } });
   assert.deepEqual(mergedSettingsProblems(ok.merged), []);
 });
 
@@ -313,7 +307,6 @@ test("withHooksDisabled：清单清空、disableAllHooks 置位，其余各节�
       },
       commands: { commands: { test: "npm test" } },
       loopGuard: { remindAt: 4 },
-      orchestration: { maxConcurrent: 3 },
     },
   });
   assert.equal(snapshot.hooks.length, 2);
@@ -324,7 +317,6 @@ test("withHooksDisabled：清单清空、disableAllHooks 置位，其余各节�
   assert.equal(off.merged.stopHookBlockCap, snapshot.merged.stopHookBlockCap);
   assert.deepEqual(off.merged.commands, snapshot.merged.commands);
   assert.deepEqual(off.merged.loopGuard, snapshot.merged.loopGuard);
-  assert.deepEqual(off.merged.orchestration, snapshot.merged.orchestration);
   assert.deepEqual(off.sectionSources, snapshot.sectionSources);
   assert.deepEqual(off.grants, snapshot.grants);
   assert.deepEqual(off.commandSources, snapshot.commandSources);

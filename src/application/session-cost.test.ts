@@ -24,7 +24,7 @@ function usage(totalTokens: number, cost: number) {
   };
 }
 
-test("累计花费：主会话 + worker + 复盘；/fork 分支、别的会话不计；无价格的 token 单列；工具另发请求的用量计入", async () => {
+test("累计花费：主会话 + 复盘；旧会话里的 worker（决策 457）、/fork 分支、别的会话不计；无价格的 token 单列；工具另发请求的用量计入", async () => {
   const root = mkdtempSync(join(tmpdir(), "pigeon-cost-"));
   try {
     const sessionsDir = join(root, ".pigeon", "state", "sessions");
@@ -66,14 +66,18 @@ test("累计花费：主会话 + worker + 复盘；/fork 分支、别的会话�
       { cost: 0.11, priced: 1200, unpriced: 700 }
     );
     const total = accumulatedSessionCost(sessionsDir, main.sessionId);
-    assert.equal(Number(total.cost.toFixed(4)), 0.135, "0.1 + 0.01 + 0.02 + 0.005，不含分支的 5");
+    assert.equal(
+      Number(total.cost.toFixed(4)),
+      0.115,
+      "0.1 + 0.01 + 0.005，不含旧 worker 的 0.02 与分支的 5"
+    );
     assert.equal(total.unpricedTokens, 700);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("运行期间的子会话：收尾后计入一次；没收尾的下次再看；打开之前就有的不计", async () => {
+test("运行期间的子会话（复盘）：收尾后计入一次；没收尾的下次再看；旧会话格式的 worker 不计", async () => {
   const root = mkdtempSync(join(tmpdir(), "pigeon-cost-child-"));
   try {
     const sessionsDir = join(root, ".pigeon", "state", "sessions");
@@ -89,11 +93,17 @@ test("运行期间的子会话：收尾后计入一次；没收尾的下次再�
     const late = spawnFixtureWorker(main, { sessionsDir, name: "late", task: "之后的" });
     late.startRun({ task: "之后的" });
     late.assistant({ text: "晚", usage: usage(20, 0.3) });
-    await late.writer.flush();
-    assert.equal(tracker.collect().cost, 0, "没收尾不计");
     late.endRun();
     await late.close();
-    assert.equal(tracker.collect().cost, 0.3);
+    assert.equal(tracker.collect().cost, 0, "旧会话格式的 worker 不计");
+    const review = createFixtureSession({ sessionsDir, parentSessionId: main.sessionId });
+    review.startRun({ task: "复盘", config: { memoryReview: { kind: "closing", template: "t" } } });
+    review.assistant({ text: "记下", usage: usage(30, 0.2) });
+    await review.writer.flush();
+    assert.equal(tracker.collect().cost, 0, "没收尾不计");
+    review.endRun();
+    await review.close();
+    assert.equal(tracker.collect().cost, 0.2);
     assert.equal(tracker.collect().cost, 0, "只计一次");
     main.endRun();
     await main.close();
@@ -146,7 +156,7 @@ test("DeepSeek 回复自带价格为 0：按官方人民币价目计，高峰翻
   });
 });
 
-test("DeepSeek 计价同样用于续接累计：主会话、worker 与复盘", async () => {
+test("DeepSeek 计价同样用于续接累计：主会话与复盘（旧会话里的 worker 不计）", async () => {
   const root = mkdtempSync(join(tmpdir(), "pigeon-cost-deepseek-"));
   try {
     const sessionsDir = join(root, ".pigeon", "state", "sessions");
@@ -181,9 +191,9 @@ test("DeepSeek 计价同样用于续接累计：主会话、worker 与复盘", a
     review.endRun();
     await review.close();
     const total = accumulatedSessionCost(sessionsDir, main.sessionId);
-    // 高峰价：(100 万 + 50 万 + 25 万) 未命中输入 × ¥1/百万 × 2
-    assert.equal(Number(total.cny.toFixed(6)), 3.5);
-    assert.equal(total.cnyTokens, 1_750_000);
+    // 高峰价：(100 万 + 25 万) 未命中输入 × ¥1/百万 × 2
+    assert.equal(Number(total.cny.toFixed(6)), 2.5);
+    assert.equal(total.cnyTokens, 1_250_000);
     assert.equal(total.unpricedTokens, 0);
   } finally {
     rmSync(root, { recursive: true, force: true });

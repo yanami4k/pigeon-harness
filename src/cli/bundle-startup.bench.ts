@@ -92,7 +92,7 @@ describe.skipIf(BUNDLE_MISSING)(SUITE, () => {
     const work = join(dir, "work");
     mkdirSync(work, { recursive: true });
     const args = [entry, "run", "说一句话", "--root", work, "--stream-fn", fake, "--yolo"];
-    const child = spawn(process.execPath, [...args, "--no-spawn-workers"], {
+    const child = spawn(process.execPath, [...args, "--no-subagents"], {
       env: childEnv(dir),
       stdio: ["ignore", "ignore", "pipe"],
       windowsHide: true,

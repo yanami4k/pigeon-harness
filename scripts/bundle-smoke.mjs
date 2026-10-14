@@ -38,7 +38,7 @@ function firstRequestMs(entry, fake) {
     const log = join(dir, "requests.log");
     const result = pigeon(
       entry,
-      ["run", "说一句话", "--root", work, "--stream-fn", fake, "--yolo", "--no-spawn-workers"],
+      ["run", "说一句话", "--root", work, "--stream-fn", fake, "--yolo", "--no-subagents"],
       { SMOKE_LOG: log, HOME: dir, USERPROFILE: dir }
     );
     if (result.status !== 0) {

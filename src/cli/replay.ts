@@ -23,7 +23,6 @@ import {
   readSessionView,
 } from "../persistence/session-catalog.ts";
 import { sessionsDirOf } from "../state/paths.ts";
-import { workerWorkspaceLabel } from "../state/session-payloads.ts";
 import {
   isSyntheticFailure,
   type SessionView,
@@ -47,7 +46,6 @@ const ITEM_TYPE: Record<ViewItem["kind"], string> = {
   verification: "pigeon.verification",
   checkpoint: "pigeon.checkpoint",
   "checkpoint-mark": "pigeon.checkpoint-mark",
-  worker: "pigeon.worker",
   fork: "pigeon.fork",
   grant: "pigeon.grant",
   hook: "pigeon.hook",
@@ -120,26 +118,6 @@ function itemDetail(item: ViewItem): string {
       return `checkpoint ${item.data.commit.slice(0, 12)} | tool call ${item.data.toolCallId}`;
     case "checkpoint-mark":
       return `${unfinishedCheckpointText(item.data)} | tool call ${item.data.toolCallId}`;
-    case "worker": {
-      const data = item.data;
-      if (data.event === "spawned") {
-        const tools = data.policy.allow.length > 0 ? data.policy.allow.join(", ") : "none";
-        return (
-          `worker spawned ${data.name} (${data.role}) | session ${shortId(data.childSessionId)} | ` +
-          `${workerWorkspaceLabel(data.workspace)} | ` +
-          `tools ${tools} | approval mode ${data.policy.approvalMode} | ` +
-          `limits ${plural(data.limits.maxTurns, "turn")} / ${Math.round(data.limits.wallClockMs / 1000)}s`
-        );
-      }
-      let detail = `worker settled ${data.name} | session ${shortId(data.childSessionId)} | ${data.status} | ${plural(data.turns, "turn")}`;
-      if (data.error !== undefined) {
-        detail += ` | reason: ${data.error}`;
-      }
-      if (data.result !== undefined) {
-        detail += ` | ${plural((data.result.changedFiles ?? []).length, "file")} changed`;
-      }
-      return detail;
-    }
     case "fork": {
       const data = item.data;
       return (

@@ -26,7 +26,6 @@ import {
   storeRunFailure,
   storeRunMetrics,
   storeToolOutcomes,
-  storeWorkerSpawned,
   TOOL_RESULT_MARK_KEY,
 } from "./session-judge.ts";
 
@@ -346,9 +345,6 @@ test("旧会话的验证记录：worker 尝试的验证记录落在父会话，�
       storeAttemptLabel(workerView, workerRun, { verificationSources: [hostView] }),
       "Passed"
     );
-    // 父会话里派出这个 worker 的记录（委派策略从这里还原）
-    assert.equal(storeWorkerSpawned(hostView, worker.sessionId)?.name, "fix-a");
-    assert.equal(workerView.metadata?.worker?.name, "fix-a");
     assert.equal(workerView.parentSessionId, host.sessionId);
   });
 });

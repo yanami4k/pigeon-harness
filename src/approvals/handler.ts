@@ -20,14 +20,11 @@ export interface ApprovalRequest {
   // 本次调用所在 Run（M4 S6：审批提示 [a]/[d] 创建会话 grant 时写入 grant.created
   // 事件的出处 run——grant 在 Run 内出生，runId 恒在场）
   readonly runId?: RunId;
-  // M5.5（决策 040）：请求来源会话与 worker 标签——worker 的审批汇聚到父级面板时在场，
-  // 面板据此区分来源；主会话自己的请求缺省
+  // M5.5（决策 040）：请求来源会话——别的会话的审批汇聚到同一面板时在场，面板据此区分来源；主会话自己的请求缺省
   readonly sessionId?: SessionId;
-  readonly worker?: { readonly name: string; readonly role: string };
   // 决策 443：会话面板派出的独立会话的审批汇到同一队列时在场（面板写明来源会话的名字）
   readonly pooled?: { readonly name: string };
-  // M5.5 S3（决策 040）：放权落点——[a]/[d] 创建的会话 grant 写进请求来源会话的存储。
-  // worker 请求由其装配根挂上 worker 自己的存储（grant 只活在该 worker 会话内）；
+  // M5.5 S3（决策 040）：放权落点——[a]/[d] 创建的会话 grant 写进请求来源会话的存储；
   // 缺省 = 审批 handler 绑定的主会话存储
   readonly grants?: GrantCreator;
   // M5.5 S5（决策 048）：工具风险分层——exec 档的 [a] 收窄为这条一模一样的命令串
@@ -37,8 +34,6 @@ export interface ApprovalRequest {
   readonly needsShell?: boolean;
   // 决策 290：网络档调用将访问的主机名（工具的 inspectHost 给出）；在场时 [a] 收窄为按网站放权
   readonly host?: string;
-  // 决策 303：请求方撤回（worker 的请求等满时限无人批）——还在排队的不再上面板，已在面板上的撤下；撤回后的决定不再被采用
-  readonly signal?: AbortSignal;
   // 决策 326 ①：写入落在受保护路径（项目的 .pigeon 目录下）时在场，为其展示写法；须人逐次批准，放权不适用
   readonly protectedPath?: string;
   // 决策 355：读档工具要读工作区以外的文件时在场，为其真实路径（面板标明；[a]/[d] 照常建放权）

@@ -1,4 +1,4 @@
-// headless 运行入口（M6.5 S1，决策 056）：进程内 API。与 worker 同一装配内核（workers.ts openRuntimeSurface），
+// headless 运行入口（M6.5 S1，决策 056）：进程内 API。装配内核在 detached-runtime.ts，
 // 以无父会话方式装出完整运行面跑到收尾，带轮次、墙钟与可选 token 上限。每次运行是一个普通会话，
 // 会话存储、trace、search 照旧。无人值守下没有审批通道：prompt 档一律 fail-closed 拒绝（006），
 // yolo 是人的显式拨档，固化规则照常生效；不新增任何审批语义。
@@ -9,14 +9,9 @@
 // 收尾钩子承担（323），成败不再由程序贴"通过"标签
 // 推送记忆（决策 191、193、331、363）：开着时把两层记忆整份放进开工状态块；无人值守，只推送、不注册 update_memory；
 // 收尾复盘与压缩前复盘已随决策 331 删除
-// 派 worker（决策 264–268、297–303）：开着时给主 agent 注册 spawn_worker 与等待等积木，装一个编排器（无人值守：worker 需请示时
-// 不等，作为可恢复错误交回，303）；worker 用的 token 计入本次运行的 token 上限，撞了即停掉主 agent 与在跑的 worker、拒绝再派。
-// 297：每次运行结束后，等本次派出的 worker 全部结束、把完成通知当新的一轮处理完，这一步才往下走；
-// 释放运行面之前停掉仍在跑的 worker（撞上限、外部中止时），等其收尾记录写进本会话。执行端另一侧的工作区（容器）与分支会话不注册。
 // 任务清单（294 B1）：开着时给主 agent 注册两件清单工具
 
 import type { MemoryLayer } from "../memory/learned.ts";
-import type { WorkerOrchestrator } from "../orchestration/workers.ts";
 import { loadStoreSession } from "../persistence/session-view.ts";
 import type { BeforeCompaction, CompactionConfigInput } from "../pi-runtime/compaction.ts";
 import type { PruneSeed } from "../pi-runtime/context-prune.ts";
@@ -27,10 +22,6 @@ import { DEFAULT_STOP_HOOK_BLOCK_CAP } from "../state/hooks.ts";
 import { newSessionId, type RunId, type SessionId } from "../state/ids.ts";
 import type { LoopGuardSettings } from "../state/loop-guard-config.ts";
 import type { MemoryLimits } from "../state/memory-config.ts";
-import {
-  DEFAULT_ORCHESTRATION_SETTINGS,
-  type OrchestrationSettings,
-} from "../state/orchestration-config.ts";
 import type { OutcomeLabel } from "../state/outcome-label.ts";
 import { sessionsDirOf } from "../state/paths.ts";
 import type {
@@ -47,26 +38,15 @@ import type { WorkspaceHost } from "../tools/workspace-host.ts";
 import { settleBackgroundJobs } from "./background-jobs.ts";
 import { attachCheckpoints } from "./checkpoints.ts";
 import { compactionWarner } from "./compaction-text.ts";
+import { createDetachedRuntime, type DetachedRuntimeRequest } from "./detached-runtime.ts";
 import { DEFAULT_MODEL_PLACEHOLDER } from "./launch-flags.ts";
 import { attachLoopGuard, type LoopStop } from "./loop-guard.ts";
 import type { McpSession } from "./mcp.ts";
 import type { LearnedMemoryConfig, RuntimeBundle } from "./runtime.ts";
-import { bindSpawnWorkers, stopAllWorkers } from "./spawn-worker-host.ts";
-import {
-  type SpawnWorkerBudget,
-  SpawnWorkerSlot,
-  spawnWorkerSettingsOf,
-} from "./spawn-worker-tool.ts";
 import type { StatusHashes } from "./status-block.ts";
 import type { StatusFacts } from "./status-sources.ts";
 import type { WarnSink } from "./warnings.ts";
 import type { WebToolsConfig } from "./web-tools.ts";
-import { drainWorkers, type WorkerNotices } from "./worker-notices.ts";
-import {
-  createDetachedRuntime,
-  createSessionWorkers,
-  type DetachedRuntimeRequest,
-} from "./workers.ts";
 
 export type HeadlessStatus =
   | "completed"
@@ -151,17 +131,12 @@ export interface HeadlessRunOptions {
   memoryLimits?: MemoryLimits;
   // 推送哪几层；缺省两层（跑批器只推项目级）
   memoryLayers?: readonly MemoryLayer[];
-  // 决策 264–267：派 worker（给主 agent 注册 spawn_worker）；缺省关着——pigeon run 由启动参数缺省打开，跑批器各条件明确关掉。
-  // 注入了执行端（容器工作区）或是分支会话时不注册
-  spawnWorkers?: boolean;
-  // 决策 297–303：编排设定（同时在跑的上限缺省 8、不设总数上限、层数、每个 worker 的上限、卡住与审批时限）
-  orchestration?: OrchestrationSettings;
-  // 决策 294 B1：任务清单工具；缺省关着——pigeon run 按编排配置缺省打开，跑批器各条件不给
+  // 决策 294 B1：任务清单工具；缺省关着——pigeon run 按设置的 tools.taskList 缺省打开，跑批器各条件不给
   taskList?: boolean;
-  // 决策 287–291：联网工具的配置——在场即给主会话与 worker 注册两件工具；缺省不注册（pigeon run 由启动参数缺省给出，
+  // 决策 287–291：联网工具的配置——在场即注册两件工具；缺省不注册（pigeon run 由启动参数缺省给出，
   // --sandbox-network off 不给；跑批器各条件不给）
   webTools?: WebToolsConfig;
-  // 决策 305–308：打转检测设定——主 agent 与 worker 都挂；缺省不挂（pigeon run 按项目配置缺省打开，跑批器各条件明确关掉）
+  // 决策 305–308：打转检测设定——挂在主 agent 上；缺省不挂（pigeon run 按项目配置缺省打开，跑批器各条件明确关掉）
   loopGuard?: LoopGuardSettings;
   // 测试注入 MCP 会话；缺省按治理根的 MCP 配置启动
   startMcp?: () => Promise<McpSession>;
@@ -196,7 +171,7 @@ export interface HeadlessRunResult extends HeadlessRunMetrics {
   label: OutcomeLabel;
   // 打转叫停时在场（307）：计数与重复的调用（收尾说明用）
   looping?: LoopStop;
-  // 决策 409：会话结束后保留中的后台作业（本会话与它派出的 worker 的；没有即缺省）。只在机器读的结果里列出
+  // 决策 409：会话结束后保留中的后台作业（没有即缺省）。只在机器读的结果里列出
   keptJobs?: KeptJob[];
 }
 
@@ -223,23 +198,6 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
   let liveBundle: RuntimeBundle | undefined;
   // 已注册工具的风险档位（需审批次数按它现算；运行面没装起来时为空）
   let toolTiers: ReadonlyMap<string, string> = new Map();
-  // 派 worker（264–268）：工具槽在装配时注册，编排器等运行面装起来后再绑定
-  const spawnSlot =
-    options.spawnWorkers === true &&
-    options.workspaceHost === undefined &&
-    options.branchHeader === undefined
-      ? new SpawnWorkerSlot(
-          spawnWorkerSettingsOf({
-            ...(options.orchestration ?? DEFAULT_ORCHESTRATION_SETTINGS),
-            taskList: options.taskList === true,
-          })
-        )
-      : undefined;
-  let workers: WorkerOrchestrator | undefined;
-  let spawnBudget: SpawnWorkerBudget | undefined;
-  let notices: WorkerNotices | undefined;
-  // worker 每收尾一轮用的 token（计入本次运行的 token 上限；运行开始前接好）
-  let addWorkerTokens: (tokens: number) => void = () => {};
   // 本次运行的装配参数
   const surface: Omit<DetachedRuntimeRequest, "sessionId"> = {
     governanceRoot: options.governanceRoot,
@@ -272,7 +230,6 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
     ...(options.compaction !== undefined ? { compaction: options.compaction } : {}),
     ...(options.startMcp !== undefined ? { startMcp: options.startMcp } : {}),
     ...(learnedMemory !== undefined ? { learnedMemory } : {}),
-    ...(spawnSlot !== undefined ? { spawnWorker: spawnSlot } : {}),
     ...(options.taskList === true ? { taskList: true } : {}),
     ...(options.webTools !== undefined ? { webTools: options.webTools } : {}),
   };
@@ -323,37 +280,6 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
           bundle.closers = [...(bundle.closers ?? []), () => checkpoints.close()];
         }
       }
-      // 决策 264–268：派 worker 的编排器（决策 279：worker 从工作区根连同未提交改动的快照开工；无人值守，不接审批通道）
-      if (spawnSlot !== undefined) {
-        workers = createSessionWorkers({
-          governanceRoot: options.governanceRoot,
-          workspaceRoot: options.workspaceRoot,
-          bundle,
-          streamFn: options.streamFn,
-          provider: surface.provider,
-          modelId: surface.modelId,
-          ...(options.homeDir !== undefined ? { homeDir: options.homeDir } : {}),
-          ...(options.persistThinking !== undefined
-            ? { persistThinking: options.persistThinking }
-            : {}),
-          ...(options.thinking !== undefined ? { thinkingLevel: options.thinking } : {}),
-          ...(options.editMode !== undefined ? { editMode: options.editMode } : {}),
-          settings: options.orchestration ?? DEFAULT_ORCHESTRATION_SETTINGS,
-          onWorkerTokens: (_workerId, tokens) => addWorkerTokens(tokens),
-          ...(options.webTools !== undefined ? { webTools: options.webTools } : {}),
-          ...(options.loopGuard !== undefined ? { loopGuard: options.loopGuard } : {}),
-        });
-        const bound = bindSpawnWorkers({
-          slot: spawnSlot,
-          orchestrator: workers,
-          workspaceRoot: options.workspaceRoot,
-          hostSessionId: sessionId,
-          // 决策 297：完成通知进本会话的下一轮（空闲时由 drainWorkers 接着跑）
-          target: bundle.adapter,
-        });
-        spawnBudget = bound.budget;
-        notices = bound.notices;
-      }
       options.onBundle?.(bundle);
     },
   });
@@ -367,13 +293,6 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
     // 只发中止请求；原因随中止请求交给运行面，运行确以中止收尾时 Run 收尾条目据此记撞上限（072 修订）。
     // 中止失败不改变结果：run 以当时的终态收尾
     handle.interrupt(reason).catch(() => {});
-    // 决策 268：撞了 token 上限即额度用完——拒绝再派、停掉在跑的 worker（主 agent 等待中的派出随中止一并取消）
-    if (reason === "token-limit") {
-      spawnBudget?.markExhausted();
-      if (workers !== undefined) {
-        void stopAllWorkers(workers);
-      }
-    }
   };
   let turns = 0;
   let tokens = 0;
@@ -389,13 +308,6 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
       stop("token-limit");
     }
   });
-  // 决策 268：worker 用的 token 一并计入本次运行的 token 上限
-  addWorkerTokens = (workerTokens) => {
-    tokens += workerTokens;
-    if (options.maxTokens !== undefined && tokens >= options.maxTokens) {
-      stop("token-limit");
-    }
-  };
   if (deadline !== undefined) {
     timer = setTimeout(() => stop("wall-clock-limit"), Math.max(0, deadline - Date.now()));
   }
@@ -408,11 +320,10 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
   if (options.abortSignal?.aborted === true) onAbort();
   let status: HeadlessStatus = "unknown";
   let errorMessage: string | undefined;
-  // 决策 297：一次运行结束后，等本次派出的 worker 全部结束、把通知处理完（撞上限或外部中止即不再等）。
+  // 决策 365：一次运行结束后等本会话的后台作业（收尾总时限、计入墙钟），把结束通知处理完（撞上限或外部中止即不再等）。
   // 等的途中撞上限或被外部中止：这一步按中止收尾（终态随后按撞上限的原因或外部中止记）
   let drainInterrupted = false;
-  // 决策 365：同样等本会话的后台作业（收尾总时限、计入墙钟），两者交替直到都没有可做的
-  const settleWorkers = async <R>(run: R): Promise<R> => {
+  const settleRun = async <R>(run: R): Promise<R> => {
     const bundle = liveBundle;
     if (bundle === undefined) {
       return run;
@@ -426,22 +337,6 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
     let latest = run;
     for (;;) {
       let progressed = false;
-      if (workers !== undefined && notices !== undefined) {
-        const { last, interrupted } = await drainWorkers({
-          orchestrator: workers,
-          parentSessionId: sessionId,
-          notices,
-          target,
-          stopped,
-        });
-        if (interrupted) {
-          drainInterrupted = true;
-        }
-        if (last !== undefined) {
-          latest = last;
-          progressed = true;
-        }
-      }
       const jobs = bundle.jobs;
       // 决策 409：保留的作业不等，不算没等完
       if (stopped() && (jobs?.toSettle().length ?? 0) > 0) {
@@ -513,7 +408,7 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
         errorMessage = preRunStopped;
       }
     } else {
-      run = await settleWorkers(
+      run = await settleRun(
         options.continueFromHistory === true && handle.continueRun !== undefined
           ? await handle.continueRun()
           : await handle.run(task)
@@ -570,7 +465,7 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
           ...report.additionalContext,
           ...(report.blocked !== undefined ? [report.blocked.reason] : []),
         ].join("\n\n");
-        run = await settleWorkers(await handle.run(next));
+        run = await settleRun(await handle.run(next));
         status =
           run.emptyReply === true
             ? "empty-reply"
@@ -607,10 +502,6 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
     deadline = undefined;
     unsubscribe();
     options.abortSignal?.removeEventListener("abort", onAbort);
-    // 派出的 worker 在释放之前停掉并收尾（收尾记录写进本会话）
-    if (workers !== undefined) {
-      await stopAllWorkers(workers);
-    }
     // 决策 323 / 324：SessionEnd——会话结束（只作副作用；缺省短时限 1.5 秒、单个钩子最长 60 秒）。
     // 在释放运行面之前跑：记录要落在本会话文件里
     if (liveBundle?.hooks !== undefined) {
@@ -621,13 +512,9 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
   const sessionsDir = sessionsDirOf(options.governanceRoot);
   const outcome = readRunOutcome(sessionsDir, sessionId, toolTiers);
   const metrics = outcome.metrics;
-  // 决策 409：本次运行（主会话与派出的 worker）结束时保留下来的作业，取自整次运行共用的作业池
-  const runSessions = new Set<string>([
-    sessionId,
-    ...(workers?.status().map((worker) => worker.sessionId) ?? []),
-  ]);
+  // 决策 409：本次运行结束时保留下来的作业，取自整次运行共用的作业池
   const keptJobs =
-    liveBundle?.jobs?.pool.keptJobs().filter((job) => runSessions.has(job.sessionId)) ?? [];
+    liveBundle?.jobs?.pool.keptJobs().filter((job) => job.sessionId === sessionId) ?? [];
   return {
     sessionId,
     status,

@@ -61,7 +61,6 @@ test("沙箱会话：释放运行面后交回并打出提示", async () => {
       governanceRoot: root,
       sessionId,
       bundle: opened.bundle,
-      workerGraceMs: 0,
       closeSandbox: async () => ({ notice: "已交回" }),
       log: (line) => logged.push(line),
     });

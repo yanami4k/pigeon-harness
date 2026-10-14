@@ -30,7 +30,7 @@ import {
   OUTPUTS_URI_PREFIX,
   type OutputSlot,
 } from "./command-output.ts";
-import { createLocalWorkspaceHost, windowsPathProgram, windowsScript } from "./local-host.ts";
+import { createLocalWorkspaceHost, windowsScript } from "./local-host.ts";
 import {
   type FileChanges,
   type HostExecOptions,
@@ -240,8 +240,6 @@ export interface RunCommandOptions {
   host?: WorkspaceHost;
   // 短名 → 命令串（设置的 commands 一节）
   commands?: Readonly<Record<string, string>>;
-  // 在场 = 只允许清单内的短名或其展开命令（tester 等角色）
-  allowlist?: readonly string[];
   // 不给 timeout_seconds 时的超时（缺省 120 秒）与 timeout_seconds 的上限（缺省 600 秒）
   timeoutMs?: number;
   maxTimeoutMs?: number;
@@ -255,8 +253,6 @@ export interface RunCommandOptions {
   platform?: NodeJS.Platform;
   // 本会话的审批状态（只影响工具说明，审批本身由治理层判定）；缺省按有人工审批
   approval?: RunCommandApproval;
-  // 决策 360：带命令前缀范围的 worker——Windows 上程序只按 PATH 解析（不查工作树根与当前目录），显式写出路径的照旧
-  pathOnly?: boolean;
   // 决策 365：本会话的后台作业（不给即不能用 background）
   jobs?: SessionJobs;
   // 决策 418：本次运行剩余的墙钟时间（毫秒）；设了墙钟预算的运行才给。前台命令的超时按它夹取，后台作业不受影响
@@ -487,7 +483,6 @@ export function createRunCommandTool(
   const env = allowedEnv(options.env ?? process.env);
   // 治理层按调用授予的 shell 确认（一次一用）
   const shellAuthorized = new Set<string>();
-  const pathOnly = options.pathOnly === true && platform === "win32";
 
   const resolve = (input: string): { command: string; alias?: string } => {
     const trimmed = input.trim();
@@ -495,18 +490,6 @@ export function createRunCommandTool(
     return commands !== undefined && Object.hasOwn(commands, trimmed)
       ? { command: commands[trimmed] as string, alias: trimmed }
       : { command: trimmed };
-  };
-
-  const permitted = (input: string, command: string): boolean => {
-    const allowlist = options.allowlist;
-    if (allowlist === undefined) {
-      return true;
-    }
-    const commands = options.commands ?? {};
-    return allowlist.some(
-      (name) =>
-        name === input.trim() || (Object.hasOwn(commands, name) && commands[name] === command)
-    );
   };
 
   const classify = (input: string): CommandInspection => {
@@ -527,33 +510,9 @@ export function createRunCommandTool(
       };
     }
     const first = argv[0] ?? "";
-    let program: string | undefined;
-    if (pathOnly && !first.includes("/") && !first.includes("\\")) {
-      program = windowsPathProgram(first, env);
-      if (program === undefined) {
-        return {
-          ...base,
-          mode: "invalid",
-          needsShell: false,
-          argv,
-          error: `Program ${first} not found on PATH (with a command prefix scope, programs are not looked up in the worktree)`,
-        };
-      }
-    }
-    const scriptPath =
-      program === undefined
-        ? host.findLauncherScript(first, env)
-        : /\.(cmd|bat)$/i.test(program)
-          ? program
-          : undefined;
+    const scriptPath = host.findLauncherScript(first, env);
     if (scriptPath === undefined) {
-      return {
-        ...base,
-        mode: "direct",
-        needsShell: false,
-        argv,
-        ...(program !== undefined ? { program } : {}),
-      };
+      return { ...base, mode: "direct", needsShell: false, argv };
     }
     const offending = argv.find((arg) => !LAUNCHER_ARG_PATTERN.test(arg));
     if (offending === undefined && !/["%]/.test(scriptPath)) {
@@ -695,9 +654,6 @@ export function createRunCommandTool(
         lines.push(`can't run: ${inspection.error}`);
       }
       lines.push(`cwd: ${root}`);
-      if (!permitted(inspection.input, inspection.command)) {
-        lines.push("not in this role's allow list; refused even if approved");
-      }
       return lines.join("\n");
     },
     async execute(toolCallId, params, signal): Promise<PigeonToolResult<ExecEvidence>> {
@@ -711,13 +667,6 @@ export function createRunCommandTool(
         maxTimeoutMs,
         options.budgetRemainingMs?.()
       );
-      if (!permitted(inspection.input, command)) {
-        const names = options.allowlist?.join(", ") ?? "";
-        throw new RunCommandError(
-          `The command is not on this role's allowlist: ${inspection.input} (only the commands registered for this role ` +
-            `in the commands section of the settings can run: ${names === "" ? "none are registered" : names})`
-        );
-      }
       if (inspection.mode === "invalid") {
         throw new RunCommandError(inspection.error ?? `Cannot run: ${echoOf(command, alias)}`);
       }

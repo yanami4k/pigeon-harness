@@ -236,35 +236,6 @@ test("环境变量只透传白名单：密钥类变量不进子进程，PATH 照
   });
 });
 
-test("短名与角色允许清单：清单内短名与其展开命令放行，清单外拒绝且不启动进程；预览显示完整命令", async () => {
-  await withRoot(async (root) => {
-    const hello = `${NODE} -e "process.stdout.write('hi')"`;
-    const tool = createRunCommandTool({
-      workspaceRoot: root,
-      commands: { hello },
-      allowlist: ["hello"],
-    });
-    const aliased = (await tool.execute("tc-a", { command: "hello" })).details;
-    assert.equal(aliased.alias, "hello");
-    assert.equal(aliased.command, hello);
-    assert.equal(aliased.output, "hi");
-
-    const expanded = (await tool.execute("tc-b", { command: hello })).details;
-    assert.equal(expanded.output, "hi");
-
-    await assert.rejects(
-      tool.execute("tc-c", { command: `${NODE} -e "1"` }),
-      (error: unknown) =>
-        error instanceof RunCommandError && /is not on this role's allowlist/.test(error.message)
-    );
-
-    const preview = await tool.preview({ command: "hello" });
-    assert.ok(preview.includes(`command: ${hello} (alias hello)`), preview);
-    const refused = await tool.preview({ command: "other" });
-    assert.ok(refused.includes("not in this role's allow list"), refused);
-  });
-});
-
 test("命令不存在：域错误", async () => {
   await withRoot(async (root) => {
     const tool = createRunCommandTool({ workspaceRoot: root });

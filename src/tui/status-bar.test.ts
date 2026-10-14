@@ -148,7 +148,7 @@ test("DeepSeek 会话：按人民币价目计的部分同样计 token 数，状�
   }
 });
 
-test("DeepSeek 会话续接：主会话、worker 与复盘的用量同样累计", async () => {
+test("DeepSeek 会话续接：主会话与复盘的用量同样累计；旧会话里的 worker 不再计入（决策 457）", async () => {
   const root = mkdtempSync(join(tmpdir(), "pigeon-tui-cost-deepseek-"));
   try {
     const sessionsDir = join(root, ".pigeon", "state", "sessions");
@@ -189,7 +189,7 @@ test("DeepSeek 会话续接：主会话、worker 与复盘的用量同样累计"
       await settle();
       shell.announceResumed(root, []);
       await settle();
-      assert.equal(lastLine(term).trim(), "1.8M tokens");
+      assert.equal(lastLine(term).trim(), "1.3M tokens");
     } finally {
       cleanup();
     }
@@ -198,7 +198,7 @@ test("DeepSeek 会话续接：主会话、worker 与复盘的用量同样累计"
   }
 });
 
-test("续接会话从会话记录累计已有用量：主会话 + 其 worker + 其复盘；别的会话与无关子会话不计", async () => {
+test("续接会话从会话记录累计已有用量：主会话 + 其复盘；旧会话里的 worker、别的会话与无关子会话不计", async () => {
   const root = mkdtempSync(join(tmpdir(), "pigeon-tui-cost-"));
   try {
     const sessionsDir = join(root, ".pigeon", "state", "sessions");
@@ -233,7 +233,7 @@ test("续接会话从会话记录累计已有用量：主会话 + 其 worker + �
       assert.equal(lastLine(term).trim(), "0 tokens", "新开时从零算");
       shell.announceResumed(root, ["续跑报告"]);
       await settle();
-      assert.equal(lastLine(term).trim(), "1.8k tokens");
+      assert.equal(lastLine(term).trim(), "1.3k tokens");
       assert.ok(screenText(term).includes("续跑报告"));
     } finally {
       cleanup();
@@ -243,7 +243,7 @@ test("续接会话从会话记录累计已有用量：主会话 + 其 worker + �
   }
 });
 
-test("本会话运行期间收尾的 worker 用量计入；没收尾的不计", async () => {
+test("旧会话格式的 worker 子会话（决策 457）：收尾前后都不计入本会话用量", async () => {
   const root = mkdtempSync(join(tmpdir(), "pigeon-tui-child-cost-"));
   try {
     const sessionsDir = join(root, ".pigeon", "state", "sessions");
@@ -269,7 +269,7 @@ test("本会话运行期间收尾的 worker 用量计入；没收尾的不计", 
       term.input("\r");
       await settle();
       assert.deepEqual(runtime.runs, ["任务", "再来"]);
-      assert.equal(lastLine(term).trim(), "400 tokens");
+      assert.equal(lastLine(term).trim(), "0 tokens");
     } finally {
       cleanup();
     }

@@ -52,7 +52,7 @@ test("续接的分支会话：不给来源也认分叉来源一路往上", () =>
     assert.deepEqual(outputAncestors(sessionsDir, origin.sessionId), []);
   }));
 
-test("worker 会话不认派出方；本会话的文件还没写出时用调用方给的来源", () =>
+test("旧会话格式的 worker 会话（决策 477）按父会话往上认；本会话的文件还没写出时用调用方给的来源", () =>
   withSessions(async (sessionsDir) => {
     const parent = createFixtureSession({ sessionsDir });
     parent.startRun({ task: "派出" });
@@ -62,7 +62,7 @@ test("worker 会话不认派出方；本会话的文件还没写出时用调用�
     await worker.close();
     parent.endRun();
     await parent.close();
-    assert.deepEqual(outputAncestors(sessionsDir, worker.sessionId), []);
+    assert.deepEqual(outputAncestors(sessionsDir, worker.sessionId), [parent.sessionId]);
     assert.deepEqual(outputAncestors(sessionsDir, "not-written-yet", parent.sessionId), [
       parent.sessionId,
     ]);

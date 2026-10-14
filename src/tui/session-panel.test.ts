@@ -12,7 +12,6 @@ import type { EventEnvelope } from "../state/events.ts";
 import { newSessionId } from "../state/ids.ts";
 import { RuntimeEventKind } from "../state/runtime-events.ts";
 import { MessageFlow, projectRuntimeEvent } from "./message-flow.ts";
-import { orchestrationHarness } from "./orchestration-fixtures.ts";
 import { ScriptedRuntime } from "./runtime-fixtures.ts";
 import { SessionPanel } from "./session-panel.ts";
 import { PigeonTuiShell, type TuiPoolFace, type TuiShellOptions } from "./shell.ts";
@@ -355,40 +354,6 @@ test("/resume 不能换到面板里还开着的会话", async () => {
   }
 });
 
-test("/take：面板会话与 worker 同名时要写明是哪一个", async () => {
-  const h = orchestrationHarness();
-  const { term, taken, finishers, cleanup } = makeShell({ workers: h.face });
-  try {
-    await settle();
-    h.face.spawn({ role: "explorer", task: "看看", name: "s1" });
-    term.input("/panel");
-    term.input("\r");
-    await settle();
-    term.input("一");
-    term.input("\r");
-    await settle();
-    // 面板会话跑完（空闲时取回才会真的动文件）
-    finishers[0]?.("做完了");
-    await settle();
-    term.input(ESC);
-    await settle();
-    term.input("/take s1");
-    term.input("\r");
-    await settle();
-    assert.match(screenText(term), /a session and a worker are both named s1/);
-    assert.deepEqual(taken, [], "有歧义时什么都不取");
-    term.input("/take session:s1");
-    term.input("\r");
-    await settle();
-    // 写明之后归面板会话
-    assert.match(screenText(term), /已取回 s1 的改动/);
-    assert.deepEqual(taken, ["s1"]);
-  } finally {
-    await h.stopAll();
-    cleanup();
-  }
-});
-
 test("决策 458：当前会话是面板的第一张卡（标 current、状态写在卡里），空状态那句不出现；偷看看它最近的对话，偷看时输入发给它；/take 它的名字说明不用取回", async () => {
   const { term, runtime, cleanup } = makeShell({ sessionName: () => "demo-main" });
   try {
@@ -620,7 +585,7 @@ test("决策 458 复查：/resume 换到别的会话后，当前会话卡的首�
   }
 });
 
-test("决策 458 复查：当前会话与面板会话同名时，派出的同名会话选中的是它自己；/take session:<名字> 取那个面板会话", async () => {
+test("决策 458 复查：当前会话与面板会话同名时，派出的同名会话选中的是它自己；/take <名字> 取那个面板会话", async () => {
   const { term, runtime, runs, finishers, taken, cleanup } = makeShell({
     sessionName: () => "s1",
   });
@@ -647,7 +612,7 @@ test("决策 458 复查：当前会话与面板会话同名时，派出的同名
     await settle();
     term.input(ESC);
     await settle();
-    term.input("/take session:s1");
+    term.input("/take s1");
     term.input("\r");
     await settle();
     assert.deepEqual(taken, ["s1"]);

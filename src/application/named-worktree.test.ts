@@ -38,7 +38,7 @@ import {
   resolveWorktreeBase,
   uncommittedCount,
 } from "./named-worktree.ts";
-import { sessionRuntimeScope } from "./worker-scope.ts";
+import { sessionRuntimeScope } from "./session-scope.ts";
 import {
   executeClean,
   formatCleanResult,

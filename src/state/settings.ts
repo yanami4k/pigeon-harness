@@ -1,6 +1,6 @@
 // 三层设置（决策 325）：用户级 ~/.pigeon/settings.json、项目共享 .pigeon/settings.json、项目个人 .pigeon/settings.local.json；
 // 项目个人 > 项目共享 > 用户级。纯 schema、校验与合并，无 IO；文件读取与会话快照在 persistence/settings.ts。
-// - 各节沿用原配置文件的字段（去掉各文件自己的 version）：mcp、permissions、commands、orchestration、web、sandbox、loopGuard、
+// - 各节沿用原配置文件的字段（去掉各文件自己的 version）：mcp、permissions、commands、web、sandbox、loopGuard、
 //   hooks（决策 323/324）、学到的记忆的两层上限 memory（决策 332）、模型信息的覆盖值 modelInfo（决策 362）、撞上限续跑
 //   truncationContinuation、流式重复检测 repetitionGuard（决策 367）、工具的上限类设置 tools（决策 356、357、368）、
 //   上下文裁剪 contextPrune（决策 361）、快照的大小上限 snapshot（决策 381）、会话检索的开关 sessionSearch（决策 382）与
@@ -10,7 +10,7 @@
 // - 合并：对象按键逐层合并，标量与数组由高优先层整体替换；两个例外：permissions 的放权规则三层并集生效，
 //   hooks 各层的条目并列生效（同一事件同一 matcher 下命令完全相同的只留一份）。
 // - 响亮失败：顶层或节内的未知键、写在设置里的 key、写在项目级的 trustedDirectories、非法的钩子 matcher，一律指出文件、键与所在层。
-//   已删的节（决策 457）单独说明已删、请删掉，不当成拼错的键。
+//   已删的节与节内的键（决策 457、478）单独说明已删、请删掉，不当成拼错的键。
 // 以后各段往 SETTINGS_SECTIONS 里加节，合并与未知键检查随之生效。
 import path from "node:path";
 import type { TSchema } from "typebox";
@@ -43,11 +43,6 @@ import {
   ModelRequestSectionSchema,
   modelRequestMaxRetries,
 } from "./model-request-config.ts";
-import {
-  OrchestrationSectionSchema,
-  type OrchestrationSettings,
-  orchestrationSettings,
-} from "./orchestration-config.ts";
 import { type ContextPruneSection, ContextPruneSectionSchema } from "./prune-config.ts";
 import {
   type RepetitionGuardSection,
@@ -64,7 +59,6 @@ import {
   SandboxSectionSchema,
   sandboxConfigProblems,
 } from "./sandbox-config.ts";
-import { WorkerRoleSchema } from "./session-payloads.ts";
 import { SessionSearchSectionSchema, sessionSearchEnabled } from "./session-search-config.ts";
 import {
   type SnapshotSection,
@@ -85,6 +79,7 @@ import {
   type SearchLimits,
   searchLimits,
   ToolsSectionSchema,
+  taskListEnabled,
 } from "./tools-config.ts";
 import { WEB_KEY_FIELDS, type WebSection, WebSectionSchema } from "./web-config.ts";
 import { type WorktreeSection, WorktreeSectionSchema } from "./worktree-config.ts";
@@ -111,7 +106,6 @@ export const SETTINGS_SECTIONS = {
   mcp: McpSectionSchema,
   permissions: PermissionsSectionSchema,
   commands: CommandsSectionSchema,
-  orchestration: OrchestrationSectionSchema,
   web: WebSectionSchema,
   hooks: HooksSectionSchema,
   sandbox: SandboxSectionSchema,
@@ -144,7 +138,6 @@ export const SettingsFileSchema = Type.Object(
     mcp: Type.Optional(McpSectionSchema),
     permissions: Type.Optional(PermissionsSectionSchema),
     commands: Type.Optional(CommandsSectionSchema),
-    orchestration: Type.Optional(OrchestrationSectionSchema),
     web: Type.Optional(WebSectionSchema),
     sandbox: Type.Optional(SandboxSectionSchema),
     loopGuard: Type.Optional(LoopGuardSectionSchema),
@@ -181,8 +174,9 @@ export function describeSource(source: SettingsSource): string {
   return `${source.file} (${SETTINGS_LAYER_LABELS[source.layer]})`;
 }
 
-// 决策 457：已删的设置。写了即开局报错，写明哪个文件、哪一节已删、请删掉
-const REMOVED_SECTIONS: ReadonlySet<string> = new Set(["messaging"]);
+// 决策 457、478：已删的设置。写了即开局报错，写明哪个文件、哪一节（或节内哪个键）已删、请删掉
+const REMOVED_SECTIONS: ReadonlySet<string> = new Set(["messaging", "orchestration"]);
+const REMOVED_KEYS: Readonly<Record<string, readonly string[]>> = { commands: ["roles"] };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -271,6 +265,10 @@ export function validateSettingsLayer(
       Object.keys(("properties" in schema ? schema.properties : {}) as Record<string, unknown>)
     );
     for (const inner of Object.keys(section)) {
+      if (REMOVED_KEYS[key]?.includes(inner) === true) {
+        problems.push(`settings file ${where}: ${key}.${inner} has been removed; delete it`);
+        continue;
+      }
       if (!known.has(inner)) {
         problems.push(
           `settings file ${where}: unknown key ${inner} in ${key} (valid: ${[...known].join(", ")})`
@@ -328,7 +326,6 @@ export interface LayeredGrantRule {
 export interface MergedSettings {
   mcp?: Static<typeof McpSectionSchema>;
   commands?: Static<typeof CommandsSectionSchema>;
-  orchestration?: Static<typeof OrchestrationSectionSchema>;
   web?: WebSection;
   sandbox?: SandboxConfig;
   loopGuard?: Static<typeof LoopGuardSectionSchema>;
@@ -439,23 +436,13 @@ export function mergeSettingsLayers(
   };
 }
 
-// 合并后的组合判据（跨层才看得出的问题：角色引用了别层也没有的短名、轮数不递增、image 与 dockerfile 同时给出、MCP 语义不明）
+// 合并后的组合判据（跨层才看得出的问题：轮数不递增、image 与 dockerfile 同时给出、MCP 语义不明）
 export function mergedSettingsProblems(merged: MergedSettings, dotMcp?: DotMcpJson): string[] {
   const problems: string[] = [];
   const commands = merged.commands?.commands ?? {};
   for (const name of Object.keys(commands)) {
     if (!COMMAND_NAME_PATTERN.test(name)) {
       problems.push(`commands: invalid short name: ${name}`);
-    }
-  }
-  for (const [role, names] of Object.entries(merged.commands?.roles ?? {})) {
-    if (!Value.Check(WorkerRoleSchema, role)) {
-      problems.push(`commands: unknown role: ${role}`);
-    }
-    for (const name of names) {
-      if (!Object.hasOwn(commands, name)) {
-        problems.push(`commands: role ${role} references unknown short name: ${name}`);
-      }
     }
   }
   const loop = loopGuardSettings(merged.loopGuard);
@@ -514,7 +501,6 @@ export function emptySettingsSnapshot(root: string): SettingsSnapshot {
 export function commandsConfigOf(snapshot: SettingsSnapshot): CommandsConfig {
   return {
     commands: { ...(snapshot.merged.commands?.commands ?? {}) },
-    roles: { ...(snapshot.merged.commands?.roles ?? {}) },
   };
 }
 
@@ -530,10 +516,6 @@ export function withHooksDisabled(snapshot: SettingsSnapshot): SettingsSnapshot 
 
 export function configGrantRulesOf(snapshot: SettingsSnapshot): ConfigGrantRule[] {
   return snapshot.grants.map((entry) => entry.rule);
-}
-
-export function orchestrationSettingsOf(snapshot: SettingsSnapshot): OrchestrationSettings {
-  return orchestrationSettings(snapshot.merged.orchestration);
 }
 
 // 学到的记忆的两层上限（决策 332）：合并后的 memory 一节，不给的取缺省
@@ -598,6 +580,11 @@ export function runCommandTimeoutsOf(snapshot: SettingsSnapshot): RunCommandTime
 
 export function backgroundJobLimitsOf(snapshot: SettingsSnapshot): BackgroundJobLimits {
   return backgroundJobLimits(snapshot.merged.tools);
+}
+
+// 决策 294 B1：任务清单开不开（tools.taskList，缺省开）
+export function taskListEnabledOf(snapshot: SettingsSnapshot): boolean {
+  return taskListEnabled(snapshot.merged.tools);
 }
 
 export function loopGuardSettingsOf(snapshot: SettingsSnapshot): LoopGuardSettings {

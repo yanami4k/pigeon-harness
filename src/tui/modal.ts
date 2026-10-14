@@ -6,13 +6,11 @@ import type { ApprovalRequest } from "../approvals/handler.ts";
 import {
   APPROVAL_CANCEL_BUSY,
   APPROVAL_CANCEL_CLOSED,
-  APPROVAL_WITHDRAWN,
   type ApprovalBlockLine,
   type ApprovalPanelKey,
   type ApprovalPanelResult,
   approvalBlockLines,
   approvalBlockText,
-  withdrawnLine,
 } from "./approval.ts";
 import { isKey } from "./keybindings.ts";
 
@@ -60,8 +58,7 @@ export interface ModalHost {
   settleApproval?(line: string): void;
   // 决策 301：当前不在主会话视图（审批块里给主会话的请求写明来源）；缺省即在
   outsideMainView?(): boolean;
-  // 决策 323、324：审批面板出现时的 Notification 钩子（只作副作用）——面板出现记
-  // permission_prompt；请求来自 worker（请示汇到本会话）另记 worker_approval；缺省不通知
+  // 决策 323、324：审批面板出现时的 Notification 钩子（只作副作用）——面板出现记 permission_prompt；缺省不通知
   notifyApprovalHook?(notificationType: string, message: string): void;
 }
 
@@ -87,10 +84,8 @@ export function askApprovalPanel(
     return Promise.resolve({ key: "cancel", reason: APPROVAL_CANCEL_BUSY });
   }
   const panelText = approvalBlockText(request, directoryGrant, host.outsideMainView?.() === true);
-  // 决策 323、324：面板出现的两个实际时刻——审批面板出现（permission_prompt），以及 worker 的
-  // 请示汇到本会话（worker_approval，请求带来源会话与 worker 标签时另记一条）
+  // 决策 323、324：审批面板出现（permission_prompt）
   host.notifyApprovalHook?.("permission_prompt", panelText);
-  if (request.worker !== undefined) host.notifyApprovalHook?.("worker_approval", panelText);
   if (host.addApprovalBlock !== undefined) {
     // 决策 472：审批区按行上色画框，另给分好类的各行
     host.addApprovalBlock(
@@ -102,29 +97,13 @@ export function askApprovalPanel(
   const pending: PendingApproval = {
     resolve,
     ...(request.protectedPath !== undefined ? { protectedPath: true } : {}),
-    ...(request.worker === undefined && request.pooled === undefined
+    ...(request.pooled === undefined
       ? { mainWaiting: `${request.toolName} ${summarizeArgs(request.args)}` }
       : {}),
   };
   host.setPendingApproval(pending);
   host.updateStatus();
   host.render();
-  // 决策 303：请求方撤回（worker 的请求等满时限无人批）——面板撤下，按取消收口
-  const signal = request.signal;
-  if (signal !== undefined) {
-    const withdraw = (): void => {
-      if (host.pendingApproval() !== pending) return;
-      host.setPendingApproval(null);
-      host.setReasonMode(false);
-      if (host.settleApproval !== undefined) host.settleApproval(withdrawnLine(request));
-      else approvalLine(host, APPROVAL_WITHDRAWN);
-      host.updateStatus();
-      host.render();
-      resolve({ key: "cancel", reason: APPROVAL_WITHDRAWN });
-    };
-    if (signal.aborted) withdraw();
-    else signal.addEventListener("abort", withdraw, { once: true });
-  }
   return promise;
 }
 

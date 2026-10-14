@@ -1,7 +1,7 @@
 // 斜杠命令分发（决策 067 拆分自 shell.ts，零行为变化）：grant 命令层在 application/grants.ts
 //（决策 030）、恢复流程在
 // application/resume.ts；语法/语义错误响亮呈现，
-// 未知命令如实说明。worker 与 resume 的具体动作由壳转交给对应视图模块。
+// 未知命令如实说明。resume 的具体动作由壳转交给对应视图模块。
 // 决策 286：命令的用法与运行中能不能用在命令表（command-table.ts）；未知命令只报命令词。
 import { compactFocusOf } from "../application/compaction-text.ts";
 import { failureLine } from "../application/format.ts";
@@ -10,16 +10,15 @@ import { MEMORY_COMMAND_USAGE, MEMORY_SAVE_WAITING_TEXT } from "../application/m
 import {
   SANDBOX_FORK_UNSUPPORTED,
   SANDBOX_RESUME_UNSUPPORTED,
-  SANDBOX_WORKERS_UNSUPPORTED,
+  SANDBOX_TAKE_UNSUPPORTED,
 } from "../application/sandbox-session.ts";
 import type { TuiWorktreesFace } from "../application/worktree-cleanup.ts";
 import type { SessionGrantStore } from "../approvals/grant-store.ts";
 import type { ConfigGrantRule } from "../state/grants.ts";
 import type { SessionId } from "../state/ids.ts";
 import type { LayeredGrantRule } from "../state/settings.ts";
-import { unknownCommandText, WORKER_SESSION_ONLY } from "./command-table.ts";
+import { unknownCommandText } from "./command-table.ts";
 import { renderHooksView, type TuiHooksFace } from "./hooks-view.ts";
-import type { TuiWorkersFace } from "./workers-view.ts";
 
 // 沙箱会话的命令面（与 shell.ts 的 TuiSandboxFace 同形）
 interface CommandsSandboxFace {
@@ -54,23 +53,17 @@ export interface CommandsHost {
   requestExit(): void;
   sessionId(): SessionId;
   grants(): TuiGrantsContext | undefined;
-  workers(): TuiWorkersFace | undefined;
   resumeConfigured(): boolean;
   // 决策 237：沙箱会话在场；缺省 = 不在沙箱里
   sandbox?(): CommandsSandboxFace | undefined;
-  spawnCommand(workers: TuiWorkersFace, raw: string): void;
-  cancelCommand(workers: TuiWorkersFace, ref: string | undefined): void;
-  workersStatusCommand(workers: TuiWorkersFace): void;
-  // 决策 279：/take <worker 名>
-  takeCommand(workers: TuiWorkersFace, name: string | undefined): void;
+  // M7（决策 079）：/fork 手动分叉，交回给人看的一行（缺省 = 不可用）
+  readonly forkCommand?: ((args: string) => Promise<string>) | undefined;
   resumeCommand(arg: string | undefined): void;
   compactCommand(focus: string | undefined): void;
   // 决策 340：/reload 重读设置（装配方给了重载入口才在场）
   readonly reloadCommand?: ((args: readonly string[]) => void) | undefined;
   // 决策 294 B1：任务清单（排好的文字）；undefined = 清单没开；缺省 = /tasks 不可用
   tasks?(): string | undefined;
-  // 决策 301：/agents 切换树形视图
-  toggleTree?(): void;
   // 决策 323、324：本会话的钩子面（/hooks 的只读清单）；缺省 = /hooks 不可用
   hooksView?(): TuiHooksFace | undefined;
   // 决策 331：/memory 的命令面（缺省 = /memory 不可用）
@@ -87,7 +80,7 @@ export interface CommandsHost {
   readonly rewindCommand?: (() => void) | undefined;
   // 决策 443：/panel 打开会话面板（缺省 = 不可用）
   readonly panelCommand?: (() => void) | undefined;
-  // 决策 443：/take <名字> 是会话面板里的会话时取回它工作树里的改动；不是即 undefined（照旧按 worker 处理）
+  // 决策 443：/take <名字> 取回会话面板里那个会话工作树里的改动；没有这个会话即 undefined
   takePooled?(name: string): Promise<string> | undefined;
   // 决策 443：会话面板里有没有这个名字的会话（只查不取）
   hasPooled?(name: string): boolean;
@@ -108,7 +101,7 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
       host.requestExit();
       return;
     }
-    // 决策 237、245：沙箱会话——/export 手动交回；分叉、worker 与 /resume 换绑不支持，说明原因
+    // 决策 237、245：沙箱会话——/export 手动交回；分叉、取回与 /resume 换绑不支持，说明原因
     const sandbox = host.sandbox?.();
     if (sandbox !== undefined) {
       if (tokens[0] === "export") {
@@ -129,11 +122,8 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
       const reason =
         tokens[0] === "fork"
           ? SANDBOX_FORK_UNSUPPORTED
-          : tokens[0] === "spawn" ||
-              tokens[0] === "cancel" ||
-              tokens[0] === "workers" ||
-              tokens[0] === "take"
-            ? SANDBOX_WORKERS_UNSUPPORTED
+          : tokens[0] === "take"
+            ? SANDBOX_TAKE_UNSUPPORTED
             : tokens[0] === "resume"
               ? SANDBOX_RESUME_UNSUPPORTED
               : undefined;
@@ -142,11 +132,10 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
         return;
       }
     }
-    // M5.5 S4（决策 040）：worker 编排命令——解析与排版在 application/workers-commands.ts
-    const workers = host.workers();
     // M7（决策 079）：/fork 手动分叉——分支在独立工作树里续跑，跑完回报
-    if (workers?.fork !== undefined && tokens[0] === "fork") {
-      void workers.fork(value.trim().slice("/fork".length)).then(
+    const fork = host.forkCommand;
+    if (fork !== undefined && tokens[0] === "fork") {
+      void fork(value.trim().slice("/fork".length)).then(
         (text) => {
           host.addSystem(text);
           host.render();
@@ -158,69 +147,27 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
       );
       return;
     }
-    if (workers !== undefined && tokens[0] === "spawn") {
-      host.spawnCommand(workers, value.trim().slice("/spawn".length));
-      return;
-    }
-    if (workers !== undefined && tokens[0] === "cancel") {
-      host.cancelCommand(workers, tokens[1]);
-      return;
-    }
-    if (workers !== undefined && tokens[0] === "workers") {
-      host.workersStatusCommand(workers);
-      return;
-    }
-    // 决策 301：/agents 切换树形视图；/stop 与 /approve 在 worker 会话里用（主会话里说明怎么进入）
-    if (workers !== undefined && tokens[0] === "agents" && host.toggleTree !== undefined) {
-      host.toggleTree();
-      return;
-    }
-    if (workers !== undefined && (tokens[0] === "stop" || tokens[0] === "approve")) {
-      host.addSystem(WORKER_SESSION_ONLY);
-      return;
-    }
-    // 决策 279：/take <worker 名> 把已收尾 worker 自己的改动叠进工作目录
-    // 决策 443：会话面板里的会话按名字取回；与 worker 同名时要写明"session:名字"或"worker:名字"（决策 475：不再认中文前缀）
-    if (tokens[0] === "take" && tokens[1] !== undefined) {
-      const raw = tokens[1];
-      const forced = /^session:/.test(raw) ? "pooled" : /^worker:/.test(raw) ? "worker" : undefined;
-      const name = forced !== undefined ? raw.slice(raw.indexOf(":") + 1) : raw;
-      const isWorker = workers?.status().some((status) => status.name === name) === true;
-      // 先判歧义：同名时什么都不做，要求写明
-      const isPooled = host.hasPooled?.(name) === true;
+    // 决策 443：/take <名字> 把会话面板里那个会话工作树里的改动取回主工作目录
+    if (tokens[0] === "take") {
+      const name = tokens[1];
+      if (name === undefined) {
+        host.addSystem("usage: /take <session>");
+        return;
+      }
       // 决策 458：当前会话也在会话面板里列着，但它的改动就在本工作区里，没有可取回的
-      if (
-        ((forced === "pooled" && !isPooled) || (forced === undefined && !isPooled && !isWorker)) &&
-        host.currentSessionName?.() === name
-      ) {
+      if (host.hasPooled?.(name) !== true && host.currentSessionName?.() === name) {
         host.addSystem(`${name} is the current session; nothing to take`);
         return;
       }
-      if (forced === undefined && isPooled && isWorker) {
-        host.addSystem(
-          `a session and a worker are both named ${name}: /take session:${name} or /take worker:${name}`
-        );
-        return;
-      }
-      const pooled = forced === "worker" || !isPooled ? undefined : host.takePooled?.(name);
-      if (pooled !== undefined) {
-        void pooled.then((text) => {
-          host.addSystem(text);
-          host.render();
-        });
-        return;
-      }
-      if (forced === "pooled") {
+      const pooled = host.takePooled?.(name);
+      if (pooled === undefined) {
         host.addSystem(`no session named ${name} in the session panel`);
         return;
       }
-      if (workers !== undefined) {
-        host.takeCommand(workers, name);
-        return;
-      }
-    }
-    if (workers !== undefined && tokens[0] === "take") {
-      host.takeCommand(workers, tokens[1]);
+      void pooled.then((text) => {
+        host.addSystem(text);
+        host.render();
+      });
       return;
     }
     // 决策 294 B1：/tasks 查看任务清单（完整的清单显示留给编排二段）

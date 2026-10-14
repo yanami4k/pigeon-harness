@@ -38,7 +38,6 @@ function input(overrides: Partial<SystemPromptBaseInput> = {}): SystemPromptBase
     runCommandSentence: runCommandTexts({ platform: "linux", approval: "yolo" }).prompt,
     backgroundJobs: true,
     sessionSearch: false,
-    scopeSentence: "",
     ...overrides,
   };
 }
@@ -102,15 +101,10 @@ test("能跑命令、能改不能写的 worker：只给它有的那几条", () =
   assert.match(text, /output limit/);
 });
 
-test("后台作业不可用时不写后台作业那一条；有会话检索与作用范围时各写一条", () => {
-  const scope =
-    'Some tools are limited in scope, and calls outside the scope are rejected: run_command may only run single commands that start with "npm test" and do not go through a shell.';
-  const text = systemPromptBase(
-    input({ backgroundJobs: false, sessionSearch: true, scopeSentence: scope })
-  );
+test("后台作业不可用时不写后台作业那一条；有会话检索时写一条", () => {
+  const text = systemPromptBase(input({ backgroundJobs: false, sessionSearch: true }));
   assert.doesNotMatch(text, /Track the background jobs/);
   assert.match(text, /- To find information from earlier sessions, use list_sessions/);
-  assert.ok(text.endsWith(`\n- ${scope}`), text);
 });
 
 test("hashline 编辑模式与 Windows 执行端：文件工具与 run_command 的说法随之变", () => {

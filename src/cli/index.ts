@@ -10,7 +10,6 @@ import { failureBadge, plural } from "../application/format.ts";
 import { currentHarnessRef, describeHarness, pigeonVersion } from "../application/harness-ref.ts";
 import { HEADLESS_EXIT_CODES, runHeadless } from "../application/headless-core.ts";
 import {
-  orchestrationSettingsOf,
   parseLaunchFlags,
   resolveStreamFnSpec,
   VALUELESS_FLAGS,
@@ -28,7 +27,7 @@ import { newSessionId } from "../state/ids.ts";
 import { BUNDLE_ROLE_ENV, FROM_BUNDLE } from "../state/package-paths.ts";
 import { pigeonRel } from "../state/paths.ts";
 import type { SessionListFilters } from "../state/session-summary.ts";
-import { loopGuardSettingsOf, withHooksDisabled } from "../state/settings.ts";
+import { loopGuardSettingsOf, taskListEnabledOf, withHooksDisabled } from "../state/settings.ts";
 import { EDIT_MODES, type EditMode, isEditMode } from "../tools/edit-mode.ts";
 import { sanitizedWriter } from "./output.ts";
 import { runReplayCommand } from "./replay.ts";
@@ -195,7 +194,7 @@ async function resumeMain(argv: string[]): Promise<void> {
 async function runMain(argv: string[]): Promise<void> {
   const usage =
     "usage: pigeon run [task] [--root <dir>] [--governance-root <dir>] --stream-fn <module> [--yolo] [--thinking <level>] " +
-    "[--max-turns <N>] [--wall-clock <ms>] [--no-hooks] [--no-web] [--no-pushed-memory] [--no-spawn-workers] [--worker-concurrency <n>] [--worker-limit <n>] [--max-output-tokens <n>] [--context-window <n>] [--compact-threshold <n>] [--compact-keep <n>] " +
+    "[--max-turns <N>] [--wall-clock <ms>] [--no-hooks] [--no-web] [--no-pushed-memory] [--no-subagents] [--max-output-tokens <n>] [--context-window <n>] [--compact-threshold <n>] [--compact-keep <n>] " +
     "[--sandbox [--sandbox-network on|off] [--sandbox-approval yolo|prompt] [--sandbox-from-head]] [--trust-config] [--json]";
   let task: string | undefined;
   let json = false;
@@ -251,7 +250,7 @@ async function runMain(argv: string[]): Promise<void> {
     sessionSearch: true,
     pushedMemory: true,
     sandbox: true,
-    spawnWorkers: true,
+    subagents: true,
   });
   if (task === undefined) {
     const chunks: Buffer[] = [];
@@ -279,8 +278,6 @@ async function runMain(argv: string[]): Promise<void> {
   });
   // 决策 324：--no-hooks 只对本次运行停用全部钩子
   if (flags.noHooks) settings = withHooksDisabled(settings);
-  // 决策 297–303：编排设定——设置的 orchestration 一节（缺失取缺省），--worker-concurrency 与 --worker-limit 优先
-  const orchestration = orchestrationSettingsOf(flags, settings);
   // 决策 308：打转检测——设置的 loopGuard 一节（缺失取缺省即开着）
   const loopGuard = loopGuardSettingsOf(settings);
   const runOptions = {
@@ -303,11 +300,8 @@ async function runMain(argv: string[]): Promise<void> {
     pushedMemory: flags.pushedMemory,
     // 决策 382：会话检索缺省开着（--no-session-search 关掉）
     sessionSearch: flags.sessionSearch,
-    // 决策 264–267：主 agent 派 worker 缺省开着（--no-spawn-workers 关掉）；--sandbox 时由 headless 略过（沙箱里不派 worker）
-    spawnWorkers: flags.spawnWorkers,
-    orchestration,
-    // 决策 294 B1：任务清单按编排配置（缺省开）
-    taskList: orchestration.taskList,
+    // 决策 294 B1：任务清单按设置的 tools.taskList（缺省开）
+    taskList: taskListEnabledOf(settings),
     // 决策 287–291：联网工具缺省给出，--sandbox-network off 不给
     ...webToolsOptionOf(flags, settings),
     loopGuard,
@@ -388,7 +382,7 @@ export async function main(argv: string[]): Promise<void> {
     writeOut(await runSandboxCommand(argv.slice(1)));
     return;
   }
-  // 决策 448：pigeon worktrees list | clean：留下的 worker 工作树与分支
+  // 决策 448：pigeon worktrees list | clean：留下的工作树与分支
   if (argv[0] === "worktrees") {
     writeOut(await worktreesMain(argv.slice(1)));
     return;
@@ -520,7 +514,7 @@ export const TOP_LEVEL_HELP = [
   "  pigeon replay <runId>         replay a run",
   "  pigeon session list           list this project's sessions",
   "  pigeon sandbox list|clean     list or clean leftover sandbox containers",
-  "  pigeon worktrees list|clean   list or delete leftover worker worktrees and branches",
+  "  pigeon worktrees list|clean   list or delete leftover worktrees and branches",
   `  pigeon migrate-config         merge old config into settings.json; move old state into ${pigeonRel("state")}/`,
   "  pigeon sandbox cache|clear-cache  show or clear the shared sandbox download cache",
 ].join("\n");

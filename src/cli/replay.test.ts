@@ -173,7 +173,7 @@ test("replay 报告（真实运行）：运行头终态与分类，时间线按�
     }
   }));
 
-test("replay 报告：七种自定义条目原位呈现（快照、验证、worker、分叉、授权、收尾）", () =>
+test("replay 报告：自定义条目原位呈现（快照、验证、分叉、授权、收尾）；旧会话的 worker 条目跳过（决策 477）", () =>
   withRoot(async (root) => {
     const sessionsDir = join(root, ".pigeon", "state", "sessions");
     const session = createFixtureSession({ sessionsDir, cwd: root });
@@ -203,10 +203,7 @@ test("replay 报告：七种自定义条目原位呈现（快照、验证、work
       `grant created ${shortId(grantId)} | edit_file, path src/ | first call tc-grant`,
       `grant revoked ${shortId(grantId)}`,
     ]);
-    assert.deepEqual(detail("pigeon.worker"), [
-      `worker spawned impl-1 (implementer) | session ${shortId(childId)} | branch impl-1 | tools read_file, edit_file | approval mode yolo | limits 20 turns / 600s`,
-      `worker settled impl-1 | session ${shortId(childId)} | completed | 3 turns | 0 files changed`,
-    ]);
+    assert.deepEqual(detail("pigeon.worker"), []);
     assert.deepEqual(detail("pigeon.run-end"), [
       "run end | ended wall-clock-limit | 3 new messages | stopReason=aborted",
     ]);

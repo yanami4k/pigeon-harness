@@ -323,25 +323,13 @@ test("决策 323/324：审批面板出现记 permission_prompt；worker 的请�
       toolCallId: "tc-2",
       args: { path: "a.ts" },
       sessionId: newSessionId(),
-      worker: { name: "w1", role: "coder" },
+      pooled: { name: "w1" },
     };
     void askApprovalPanel(shell, workerRequest);
     await settle();
-    assert.deepEqual(notificationTypes(), [
-      "permission_prompt",
-      "permission_prompt",
-      "worker_approval",
-    ]);
+    assert.deepEqual(notificationTypes(), ["permission_prompt", "permission_prompt"]);
     term.input("n");
     await settle();
-    // message 用面板提示原文
-    const workerCall = hooks.calls.find((call) => call.target === "worker_approval");
-    assert.ok(
-      typeof workerCall?.fields.message === "string" &&
-        (workerCall.fields.message as string).includes("edit_file"),
-      JSON.stringify(workerCall?.fields)
-    );
-    assert.equal(workerCall?.fields.notification_type, "worker_approval");
   } finally {
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });

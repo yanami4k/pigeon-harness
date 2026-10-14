@@ -1,9 +1,9 @@
 // 新会话存储的自定义条目（决策 176 / 182 / 184）：会话文件是 pi 的 v4 JSONL 会话树，消息以 pi 消息条目完整存储（179），
 // Pigeon 自有的事实只以 custom 条目挂进树里（上游 entry 与 record 类型封闭，写入未知类型"写时不报、读时整个文件打不开"）。
-// 除消息外只写十一种：Run 开始、Run 收尾、验证记录（旧会话只读）、代码快照、worker 派出与收尾、分叉、授权建立与撤销、
-// 终端界面退出（283）、钩子运行（323）、撞上限续跑与流式重复检测命中（367）。
+// 除消息外只写这里列出的几种（Run 开始与收尾、代码快照、分叉、授权、钩子运行等）；验证记录与终端界面退出只供读旧会话。
+// 决策 457：worker 的派出与收尾（pigeon.worker）不再写，旧会话里的读到即跳过（决策 477）。
 // 条目数据的形状与版本由 Pigeon 自己负责（上游读盘只要求 customType 是字符串）：每种数据都带 version，读者按它分派。
-// worker 与分支会话的来历不写成条目，放进会话文件头的 metadata（只在创建与分叉时写一次，177）。
+// 分支会话的来历不写成条目，放进会话文件头的 metadata（只在分叉时写一次，177）。
 // 本文件只定义形状与写入接口，纯类型、无 IO；写者在 pi-runtime/session-store.ts，只读读取器在 persistence/session-reader.ts。
 import { type Static, Type } from "typebox";
 import { AttemptBudgetSchema } from "./attempt-config.ts";
@@ -23,17 +23,9 @@ import {
 } from "./runtime-events.ts";
 import {
   CheckpointRefSchema,
-  ChildSettledStatusSchema,
-  DelegatedPolicySchema,
   ForkPointSchema,
   ForkTriggerSchema,
   GitWorktreeWorkspaceSchema,
-  ScriptSettleTagSchema,
-  ScriptSpawnTagSchema,
-  WorkerErrorKindSchema,
-  WorkerLimitsSchema,
-  WorkerRoleSchema,
-  WorkerWorkspaceSchema,
 } from "./session-payloads.ts";
 
 // 自定义条目的 customType（加 pigeon. 前缀，与上游或其他应用写的 custom 条目区分）
@@ -43,7 +35,6 @@ export const SessionEntryType = {
   Verification: "pigeon.verification",
   Checkpoint: "pigeon.checkpoint",
   CheckpointMark: "pigeon.checkpoint-mark",
-  Worker: "pigeon.worker",
   Fork: "pigeon.fork",
   Grant: "pigeon.grant",
   Exit: "pigeon.exit",
@@ -264,52 +255,6 @@ export const CheckpointMarkDataSchema = Type.Object({
   reason: Type.Optional(Type.String()),
 });
 export type CheckpointMarkData = Static<typeof CheckpointMarkDataSchema>;
-
-// worker 派出与收尾（040）：写在父会话文件里。派出先于建工作树落盘；派出失败以 spawn-failed 收尾，保证两者配对。
-// 旧记录的 taskKey 与结果里的 structured、receiptIds 不再写（前两者无读者，回执随 184 停写）
-export const WorkerSpawnedDataSchema = Type.Object({
-  version: VERSION,
-  event: Type.Literal("spawned"),
-  // 派出时父会话的活动 Run（人以 /spawn 派出时缺省）
-  runId: Type.Optional(RunIdSchema),
-  childSessionId: SessionIdSchema,
-  name: Type.String({ minLength: 1 }),
-  role: WorkerRoleSchema,
-  task: Type.String({ minLength: 1 }),
-  // 决策 294：派出时带的标签（加这一项之前的记录没有它）
-  label: Type.Optional(Type.String({ minLength: 1 })),
-  policy: DelegatedPolicySchema,
-  limits: WorkerLimitsSchema,
-  workspace: WorkerWorkspaceSchema,
-  spawnedAt: Type.Integer({ minimum: 0 }),
-  // 决策 312：脚本编排派出的调用（运行号、指纹、接力的上游；加这一项之前的记录没有它）
-  script: Type.Optional(ScriptSpawnTagSchema),
-});
-export const WorkerSettledDataSchema = Type.Object({
-  version: VERSION,
-  event: Type.Literal("settled"),
-  runId: Type.Optional(RunIdSchema),
-  childSessionId: SessionIdSchema,
-  name: Type.String({ minLength: 1 }),
-  status: ChildSettledStatusSchema,
-  error: Type.Optional(Type.String()),
-  // 决策 298：错误类型（加这一项之前的记录没有它）
-  errorKind: Type.Optional(WorkerErrorKindSchema),
-  result: Type.Optional(
-    Type.Object({
-      branch: Type.Optional(Type.String({ minLength: 1 })),
-      changedFiles: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-      summary: Type.String(),
-      summaryTruncated: Type.Boolean(),
-    })
-  ),
-  turns: Type.Integer({ minimum: 0 }),
-  settledAt: Type.Integer({ minimum: 0 }),
-  // 决策 312：脚本编排派出的调用（运行号、指纹与交回的结构化数据）
-  script: Type.Optional(ScriptSettleTagSchema),
-});
-export const WorkerDataSchema = Type.Union([WorkerSpawnedDataSchema, WorkerSettledDataSchema]);
-export type WorkerData = Static<typeof WorkerDataSchema>;
 
 // 分叉（077 / 177）：写在来源会话文件里；分支会话自成文件，由 pi 的 fork 把分叉点之前的历史复制过去。
 // forkEntryId 是分叉点在本文件里对应的消息条目号（来源会话在本存储里没有对应消息时缺省）
@@ -666,7 +611,6 @@ export type SessionCustomEntry =
   | { customType: typeof SessionEntryType.Verification; data: VerificationData }
   | { customType: typeof SessionEntryType.Checkpoint; data: CheckpointData }
   | { customType: typeof SessionEntryType.CheckpointMark; data: CheckpointMarkData }
-  | { customType: typeof SessionEntryType.Worker; data: WorkerData }
   | { customType: typeof SessionEntryType.Fork; data: ForkData }
   | { customType: typeof SessionEntryType.Grant; data: GrantData }
   | { customType: typeof SessionEntryType.Exit; data: ExitData }
@@ -691,7 +635,6 @@ export const SESSION_ENTRY_SCHEMAS = {
   [SessionEntryType.Verification]: VerificationDataSchema,
   [SessionEntryType.Checkpoint]: CheckpointDataSchema,
   [SessionEntryType.CheckpointMark]: CheckpointMarkDataSchema,
-  [SessionEntryType.Worker]: WorkerDataSchema,
   [SessionEntryType.Fork]: ForkDataSchema,
   [SessionEntryType.Grant]: GrantDataSchema,
   [SessionEntryType.Exit]: ExitDataSchema,
@@ -716,19 +659,10 @@ export interface SessionEntrySink {
   append(entry: SessionCustomEntry): void;
 }
 
-// 会话文件头 metadata 里 Pigeon 的一段（只在创建与分叉时写一次）：worker 会话记派出它的父 Run、名字、角色、工作区；
-// 分支会话记来源会话、分叉点、快照与工作树。父会话号在文件头的 parentSessionId 上，不重复
+// 会话文件头 metadata 里 Pigeon 的一段（只在分叉时写一次）：分支会话记来源会话、分叉点、快照与工作树。父会话号在文件头的
+// parentSessionId 上，不重复。旧会话里 worker 会话头上的 worker 一段不再认（决策 477），按普通会话读
 export const SessionHeaderMetadataSchema = Type.Object({
   version: VERSION,
-  worker: Type.Optional(
-    Type.Object({
-      parentRunId: Type.Optional(RunIdSchema),
-      name: Type.String({ minLength: 1 }),
-      role: WorkerRoleSchema,
-      workspace: WorkerWorkspaceSchema,
-      startedAt: Type.Integer({ minimum: 0 }),
-    })
-  ),
   branch: Type.Optional(
     Type.Object({
       sourceSessionId: SessionIdSchema,

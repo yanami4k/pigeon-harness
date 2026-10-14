@@ -135,7 +135,7 @@ test("Run 级失败分类：取消、熔断、业务（输出截断）、基础�
   }
 });
 
-test("worker 父子关系：子会话摘要回指父会话，父会话计派出数与未收尾数", async () => {
+test("旧会话的 worker 记录（决策 477）：父会话与子会话照常列出，摘要里不再带派出与父子信息", async () => {
   const { dir, cleanup } = makeDir();
   try {
     const parent = createFixtureSession({ sessionsDir: dir });
@@ -151,12 +151,10 @@ test("worker 父子关系：子会话摘要回指父会话，父会话计派出�
     const { sessionId: parentId } = await parent.close();
 
     const byId = new Map(listSessionSummaries(dir).map((summary) => [summary.sessionId, summary]));
-    assert.deepEqual(byId.get(parentId)?.children, { count: 2, unsettled: 1 });
-    assert.deepEqual(byId.get(doneId)?.worker, {
-      name: "impl-1",
-      role: "implementer",
-      parentSessionId: parentId,
-    });
+    assert.equal(byId.get(parentId)?.runCount, 1);
+    assert.equal(byId.get(doneId)?.runCount, 1);
+    assert.equal("children" in (byId.get(parentId) ?? {}), false);
+    assert.equal("worker" in (byId.get(doneId) ?? {}), false);
   } finally {
     cleanup();
   }

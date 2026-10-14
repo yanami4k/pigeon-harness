@@ -36,8 +36,7 @@ import type { StatusFacts } from "./status-sources.ts";
 export { exportNotice, SANDBOX_CLEAN_COMMAND, type Sandbox, type SandboxExport };
 
 export const SANDBOX_FORK_UNSUPPORTED = "/fork not available in the sandbox";
-export const SANDBOX_WORKERS_UNSUPPORTED =
-  "/spawn, /cancel, /workers and /take not available in the sandbox";
+export const SANDBOX_TAKE_UNSUPPORTED = "/take not available in the sandbox";
 export const SANDBOX_RESUME_UNSUPPORTED =
   "/resume not available in the sandbox; use pigeon --sandbox --resume <session ID>";
 

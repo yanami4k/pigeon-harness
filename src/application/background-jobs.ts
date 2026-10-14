@@ -35,7 +35,20 @@ import {
 } from "../tools/background-jobs.ts";
 import { commandLabel } from "../tools/command-echo.ts";
 import { escapeStatusText } from "./status-block.ts";
-import type { DrainTarget, NoticeTarget } from "./worker-notices.ts";
+
+// 运行面上接收通知的一面（PiRuntimeAdapter 满足）
+export interface NoticeTarget {
+  notify(text: string): string;
+  withdrawNotice(key: string): boolean;
+  noticeDelivered(key: string): boolean;
+  pendingNotices(): number;
+}
+
+// 只带通知跑一轮的一面
+export interface DrainTarget<R> {
+  pendingNotices(): number;
+  runNotices(): Promise<R>;
+}
 
 export const JOB_NOTICE_PREFIX = "[Background job notice] ";
 // 决策 428 之前的中文原文，只用来认出旧会话里的通知（回看历史、回退）

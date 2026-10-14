@@ -21,7 +21,6 @@ import { JOB_NOTICE_PREFIX, LEGACY_JOB_NOTICE_PREFIX } from "./background-jobs.t
 import { PROGRAM_NOTE_PREFIX } from "./enter-worktree-tool.ts";
 import { plural, summarizeArgs, workEndLine } from "./format.ts";
 import { LEGACY_LOOP_REMINDER_PREFIX, LOOP_REMINDER_PREFIX } from "./loop-guard.ts";
-import { LEGACY_WORKER_NOTICE_PREFIX, WORKER_NOTICE_PREFIX } from "./worker-notices.ts";
 
 export const DEFAULT_HISTORY_LIMIT = 500;
 // 单条正文的渲染上限（字符）：超出折叠并标注，原文用 /search 与读原文工具取
@@ -55,7 +54,9 @@ function clip(text: string, chars: number): string {
   return text.length <= chars ? text : `${text.slice(0, chars)}… (${text.length} chars)`;
 }
 
-// 决策 457、477：脚本编排与跨会话消息已删除，旧会话里它们递给模型的通知只用这几个前缀认出（回看时不当成人说的话）
+// 决策 457、477：worker、脚本编排与跨会话消息已删除，旧会话里它们递给模型的通知只用这几个前缀认出（回看时不当成人说的话）
+const WORKER_NOTICE_PREFIX = "[Worker notice] ";
+const LEGACY_WORKER_NOTICE_PREFIX = "[worker 通知] ";
 const SCRIPT_NOTICE_PREFIX = "[Script notice] ";
 const LEGACY_SCRIPT_NOTICE_PREFIX = "[脚本通知] ";
 const PEER_NOTICE_PREFIXES = [

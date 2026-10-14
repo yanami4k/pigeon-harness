@@ -17,7 +17,6 @@ import type { ThinkingLevel } from "../state/runtime-events.ts";
 import { emptySettingsSnapshot } from "../state/settings.ts";
 import type { ThinkingSection } from "../state/thinking-config.ts";
 import { buildRuntime } from "./runtime.ts";
-import { createWorkerRuntimeFactory } from "./workers.ts";
 
 // Run 开始条目的 model 段里本文件关心的几项：档位、温度或"温度未生效"
 type StartedModel = { thinkingLevel?: string; temperature?: number; temperatureIgnored?: unknown };
@@ -127,58 +126,6 @@ test("自带的 DeepSeek 接入（入口模块声明的模型信息）：缺省�
     assert.deepEqual(bodies[0]?.thinking, { type: "disabled" });
     assert.equal(bodies[0]?.temperature, 0);
     assert.equal(off?.temperature, 0);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("推理档位：worker 按角色配置覆盖全局值，无覆盖的角色继承全局；没有全局值时按模型信息取缺省", async () => {
-  const root = mkdtempSync(join(tmpdir(), "pigeon-thinking-worker-"));
-  try {
-    const seen: unknown[] = [];
-    const levels: unknown[] = [];
-    const runWorker = async (
-      factory: ReturnType<typeof createWorkerRuntimeFactory>,
-      role: "tester" | "explorer"
-    ) => {
-      const sessionId = newSessionId();
-      const handle = factory({
-        sessionId,
-        name: role,
-        role,
-        task: "看看",
-        policy: { allow: ["read_file"], deny: [], approvalMode: "prompt" },
-        governanceRoot: root,
-        workspace: { kind: "git-worktree", path: root, branch: `pigeon/${role}` },
-        lineage: { parentSessionId: newSessionId() },
-        approvalHandler: async () => ({ approved: false }),
-      });
-      await handle.run("看看");
-      await handle.dispose();
-      levels.push(
-        loadStoreSession(join(root, ".pigeon", "state", "sessions"), sessionId)?.view.runs[0]?.start
-          .model.thinkingLevel
-      );
-    };
-    const explicit = createWorkerRuntimeFactory({
-      streamFnFor: () => recordingStreamFn(seen),
-      provider: "fake-provider",
-      modelId: "fake-model-1",
-      homeDir: root,
-      thinkingLevel: "high",
-      roleThinkingLevels: { tester: "low" },
-    });
-    await runWorker(explicit, "tester");
-    await runWorker(explicit, "explorer");
-    const byModel = createWorkerRuntimeFactory({
-      streamFnFor: () => recordingStreamFn(seen, true),
-      provider: "fake-provider",
-      modelId: "fake-model-1",
-      homeDir: root,
-    });
-    await runWorker(byModel, "explorer");
-    assert.deepEqual(levels, ["low", "high", "high"]);
-    assert.deepEqual(seen, ["low", "high", "high"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

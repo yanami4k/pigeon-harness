@@ -30,9 +30,9 @@ import type {
   GitWorktreeWorkspace,
 } from "../state/session-payloads.ts";
 import { type HeadlessRunOptions, runHeadless } from "./headless-core.ts";
+import { sessionRuntimeScope } from "./session-scope.ts";
 import { beginStoreFork, type SessionStoreWriter, storeFaultWarner } from "./session-store.ts";
 import { type StatusHashes, statusFromEntries } from "./status-block.ts";
-import { sessionRuntimeScope } from "./worker-scope.ts";
 import { sessionsDirOf } from "./workspace.ts";
 
 export class ForkError extends Error {}

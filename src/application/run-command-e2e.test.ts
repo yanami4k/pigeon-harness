@@ -3,31 +3,17 @@
 // （human:grant），参数不同重新问；执行证据随工具结果的 details 记进会话存储。tester 角色只能跑 commands.json 为它登记的命令。
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { onTestFinished, test } from "vitest";
+import { test } from "vitest";
 import { loadStoreSession } from "../persistence/session-view.ts";
-import { loadSettings } from "../persistence/settings.ts";
 import { createFakeStreamFn } from "../pi-runtime/fixtures.ts";
 import { newSessionId } from "../state/ids.ts";
 import { type StoreMessage, toolResultMark } from "../state/session-judge.ts";
 import type { ExecEvidence } from "../tools/run-command.ts";
 import { REASON_PROMPT, scriptedApprovalHandler } from "../tui/approval-fixtures.ts";
 import { buildRuntime } from "./runtime.ts";
-
-// 用户级设置指到的空临时目录：这个测试结束后删掉
-function emptyHome(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
-  onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
-  return dir;
-}
-
-// 取值并断言在场（替代非空断言）
-function required<T>(value: T | undefined): T {
-  assert.ok(value !== undefined, "值应在场");
-  return value;
-}
 
 const NODE = `"${process.execPath}"`;
 const COMMAND_A = `${NODE} -e "process.stdout.write('a')"`;
@@ -144,75 +130,6 @@ test("run_command：exec 每次都问且显示完整命令；[a] 精确命令放
     // 被拒的调用没有执行：工具结果是错误、不带执行证据
     assert.equal(third?.isError, true);
     assert.equal(execOf(third).command, undefined);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("tester 角色：只能运行设置 commands 一节为它登记的命令（短名展开），清单外拒绝且不产生副作用", async () => {
-  const root = mkdtempSync(join(tmpdir(), "pigeon-run-command-tester-"));
-  try {
-    mkdirSync(join(root, ".pigeon"), { recursive: true });
-    writeFileSync(
-      join(root, ".pigeon", "settings.json"),
-      JSON.stringify({ commands: { commands: { hello: COMMAND_A }, roles: { tester: ["hello"] } } })
-    );
-    const sessionId = newSessionId();
-    const bundle = buildRuntime({
-      streamFn: createFakeStreamFn({
-        replies: [
-          runCommandCall("hello", "跑登记的"),
-          runCommandCall(COMMAND_B, "跑没登记的"),
-          { text: "完成" },
-        ],
-      }),
-      workspaceRoot: root,
-      homeDir: root,
-      // 决策 325：短名与角色清单取自设置快照
-      settings: loadSettings(root, { homeDir: emptyHome("pigeon-run-home-") }),
-      sessionId,
-      yolo: true,
-      toolPolicy: { allow: ["read_file", "run_command"], deny: [], approvalMode: "yolo" },
-      commandRole: "tester",
-      provider: "fake-provider",
-      modelId: "fake-model-1",
-      createApprovalHandler: () => async () => ({ approved: false }),
-    });
-    let toolResults: Array<{ isError: boolean; text: string }>;
-    try {
-      await bundle.adapter.run("测一下");
-      toolResults = bundle.adapter.transcript().flatMap((message) =>
-        message.role === "toolResult"
-          ? [
-              {
-                isError: message.isError,
-                text: message.content
-                  .map((block) => (block.type === "text" ? block.text : ""))
-                  .join(""),
-              },
-            ]
-          : []
-      );
-    } finally {
-      await bundle.adapter.dispose();
-      await bundle.sessionStore.close();
-    }
-    assert.equal(toolResults[0]?.isError, false);
-    assert.ok(toolResults[0]?.text.includes(" (short name hello)"), toolResults[0]?.text);
-    assert.equal(toolResults[1]?.isError, true);
-    assert.ok(
-      toolResults[1]?.text.includes("is not on this role's allowlist"),
-      toolResults[1]?.text
-    );
-
-    const stored = storeFacts(root, sessionId).toolResults;
-    assert.equal(stored.length, 2);
-    assert.equal(execOf(stored[0]).alias, "hello");
-    assert.equal(execOf(stored[0]).output, "a");
-    // 清单外的命令由工具自己拒绝（域错误），没有执行、不带执行证据
-    assert.equal(stored[1]?.isError, true);
-    assert.equal(toolResultMark(required(stored[1]))?.errorKind, "domain");
-    assert.equal(execOf(stored[1]).command, undefined);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

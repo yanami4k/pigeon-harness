@@ -20,10 +20,6 @@ export interface SessionSummary {
   // 本会话助手消息 usage 的合计
   totalTokens: number;
   totalCost: number;
-  // M5.5 S4（决策 040）：本会话是 worker 时在场（会话头派生）
-  worker?: { name: string; role: string; parentSessionId: SessionId };
-  // M5.5 S4：本会话派出过 worker 时在场；unsettled = 有派出无收尾
-  children?: { count: number; unsettled: number };
   // 决策 456：会话文件里记的会话名（没改过名为缺省）与文件头的工作目录（列表显示缺省名用）
   name?: string;
   cwd?: string;

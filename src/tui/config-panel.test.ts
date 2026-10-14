@@ -11,7 +11,6 @@ import { CONFIG_OPTIONS, ConfigError, type ConfigItemView } from "../application
 import { newSessionId } from "../state/ids.ts";
 import { ConfigPanel } from "./config-panel.ts";
 import { keybindingRows } from "./keybindings.ts";
-import { orchestrationHarness } from "./orchestration-fixtures.ts";
 import { ScriptedRuntime } from "./runtime-fixtures.ts";
 import { PigeonTuiShell, type TuiShellOptions } from "./shell.ts";
 import { MockTerminal, screenFlat, screenText, settle, squashSpaces } from "./testing.ts";
@@ -327,31 +326,8 @@ test("读设置出错（项目设置文件坏了）：如实说明、不崩，�
   }
 });
 
-test("有 worker 在跑时设置视图开着：↓ 在视图里移动、不跳去 worker 面板，改的是视图里选中的那一项", async () => {
-  const h = orchestrationHarness();
-  const { term, writes, cleanup } = makeShell({ workers: h.face });
-  try {
-    h.face.spawn({ role: "explorer", task: "看看", name: "w1" });
-    await settle();
-    term.input("/config");
-    term.input("\r");
-    await settle();
-    term.input(DOWN);
-    term.input("\r");
-    term.input("3");
-    term.input("\r");
-    await settle();
-    assert.deepEqual(writes, ["modelRequest.maxRetries=3"]);
-    assert.doesNotMatch(screenText(term), /worker w1 \|/);
-  } finally {
-    await h.stopAll();
-    cleanup();
-  }
-});
-
-test("写拒绝理由时设置视图不收键；切到别的视图即关它", async () => {
-  const h = orchestrationHarness();
-  const { shell, term, writes, cleanup } = makeShell({ workers: h.face });
+test("写拒绝理由时设置视图不收键", async () => {
+  const { shell, term, writes, cleanup } = makeShell();
   try {
     await settle();
     term.input("/config");
@@ -371,16 +347,7 @@ test("写拒绝理由时设置视图不收键；切到别的视图即关它", as
     await settle();
     assert.deepEqual(decided, { key: "r", reason: "too risky" });
     assert.deepEqual(writes, [], "理由里的字母与回车没有改设置");
-    // 打开树形视图（Ctrl+X）：面板关掉
-    term.input("\x18");
-    await settle();
-    term.input("\x18");
-    await settle();
-    term.input("\r");
-    await settle();
-    assert.deepEqual(writes, []);
   } finally {
-    await h.stopAll();
     cleanup();
   }
 });

@@ -127,7 +127,6 @@ export async function openTuiSession(input: {
         governanceRoot: input.root,
         sessionId,
         bundle: opened.bundle,
-        workerGraceMs: 0,
       }),
   };
   if (input.task !== undefined) {

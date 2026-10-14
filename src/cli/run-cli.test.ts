@@ -331,7 +331,10 @@ test("决策 325：启动遇旧配置文件即报错并提示 pigeon migrate-con
     assert.ok(existsSync(join(root, ".pigeon", "orchestration.json")), "不自动迁移");
     const migrated = runCli(["migrate-config", "--root", root]);
     assert.equal(migrated.status, 0, migrated.stderr);
-    assert.match(migrated.stdout, /migrated \.pigeon\/orchestration\.json/);
+    assert.match(
+      migrated.stdout,
+      /moved \.pigeon\/orchestration\.json to backup; not merged into settings/
+    );
     const ran = runCli(["run", "随便", "--root", root, "--stream-fn", streamFn, "--json"]);
     assert.equal(ran.status, 0, ran.stderr);
   } finally {

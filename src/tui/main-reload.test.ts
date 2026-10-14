@@ -62,7 +62,7 @@ test("/reload 经终端界面的重建路径：update_memory 仍注册且可写�
   const flags = parseLaunchFlags(["--root", root, "--provider", "fake", "--model", "fake"], {
     usage: "u",
     pushedMemory: true,
-    spawnWorkers: true,
+    subagents: true,
   });
   const streamFn = createFakeStreamFn({
     replies: [
@@ -205,7 +205,7 @@ async function deferredMain(root: string, home: string, replies: Array<{ text: s
   const flags = parseLaunchFlags(["--root", root, "--provider", "fake", "--model", "fake"], {
     usage: "u",
     pushedMemory: true,
-    spawnWorkers: true,
+    subagents: true,
   });
   const streamFn = createFakeStreamFn({ replies });
   const settings: SettingsSnapshot = await openSessionSettings(root, {

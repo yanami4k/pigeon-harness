@@ -125,6 +125,8 @@ interface ConvertedConfig {
   keyEnvs: string[];
   // 写进备份的改写稿（web.json 有 key 时：key 的值换成说明）；不在即原文照挪
   backupText?: string;
+  // 决策 457、478：已删的设置不并入，只挪进备份（打印一行说明）
+  dropped?: string[];
 }
 
 // 备份里 key 的值换成的说明
@@ -173,6 +175,27 @@ function convertLegacyConfig(root: string, file: string, section: string): Conve
       backupText = `${JSON.stringify({ ...raw, search: backupSearch }, null, 2)}\n`;
     }
   }
+  // 决策 457、478：commands 里的 roles 已删，不并入
+  const dropped: string[] = [];
+  if (section === "commands" && Object.hasOwn(content, "roles")) {
+    delete content.roles;
+    dropped.push("roles (removed)");
+  }
+  // 决策 457、479：orchestration 整节已删，只有任务清单的开关搬到 tools.taskList，其余不并入
+  if (section === "orchestration") {
+    const taskList = content.taskList;
+    for (const key of Object.keys(content)) {
+      if (key !== "taskList" || typeof taskList !== "boolean") dropped.push(`${key} (removed)`);
+    }
+    return {
+      file,
+      section: "tools",
+      layer: targetLayerOf("tools"),
+      content: typeof taskList === "boolean" ? { taskList } : {},
+      keyEnvs,
+      dropped,
+    };
+  }
   return {
     file,
     section,
@@ -180,6 +203,7 @@ function convertLegacyConfig(root: string, file: string, section: string): Conve
     content,
     keyEnvs,
     ...(backupText !== undefined ? { backupText } : {}),
+    ...(dropped.length > 0 ? { dropped } : {}),
   };
 }
 
@@ -227,6 +251,8 @@ function plannedConfigs(
   }
   const targets = new Map<Exclude<SettingsLayer, "user">, Record<string, unknown>>();
   for (const item of converted) {
+    // 旧 orchestration.json 里没有可带过来的（任务清单的开关）：只挪进备份，不碰设置文件
+    if (item.file === "orchestration.json" && Object.keys(item.content).length === 0) continue;
     const label = targetLabelOf(item.layer);
     let target = targets.get(item.layer);
     if (target === undefined) {
@@ -237,6 +263,19 @@ function plannedConfigs(
         continue;
       }
       targets.set(item.layer, target);
+    }
+    // 旧 orchestration.json 只带过来任务清单的开关（并进 tools 一节，不动其中别的键）；什么都不带的不写
+    if (item.file === "orchestration.json") {
+      const tools = target.tools;
+      const merged = isPlainObject(tools) ? { ...tools } : {};
+      if (merged.taskList !== undefined && merged.taskList !== item.content.taskList) {
+        blockers.push(
+          `${label} already sets tools.taskList differently from ${pigeonRel(item.file)}; not overwritten`
+        );
+        continue;
+      }
+      target.tools = { ...merged, ...item.content };
+      continue;
     }
     const existing = target[item.section];
     if (existing !== undefined && canonicalJson(existing) !== canonicalJson(item.content)) {
@@ -266,9 +305,10 @@ export const legacyConfigStep: MigrationStep = {
   plan(ctx) {
     const { converted, blockers, homeIsUser } = plannedConfigs(ctx.root, ctx.homeDir);
     return {
-      todo: converted.map(
-        (item) =>
-          `${pigeonRel(item.file)} → ${item.section} section of ${targetLabelOf(item.layer)}${targetNoteOf(item.layer, homeIsUser)}; original to backup`
+      todo: converted.map((item) =>
+        item.file === "orchestration.json" && Object.keys(item.content).length === 0
+          ? `${pigeonRel(item.file)} → backup only (the orchestration section was removed)`
+          : `${pigeonRel(item.file)} → ${item.file === "orchestration.json" ? "tools.taskList" : `${item.section} section`} of ${targetLabelOf(item.layer)}${targetNoteOf(item.layer, homeIsUser)}; original to backup`
       ),
       blockers,
     };
@@ -293,9 +333,14 @@ export const legacyConfigStep: MigrationStep = {
           : moveToMigrationBackup(ctx.root, source, item.file, ctx.homeDir)
       );
       lines.push(
-        `migrated ${pigeonRel(item.file)} → ${item.section} section of ${targetLabelOf(item.layer)}${targetNoteOf(item.layer, homeIsUser)}; original moved to backup` +
-          (item.backupText !== undefined ? " (key removed from backup)" : "")
+        item.file === "orchestration.json" && Object.keys(item.content).length === 0
+          ? `moved ${pigeonRel(item.file)} to backup; not merged into settings (the orchestration section was removed)`
+          : `migrated ${pigeonRel(item.file)} → ${item.file === "orchestration.json" ? "tools.taskList" : `${item.section} section`} of ${targetLabelOf(item.layer)}${targetNoteOf(item.layer, homeIsUser)}; original moved to backup` +
+              (item.backupText !== undefined ? " (key removed from backup)" : "")
       );
+      for (const what of item.dropped ?? []) {
+        lines.push(`  not merged from ${pigeonRel(item.file)}: ${what}`);
+      }
       for (const env of item.keyEnvs) {
         lines.push(`  key in ${pigeonRel(item.file)} not written to settings; set ${env} instead`);
       }

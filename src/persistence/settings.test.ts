@@ -43,10 +43,7 @@ function write(file: string, value: unknown): void {
 test("三层读取：缺失的层为空；有的层按优先级合并", () => {
   const { root, home, cleanup } = dirs();
   try {
-    assert.deepEqual(commandsConfigOf(loadSettings(root, { homeDir: home })), {
-      commands: {},
-      roles: {},
-    });
+    assert.deepEqual(commandsConfigOf(loadSettings(root, { homeDir: home })), { commands: {} });
     write(userSettingsPath(home), { commands: { commands: { a: "echo user", b: "echo b" } } });
     write(projectSettingsPath(root), { commands: { commands: { a: "echo project" } } });
     write(projectLocalSettingsPath(root), { commands: { commands: { a: "echo local" } } });
@@ -82,10 +79,11 @@ test("出错响亮失败并指出文件与层：不是合法 JSON、未知键、
       /~\/\.pigeon\/settings\.json \(user settings\): unknown key grants/
     );
     write(userSettingsPath(home), {});
+    // 决策 478：commands 里的 roles 已删，写了即说明已删、请删掉
     write(projectLocalSettingsPath(root), { commands: { roles: { tester: ["nope"] } } });
     assert.throws(
       () => loadSettings(root, { homeDir: home }),
-      /references unknown short name: nope/
+      /\.pigeon\/settings\.local\.json \(project local settings\): commands\.roles has been removed; delete it/
     );
   } finally {
     cleanup();

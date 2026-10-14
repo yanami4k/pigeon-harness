@@ -29,7 +29,12 @@ import {
   sessionsDirOf,
   worktreesDirOf,
 } from "../state/paths.ts";
-import { commandsConfigOf, configGrantRulesOf, webSectionOf } from "../state/settings.ts";
+import {
+  commandsConfigOf,
+  configGrantRulesOf,
+  taskListEnabledOf,
+  webSectionOf,
+} from "../state/settings.ts";
 import { MigrationError, runMigrateConfig } from "./migrate-config.ts";
 
 const made: string[] = [];
@@ -119,6 +124,8 @@ test("7 个旧文件迁入设置各节：去掉 version；key 不进设置并给
   assert.equal(result.changed, true);
   const text = result.lines.join("\n");
   assert.match(text, /ZAI_API_KEY/);
+  // 决策 457、478：orchestration 一节已删，旧文件只挪进备份
+  assert.match(text, /moved \.pigeon\/orchestration\.json to backup; not merged into settings/);
   assert.ok(!text.includes("sk-secret-zai"), "不打印 key");
   assert.ok(result.lines.at(-1)?.endsWith(backupDir), "迁移结束打印备份位置");
   const shared = readFileSync(projectSettingsPath(root), "utf8");
@@ -128,7 +135,6 @@ test("7 个旧文件迁入设置各节：去掉 version；key 不进设置并给
     "commands",
     "loopGuard",
     "mcp",
-    "orchestration",
     "sandbox",
     "web",
   ]);
@@ -160,6 +166,34 @@ test("7 个旧文件迁入设置各节：去掉 version；key 不进设置并给
   const again = migrate(root, homeDir);
   assert.equal(again.changed, false);
   assert.match(again.lines.join("\n"), /nothing to migrate/);
+});
+
+test("决策 457、479：旧 orchestration.json 只把 taskList 搬到 tools.taskList，其余与 commands.json 的 roles 不并入、照样进备份", () => {
+  const root = repo();
+  const homeDir = home();
+  write(join(root, ".pigeon", "orchestration.json"), {
+    version: 1,
+    maxConcurrent: 3,
+    taskList: false,
+  });
+  write(join(root, ".pigeon", "commands.json"), {
+    version: 1,
+    commands: { t: "npm test" },
+    roles: { tester: ["t"] },
+  });
+  const result = migrate(root, homeDir);
+  const text = result.lines.join("\n");
+  assert.match(text, /orchestration\.json → tools\.taskList/);
+  assert.match(text, /not merged from \.pigeon\/orchestration\.json: maxConcurrent \(removed\)/);
+  assert.match(text, /not merged from \.pigeon\/commands\.json: roles \(removed\)/);
+  const shared = JSON.parse(readFileSync(projectSettingsPath(root), "utf8"));
+  assert.deepEqual(shared, {
+    commands: { commands: { t: "npm test" } },
+    tools: { taskList: false },
+  });
+  const backupDir = migrationBackupLocation(root, homeDir);
+  assert.ok(existsSync(join(backupDir, "orchestration.json")));
+  assert.equal(taskListEnabledOf(loadSettings(root, { homeDir })), false);
 });
 
 test("目标设置已有同一节且内容不同：报错停下，什么都不改；内容相同则照常合并", () => {

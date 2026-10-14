@@ -16,7 +16,6 @@ import { runForkBranch } from "./fork.ts";
 import { noMcpSession } from "./mcp.ts";
 import { disposeRuntime } from "./runtime.ts";
 import { openSessionRuntime } from "./session-runtime.ts";
-import { createWorkerRuntimeFactory } from "./workers.ts";
 
 const FLAGS = { yolo: true, provider: "fake", modelId: "fake", persistThinking: true };
 // 读大文件、读小文件、收尾
@@ -146,43 +145,6 @@ test("分叉续跑：分支会话记录里复制来的裁剪照样应用", async
     try {
       execFileSync("git", ["worktree", "prune"], { cwd: root });
     } catch {}
-    cleanup();
-  }
-});
-
-test("worker 续做：从 worker 会话记录取回已有的裁剪", async () => {
-  const { root, cleanup } = workspace();
-  const sessionId = newSessionId();
-  const request = {
-    sessionId,
-    name: "w1",
-    role: "implementer" as const,
-    task: "读文件",
-    policy: { allow: ["read_file"], deny: [], approvalMode: "prompt" as const },
-    governanceRoot: root,
-    workspace: { kind: "git-worktree" as const, path: root, branch: "pigeon/w1" },
-    lineage: { parentSessionId: newSessionId() },
-    approvalHandler: async () => ({ approved: false }),
-  };
-  const factory = (streamFn: FakeStreamFn, contextPrune: ContextPruneSection) =>
-    createWorkerRuntimeFactory({
-      streamFnFor: () => streamFn,
-      provider: "fake",
-      modelId: "fake",
-      homeDir: root,
-      settingsSnapshot: settingsOf(root, contextPrune),
-    });
-  try {
-    const first = factory(createFakeStreamFn({ replies: READS }), PRUNE)(request);
-    await first.run("读文件");
-    await first.dispose();
-    const [item] = prunes(root, sessionId)[0]?.items ?? [];
-    const second = createFakeStreamFn({ replies: [{ text: "好" }] });
-    const resumed = factory(second, { enabled: false })({ ...request, resume: true });
-    await resumed.run("继续");
-    await resumed.dispose();
-    assert.equal(sentText(second, item?.toolCallId), item?.placeholder);
-  } finally {
     cleanup();
   }
 });

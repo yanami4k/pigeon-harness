@@ -149,18 +149,6 @@ test("yolo 下放行：写 .pigeon 不问人", async () => {
   assert.equal(readFileSync(join(root, ".pigeon", "settings.json"), "utf8"), "B\n");
 });
 
-test("worker 在自己工作树里写 .pigeon 要人批（不再默认放行），普通文件照常默认放行", async () => {
-  const root = project();
-  const asked = await runEdits(root, ".pigeon/settings.json", {
-    toolPolicy: { allow: ["read_file", "edit_file"], deny: [], approvalMode: "prompt" },
-    ownWorkspaceWrites: true,
-  });
-  assert.deepEqual(
-    asked.map((request) => request.protectedPath),
-    [".pigeon/settings.json"]
-  );
-});
-
 test.skipIf(NO_SYMLINKS)("符号链接指进 .pigeon：经链接写入同样要人批", async () => {
   const root = project();
   symlinkSync(join(root, ".pigeon"), join(root, "cfg"));

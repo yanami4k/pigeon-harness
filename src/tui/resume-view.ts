@@ -11,11 +11,9 @@ import { resumeUsageText } from "./command-table.ts";
 
 // /resume 换绑产物（S4）：目标会话的新运行面与新治理上下文。装配由调用方（main.ts）完成——
 // restoredGrants 种子还原、buildRuntime、旧运行面释放都在壳外；壳只换绑投影
-export interface SessionBinding<Runtime, Grants, Workers> {
+export interface SessionBinding<Runtime, Grants> {
   runtime: Runtime;
   grants?: Grants;
-  // M5.5 S4：目标会话的 worker 编排面（worker 会话的编排面按深度 1 拒绝再派）
-  workers?: Workers;
 }
 
 // S4：/resume <sessionId> 恢复入口配置（壳选项的一段）
@@ -35,7 +33,6 @@ export interface ResumeViewHost<Binding> {
   updateStatus(): void;
   setResuming(resuming: boolean): void;
   sessionId(): SessionId;
-  hasRunningWorkers(): boolean;
   resumeOptions(): ResumeOptions<Binding> | undefined;
   historyLimit(): number | undefined;
   rebindSession(sessionId: SessionId, binding: Binding): void;
@@ -65,12 +62,6 @@ export function handleResumeCommand<Binding>(
   // 决策 443：会话面板里还开着的会话有自己的运行面在写会话文件与工作树，换过去会有两个运行面写同一处
   if (host.pooledSessionIds?.().has(arg) === true) {
     host.addSystem(`session ${arg} is open in the session panel`);
-    return;
-  }
-  // M5.5 S4（决策 040）：worker 的收尾记录写在当前会话文件里——有 worker 在跑时换绑会让它们
-  // 写向已关闭的会话，响亮拒绝
-  if (host.hasRunningWorkers()) {
-    host.addSystem("workers are running; wait for them to finish or /cancel them");
     return;
   }
   host.setResuming(true);

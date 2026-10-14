@@ -199,7 +199,7 @@ test("改命令短名后 /reload 须确认：skip 沿用原内容、原来没有
   try {
     write(projectSettingsPath(root), {
       commands: { commands: { mark: "git tag b", fresh: "npm test" } },
-      orchestration: { maxConcurrent: 2 },
+      loopGuard: { remindAt: 6 },
     });
     const listed = (await s.reload([])).join("\n");
     assert.match(listed, /command mark: git tag b/);
@@ -211,10 +211,10 @@ test("改命令短名后 /reload 须确认：skip 沿用原内容、原来没有
       "确认之前不变"
     );
     const skipped = (await s.reload(["skip"])).join("\n");
-    assert.match(skipped, /settings reloaded: .*orchestration/);
+    assert.match(skipped, /settings reloaded: .*loopGuard/);
     assert.match(skipped, /unconfirmed, kept as before/);
     assert.deepEqual(commandsConfigOf(s.settings()).commands, { mark: "git tag a" });
-    assert.equal(s.settings().merged.orchestration?.maxConcurrent, 2, "其余改动照常生效");
+    assert.equal(s.settings().merged.loopGuard?.remindAt, 6, "其余改动照常生效");
     // 再读一次并确认：记下指纹，新内容生效
     await s.reload([]);
     const confirmed = (await s.reload(["confirm"])).join("\n");

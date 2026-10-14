@@ -7,13 +7,8 @@
 import { SANDBOX_NETWORKS, type SandboxNetwork } from "../execution/sandbox.ts";
 
 import type { CompactionConfigInput } from "../pi-runtime/compaction.ts";
-import type { OrchestrationSettings } from "../state/orchestration-config.ts";
 import { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from "../state/runtime-events.ts";
-import {
-  orchestrationSettingsOf as orchestrationSectionOf,
-  type SettingsSnapshot,
-  webSectionOf,
-} from "../state/settings.ts";
+import { type SettingsSnapshot, webSectionOf } from "../state/settings.ts";
 import type { WebSection } from "../state/web-config.ts";
 import { resolveWebTools, type WebToolsConfig } from "./web-tools.ts";
 
@@ -26,7 +21,7 @@ export const VALUELESS_FLAGS = new Set([
   "--no-persist-thinking",
   "--no-pushed-memory",
   "--no-session-search",
-  "--no-spawn-workers",
+  "--no-subagents",
   "--no-hooks",
   "--no-web",
   "--sandbox",
@@ -78,13 +73,9 @@ export interface LaunchFlags {
   compaction?: CompactionConfigInput;
   // 决策 237：--sandbox 及其参数；不开沙箱时缺省
   sandbox?: SandboxLaunch;
-  // 决策 265–267：主 agent 派 worker——终端界面与 pigeon run 缺省开着，--no-spawn-workers 关掉（关掉即不注册 spawn_worker）；
-  // 沙箱会话不注册，不看这一项
-  spawnWorkers: boolean;
-  // 决策 268、300：--worker-concurrency <n> 同时在跑的 worker 上限（缺省取编排配置，配置缺省 8；人派的与 agent 派的一并计算）；
-  // --worker-limit <n> 一次运行里 agent 最多派出的 worker 数（可选的上限，缺省不设）。与 --no-spawn-workers 同在能派 worker 的入口接受
-  workerConcurrency?: number;
-  workerLimit?: number;
+  // 决策 457：派子 agent——终端界面与 pigeon run 缺省开着，--no-subagents 关掉（关掉即不注册派生与通讯的工具）；
+  // 沙箱会话不派，不看这一项
+  subagents: boolean;
 }
 
 // 上下文压缩参数名 → 配置字段
@@ -109,8 +100,8 @@ export interface ParseLaunchFlagsOptions {
   sessionSearch?: boolean;
   // 是否接受 --sandbox 及其参数（终端界面、pigeon run）
   sandbox?: boolean;
-  // 是否接受 --no-spawn-workers（能派 worker 的入口：终端界面与 pigeon run）
-  spawnWorkers?: boolean;
+  // 是否接受 --no-subagents（能派子 agent 的入口：终端界面与 pigeon run）
+  subagents?: boolean;
 }
 
 export function parseLaunchFlags(argv: string[], options: ParseLaunchFlagsOptions): LaunchFlags {
@@ -126,7 +117,7 @@ export function parseLaunchFlags(argv: string[], options: ParseLaunchFlagsOption
     persistThinking: true,
     pushedMemory: true,
     sessionSearch: true,
-    spawnWorkers: true,
+    subagents: true,
   };
   // 环境变量回退：--stream-fn 未给时用 PIGEON_STREAM_FN（决策 067：cli 补齐，与既有报错文案一致）
   // 沙箱参数：先收下，循环后与 --sandbox 对齐
@@ -164,21 +155,8 @@ export function parseLaunchFlags(argv: string[], options: ParseLaunchFlagsOption
       sandboxApproval = value as SandboxApproval;
     } else if (flag === "--no-persist-thinking") {
       flags.persistThinking = false;
-    } else if (flag === "--no-spawn-workers" && options.spawnWorkers === true) {
-      flags.spawnWorkers = false;
-    } else if (
-      (flag === "--worker-concurrency" || flag === "--worker-limit") &&
-      options.spawnWorkers === true
-    ) {
-      const value = Number(argv[++i]);
-      if (!Number.isInteger(value) || value < 1) {
-        throw new Error(`${flag} needs a positive integer (${usage})`);
-      }
-      if (flag === "--worker-concurrency") {
-        flags.workerConcurrency = value;
-      } else {
-        flags.workerLimit = value;
-      }
+    } else if (flag === "--no-subagents" && options.subagents === true) {
+      flags.subagents = false;
     } else if (flag === "--no-pushed-memory" && options.pushedMemory === true) {
       flags.pushedMemory = false;
     } else if (flag === "--no-session-search" && options.sessionSearch === true) {
@@ -252,7 +230,7 @@ export function webToolsEnabled(
 }
 
 // 交给装配根的联网工具选项：给就按快照的 web 一节建出配置（配置畸形在此响亮失败），不给就不带 webTools。
-// 各入口启动与终端界面 /reload 后都经这里，按当时的设置快照重算；worker 照父运行面拿同一份
+// 各入口启动与终端界面 /reload 后都经这里，按当时的设置快照重算
 export function webToolsOptionOf(
   flags: Pick<LaunchFlags, "sandbox" | "noWeb">,
   snapshot: SettingsSnapshot,
@@ -262,19 +240,6 @@ export function webToolsOptionOf(
   return webToolsEnabled(flags, web)
     ? { webTools: resolveWebTools({ config: web, ...(env !== undefined ? { env } : {}) }) }
     : {};
-}
-
-// 编排设定（决策 297–303）：设置快照的 orchestration 一节（缺失取缺省），启动参数给了的两项以参数为准
-export function orchestrationSettingsOf(
-  flags: Pick<LaunchFlags, "workerConcurrency" | "workerLimit">,
-  snapshot: SettingsSnapshot
-): OrchestrationSettings {
-  const settings = orchestrationSectionOf(snapshot);
-  return {
-    ...settings,
-    ...(flags.workerConcurrency !== undefined ? { maxConcurrent: flags.workerConcurrency } : {}),
-    ...(flags.workerLimit !== undefined ? { maxWorkersPerRun: flags.workerLimit } : {}),
-  };
 }
 
 // 模型接入必须显式配置：缺失时响亮失败（措辞与两个入口此前一致）

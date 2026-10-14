@@ -37,14 +37,7 @@ import {
   type ToolResultMark,
   toolResultMark,
 } from "../state/session-judge.ts";
-import { workerWorkspaceLabel } from "../state/session-payloads.ts";
-import type {
-  SessionView,
-  ViewChild,
-  ViewItem,
-  ViewRun,
-  ViewToolCall,
-} from "../state/session-view.ts";
+import type { SessionView, ViewItem, ViewRun, ViewToolCall } from "../state/session-view.ts";
 import {
   isSyntheticFailure,
   unfinishedCheckpointMarks,
@@ -139,22 +132,6 @@ function renderToolCall(
 // 带正文渲染选项（M5 S2，决策 045）：缺省 = 不带正文
 export interface TraceRenderOptions {
   withContent?: boolean;
-}
-
-// 派出的 worker 一行：已收尾给状态与结果并给进入命令；未收尾如实标注（进程中断可能），给 resume 入口
-function renderChildLine({ spawned, settled }: ViewChild): string {
-  const base = `  ${spawned.name} (${spawned.role}) | session ${shortId(spawned.childSessionId)}`;
-  if (settled === undefined) {
-    return `${base} | not settled (process may have been interrupted) | resume ${spawned.childSessionId}`;
-  }
-  let line = `${base} | ${settled.status} | ${plural(settled.turns, "turn")}`;
-  if (settled.result !== undefined) {
-    line += ` | ${plural((settled.result.changedFiles ?? []).length, "file")} changed`;
-  }
-  if (settled.error !== undefined) {
-    line += ` | reason: ${settled.error}`;
-  }
-  return `${line} | trace ${spawned.childSessionId}`;
 }
 
 function runStopReason(run: ViewRun): string | undefined {
@@ -303,14 +280,6 @@ export function renderSessionTrace(
         ? ` | ${plural(unfinishedCount, "unfinished run")} (possible crash)`
         : ""),
   ];
-  if (view.worker !== undefined && view.parentSessionId !== undefined) {
-    const worker = view.worker;
-    lines.push(
-      `worker session: ${worker.name} (${worker.role}) | ` +
-        `${workerWorkspaceLabel(worker.workspace)} | ` +
-        `parent ${view.parentSessionId} (trace ${view.parentSessionId})`
-    );
-  }
   if (view.branch !== undefined) {
     const branch = view.branch;
     lines.push(
@@ -319,13 +288,6 @@ export function renderSessionTrace(
     );
   }
   lines.push("");
-  if (view.children.length > 0) {
-    lines.push(`spawned workers (${view.children.length}):`);
-    for (const child of view.children) {
-      lines.push(renderChildLine(child));
-    }
-    lines.push("");
-  }
   for (const [index, run] of runs.entries()) {
     if (index > 0) {
       lines.push("");
@@ -344,15 +306,10 @@ export function renderSessionTrace(
       lines.push(`  ${item.kind === "hook" ? hookLine(item.data) : approvalModeLine(item.data)}`);
     }
   }
-  // 会话级异常项：孤立的收尾、读取时跳过的行与条目如实报告，不猜测挂接
-  if (view.orphanSettleds.length > 0 || view.warnings.length > 0) {
+  // 会话级异常项：读取时跳过的行与条目如实报告，不猜测挂接
+  if (view.warnings.length > 0) {
     lines.push("");
     lines.push("anomalies:");
-    for (const settled of view.orphanSettleds) {
-      lines.push(
-        `  orphan worker settle: ${settled.name} (session ${shortId(settled.childSessionId)}) with no spawn`
-      );
-    }
     for (const warning of view.warnings) {
       lines.push(`  read warning: ${warning}`);
     }

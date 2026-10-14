@@ -1,7 +1,6 @@
 // 决策 446：enter_worktree 之后"本轮结束移进工作树"的流程。工具在轮内只建工作树、记下待移入；轮次收尾时：
 // - 本轮被中止（Esc）：不移，告诉人与模型，工作树留着；
-// - 有 worker 在跑、排队或等补批续做：不移（与 /reload 同一口径），同样说明；
-// - 否则先把工作区换成工作树，再按 /reload 的先建后换重建运行面（重建时挂上的 worker 编排与取用都按新工作区）；
+// - 否则先把工作区换成工作树，再按 /reload 的先建后换重建运行面；
 //   重建失败即换回原工作区并说明；成功才记 pigeon.worktree 条目、递通知让 agent 接着做。
 // 不移时给模型的说明随人的下一条输入带上，不自动开新的一轮。
 // 同一轮里已有待移入的，再调即拒绝（工具经 blocked 如实回模型）。
@@ -12,8 +11,6 @@ export interface WorktreeSwitchDeps {
   // 当前工作区与换工作区（同时换 /reload 的上下文）
   workspace(): string;
   setWorkspace(root: string): void;
-  // 有 worker 在跑或等补批时给出英文原因
-  workersBusy(): string | undefined;
   // 按当前工作区重建运行面（/reload 的先建后换）
   rebuild(): Promise<void>;
   // 换成功之后：记为当前工作树、写 pigeon.worktree 条目
@@ -54,11 +51,6 @@ export function createWorktreeSwitch(deps: WorktreeSwitchDeps): WorktreeSwitch {
       stay("turn interrupted", "the turn was interrupted");
       return;
     }
-    const busy = deps.workersBusy();
-    if (busy !== undefined) {
-      stay("workers are running or waiting for approval", `${busy}; wait for them to finish first`);
-      return;
-    }
     const previous = deps.workspace();
     deps.setWorkspace(worktree.path);
     try {
@@ -86,7 +78,7 @@ export function createWorktreeSwitch(deps: WorktreeSwitchDeps): WorktreeSwitch {
     blocked: () =>
       pending !== undefined
         ? `a move into the worktree ${pending.worktree.path} is already pending this turn`
-        : deps.workersBusy(),
+        : undefined,
     entered(worktree, uncommitted) {
       pending = { worktree, uncommitted };
     },

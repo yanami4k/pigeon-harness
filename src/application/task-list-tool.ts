@@ -1,5 +1,5 @@
 // 任务清单（决策 294 B1）：update_tasks 建立与更新、list_tasks 查看。只记录不调度——不派出、不按依赖排序或拦截；每项有标题与状态，
-// 可选标注依赖的项与对应的 worker 标签。清单存进会话：每次更新后的整份清单随 update_tasks 的工具结果（details）写进会话文件，
+// 可选标注依赖的项。清单存进会话：每次更新后的整份清单随 update_tasks 的工具结果（details）写进会话文件，
 // 续聊时从会话里最后一次更新还原。配置开关缺省开（设置的 orchestration 一节的 taskList），跑批器各条件不注册。
 // 两件都是只读档：只改本会话内存里的清单，不读写工作区，不经审批。说明文字为定稿原文（决策 428 起为英文）。
 // 清单的排版（renderTaskList）同时给模型（工具结果）与人（/tasks）看，为英文。
@@ -26,11 +26,10 @@ export interface TaskItem {
   title: string;
   status: TaskStatus;
   dependsOn?: string[];
-  workerLabel?: string;
 }
 
 export const UPDATE_TASKS_DESCRIPTION =
-  "Record or update the task list: break the work into items, each with a title and a status (pending, in progress, done, dropped), optionally noting which items it depends on and which worker label is responsible for it. This is only a record; nothing is spawned or scheduled automatically. Give an id to update that item; omit it to create a new one. Returns the whole list.";
+  "Record or update the task list: break the work into items, each with a title and a status (pending, in progress, done, dropped), optionally noting which items it depends on. This is only a record; nothing is spawned or scheduled automatically. Give an id to update that item; omit it to create a new one. Returns the whole list.";
 
 export const LIST_TASKS_DESCRIPTION = "Show the current task list.";
 
@@ -58,12 +57,6 @@ export const UpdateTasksParamsSchema = Type.Object({
       depends_on: Type.Optional(
         Type.Array(Type.String(), {
           description: "ids of the items this one depends on (record only)",
-        })
-      ),
-      worker_label: Type.Optional(
-        Type.String({
-          description:
-            "Label of the worker responsible for this item (the label given to spawn_worker)",
         })
       ),
     }),
@@ -103,7 +96,6 @@ export class TaskList {
         }
         if (change.status !== undefined) item.status = change.status;
         if (change.depends_on !== undefined) item.dependsOn = [...change.depends_on];
-        if (change.worker_label !== undefined) item.workerLabel = change.worker_label;
         continue;
       }
       const title = change.title?.trim() ?? "";
@@ -115,7 +107,6 @@ export class TaskList {
         title,
         status: change.status ?? "pending",
         ...(change.depends_on !== undefined ? { dependsOn: [...change.depends_on] } : {}),
-        ...(change.worker_label !== undefined ? { workerLabel: change.worker_label } : {}),
       });
       nextId += 1;
     }
@@ -156,8 +147,7 @@ export function renderTaskList(items: readonly TaskItem[]): string {
         `${item.id}. [${STATUS_WORD[item.status]}] ${item.title}` +
         (item.dependsOn !== undefined && item.dependsOn.length > 0
           ? ` (depends on ${item.dependsOn.join(", ")})`
-          : "") +
-        (item.workerLabel !== undefined ? ` (worker label ${item.workerLabel})` : "")
+          : "")
     )
     .join("\n");
 }

@@ -3,9 +3,8 @@
 // pigeon run、worker 只推送；记忆工具免审批，写入后交出一行提示；两层上限取设置的 memory 一节；日常入口的启动参数缺省开着，
 // --no-pushed-memory 关掉。
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "vitest";
@@ -25,7 +24,6 @@ import type { McpSession } from "./mcp.ts";
 import { buildRuntime, disposeRuntime, type RuntimeDeps } from "./runtime.ts";
 import { openSessionRuntime } from "./session-runtime.ts";
 import { statusTextOf } from "./status-fixtures.ts";
-import { createSessionWorkers } from "./workers.ts";
 
 const PROJECT_ENTRY = "- [P1] 提交信息用英文祈使句 (recorded 2026-09-30 · tui · session sess_A)\n";
 const USER_ENTRY = "- [U1] 回复用中文 (recorded 2026-09-30 · cli · session sess_B)\n";
@@ -369,54 +367,6 @@ test("日常入口：会话检索缺省开着，--no-session-search 关掉（决
 });
 
 // 决策 331：worker 只推送记忆、不带记忆工具；父会话带写入配置也一样。与角色无关（装配根只看委派策略在不在场），取一个角色
-test("worker（implementer）：父会话推送且可写入时，开工状态块带推送段，但不带写入说明、不广告 update_memory", async () => {
-  const repo = realpathSync.native(mkdtempSync(join(tmpdir(), "pigeon-pushed-worker-")));
-  try {
-    const git = (args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" });
-    git(["init", "-q", "-b", "main"]);
-    git(["config", "user.email", "pigeon@example.invalid"]);
-    git(["config", "user.name", "pigeon-test"]);
-    writeFileSync(join(repo, "a.ts"), "alpha\n");
-    git(["add", "a.ts"]);
-    git(["commit", "-q", "-m", "init"]);
-    seed(repo);
-    const parent = buildRuntime({
-      ...deps(repo, { streamFn: createFakeStreamFn({ replies: [{ text: "好" }] }) }),
-      learnedMemory: { write: { source: "tui" } },
-    });
-    try {
-      assert.ok(parent.adapter.snapshot().tools.advertised.includes("update_memory"));
-      const workerStream = createFakeStreamFn({ replies: [{ text: "做完了" }] });
-      const orchestrator = createSessionWorkers({
-        governanceRoot: repo,
-        workspaceRoot: repo,
-        bundle: parent,
-        approvals: async () => ({ approved: true }),
-        streamFn: workerStream,
-        provider: "fake-provider",
-        modelId: "fake-model",
-        homeDir: homeOf(repo),
-      });
-      const workerId = orchestrator.spawn({ role: "implementer", task: "看看", name: "w" });
-      const outcome = await orchestrator.awaitResult(workerId);
-      assert.equal(outcome.status, "completed", JSON.stringify(outcome));
-      const [start] = runStarts(repo, workerId);
-      // 决策 363：推送段在开工状态块里
-      const workerStatus = statusTextOf(workerStream.calls[0]);
-      assert.ok(workerStatus.includes(PROJECT_ENTRY.trimEnd()));
-      assert.ok(workerStatus.includes(MEMORY_CONFLICT_TEXTS.unattended));
-      assert.ok(!workerStatus.includes(MEMORY_WRITE_GUIDANCE));
-      assert.ok(!start?.advertisedTools.includes("update_memory"));
-      assert.ok(!start?.policy.allow.includes("update_memory"));
-      assert.equal(start?.pushedMemory?.layers.length, 2);
-    } finally {
-      await disposeRuntime(parent);
-    }
-  } finally {
-    rmSync(repo, { recursive: true, force: true });
-  }
-});
-
 test("功能：记下纠正、下次照做——第一会话经 update_memory 记下，第二会话的开工状态块带这一条（层级、来源、日期、会话编号正确）", () =>
   withRoot("pigeon-pushed-correction-", async (root) => {
     seed(root);
