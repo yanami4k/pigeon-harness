@@ -149,7 +149,7 @@ test("编排面板的过滤：行数有上限、超出折成 +N；结束的过�
     shell.start();
     await settle();
     const bottom = lines(term).at(-1);
-    assert.equal(bottom, " cost $0", "没有 worker：状态栏是最后一行");
+    assert.equal(bottom, " 0 tokens", "没有 worker：状态栏是最后一行");
     for (const name of ["w-a", "w-b", "w-c"]) {
       h.orchestrator.spawn({ role: "explorer", task: name, name, origin: "agent" });
     }
@@ -172,7 +172,7 @@ test("编排面板的过滤：行数有上限、超出折成 +N；结束的过�
     assert.match(panelRow(term, "w-b") ?? "", /w-b\s+cancelled/);
     clock.now += 11_000;
     await settle(120);
-    assert.equal(lines(term).at(-1), " cost $0", "全部淡出后面板不占行");
+    assert.equal(lines(term).at(-1), " 0 tokens", "全部淡出后面板不占行");
   } finally {
     shell.stop();
     await h.stopAll();
@@ -541,11 +541,11 @@ test("进入 worker 会话期间：主 agent 照常运行（结果留在主会�
     assert.equal(shell.currentView(), "worker");
     flat = screenFlat(term);
     assert.ok(flat.includes("worker: look-a running"), flat);
-    // 主会话的消息区照常留下审批记录与后台结束的这一轮
+    // 主会话的消息区照常留下后台结束的这一轮；审批块不进消息流（决策 467：结论行由 handler 答完时写）
     await type(term, ESC);
     flat = screenFlat(term);
     assert.ok(flat.includes("done · "), flat);
-    assert.ok(flat.includes("source: main session"), flat);
+    assert.ok(!flat.includes("source: main session"), flat);
   } finally {
     shell.stop();
     await h.stopAll();
@@ -578,13 +578,13 @@ test("树形视图里审批就地弹出：显示在树下方并写明来源（wo
     assert.ok(text.includes("source: worker ship (tester)"), text);
     await type(term, "n");
     assert.equal((await answer).key, "n");
-    // handler 答完把审批收成一行（决策 460）：树下方的审批框换成这一行，主会话的消息区同样只留这一行
+    // handler 答完写结论（决策 467）：审批区收起，结论行只进主会话的消息流
     shell.noteApproval("[ship] ✗ rejected run_command: npm test");
     await settle();
     assert.equal(shell.currentView(), "tree");
     text = lines(term).join("\n");
-    assert.ok(!text.includes("-- approval --"), "答完审批框撤下");
-    assert.ok(text.includes("[ship] ✗ rejected run_command: npm test"), text);
+    assert.ok(!text.includes("-- approval --"), "答完审批区收起");
+    assert.ok(!text.includes("[ship] ✗ rejected"), text);
     assert.ok(text.includes("== workers tree"), text);
     await type(term, CTRL_X);
     assert.equal(shell.currentView(), "main");
@@ -597,7 +597,7 @@ test("树形视图里审批就地弹出：显示在树下方并写明来源（wo
   }
 });
 
-test("状态栏的本会话花费含在跑 worker 的实时花费（与面板同源），worker 收尾后不重复计入", async () => {
+test("状态栏的本会话 token 数含在跑 worker 的实时用量（与面板同源），worker 收尾后不重复计入", async () => {
   const h = orchestrationHarness();
   const { term, shell, runtime } = shellWith({ workers: h.face });
   try {
@@ -618,16 +618,16 @@ test("状态栏的本会话花费含在跑 worker 的实时花费（与面板同
       },
     });
     await settle();
-    assert.equal(lines(term).at(-1), " cost $0.1000");
+    assert.equal(lines(term).at(-1), " 10 tokens");
     h.orchestrator.spawn({ role: "explorer", task: "一", name: "look-a", origin: "agent" });
     h.runtime("look-a").turn("一轮", { totalTokens: 100, cost: 0.25 });
     await settle();
     assert.equal(h.orchestrator.status()[0]?.state, "running");
-    assert.ok(lines(term).includes(" cost $0.3500"), lines(term).join("\n"));
+    assert.ok(lines(term).includes(" 110 tokens"), lines(term).join("\n"));
     assert.match(panelRow(term, "look-a") ?? "", /\$0\.25/);
     h.runtime("look-a").finish();
     await settle();
-    assert.ok(lines(term).includes(" cost $0.3500"), lines(term).join("\n"));
+    assert.ok(lines(term).includes(" 110 tokens"), lines(term).join("\n"));
   } finally {
     shell.stop();
     await h.stopAll();

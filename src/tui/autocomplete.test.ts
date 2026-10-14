@@ -25,7 +25,6 @@ function makeShell() {
     sessionId,
     logDir: root,
     autocomplete: { basePath: root, fdPath: null },
-    search: { root },
   });
   shell.start();
   return {
@@ -50,17 +49,17 @@ test('"/" 开头列出命令，选中前缀为 ASCII；回车套用并发出命�
   const { term, runtime, cleanup } = makeShell();
   try {
     await settle();
-    term.input("/sear");
+    term.input("/tas");
     await settle();
     const screen = screenText(term);
-    assert.match(screen, /search/);
+    assert.match(screen, /tasks/);
     assert.doesNotMatch(screen, /→/);
     term.input("\r");
     await settle();
     term.input("\r");
     await settle();
     assert.deepEqual(runtime.runs, [], "斜杠命令不交给模型");
-    assert.match(screenText(term), /search/);
+    assert.match(screenText(term), /tasks/);
   } finally {
     cleanup();
   }
@@ -81,10 +80,10 @@ test("输入框空、或刚敲完空格时 Tab 什么都不做（不弹文件列
     term.input("\r");
     await settle();
     assert.deepEqual(runtime.runs, ["看看"]);
-    term.input("/sear");
+    term.input("/tas");
     term.input("\t");
     await settle();
-    assert.match(screenText(term), /search/);
+    assert.match(screenText(term), /tasks/);
   } finally {
     cleanup();
   }

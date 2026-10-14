@@ -146,6 +146,9 @@ export class MessageFlow {
     for (const line of lines) {
       if (line.kind === "thinking" || line.kind === "end") {
         this.appendDim(line.text);
+      } else if (line.kind === "approval") {
+        // 决策 467：回看历史里审批只有那一行结论，不还原整块
+        this.addConclusion(line.text);
       } else if (line.kind === "tool" || line.kind === "toolResult") {
         // 工具调用行与结果行同实时流：暗色，失败的开头标红色 ✗
         this.list.addChild(
@@ -182,12 +185,9 @@ export class MessageFlow {
   }
 
   // 挂着的审批块：照常醒目显示整块；返回的函数在答完时把整块原地换成一行结论（弱化、按宽度截断，不折行）
-  addApprovalBlock(text: string): (line: string) => void {
-    const block = this.append(text);
-    return (line) => {
-      const index = this.list.children.indexOf(block);
-      if (index >= 0) this.list.children[index] = new ConclusionLine(sanitizeTerminalText(line));
-    };
+  // 决策 467：答完的审批在消息流里只留一行暗色结论（审批块本身显示在底部的审批区，不进消息流）
+  addConclusion(line: string): void {
+    this.list.addChild(new ConclusionLine(sanitizeTerminalText(line)));
   }
 
   // turn.started：只重置流式状态，不 append——尾巴懒创建（决策 035：首个 text_delta 到达时

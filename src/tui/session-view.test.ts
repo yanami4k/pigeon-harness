@@ -400,7 +400,7 @@ test("/resume 会话不存在与空目录响亮报错；原运行面不受影响
   }
 });
 
-test("运行中只读的 /search 放行、/resume 被拒并说明原因；收尾后 /resume 直接换绑，不进菜单（决策 286）", async () => {
+test("运行中只读的 /tasks 放行、/resume 被拒并说明原因；收尾后 /resume 直接换绑，不进菜单（决策 286）", async () => {
   const { root, cleanup } = makeRoot();
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-log-"));
   try {
@@ -415,22 +415,22 @@ test("运行中只读的 /search 放行、/resume 被拒并说明原因；收尾
       sessionId: SESSION_ID,
       logDir,
       sessions: { root },
-      search: { root },
+      tasks: () => undefined,
       resume: { root, rebind: tracker.rebind },
     });
     try {
       shell.start();
       await settle();
 
-      // 运行中：只读的 /search 照常渲染，换会话的 /resume 被拒并说明原因（决策 286）
+      // 运行中：只读的 /tasks 照常执行，换会话的 /resume 被拒并说明原因（决策 286）
       runtime.autoResolve = false;
       term.input("任务一");
       term.input("\r");
       await settle();
-      term.input("/search");
+      term.input("/tasks");
       term.input("\r");
       await settle();
-      assert.ok(screenFlat(term).includes("usage: /search"), "运行中 /search 照常执行");
+      assert.ok(screenFlat(term).includes("task list is off"), "运行中 /tasks 照常执行");
       term.input(`/resume ${crashed}`);
       term.input("\r");
       await settle();

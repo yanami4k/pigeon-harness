@@ -24,7 +24,6 @@ function stubHost(memory: TuiMemoryFace | undefined) {
     sessionId: () => sessionId,
     grants: () => undefined,
     workers: () => undefined,
-    searchRoot: () => undefined,
     resumeConfigured: () => false,
     spawnCommand: () => {},
     cancelCommand: () => {},

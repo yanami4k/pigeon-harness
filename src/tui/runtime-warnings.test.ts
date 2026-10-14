@@ -111,7 +111,6 @@ test("窗口缩放：变窄后全量重绘，内容仍在、行宽不越界，�
     runtime,
     sessionId,
     logDir,
-    model: "deepseek/deepseek-chat",
   });
   try {
     shell.start();
@@ -131,10 +130,7 @@ test("窗口缩放：变窄后全量重绘，内容仍在、行宽不越界，�
     term.resize(120, 30);
     await settle();
     assertWidthsWithin(term, 120);
-    assert.ok(
-      screenText(term).includes("deepseek/deepseek-chat | ctx 30% (60k/200k) | cost $0"),
-      "变宽后状态栏恢复全写"
-    );
+    assert.ok(screenText(term).includes("ctx 30% (60k/200k) · 0 tokens"), "变宽后状态栏恢复全写");
   } finally {
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });

@@ -232,3 +232,39 @@ test("回看历史：后台作业通知、跨会话消息与回告、[Pigeon] �
     assert.deepEqual(messageLines(message(text)), [{ kind: "user", text: `> ${text}` }]);
   }
 });
+
+test("决策 467：人在审批区答过的工具调用，回看历史在结果之前留一行结论（批准或拒绝）；按规则放行的不写", () =>
+  withRoot(async (root, sessionsDir) => {
+    const session = createFixtureSession({ sessionsDir });
+    session.startRun({ task: "改两处" });
+    session.toolTurn({
+      name: "edit_file",
+      args: { path: "a" },
+      result: "ok",
+      details: { pigeon: { gate: { outcome: "approved", approvedBy: "human" } } },
+    });
+    session.toolTurn({
+      name: "run_command",
+      args: { command: "rm x" },
+      result: "rejected",
+      isError: true,
+      details: { pigeon: { gate: { outcome: "rejected", approvedBy: "human" } } },
+    });
+    session.toolTurn({
+      name: "read_file",
+      args: { path: "b" },
+      result: "ok",
+      details: { pigeon: { gate: { outcome: "approved", approvedBy: "policy:grant" } } },
+    });
+    const { sessionId } = await session.close();
+    const lines = pairs(loadSessionHistory(root, sessionId)).filter(
+      ([kind]) => kind === "approval" || kind === "tool"
+    );
+    assert.deepEqual(lines, [
+      ["tool", '$ edit_file {"path":"a"} -> ok'],
+      ["approval", '✓ approved edit_file {"path":"a"}'],
+      ["tool", '$ run_command {"command":"rm x"} -> error'],
+      ["approval", '✗ rejected run_command {"command":"rm x"}'],
+      ["tool", '$ read_file {"path":"b"} -> ok'],
+    ]);
+  }));

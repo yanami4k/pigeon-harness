@@ -25,7 +25,11 @@ import {
 } from "../persistence/session-catalog.ts";
 import type { McpServerStatus, McpToolsetEntry } from "../state/mcp-toolset.ts";
 import { sessionsDirOf } from "../state/paths.ts";
-import type { CheckpointMarkData, HookRunData } from "../state/session-entries.ts";
+import type {
+  ApprovalModeData,
+  CheckpointMarkData,
+  HookRunData,
+} from "../state/session-entries.ts";
 import {
   type StoreMessage,
   type StoreToolOutcome,
@@ -47,6 +51,12 @@ import {
 } from "../state/session-view.ts";
 
 // 钩子运行（323 / 324）的一行：事件、命令、退出码、用时、结论
+// 决策 469：审批模式切换（时刻、从什么到什么）
+function approvalModeLine(data: ApprovalModeData): string {
+  const label = (mode: ApprovalModeData["to"]): string => (mode === "yolo" ? "yolo" : "ask");
+  return `approval mode: ${label(data.from)} -> ${label(data.to)} at ${new Date(data.changedAt).toISOString().slice(11, 19)}(UTC)`;
+}
+
 function hookLine(data: HookRunData): string {
   return (
     `hook ${data.event}${data.matcher !== undefined ? ` (matcher ${data.matcher})` : ""}: ${data.conclusion} | ` +
@@ -243,6 +253,8 @@ function renderRun(
       lines.push(`  ${pruneLine(item.data)}`);
     } else if (item.kind === "request-retry") {
       lines.push(`  ${requestRetryLine(item.data)}`);
+    } else if (item.kind === "approval-mode") {
+      lines.push(`  ${approvalModeLine(item.data)}`);
     }
   }
   const unfinished = unfinishedCheckpointMarks(run.items);
@@ -319,15 +331,16 @@ export function renderSessionTrace(
     }
     renderRun(view, run, lines, options);
   }
-  // 会话级的钩子运行（323：SessionStart / SessionEnd 等窗口外事件没有所属 Run）
-  const sessionHooks = view.sessionItems.filter(
-    (item): item is Extract<ViewItem, { kind: "hook" }> => item.kind === "hook"
+  // 会话级的钩子运行（323：SessionStart / SessionEnd 等窗口外事件没有所属 Run）与 Run 之外的审批模式切换（469）
+  const sessionEntries = view.sessionItems.filter(
+    (item): item is Extract<ViewItem, { kind: "hook" | "approval-mode" }> =>
+      item.kind === "hook" || item.kind === "approval-mode"
   );
-  if (sessionHooks.length > 0) {
+  if (sessionEntries.length > 0) {
     lines.push("");
     lines.push("session entries:");
-    for (const item of sessionHooks) {
-      lines.push(`  ${hookLine(item.data)}`);
+    for (const item of sessionEntries) {
+      lines.push(`  ${item.kind === "hook" ? hookLine(item.data) : approvalModeLine(item.data)}`);
     }
   }
   // 会话级异常项：孤立的收尾、读取时跳过的行与条目如实报告，不猜测挂接

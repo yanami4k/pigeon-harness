@@ -33,6 +33,10 @@ export class TreeList<T> {
     return this.problem === undefined;
   }
 
+  cursorIndex(): number {
+    return this.cursor;
+  }
+
   selected(): T | undefined {
     return this.rows[this.cursor]?.item;
   }

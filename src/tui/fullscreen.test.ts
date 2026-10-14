@@ -57,7 +57,7 @@ test("进全屏：主视图没有标题行、状态栏在底；对话超过一�
     );
     assert.ok(!screen.some((line) => line.includes("> 第 0 条")), "最早的滚出视口");
     assert.doesNotMatch(screen.join("\n"), /state:/, "空闲时状态行不写字");
-    assert.match(screen.at(-1) ?? "", /cost \$0/);
+    assert.match(screen.at(-1) ?? "", /0 tokens/);
   } finally {
     cleanup();
   }
@@ -157,7 +157,7 @@ test("拖选出选区后 Ctrl+C 复制选区（写出 OSC 52），不清输入�
     await settle();
     term.input("draft");
     await settle();
-    // 在最底下的状态栏（第 16 行，cost $0）上按下、拖动（SGR 鼠标序列，1 起的列与行）
+    // 在最底下的状态栏（第 16 行，0 tokens）上按下、拖动（SGR 鼠标序列，1 起的列与行）
     term.input("\x1b[<0;2;16M");
     term.input("\x1b[<32;8;16M");
     await settle();

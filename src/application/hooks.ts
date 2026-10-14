@@ -92,7 +92,8 @@ export interface SessionHooksOptions {
   // 会话存储写入面（缺省不记）
   sink?: { append(entry: SessionCustomEntry): void };
   // 审批档（钩子 JSON 的 permission_mode；复审 P2 补上）
-  permissionMode?: string;
+  // 决策 469：可在会话中途切换，给函数即每次触发时现取
+  permissionMode?: string | (() => string);
   // 记录里附的 Run（按事件与匹配对象定归属；会话级事件返回缺省）
   activeRunId?: (event: HookEventName, matcherTarget: string) => string | undefined;
   // 终端界面的一行提示（拦下或出错时调用；缺省静默）
@@ -330,7 +331,12 @@ export class SessionHooks {
           cwd,
           hook_event_name: event,
           ...(this.#options.permissionMode !== undefined
-            ? { permission_mode: this.#options.permissionMode }
+            ? {
+                permission_mode:
+                  typeof this.#options.permissionMode === "function"
+                    ? this.#options.permissionMode()
+                    : this.#options.permissionMode,
+              }
             : {}),
           ...fields,
         };

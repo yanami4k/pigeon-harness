@@ -14,6 +14,7 @@ import {
   TRUNCATION_CONTINUE_PROMPT,
   TRUNCATION_RESUME_PROMPT,
 } from "../state/runaway-config.ts";
+import { type StoreMessage, toolResultMark } from "../state/session-judge.ts";
 import type { ViewMessage } from "../state/session-view.ts";
 import { isStatusMessage, statusSummary } from "../state/status-text.ts";
 import { JOB_NOTICE_PREFIX, LEGACY_JOB_NOTICE_PREFIX } from "./background-jobs.ts";
@@ -41,7 +42,9 @@ export type HistoryLineKind =
   | "tool"
   | "toolResult"
   // 决策 452：一次运行的收尾行
-  | "end";
+  | "end"
+  // 决策 467：人答过的审批，只留一行结论
+  | "approval";
 
 export interface HistoryLine {
   kind: HistoryLineKind;
@@ -239,6 +242,15 @@ export function loadSessionHistory(
         const state = message.isError === true ? "-> error" : "-> ok";
         const existing = toolLines.get(`${message.runId}\n${message.toolCallId ?? ""}`);
         const failed = message.isError === true;
+        // 决策 467：人在审批区答过的，在结果之前留一行结论（审批块本身不还原）
+        const gate = toolResultMark(message.raw as unknown as StoreMessage)?.gate;
+        if (gate?.approvedBy === "human") {
+          const call = existing?.text.replace(/ -> (ok|error)$/, "").replace(/^\$ /, "");
+          body.push({
+            kind: "approval",
+            text: `${gate.outcome === "approved" ? "✓ approved" : "✗ rejected"} ${call ?? message.toolName ?? "?"}`,
+          });
+        }
         if (existing !== undefined) {
           existing.text += ` ${state}`;
           if (failed) existing.failed = true;

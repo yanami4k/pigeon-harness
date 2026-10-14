@@ -20,6 +20,8 @@ declare module "@earendil-works/pi-tui" {
     "pigeon.exit": true;
     "pigeon.toggleToolOutput": true;
     "pigeon.tree": true;
+    "pigeon.toggleMode": true;
+    "pigeon.openPanel": true;
     "pigeon.dequeue": true;
     "pigeon.approval.approve": true;
     "pigeon.approval.reject": true;
@@ -38,6 +40,16 @@ export const PIGEON_KEYBINDINGS = {
     description: "Expand or collapse tool output",
   },
   "pigeon.tree": { defaultKeys: "ctrl+x", description: "Toggle the tree view" },
+  // 决策 470：输入框为空时连按两下打开会话面板（进入的面板会话里即回面板）
+  "pigeon.openPanel": {
+    defaultKeys: "left",
+    description: "Open the session panel (empty input; press twice)",
+  },
+  // 决策 469：在询问与放手两种审批模式之间切换（只对当前会话）
+  "pigeon.toggleMode": {
+    defaultKeys: "shift+tab",
+    description: "Switch the approval mode (ask / yolo)",
+  },
   "pigeon.dequeue": {
     defaultKeys: ["alt+up", "alt+q"],
     description: "Move queued input back to the editor",
@@ -119,6 +131,65 @@ function pigeonConflicts(manager: KeybindingsManager): string[] {
     }
   }
   return lines;
+}
+
+// 决策 465：设置视图的键位组——每个动作一行：当前生效的键、缺省键、用户级写过没有、与别的 Pigeon 动作冲突的（同一组里同一个键）
+export interface KeybindingRow {
+  action: string;
+  description: string;
+  keys: string[];
+  defaults: string[];
+  // 用户级 keybindings 一节写了它
+  userSet: boolean;
+  // 与它绑了同一个键的其他 Pigeon 动作
+  conflicts: string[];
+}
+
+export function keybindingRows(user: Record<string, string | string[]>): KeybindingRow[] {
+  const manager = getKeybindings();
+  const groupOf = (id: string): string =>
+    id.startsWith("pigeon.approval.") ? "approval" : id.startsWith("pigeon.") ? "global" : "tui";
+  const claims = new Map<string, string[]>();
+  for (const id of Object.keys(PIGEON_KEYBINDINGS)) {
+    for (const key of manager.getKeys(id as keyof typeof PIGEON_KEYBINDINGS)) {
+      const claim = `${groupOf(id)}\n${key}`;
+      claims.set(claim, [...(claims.get(claim) ?? []), id]);
+    }
+  }
+  // Pigeon 自己的动作在前，pi-tui 部件的在后
+  const entries = [
+    ...Object.entries(PIGEON_KEYBINDINGS),
+    ...Object.entries(TUI_KEYBINDINGS),
+  ] as Array<[string, KeybindingDefinitions[string]]>;
+  return entries.map(([action, definition]) => {
+    const keys = manager.getKeys(action as keyof typeof PIGEON_KEYBINDINGS);
+    const defaults = Array.isArray(definition.defaultKeys)
+      ? [...definition.defaultKeys]
+      : [definition.defaultKeys];
+    const fullscreen = FULLSCREEN_KEY_DEFAULTS[action];
+    const conflicts = action.startsWith("pigeon.")
+      ? [
+          ...new Set(
+            keys.flatMap((key) =>
+              (claims.get(`${groupOf(action)}\n${key}`) ?? []).filter((id) => id !== action)
+            )
+          ),
+        ]
+      : [];
+    return {
+      action,
+      description: definition.description ?? "",
+      keys,
+      defaults:
+        fullscreen === undefined
+          ? defaults
+          : Array.isArray(fullscreen)
+            ? [...fullscreen]
+            : [fullscreen],
+      userSet: action in user,
+      conflicts,
+    };
+  });
 }
 
 // 按键是否是某个 Pigeon 动作（字母键不分大小写）

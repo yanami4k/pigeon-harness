@@ -345,7 +345,9 @@ export function openSessionStoreWriter(options: SessionStoreWriterOptions): Sess
       enqueue(
         action,
         (session) => session.appendCustomEntry(entry.customType, data),
-        entry.customType === SessionEntryType.Hook
+        // 钩子运行记录与审批模式的切换（决策 469）不算会话内容：还没建文件时先留在内存里
+        entry.customType === SessionEntryType.Hook ||
+          entry.customType === SessionEntryType.ApprovalMode
       );
     },
     setName: (name) => {

@@ -60,6 +60,7 @@ import {
 import type { UntrackedLimits } from "../state/snapshot-config.ts";
 import { structuredResultOf } from "../state/structured-result.ts";
 import type { EditMode } from "../tools/edit-mode.ts";
+import type { ToolPolicyLike } from "../tools/policy.ts";
 import type { WorkspaceHost } from "../tools/workspace-host.ts";
 import { settleBackgroundJobs } from "./background-jobs.ts";
 import type { SessionHooks } from "./hooks.ts";
@@ -157,6 +158,18 @@ const UNATTENDED_APPROVAL = async () => ({
 
 // 按会话装配编排器（M5.5 S4）：Actor 只拿动作面，不触达 orchestration 的构造细节。
 // 决策 303：没有审批通道（pigeon run）即无人值守——worker 需请示时不等，作为可恢复错误交回
+// 父会话的工具策略：清单取快照，审批模式现取
+function livePolicy(adapter: SessionWorkersDeps["bundle"]["adapter"]): ToolPolicyLike {
+  const policy = adapter.snapshot().tools.policy;
+  return {
+    allow: policy.allow,
+    deny: policy.deny,
+    get approvalMode() {
+      return adapter.approvalMode();
+    },
+  };
+}
+
 export function createSessionWorkers(deps: SessionWorkersDeps): WorkerOrchestrator {
   const settings = deps.settings;
   const holder: { current?: WorkerOrchestrator } = {};
@@ -167,7 +180,8 @@ export function createSessionWorkers(deps: SessionWorkersDeps): WorkerOrchestrat
       sessionId: deps.bundle.adapter.sessionId,
       ...(deps.parentSessionId !== undefined ? { parentSessionId: deps.parentSessionId } : {}),
     },
-    parentPolicy: deps.bundle.adapter.snapshot().tools.policy,
+    // 决策 469：派出时按父会话当前的审批模式（会话中途切换过的取切换后的）
+    parentPolicy: livePolicy(deps.bundle.adapter),
     // worker 派出与收尾写进父会话的会话存储
     parentLog: childFamilySink(deps.bundle.sessionStore),
     approvals: deps.approvals ?? UNATTENDED_APPROVAL,

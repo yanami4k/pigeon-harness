@@ -25,7 +25,12 @@ import { pathToFileURL } from "node:url";
 import { ProcessTerminal } from "@earendil-works/pi-tui";
 import { createSessionAttemptRunner } from "../application/attempt-group.ts";
 import type { CheckpointAttachment } from "../application/checkpoints.ts";
-import { configView, setUserConfig } from "../application/config-options.ts";
+import {
+  configView,
+  setUserConfig,
+  setUserKeybinding,
+  userKeybindings,
+} from "../application/config-options.ts";
 import {
   EnterWorktreeSlot,
   recordWorktreeEntry,
@@ -67,6 +72,7 @@ import {
   prepareUndo,
   type RewindHost,
 } from "../application/rewind.ts";
+import type { ApprovalModeCell } from "../application/runtime.ts";
 import {
   disposeRuntime,
   loadStreamFn,
@@ -123,8 +129,10 @@ import {
 import { worktreeBaseModeOf } from "../state/worktree-config.ts";
 import { createTuiApprovalHandler, type TuiApprovalFace } from "./approval.ts";
 import { readWindowsClipboard } from "./clipboard.ts";
+import { KEYBINDING_ID_PREFIX } from "./config-panel.ts";
 import { resolveStartTarget, takeContinueFlags } from "./continue-flags.ts";
 import { findFdPath } from "./fd-path.ts";
+import { keybindingRows } from "./keybindings.ts";
 import { guardTuiAgent } from "./loop-guard-view.ts";
 import { createSessionPool } from "./main-pool.ts";
 import {
@@ -348,7 +356,8 @@ export async function main(argv: string[]): Promise<void> {
           flush: () => bundle.sessionStore.flush(),
           ...(bound.notices !== undefined ? { notices: bound.notices } : {}),
           approval: {
-            yolo: flags.yolo,
+            // 决策 469：按主会话当前的审批模式
+            yolo: () => mainModeCell.current === "yolo",
             grants: bundle.grantStore,
             configGrants: bundle.configGrants,
             handler: createHandler(bundle.grantStore),
@@ -438,8 +447,12 @@ export async function main(argv: string[]): Promise<void> {
     // 决策 333：运行中的提示（命令超出内存上限）经告警出口：壳接管终端期间落消息区
     notice: (line) => warn(`[sandbox] ${line}`),
   });
+  // 决策 469：主会话的审批模式单元——开局按启动参数（--yolo、沙箱的审批参数），Shift+Tab 切换；/reload、换工作树、
+  // /resume 换会话都沿用（续接按启动参数，指重新启动程序）
+  const mainModeCell: ApprovalModeCell = { current: flags.yolo ? "yolo" : "prompt" };
   // 决策 340：/reload 重建主会话运行面时跨快照不变的部分（重建本身在 main-reload.ts）
   const reloadContext: MainReloadContext = {
+    approvalModeCell: mainModeCell,
     governanceRoot: governanceRoot,
     // 决策 445：独立工作树里的会话，/reload 重建时工作区仍是工作树（第一条消息之前会话文件还没建，推导不出）
     ...(namedWorktree !== undefined ? { workspaceRoot: namedWorktree.path } : {}),
@@ -464,6 +477,7 @@ export async function main(argv: string[]): Promise<void> {
     onMcpNote: (note) => say(`[mcp] ${note}`, true),
   };
   const mainOpened = await openSessionRuntime({
+    approvalModeCell: mainModeCell,
     governanceRoot: governanceRoot,
     // 决策 436：会话回退要用发消息时的快照
     turnSnapshots: true,
@@ -534,6 +548,8 @@ export async function main(argv: string[]): Promise<void> {
           memoryWrite,
           webToolsFor,
           mainWorkspace: () => workspaceRoot,
+          // 决策 469：派出的会话沿用主会话当时的审批模式
+          approvalMode: () => mainModeCell.current,
           notice: (line, alert) => {
             if (poolExiting) console.error(line);
             else if (alert === true) shellHolder.current?.addAlert(line);
@@ -575,7 +591,16 @@ export async function main(argv: string[]): Promise<void> {
     // 决策 442：/config 设置面板——生效值取本会话当前的设置快照，改动写用户级设置（随后壳按 /reload 重建）
     config: {
       view: () => configView(settings),
-      set: (id: string, value: string) => setUserConfig(governanceRoot, id, value),
+      // 决策 465：键位组的改动名字带 keybindings: 前缀（值为键，空串 = 清空，default = 恢复缺省）
+      set: (id: string, value: string) =>
+        id.startsWith(KEYBINDING_ID_PREFIX)
+          ? setUserKeybinding(
+              governanceRoot,
+              id.slice(KEYBINDING_ID_PREFIX.length),
+              value === "default" ? undefined : value === "" ? [] : [value]
+            )
+          : setUserConfig(governanceRoot, id, value),
+      keys: () => keybindingRows(userKeybindings(governanceRoot)),
       // 有 worker 在跑或排队时重建不了运行面（与 /reload 同一口径）：先不改，免得写了不生效
       busy: () =>
         slot.workers
@@ -589,13 +614,15 @@ export async function main(argv: string[]): Promise<void> {
     // 决策 441：Windows 上右键粘贴取系统剪贴板
     ...(process.platform === "win32" ? { readClipboard: readWindowsClipboard } : {}),
     runtime: slot.bundle.adapter,
+    // 决策 469：主会话的审批模式（状态栏显示、Shift+Tab 切换）；重建运行面后取新的
+    approvalMode: () => slot.bundle.approvalMode,
+    // 决策 470：输入框为空时按两下 ← 打开会话面板（设置可关；/reload 后取新的）
+    leftArrowOpensPanel: () => settings.merged.tui?.leftArrowOpensPanel !== false,
     sessionId: slot.sessionId,
     // 决策 325：终端界面日志在程序状态目录下
     logDir: tuiLogDirOf(governanceRoot),
-    // 决策 286：状态栏的模型与跨启动的输入历史
-    // 决策 453：模型名取运行面的模型信息（接入模块声明的优先，其次启动参数）；只有占位标签时不显示
-    ...(modelLabel !== undefined ? { model: modelLabel } : {}),
-    // 决策 451：欢迎头（版本、模型、当前目录）
+    // 决策 451：欢迎头（版本、模型、当前目录）；决策 453：模型名取运行面的模型信息（接入模块声明的优先，其次启动参数），
+    // 只有占位标签时不显示。决策 468：状态栏不写模型名
     welcome: {
       version: pigeonVersion(),
       ...(modelLabel !== undefined ? { model: modelLabel } : {}),
@@ -616,8 +643,7 @@ export async function main(argv: string[]): Promise<void> {
     stopHookCap: () => settings.merged.stopHookBlockCap,
     // 会话目录所在的根（花费累计用）
     sessions: { root: governanceRoot },
-    // M5 S2（决策 038 / 045）：/search 命令上下文与 /resume 历史渲染上限
-    search: { root: governanceRoot },
+    // M5 S2（决策 045）：/resume 历史渲染上限
     ...(flags.historyLimit !== undefined ? { historyLimit: flags.historyLimit } : {}),
     // M5.5 S4：/spawn /cancel /workers（沙箱里不提供）
     ...(slot.workers !== undefined ? { workers: slot.workers } : {}),
@@ -781,6 +807,7 @@ export async function main(argv: string[]): Promise<void> {
         // M5.5 S4：worker 会话回到它自己的工作树与委派策略（父会话或工作树缺失时响亮失败）；
         // 决策 3b：会话 grant 种子还原。两者与 MCP 启动一并在 session-runtime.ts（与 cli resume 同一份）
         const opened = await openSessionRuntime({
+          approvalModeCell: mainModeCell,
           governanceRoot: governanceRoot,
           turnSnapshots: true,
           settings,

@@ -32,12 +32,6 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     whileRunning: { allow: false },
   },
   {
-    name: "search",
-    usage:
-      "/search <keywords...> [--conversation-only] [--role user|assistant|toolResult] [--limit N]",
-    whileRunning: { allow: true },
-  },
-  {
     name: "grants",
     usage: "/grants",
     whileRunning: { allow: true },

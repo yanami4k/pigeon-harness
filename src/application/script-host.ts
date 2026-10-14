@@ -81,7 +81,8 @@ export function dockerLauncherFor(
 
 // 收回的请示：放手模式或已放权（会话放权、固化规则，与 take_worker 同一工具名）即直接做；否则经审批通道请示一次
 export interface CollectApproval {
-  yolo: boolean;
+  // 决策 469：会话中途可切换审批模式——给函数即每次收回时现取
+  yolo: boolean | (() => boolean);
   grants?: { match(toolName: string, args: unknown): unknown };
   configGrants?: readonly ConfigGrantRule[];
   handler?: ApprovalHandler;
@@ -92,7 +93,7 @@ export function collectApprover(
   approval: CollectApproval
 ): ScriptRunnerDeps["approveCollect"] {
   return async ({ runId, title, workers, targets }) => {
-    if (approval.yolo) return true;
+    if (typeof approval.yolo === "function" ? approval.yolo() : approval.yolo) return true;
     const args = { workers };
     // 决策 340：叠回内容写到 .pigeon 下时按受保护路径请示——放权不算，逐次问人，请示里列出这些路径
     const protectedPaths = (targets ?? []).flatMap((target) =>

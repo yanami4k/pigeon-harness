@@ -113,6 +113,13 @@ export class SessionPanel implements Component {
     this.note = "";
   }
 
+  // 决策 470：按 ← 打开面板时光标落在刚才所在的会话上（按会话号）
+  selectId(id: string): void {
+    this.selectedId = id;
+    this.selectedName = undefined;
+    this.note = "";
+  }
+
   // 新派出的会话：光标落在它上面（按名字）
   selectName(name: string): void {
     this.selectedId = undefined;

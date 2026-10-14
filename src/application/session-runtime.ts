@@ -24,6 +24,7 @@ import type { EnterWorktreeSlot } from "./enter-worktree-tool.ts";
 import { describeMcpStartup, type McpSession, noMcpSession, startMcpSession } from "./mcp.ts";
 import type { PeerSlot } from "./peer-tools.ts";
 import {
+  type ApprovalModeCell,
   buildRuntime,
   disposeRuntime,
   type LearnedMemoryConfig,
@@ -72,6 +73,8 @@ export function pushedMemoryRunOptions(flags: SessionRuntimeFlags): { pushedMemo
 export interface OpenSessionRuntimeRequest {
   // 治理根：.pigeon/（设置、程序状态、Skill）所在
   governanceRoot: string;
+  // 决策 469：审批模式单元（会话中途可切换；主会话重建运行面时传同一个）。缺省按 flags.yolo 新建
+  approvalModeCell?: ApprovalModeCell;
   // 决策 436：发消息时也拍工作区快照（会话回退用；只有终端界面开）
   turnSnapshots?: boolean;
   // 决策 325：本会话的设置快照（入口在会话开始时读一次并确认过会执行命令的条目；本会话内各处都从它取）。
@@ -251,6 +254,9 @@ export async function openSessionRuntime(
       sessionId: request.sessionId,
       ...(request.deferSessionFile === true ? { deferSessionFile: true } : {}),
       yolo: request.flags.yolo,
+      ...(request.approvalModeCell !== undefined
+        ? { approvalModeCell: request.approvalModeCell }
+        : {}),
       provider: request.flags.provider,
       modelId: request.flags.modelId,
       persistThinking: request.flags.persistThinking,

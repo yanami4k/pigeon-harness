@@ -69,6 +69,7 @@ import type {
   RewindOutcome,
 } from "../application/rewind.ts";
 import type { ScriptCommands } from "../application/script-commands.ts";
+import { createSessionFilter } from "../application/search.ts";
 import {
   accumulatedSessionCost,
   addUsage,
@@ -113,6 +114,7 @@ import type { RewindMode, RunStopCause } from "../state/session-entries.ts";
 import { toolResultModelUsage } from "../state/tool-usage.ts";
 import { openExternalUrl, PigeonAltScreen, TrimmedTranscript } from "./alt-screen.ts";
 import type { ApprovalPanelResult, TuiApprovalFace } from "./approval.ts";
+import { ApprovalArea } from "./approval-area.ts";
 import {
   lookupSlashCommand,
   rejectInWorkerSession,
@@ -129,9 +131,14 @@ import { ConfigPanel } from "./config-panel.ts";
 import type { TuiHooksFace } from "./hooks-view.ts";
 import { createPromptEditor, type PromptAutocomplete } from "./input-editor.ts";
 import { InputQueue } from "./input-queue.ts";
-import { installKeybindings, isKey } from "./keybindings.ts";
+import { installKeybindings, isKey, type KeybindingRow } from "./keybindings.ts";
 import { attachToolResultTo, MessageFlow, projectRuntimeEvent } from "./message-flow.ts";
-import { MessageTree, type RewindChoice } from "./message-tree.ts";
+import {
+  MessageTree,
+  type RewindAction,
+  rewindMenuTitle,
+  type VersionRow,
+} from "./message-tree.ts";
 import {
   askApprovalPanel,
   closePendingModals,
@@ -232,8 +239,6 @@ export interface TuiShellOptions {
   onExit?: () => void;
   // 双击窗口（毫秒）：缺省 1000；测试注入小窗口断言过期语义
   exitWindowMs?: number;
-  // M5 S2（决策 038）：/search 命令上下文（工作区根）；缺省时 /search 不可用
-  search?: { root: string };
   // M5 S2（决策 045）：/resume 历史渲染的安全上限（行）；缺省 500
   historyLimit?: number;
   // M5.5 S4（决策 040）：/spawn /cancel /workers 与状态栏 worker 行；缺省 = 命令不可用
@@ -244,10 +249,12 @@ export interface TuiShellOptions {
   sandbox?: TuiSandboxFace;
   // 决策 294 B1：/tasks 查看当前会话的任务清单（排好的文字）；返回 undefined = 清单没开；缺省 = 命令不可用
   tasks?: () => string | undefined;
-  // 决策 286、453：状态栏显示的模型（"模型 id · 服务商"，取运行面的模型信息）；缺省不显示
-  model?: string;
   // 决策 451：对话流最上方的欢迎头（版本、模型、当前目录）；缺省不放
   welcome?: WelcomeInfo;
+  // 决策 469：主会话的审批模式（每次现取：/reload 等重建运行面后换成新的）；缺省 = 状态栏不写模式、Shift+Tab 不做事
+  approvalMode?: () => ApprovalModeControl | undefined;
+  // 决策 470：输入框为空时按两下 ← 打开会话面板（设置 tui.leftArrowOpensPanel，每次现取）；缺省开着
+  leftArrowOpensPanel?: () => boolean;
   // 决策 286：主 agent 的模型接入（DeepSeek 回复自带价格为 0 时按官方人民币价目计会话花费）；缺省不另计价
   provider?: string;
   // 决策 286：输入历史的跨启动存储（按项目）；缺省只在本次启动内保留
@@ -294,6 +301,8 @@ export interface TuiShellOptions {
     view(): ConfigItemView[];
     // 写到的文件；值没变、没有写时为 undefined
     set(id: string, value: string): string | undefined;
+    // 决策 465：设置视图的键位组（每个动作的生效键、缺省键与冲突）；改键位经 set（名字带 keybindings: 前缀）。缺省没有键位组
+    keys?(): KeybindingRow[];
     // 现在不能改的原因（有 worker 在跑等）；能改为 undefined
     busy?(): string | undefined;
   };
@@ -319,20 +328,27 @@ function keep(component: Component): StackChild {
 
 // 矮窗口里列表最多显示几行：窗口高度减去输入框（含上下边框）、消息区至少一行、提示行、滚动标记与状态行、状态栏
 const LIST_CHROME_ROWS = 8;
-// 设置面板另有选中项说明（空行、说明、空行、提示行）
-const CONFIG_CHROME_ROWS = LIST_CHROME_ROWS + 5;
+// 整屏的设置视图：窗口高度减去状态行（含上方空行）与状态栏
+const CONFIG_CHROME_ROWS = 4;
 
 // 决策 301：界面所处的视图——主会话、整屏的树形视图、进入的 worker 会话
-export type ShellView = "main" | "tree" | "worker" | "history" | "panel" | "pooled";
+export type ShellView = "main" | "tree" | "worker" | "history" | "panel" | "pooled" | "config";
+
+// 决策 469：一个会话的审批模式——取当前模式、切换（切换写一条会话记录，之后的工具调用按新模式判定）
+export interface ApprovalModeControl {
+  get(): "prompt" | "yolo";
+  set(mode: "prompt" | "yolo"): void;
+}
 
 // 决策 443：会话面板（进程内版）：面板只经 source 取数与下指令；进入会话时直接订阅它的运行面（进程内版才有）
 export interface TuiPoolFace {
   source: SessionPanelSource;
-  live?(
-    id: string
-  ):
+  live?(id: string):
     | (Pick<TuiRuntimeFace, "subscribe" | "subscribeStream"> &
-        Partial<Pick<TuiRuntimeFace, "subscribeToolResults">>)
+        Partial<Pick<TuiRuntimeFace, "subscribeToolResults">> & {
+          // 决策 469：面板会话自己的审批模式
+          approvalMode?: ApprovalModeControl;
+        })
     | undefined;
 }
 
@@ -356,6 +372,25 @@ export interface TuiRewindFace {
     options: { mode: RewindMode; code?: CodeCheck; revert?: ReadonlySet<string> }
   ): Promise<RewindOutcome>;
 }
+
+// 消息树动作菜单里各项的规划：退到选中那一条之前、整支切到正在看的版本、撤销上次退代码
+interface RewindMenu {
+  before?: { node: RewindNode; prepared: PreparedRewind };
+  branch?: { node: RewindNode; prepared: PreparedRewind; mode: RewindMode };
+  undo?: PreparedRewind;
+}
+
+// 选定之后要做的：退到这一条之前（退了对话的把它放回输入框）、整支切过去、撤销上次退代码
+type RewindTarget =
+  | { kind: "before"; node: RewindNode }
+  | { kind: "switch"; node: RewindNode }
+  | { kind: "undo" };
+
+// 决策 467：审批区的高度上限 = 窗口高度减去输入框（含上下边框）、消息区至少几行、状态行与状态栏
+const APPROVAL_CHROME_ROWS = 10;
+
+// 决策 470：按 ← 打开面板的第一下在状态行的提示（ASCII：箭头字符在中文环境下宽度不定）
+const PANEL_HINT = "press Left again to open the panel";
 
 // 决策 435：双击 Esc 的间隔
 const DOUBLE_ESCAPE_MS = 500;
@@ -397,7 +432,9 @@ export class PigeonTuiShell
   private readonly messageTree: MessageTree;
   // 决策 443：会话面板、进入的会话与连按两次 Ctrl+X 停止的上一下
   private readonly sessionPanel: SessionPanel;
-  private pooledSession: { id: string; flow: MessageFlow; unsubscribe: () => void } | undefined;
+  private pooledSession:
+    | { id: string; flow: MessageFlow; unsubscribe: () => void; mode?: ApprovalModeControl }
+    | undefined;
   // 决策 458：对当前会话的两次 Ctrl+X 须落在同一次工作上（work 为那次工作的开始时刻）
   private lastPanelStop: { id: string; at: number; work?: number | null | undefined } | undefined;
   // 决策 458：在面板里中断主会话时留着的排队内容（回到主视图时放进输入框）
@@ -407,9 +444,10 @@ export class PigeonTuiShell
   private lastIdleEscapeAt: number | undefined;
   private historySession: { sessionId: string; flow: MessageFlow } | undefined;
   private returnTo: ReturnTo = { view: "main" };
-  // 决策 301：树形视图里就地显示的审批面板（审批挂起期间）
-  private readonly approvalBox = new Text("");
-  private approvalBoxText = "";
+  // 决策 301、467：挂着的审批显示在底部的审批区（各视图都是；主视图里在输入框上方），不进消息流；高度上限按窗口取
+  private readonly approvalBox = new ApprovalArea(() =>
+    Math.max(4, this.options.terminal.rows - APPROVAL_CHROME_ROWS)
+  );
   // 挂着的审批块的收起函数（答完收成一行）
   private approvalSettlers: Array<(line: string) => void> = [];
   // 进入的 worker 会话：它的会话号、消息区与活动订阅
@@ -487,6 +525,9 @@ export class PigeonTuiShell
   private rewindPrepared: PreparedRewind | undefined;
   private rewindCode: CodeCheck | undefined;
   private pendingRewindMode: RewindMode = "conversation";
+  // 动作菜单开着时各项的规划；选定之后要做的那一项
+  private rewindMenu: RewindMenu | undefined;
+  private rewindTarget: RewindTarget | undefined;
   // S3 审批面板：挂起中的审批决议（resolve 四键或 cancel）；串行不变量（决策 002）下
   // 同时最多一个，非空即面板期间
   private pendingApprovalState: PendingApproval | null = null;
@@ -502,6 +543,9 @@ export class PigeonTuiShell
   // S5+ 退出布防（裁决 033）：上一次 Ctrl+C 的墙钟时刻（窗口内再来一次即优雅退出）；
   // exitRequested 保证退出恰好一次（stop 后输入监听已退订，重入仅作幂等防御）
   private lastCtrlCAtValue: number | null = null;
+  // 决策 470：← 打开面板的第一下（时刻）与状态行提示的到期计时
+  private panelLeftAt: number | undefined;
+  private panelHintTimer: ReturnType<typeof setTimeout> | undefined;
   // 退出布防的状态行提示（EXIT_HINT）开着与它的到期计时
   private exitHintOn = false;
   private exitHintTimer: ReturnType<typeof setTimeout> | undefined;
@@ -537,10 +581,7 @@ export class PigeonTuiShell
       options.promptHistory?.load() ?? [],
       options.autocomplete
     );
-    this.statusBar = new StatusBar({
-      ...(options.model !== undefined ? { model: options.model } : {}),
-      cost: emptyCostTally(),
-    });
+    this.statusBar = new StatusBar({ cost: emptyCostTally() });
     // chrome 除会话名外纯 ASCII（spike 纪律：歧义宽字符不进边框/标题/状态栏）；sessionId 全 ASCII ULID。决策 456：会话名
     // 按名字规则只含字母、数字与 _ . -（不含控制字符、零宽与可忽略字符），其他文字的宽度按 pi-tui 的算法
     // 只在特殊视图里有一行，不带上下空行
@@ -609,48 +650,57 @@ export class PigeonTuiShell
                   ? this.messageTree
                   : this.tree
             ),
-            this.approvalBox,
+            keep(this.approvalBox),
             this.statusBar,
           ]
-        : this.view === "panel"
-          ? [fill(this.sessionPanel), this.approvalBox, ...status, keep(this.input), this.statusBar]
-          : this.view === "pooled" && this.pooledSession !== undefined
+        : this.view === "config"
+          ? [fill(this.configPanel.view), keep(this.approvalBox), ...status, this.statusBar]
+          : this.view === "panel"
             ? [
-                this.title,
-                fill(this.pooledSession.flow.view),
-                this.approvalBox,
+                fill(this.sessionPanel),
+                keep(this.approvalBox),
                 ...status,
                 keep(this.input),
                 this.statusBar,
               ]
-            : this.view === "history" && this.historySession !== undefined
+            : this.view === "pooled" && this.pooledSession !== undefined
               ? [
                   this.title,
-                  fill(this.historySession.flow.view),
-                  this.approvalBox,
+                  fill(this.pooledSession.flow.view),
+                  keep(this.approvalBox),
                   ...status,
+                  keep(this.input),
                   this.statusBar,
                 ]
-              : this.view === "worker" && this.workerSession !== undefined
+              : this.view === "history" && this.historySession !== undefined
                 ? [
                     this.title,
-                    fill(this.workerSession.flow.view),
+                    fill(this.historySession.flow.view),
+                    keep(this.approvalBox),
                     ...status,
-                    keep(this.input),
                     this.statusBar,
-                    this.panel,
                   ]
-                : [
-                    fill(this.flow.view),
-                    ...(this.loader !== undefined ? [this.loader] : []),
-                    this.queue.view,
-                    keep(this.picker.view),
-                    keep(this.configPanel.view),
-                    ...status,
-                    keep(this.input),
-                    this.statusBar,
-                    this.panel,
-                  ];
+                : this.view === "worker" && this.workerSession !== undefined
+                  ? [
+                      this.title,
+                      fill(this.workerSession.flow.view),
+                      keep(this.approvalBox),
+                      ...status,
+                      keep(this.input),
+                      this.statusBar,
+                      this.panel,
+                    ]
+                  : [
+                      fill(this.flow.view),
+                      ...(this.loader !== undefined ? [this.loader] : []),
+                      this.queue.view,
+                      keep(this.picker.view),
+                      keep(this.approvalBox),
+                      ...status,
+                      keep(this.input),
+                      this.statusBar,
+                      this.panel,
+                    ];
     // 决策 441：每个视图一个 VStack 作布局根——中间的滚动区占满剩余高度，其余各条按自身高度排在上下
     this.tui.setLayoutRoot(new VStack(children));
   }
@@ -824,9 +874,14 @@ export class PigeonTuiShell
   }
 
   updateStatus(): void {
+    this.statusBar.update({ mode: this.modeControl()?.get() });
     // 单击 Ctrl+C 布防期间状态行只写退出提示
     if (this.exitHintOn) {
       this.statusLine.setText(EXIT_HINT);
+      return;
+    }
+    if (this.panelLeftAt !== undefined) {
+      this.statusLine.setText(PANEL_HINT);
       return;
     }
     // 决策 301：worker 会话里状态行说明这个 worker 的状态与可用的动作
@@ -1074,17 +1129,19 @@ export class PigeonTuiShell
       if (args === "") {
         const items = this.configItems();
         if (items === undefined) return;
+        // 整屏的设置视图；Esc 回主视图（斜杠命令只在主视图里用），把视图开着期间排下的输入与通知发出去
         this.configPanel.open(
           items,
           (id, value) => this.applyConfig(id, value),
-          // 关面板时把面板开着期间排下的输入与通知发出去
           () => {
+            this.showView("main");
             this.drainQueue();
-            this.tui.requestRender();
           },
-          () => Math.max(1, this.options.terminal.rows - CONFIG_CHROME_ROWS)
+          () => Math.max(1, this.options.terminal.rows - CONFIG_CHROME_ROWS),
+          face.keys !== undefined ? () => face.keys?.() ?? [] : undefined
         );
-        this.tui.requestRender();
+        this.panel.blur();
+        this.showView("config");
         return;
       }
       const assignment = parseConfigAssignment(args);
@@ -1110,12 +1167,12 @@ export class PigeonTuiShell
     }
   }
 
-  // 改设置之后刷新面板（读不了即关面板，说明已写在消息区）
+  // 改设置之后刷新设置视图（读不了即关视图回主视图，说明已写在消息区）
   private refreshConfigPanel(id: string): void {
     if (!this.configPanel.isOpen()) return;
     const items = this.configItems();
     if (items === undefined) {
-      this.configPanel.close();
+      this.showView("main");
       return;
     }
     this.configPanel.refresh(items, id);
@@ -1292,15 +1349,54 @@ export class PigeonTuiShell
     return this.options.pool === undefined ? undefined : () => this.openPanel();
   }
 
-  // 决策 443：打开会话面板（整屏，底部输入框派新会话）
-  openPanel(): void {
+  // 决策 443：打开会话面板（整屏，底部输入框派新会话）；select：光标落在这个会话上（决策 470：按 ← 打开时是刚才所在的会话）
+  openPanel(select?: string): void {
     if (this.options.pool === undefined) return;
     this.panel.blur();
     this.returnTo = { view: "main" };
     // 决策 458：打开时从不偷看开始（输入框里的话派新会话，不会悄悄发给上次偷看的会话）
     this.sessionPanel.closePeek();
+    if (select !== undefined) this.sessionPanel.selectId(select);
     this.showView("panel");
     this.tui.requestRender();
+  }
+
+  // 决策 470：主视图或进入的面板会话里，输入框为空时按 ←：第一下在状态行提示，短时间内再按一下才打开面板并选中刚才所在的
+  // 会话（照 Claude Code，防误触）。没有面板（沙箱等）或设置关掉时不做事、不吞键
+  private leftOpensPanel(data: string): boolean {
+    if (
+      (this.view !== "main" && this.view !== "pooled") ||
+      this.options.pool === undefined ||
+      this.options.leftArrowOpensPanel?.() === false ||
+      !isKey(data, "pigeon.openPanel") ||
+      this.input.getText() !== "" ||
+      this.picker.isOpen()
+    ) {
+      return false;
+    }
+    const now = Date.now();
+    const first = this.panelLeftAt;
+    this.clearPanelHint();
+    if (first !== undefined && now - first <= this.exitWindowMs()) {
+      this.openPanel(this.view === "pooled" ? this.pooledSession?.id : this.current.sessionId);
+      return true;
+    }
+    this.panelLeftAt = now;
+    this.panelHintTimer = setTimeout(() => {
+      this.clearPanelHint();
+      this.updateStatus();
+      this.tui.requestRender();
+    }, this.exitWindowMs());
+    this.panelHintTimer.unref?.();
+    this.updateStatus();
+    this.tui.requestRender();
+    return true;
+  }
+
+  private clearPanelHint(): void {
+    if (this.panelHintTimer !== undefined) clearTimeout(this.panelHintTimer);
+    this.panelHintTimer = undefined;
+    this.panelLeftAt = undefined;
   }
 
   private handlePanelKey(data: string): { consume: true } | undefined {
@@ -1323,7 +1419,8 @@ export class PigeonTuiShell
     } else if (empty && matchesKey(data, "space")) {
       panel.togglePeek();
       this.refreshPeek();
-    } else if (empty && matchesKey(data, "enter")) {
+    } else if (empty && (matchesKey(data, "enter") || matchesKey(data, "right"))) {
+      // 决策 470：→ 与 Enter 一样进入选中的会话（输入框有字时 → 照旧移光标）
       const card = panel.selected();
       if (panel.isMain(card)) {
         // 决策 458：进入当前会话即关面板回到主视图（偷看一并关掉，再开面板时输入框里的话照常派新会话）
@@ -1494,6 +1591,7 @@ export class PigeonTuiShell
     this.pooledSession = {
       id: card.id,
       flow,
+      ...(live?.approvalMode !== undefined ? { mode: live.approvalMode } : {}),
       unsubscribe: () => {
         for (const dispose of disposers) dispose();
       },
@@ -1547,6 +1645,8 @@ export class PigeonTuiShell
   private closeMessageTree(): void {
     this.rewindPrepared = undefined;
     this.rewindCode = undefined;
+    this.rewindMenu = undefined;
+    this.rewindTarget = undefined;
     this.returnTo = { view: "main" };
     this.showView("main");
     this.drainQueue();
@@ -1569,24 +1669,27 @@ export class PigeonTuiShell
         tree.move(-1);
       } else if (matchesKey(data, "down")) {
         tree.move(1);
+      } else if (matchesKey(data, "left")) {
+        tree.shift(-1);
+      } else if (matchesKey(data, "right")) {
+        tree.shift(1);
       } else if (matchesKey(data, "enter")) {
-        const node = tree.selected();
-        if (node === undefined) return;
-        if (node.current) this.planUndo(node);
-        else this.planRewind(node);
+        const row = tree.selected();
+        if (row !== undefined) this.planMenu(row);
       }
       return;
     }
     if (stage === "choose") {
       if (matchesKey(data, "escape")) {
+        this.rewindMenu = undefined;
         tree.back();
       } else if (matchesKey(data, "up")) {
         tree.move(-1);
       } else if (matchesKey(data, "down")) {
         tree.move(1);
-      } else if (/^[1-4]$/.test(data) || matchesKey(data, "enter")) {
-        const choice = /^[1-4]$/.test(data) ? tree.choiceAt(Number(data) - 1) : tree.choice();
-        if (choice !== undefined) this.chooseRewindMode(choice);
+      } else if (matchesKey(data, "enter")) {
+        const action = tree.action();
+        if (action !== undefined) this.chooseRewindAction(action);
       }
       return;
     }
@@ -1606,6 +1709,7 @@ export class PigeonTuiShell
 
   private rewindFailed(error: unknown): void {
     this.rewinding = false;
+    this.rewindMenu = undefined;
     this.messageTree.back(
       `rewind failed: ${error instanceof Error ? error.message : String(error)}`
     );
@@ -1613,59 +1717,61 @@ export class PigeonTuiShell
     this.tui.requestRender();
   }
 
-  // 选了一点：先规划（不拍快照），据此给可选的几项与原因
-  private planRewind(node: RewindNode): void {
+  // 选了一行回车：先规划（不拍快照）——退到这一条之前、整支切到正在看的版本（不是当前版本时）、撤销上次退代码——
+  // 据此只给做得成的几项：只能退对话的情形不给含 code 的两项，切不过去的不给 Switch，没有可撤销的不给 Undo
+  private planMenu(row: VersionRow): void {
     const rewind = this.options.rewind;
     if (rewind === undefined) return;
+    const node = row.node;
+    const tip = this.messageTree.switchTarget();
     this.rewinding = true;
     this.messageTree.busy();
-    rewind.prepare(node.target).then(
-      (prepared) => {
+    void (async () => {
+      const before = node === undefined ? undefined : await rewind.prepare(node.target);
+      const branch = tip === undefined ? undefined : await rewind.prepare(tip.target);
+      const undo = await rewind.prepareUndo();
+      return { before, branch, undo };
+    })().then(
+      ({ before, branch, undo }) => {
         this.rewinding = false;
-        this.rewindPrepared = prepared;
-        this.rewindCode = undefined;
-        const plan = prepared.plan;
-        const code = plan.codeBlocked === undefined && plan.files.length > 0;
-        const choices: RewindChoice[] =
-          plan.conversationBlocked !== undefined
-            ? []
-            : code
-              ? ["both", "conversation", "code"]
-              : ["conversation"];
-        if (choices.length === 0) {
-          this.messageTree.back(`can't rewind: ${plan.conversationBlocked ?? ""}`);
-        } else {
-          this.messageTree.choose(
-            node,
-            choices,
-            code
+        const menu: RewindMenu = {};
+        const actions: RewindAction[] = [];
+        let note: string | undefined;
+        if (node !== undefined && before !== undefined) {
+          const plan = before.plan;
+          if (plan.conversationBlocked !== undefined) {
+            note = `can't rewind: ${plan.conversationBlocked}`;
+          } else {
+            menu.before = { node, prepared: before };
+            const code = plan.codeBlocked === undefined && plan.files.length > 0;
+            actions.push(
+              ...(code ? (["both", "conversation", "code"] as const) : (["conversation"] as const))
+            );
+            note = code
               ? plan.untouchable.length > 0
                 ? `too large to snapshot; left alone: ${plan.untouchable.join(", ")}`
                 : undefined
-              : plan.codeBlocked
-          );
+              : plan.codeBlocked;
+          }
         }
-        this.tui.requestRender();
-      },
-      (error: unknown) => this.rewindFailed(error)
-    );
-  }
-
-  // 当前位置上回车：有可撤销的上一次退代码即给"撤销"，否则说明已在这里
-  private planUndo(node: RewindNode): void {
-    const rewind = this.options.rewind;
-    if (rewind === undefined) return;
-    this.rewinding = true;
-    this.messageTree.busy();
-    rewind.prepareUndo().then(
-      (prepared) => {
-        this.rewinding = false;
-        if (prepared === undefined || prepared.plan.files.length === 0) {
-          this.messageTree.back("already here");
+        if (
+          tip !== undefined &&
+          branch !== undefined &&
+          branch.plan.conversationBlocked === undefined
+        ) {
+          const code = branch.plan.codeBlocked === undefined && branch.plan.files.length > 0;
+          menu.branch = { node: tip, prepared: branch, mode: code ? "both" : "conversation" };
+          actions.push("switch");
+        }
+        if (undo !== undefined && undo.plan.files.length > 0) {
+          menu.undo = undo;
+          actions.push("undo");
+        }
+        if (actions.length === 0) {
+          this.messageTree.back(note ?? "already here");
         } else {
-          this.rewindPrepared = prepared;
-          this.rewindCode = undefined;
-          this.messageTree.choose(node, ["undo"]);
+          this.rewindMenu = menu;
+          this.messageTree.choose(rewindMenuTitle(row), [...actions, "cancel"], note);
         }
         this.tui.requestRender();
       },
@@ -1673,12 +1779,40 @@ export class PigeonTuiShell
     );
   }
 
-  // 选定之后：退代码的先给现状拍快照（433），拿不准的文件让人逐个选
-  private chooseRewindMode(choice: RewindChoice): void {
+  // 菜单里选了一项：取对应的规划；退代码的先给现状拍快照（433），拿不准的文件让人逐个选
+  private chooseRewindAction(action: RewindAction): void {
+    const menu = this.rewindMenu;
+    if (action === "cancel" || menu === undefined) {
+      this.rewindMenu = undefined;
+      this.messageTree.back();
+      return;
+    }
+    let mode: RewindMode;
+    if (action === "switch") {
+      if (menu.branch === undefined) return;
+      this.rewindPrepared = menu.branch.prepared;
+      this.rewindTarget = { kind: "switch", node: menu.branch.node };
+      mode = menu.branch.mode;
+    } else if (action === "undo") {
+      if (menu.undo === undefined) return;
+      this.rewindPrepared = menu.undo;
+      this.rewindTarget = { kind: "undo" };
+      mode = "code";
+    } else {
+      if (menu.before === undefined) return;
+      this.rewindPrepared = menu.before.prepared;
+      this.rewindTarget = { kind: "before", node: menu.before.node };
+      mode = action;
+    }
+    this.rewindMenu = undefined;
+    this.rewindCode = undefined;
+    this.chooseRewindMode(mode);
+  }
+
+  private chooseRewindMode(mode: RewindMode): void {
     const rewind = this.options.rewind;
     const prepared = this.rewindPrepared;
     if (rewind === undefined || prepared === undefined) return;
-    const mode: RewindMode = choice === "undo" ? "code" : choice;
     this.pendingRewindMode = mode;
     if (mode === "conversation") {
       this.applyRewind(mode, new Set());
@@ -1707,8 +1841,8 @@ export class PigeonTuiShell
   private applyRewind(mode: RewindMode, revert: ReadonlySet<string>): void {
     const rewind = this.options.rewind;
     const prepared = this.rewindPrepared;
-    const node = this.messageTree.chosenNode();
-    if (rewind === undefined || prepared === undefined || node === undefined) return;
+    const target = this.rewindTarget;
+    if (rewind === undefined || prepared === undefined || target === undefined) return;
     this.rewinding = true;
     this.messageTree.busy();
     const code = this.rewindCode;
@@ -1719,16 +1853,17 @@ export class PigeonTuiShell
         revert,
       })
       .then(
-        (outcome) => this.rewindDone(node, outcome),
+        (outcome) => this.rewindDone(target, outcome),
         (error: unknown) => this.rewindFailed(error)
       );
   }
 
   // 回退完成（或部分完成）：退了对话的按新的主分支重绘消息区，原消息放回输入框；写回结果与出错如实列出
-  private rewindDone(node: RewindNode, outcome: RewindOutcome): void {
+  private rewindDone(target: RewindTarget, outcome: RewindOutcome): void {
     this.rewinding = false;
     this.rewindPrepared = undefined;
     this.rewindCode = undefined;
+    this.rewindTarget = undefined;
     this.returnTo = { view: "main" };
     this.showView("main");
     const moved =
@@ -1755,9 +1890,9 @@ export class PigeonTuiShell
       this.flow.addAlert("restoring files failed partway; conversation not rewound");
     } else {
       this.flow.addSystem(
-        node.kind === "message"
-          ? `rewound ${what} to before this message`
-          : `switched ${what} to this branch`
+        target.kind === "switch"
+          ? `switched ${what} to this version`
+          : `rewound ${what} to before this message`
       );
     }
     const restore = outcome.restore;
@@ -1791,8 +1926,8 @@ export class PigeonTuiShell
     for (const path of outcome.untouchable) {
       this.flow.addSystem(`skipped: ${path} (too large to snapshot)`);
     }
-    if (moved && node.kind === "message" && node.prefill !== undefined) {
-      this.input.setText(node.prefill);
+    if (moved && target.kind === "before" && target.node.prefill !== undefined) {
+      this.input.setText(target.node.prefill);
     }
     this.updateStatus();
     this.tui.requestRender();
@@ -1881,7 +2016,36 @@ export class PigeonTuiShell
 
   // ---- 决策 286：视图按键（选择器、Ctrl+O、退回排队）----
 
+  // 决策 469：当前会话的审批模式——进入的面板会话是它自己的，其余视图是主会话的
+  private modeControl(): ApprovalModeControl | undefined {
+    if (this.view === "pooled") return this.pooledSession?.mode;
+    return this.options.approvalMode?.();
+  }
+
+  // Shift+Tab：在询问与放手之间切换，当场生效；挂着的审批不替人回答（挂着时按键归审批，到不了这里）
+  private toggleApprovalMode(): void {
+    const control = this.modeControl();
+    if (control === undefined) return;
+    control.set(control.get() === "yolo" ? "prompt" : "yolo");
+    this.updateStatus();
+    this.tui.requestRender();
+  }
+
   private handleViewKey(data: string): { consume: true } | undefined {
+    // 决策 465：设置视图里正在就地输入或等新键：按键全归它（Shift+Tab 等也要能绑）
+    if (
+      this.configPanel.isOpen() &&
+      this.configPanel.busyWithInput() &&
+      this.pendingApprovalState === null
+    ) {
+      this.configPanel.handleInput(data);
+      this.tui.requestRender();
+      return { consume: true };
+    }
+    if (isKey(data, "pigeon.toggleMode")) {
+      this.toggleApprovalMode();
+      return { consume: true };
+    }
     // 决策 442：设置面板开着时按键归它（方向键、Enter/空格改值、Esc 关）；审批挂着（含写拒绝理由）时不归它
     if (this.configPanel.isOpen() && this.pendingApprovalState === null) {
       this.configPanel.handleInput(data);
@@ -2027,6 +2191,8 @@ export class PigeonTuiShell
       this.tui.requestRender();
       return;
     }
+    const filter = createSessionFilter(root);
+    const among = new Set<string>(sessions.map((session) => session.sessionId));
     this.picker.open(
       sessions,
       (picked) => {
@@ -2040,7 +2206,12 @@ export class PigeonTuiShell
         this.tui.requestRender();
         this.drainQueue();
       },
-      () => Math.max(1, this.options.terminal.rows - LIST_CHROME_ROWS)
+      () => Math.max(1, this.options.terminal.rows - LIST_CHROME_ROWS),
+      // 决策 466：打字即筛选——按会话内容筛列表里的这些会话
+      {
+        search: (query) => filter(query, among),
+        updated: () => this.tui.requestRender(),
+      }
     );
     this.tui.requestRender();
   }
@@ -2058,55 +2229,39 @@ export class PigeonTuiShell
     this.settleApproval(line);
   }
 
-  // 挂着的审批块：主会话的消息区照常显示整块（在 worker 会话里同时写进它的消息区，其他视图显示在审批框里），记下各处的
-  // 收起函数，答完一起收成一行
+  // 挂着的审批块：显示在底部的审批区（决策 467，各视图都是），不进消息流；记下答完时写结论行的地方——主会话的消息流，
+  // 在 worker 会话里同时写进它的消息流
   addApprovalBlock(text: string): void {
-    this.approvalSettlers = [this.flow.addApprovalBlock(text)];
+    this.approvalBox.setText(text);
+    const flows = [this.flow];
     if (this.view === "worker" && this.workerSession !== undefined) {
-      this.approvalSettlers.push(this.workerSession.flow.addApprovalBlock(text));
-    } else if (
-      this.view === "tree" ||
-      this.view === "history" ||
-      this.view === "panel" ||
-      this.view === "pooled"
-    ) {
-      this.approvalBoxText = text;
-      this.approvalBox.setText(text);
-      this.approvalSettlers.push((line) => {
-        this.approvalBoxText = line;
-        this.approvalBox.setText(secondary(line));
-      });
+      flows.push(this.workerSession.flow);
     }
+    this.approvalSettlers = flows.map((flow) => (line: string) => flow.addConclusion(line));
   }
 
-  // 结论压成一行（多行命令只取首行）；没有挂着的审批块（已收起，或块根本没出现）即不写
+  // 答完（或超时撤回）：审批区收起，消息流里只留一行暗色结论（多行命令只取首行）；没有挂着的审批块即不写
   settleApproval(line: string): void {
     const settlers = this.approvalSettlers.splice(0);
     const one = oneLineConclusion(line);
     for (const settle of settlers) settle(one);
+    this.clearApprovalBox();
     this.tui.requestRender();
   }
 
-  // 决策 301：审批面板的各行——主会话的消息区照常留下记录；在 worker 会话里同时写进它的消息区，在树形视图里显示在树下方
+  // 决策 301：审批面板的其他行——审批挂着时接在审批区里；已收起时（扣住的消息被撤回等）写一行到消息流
   addApprovalLine(line: string): void {
-    this.flow.addAlert(line);
+    if (this.pendingApprovalState !== null && this.approvalBox.getText() !== "") {
+      this.approvalBox.setText(`${this.approvalBox.getText()}\n${line}`);
+      return;
+    }
+    this.flow.addSystem(line);
     if (this.view === "worker" && this.workerSession !== undefined) {
-      this.workerSession.flow.addAlert(line);
-    } else if (
-      this.view === "tree" ||
-      this.view === "history" ||
-      this.view === "panel" ||
-      this.view === "pooled"
-    ) {
-      // 决策 443：面板与进入的会话里审批块同样显示（含来源）
-      this.approvalBoxText =
-        this.approvalBoxText === "" ? line : `${this.approvalBoxText}\n${line}`;
-      this.approvalBox.setText(this.approvalBoxText);
+      this.workerSession.flow.addSystem(line);
     }
   }
 
   private clearApprovalBox(): void {
-    this.approvalBoxText = "";
     this.approvalBox.setText("");
   }
 
@@ -2230,10 +2385,6 @@ export class PigeonTuiShell
 
   workers(): TuiWorkersFace | undefined {
     return this.current.workers;
-  }
-
-  searchRoot(): string | undefined {
-    return this.options.search?.root;
   }
 
   resumeConfigured(): boolean {
@@ -2545,8 +2696,8 @@ export class PigeonTuiShell
   // 切换视图：重排组件、标题与状态行跟着变；消息区整体换掉，强制全量重绘
   private showView(view: ShellView): void {
     if (view !== "pooled") this.leavePooledSession();
-    // 决策 442：离开主视图即关设置面板（它不可见时不能再吞键）
-    if (view !== "main") this.configPanel.close();
+    // 决策 442：离开设置视图即关它（它不可见时不能再吞键）
+    if (view !== "config") this.configPanel.close();
     if (view !== "worker") this.leaveWorkerSession();
     if (view !== "history") this.historySession = undefined;
     this.view = view;
@@ -2746,17 +2897,28 @@ export class PigeonTuiShell
   private handleOrchestrationKey(data: string): { consume: true } | undefined {
     if (data === "\x03" || this.pendingApprovalState !== null) return undefined;
     // 决策 442：设置面板开着时它独占方向键与回车，编排视图的入口（↓ 进 worker 面板等）不响应；切换树形视图照常（切过去即关面板）
-    if (this.configPanel.isOpen() && !isKey(data, "pigeon.tree")) return undefined;
+    if (
+      this.configPanel.isOpen() &&
+      (this.configPanel.busyWithInput() || !isKey(data, "pigeon.tree"))
+    ) {
+      return undefined;
+    }
     // 有一方接管了 Esc（/memory edit 排队保存时）：Esc 归它，排在视图与取消键之前
     if (this.escapeCapture !== undefined && matchesKey(data, "escape")) {
       this.escapeCapture();
       return { consume: true };
     }
+    // 决策 470：输入框为空时按两下 ← 打开会话面板（主视图与进入的面板会话里）；别的键撤掉第一下
+    if (this.leftOpensPanel(data)) return { consume: true };
+    if (this.panelLeftAt !== undefined) {
+      this.clearPanelHint();
+      this.updateStatus();
+    }
     // 决策 443：会话面板与进入的会话（Esc 回面板）
     if (this.view === "panel") return this.handlePanelKey(data);
     if (this.view === "pooled") {
       if (!matchesKey(data, "escape")) return undefined;
-      this.openPanel();
+      this.openPanel(this.pooledSession?.id);
       return { consume: true };
     }
     // 决策 435：消息树不依赖 worker 编排面

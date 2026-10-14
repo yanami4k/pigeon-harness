@@ -56,6 +56,7 @@ const ITEM_TYPE: Record<ViewItem["kind"], string> = {
   prune: "pigeon.prune",
   "background-job": "pigeon.background-job",
   "request-retry": "pigeon.request-retry",
+  "approval-mode": "pigeon.approval-mode",
 };
 
 // 单条条目的关键字段摘要（各类型的要点，通俗措辞）
@@ -170,6 +171,9 @@ function itemDetail(item: ViewItem): string {
       return pruneLine(item.data);
     case "request-retry":
       return requestRetryLine(item.data);
+    // 决策 469：会话中途切换审批模式
+    case "approval-mode":
+      return `approval mode ${item.data.from === "yolo" ? "yolo" : "ask"} -> ${item.data.to === "yolo" ? "yolo" : "ask"}`;
     case "background-job": {
       // 决策 365：后台作业的启动与结束；决策 409：会话结束时保留
       const data = item.data;

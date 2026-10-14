@@ -23,7 +23,6 @@ function stubHost(sandbox: { exportChanges(): Promise<string> } | undefined) {
     sessionId: () => sessionId,
     grants: () => undefined,
     workers: () => undefined,
-    searchRoot: () => undefined,
     resumeConfigured: () => false,
     spawnCommand: () => assert.fail("沙箱里不该派 worker"),
     cancelCommand: () => assert.fail("沙箱里不该派 worker"),

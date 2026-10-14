@@ -6,7 +6,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
-import { runSearchCommand } from "../application/search.ts";
 import { newSessionId } from "../state/ids.ts";
 import { lookupSlashCommand, rejectWhileRunning, SLASH_COMMANDS } from "./command-table.ts";
 import { InputQueue } from "./input-queue.ts";
@@ -33,7 +32,7 @@ function makeShell(): {
     sessionId,
     logDir: root,
     sessions: { root },
-    search: { root },
+    tasks: () => undefined,
   });
   return {
     shell,
@@ -125,10 +124,10 @@ test("运行中只读命令照常执行，改状态的命令被拒并说明原�
     term.input("长任务");
     term.input("\r");
     await settle();
-    term.input("/search");
+    term.input("/tasks");
     term.input("\r");
     await settle();
-    assert.ok(screenFlat(term).includes("usage: /search"), "只读命令运行中照常执行");
+    assert.ok(screenFlat(term).includes("task list is off"), "只读命令运行中照常执行");
     term.input("/compact");
     term.input("\r");
     await settle();
@@ -144,7 +143,6 @@ test("命令放行表：只读类与 /cancel、/quit 运行中可用，其余逐
   const allowed = SLASH_COMMANDS.filter((spec) => spec.whileRunning.allow).map((spec) => spec.name);
   assert.deepEqual(allowed, [
     "quit",
-    "search",
     "grants",
     "cancel",
     "workers",
@@ -222,20 +220,5 @@ test("壳的排队接口：空闲时入队立即发出，运行中入队等空�
     assert.deepEqual(runtime.runs, ["外部一", "外部二"]);
   } finally {
     cleanup();
-  }
-});
-
-test("第 5 节 4：/search 的用法写的选项就是检索认的选项（不再写已不认的 --tool-output）", async () => {
-  const spec = SLASH_COMMANDS.find((entry) => entry.name === "search");
-  const flags = (spec?.usage.match(/--[a-z-]+/g) ?? []).sort();
-  assert.deepEqual(flags, ["--conversation-only", "--limit", "--role"]);
-  const root = mkdtempSync(join(tmpdir(), "pigeon-search-usage-"));
-  try {
-    for (const flag of ["--conversation-only", "--role user", "--limit 3"]) {
-      const text = await runSearchCommand({ root, args: ["词", ...flag.split(" ")] });
-      assert.doesNotMatch(text, /未知选项|unknown option/i, flag);
-    }
-  } finally {
-    rmSync(root, { recursive: true, force: true });
   }
 });

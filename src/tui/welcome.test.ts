@@ -146,9 +146,9 @@ test("欢迎头在对话流最上方、随消息滚动（不常驻）；清空�
 });
 
 test("次要信息统一弱化：状态栏、状态行与工作收尾行都包在同一种暗色里", async () => {
-  const bar = new StatusBar({ model: "deepseek-flash · deepseek", cost: emptyCostTally() });
+  const bar = new StatusBar({ cost: emptyCostTally() });
   const [line] = bar.render(80);
-  assert.equal(line, ` ${secondary("deepseek-flash · deepseek | cost $0")}`);
+  assert.equal(line, ` ${secondary("0 tokens")}`);
 
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-welcome-"));
   const sessionId = newSessionId();

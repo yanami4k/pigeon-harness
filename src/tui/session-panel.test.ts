@@ -688,3 +688,82 @@ test("决策 458 复查：准备中的会话开好、会话号换了之后，选
   cards = [{ ...cards[0], id: "sess_real_s1", state: "running" as const } as never];
   assert.equal(panel.selected()?.id, "sess_real_s1");
 });
+
+const LEFT = "\x1b[D";
+const RIGHT = "\x1b[C";
+
+test("决策 470：输入框为空时按两下 ← 打开面板并选中当前会话（第一下只在状态行提示）；输入框有字时 ← 照旧移光标", async () => {
+  const { shell, term, cleanup } = makeShell();
+  try {
+    await settle();
+    term.input(LEFT);
+    await settle();
+    assert.equal(shell.currentView(), "main");
+    assert.match(screenText(term), /press Left again to open the panel/);
+    term.input(LEFT);
+    await settle();
+    assert.equal(shell.currentView(), "panel");
+    assert.match(screenText(term), /^ > {3}\S+ current/m);
+    term.input(ESC);
+    await settle();
+    // 有字：← 移光标，不开面板也不提示
+    term.input("ab");
+    term.input(LEFT);
+    term.input(LEFT);
+    await settle();
+    assert.equal(shell.currentView(), "main");
+    assert.doesNotMatch(screenText(term), /press Left again/);
+    term.input("X");
+    await settle();
+    assert.match(screenText(term), /Xab/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("决策 470：第一下之后按别的键即撤掉；设置关掉时 ← 不开面板", async () => {
+  let enabled = true;
+  const { shell, term, cleanup } = makeShell({ leftArrowOpensPanel: () => enabled });
+  try {
+    await settle();
+    term.input(LEFT);
+    term.input("\x1b[B");
+    term.input(LEFT);
+    await settle();
+    assert.equal(shell.currentView(), "main", "中间按了别的键，第二下只算新的第一下");
+    enabled = false;
+    term.input(LEFT);
+    term.input(LEFT);
+    await settle();
+    assert.equal(shell.currentView(), "main");
+    assert.doesNotMatch(screenText(term), /press Left again/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("决策 470：面板里 → 进入选中的会话；进入的会话里输入框为空按两下 ← 回面板并选中它", async () => {
+  const { shell, term, finishers, cleanup } = makeShell();
+  try {
+    await settle();
+    term.input("/panel");
+    term.input("\r");
+    await settle();
+    term.input("修登录");
+    term.input("\r");
+    await settle();
+    finishers[0]?.("好了");
+    await settle();
+    // 光标在新派出的 s1 上：→ 进入
+    term.input(RIGHT);
+    await settle();
+    assert.equal(shell.currentView(), "pooled");
+    term.input(LEFT);
+    term.input(LEFT);
+    await settle();
+    assert.equal(shell.currentView(), "panel");
+    assert.match(screenText(term), /^ > {3}s1 /m);
+  } finally {
+    cleanup();
+  }
+});

@@ -58,6 +58,7 @@ export const SessionEntryType = {
   TurnSnapshot: "pigeon.turn-snapshot",
   Rewind: "pigeon.rewind",
   RewindStep: "pigeon.rewind-step",
+  ApprovalMode: "pigeon.approval-mode",
 } as const;
 export type SessionEntryTypeName = (typeof SessionEntryType)[keyof typeof SessionEntryType];
 
@@ -639,6 +640,15 @@ export const RewindStepDataSchema = Type.Object({
 });
 export type RewindStepData = Static<typeof RewindStepDataSchema>;
 
+// 决策 469：会话中途切换审批模式（Shift+Tab）：从什么到什么、何时。续接时模式按启动参数定，不沿用这里最后的模式
+export const ApprovalModeDataSchema = Type.Object({
+  version: VERSION,
+  from: Type.Union([Type.Literal("prompt"), Type.Literal("yolo")]),
+  to: Type.Union([Type.Literal("prompt"), Type.Literal("yolo")]),
+  changedAt: Type.Integer({ minimum: 0 }),
+});
+export type ApprovalModeData = Static<typeof ApprovalModeDataSchema>;
+
 // 一条待写的自定义条目：customType 与数据成对
 export type SessionCustomEntry =
   | { customType: typeof SessionEntryType.RunStart; data: RunStartData }
@@ -660,7 +670,8 @@ export type SessionCustomEntry =
   | { customType: typeof SessionEntryType.Worktree; data: WorktreeData }
   | { customType: typeof SessionEntryType.TurnSnapshot; data: TurnSnapshotData }
   | { customType: typeof SessionEntryType.Rewind; data: RewindData }
-  | { customType: typeof SessionEntryType.RewindStep; data: RewindStepData };
+  | { customType: typeof SessionEntryType.RewindStep; data: RewindStepData }
+  | { customType: typeof SessionEntryType.ApprovalMode; data: ApprovalModeData };
 
 // 各 customType 的数据 schema（读者校验用）
 export const SESSION_ENTRY_SCHEMAS = {
@@ -684,6 +695,7 @@ export const SESSION_ENTRY_SCHEMAS = {
   [SessionEntryType.TurnSnapshot]: TurnSnapshotDataSchema,
   [SessionEntryType.Rewind]: RewindDataSchema,
   [SessionEntryType.RewindStep]: RewindStepDataSchema,
+  [SessionEntryType.ApprovalMode]: ApprovalModeDataSchema,
 } as const;
 
 // 自定义条目的写入面：写者自身从不抛，写失败按内部故障处理（向标准错误输出去重告警），不中断运行。

@@ -46,6 +46,7 @@
 //    上下文接着运行一次（那条出错消息不再发给模型，会话文件照实留着），没压成不重试、照原错误收尾，没压成的情形记进 Run 收尾
 //    条目。同一次超长只重试一次：重试的那次请求仍超长即照原错误收尾；重试之后来了正常回复，之后再超长算新的一次。400 且请求里有
 //    新加的图时先按 16 处理。没有配置压缩时不重试。
+
 import {
   type AfterToolCallContext,
   type AfterToolCallResult,
@@ -98,6 +99,7 @@ import { TOOL_RESULT_MARK_KEY, type ToolResultMark } from "../state/session-judg
 import { isStatusMessage, STATUS_MARKER, withoutStatusMarker } from "../state/status-text.ts";
 import type { ToolErrorKind, ToolExecution } from "../state/tool-execution.ts";
 import { classifyToolError } from "../tools/error-kind.ts";
+import type { ApprovalMode } from "../tools/policy.ts";
 import {
   type CompactionOutcome,
   type CompactionStore,
@@ -237,6 +239,8 @@ type RunStartedExtras = Pick<RunStartedPayload, "mcpTools" | "mcpServers" | "ski
 
 export interface PiRuntimeAdapterOptions {
   snapshot: InjectionSnapshot;
+  // 决策 469：当前的审批模式（会话中途可切换）；治理每次判定与每个 Run 开头的记录按它读。缺省 = 快照里的模式（不可切换）
+  approvalMode?: () => ApprovalMode;
   // 永远显式传入；测试注入假 streamFn，生产注入真实 provider 实现
   streamFn: StreamFn;
   // 真实部署时补充 api/baseUrl 等模型元数据；provider/id 属于模型身份，
@@ -288,6 +292,7 @@ export interface StatusChannel {
 
 export class PiRuntimeAdapter {
   readonly sessionId: SessionId;
+  #approvalModeOf: (() => ApprovalMode) | undefined;
   readonly #agent: Agent;
   readonly #snapshot: InjectionSnapshot;
   readonly #events: EventEnvelope[] = [];
@@ -390,6 +395,7 @@ export class PiRuntimeAdapter {
     // 模型重发"从未广告"工具名的幽灵循环由事件级熔断收口：tool_execution_end 照常到达事件层，
     // 治理实例的 settle 按工具名连续计数、达阈值 abort。
     const policy = this.#snapshot.tools.policy;
+    this.#approvalModeOf = options.approvalMode;
     const advertised = (options.tools ?? []).filter((tool) => policy.allow.includes(tool.name));
     // 包装 execute 捕获错误分类（M4 S2，D7）：上游把工具异常转成 isError 结果后只剩
     // 消息字符串，域/环境归类必须在抛出源头留证；preview/探针等可选能力随 spread 保留
@@ -403,8 +409,20 @@ export class PiRuntimeAdapter {
     );
     // 治理绑定宿主能力；广告工具未在注册表登记时在此构造期 fail-fast
     this.#toolHooks = options.toolHooks;
+    // 决策 469：交给治理的策略按当前模式读审批模式（快照本身冻结不变）
+    const live = options.approvalMode;
+    const governed =
+      live === undefined
+        ? policy
+        : {
+            allow: policy.allow,
+            deny: policy.deny,
+            get approvalMode(): ApprovalMode {
+              return live();
+            },
+          };
     this.#governance = options.governance({
-      policy,
+      policy: governed,
       tools,
       activeRunId: () => this.#activeRunId(),
       abort: () => this.#agent.abort(),
@@ -1060,6 +1078,11 @@ export class PiRuntimeAdapter {
   }
 
   // 冻结的注入快照
+  // 决策 469：当前的审批模式（会话中途切换过的取切换后的）
+  approvalMode(): ApprovalMode {
+    return this.#approvalModeOf?.() ?? this.#snapshot.tools.policy.approvalMode;
+  }
+
   snapshot(): InjectionSnapshot {
     return this.#snapshot;
   }
@@ -1822,7 +1845,7 @@ export class PiRuntimeAdapter {
           policy: {
             allow: [...snapshot.tools.policy.allow],
             deny: [...snapshot.tools.policy.deny],
-            approvalMode: snapshot.tools.policy.approvalMode,
+            approvalMode: this.approvalMode(),
           },
           advertisedTools: [...advertisedTools],
           systemPrompt: snapshot.context.systemPrompt,

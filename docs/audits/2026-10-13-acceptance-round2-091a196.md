@@ -170,3 +170,121 @@
 - `tsc --noEmit`、biome、dependency-cruiser 干净。
 - 本机按改动跑了相关的 12 个测试文件，全部通过：`autocomplete`、`peer-shell`、`shell`、`history`（终端界面与应用层各一）、`message-tree`（新增）、`rewind`（终端界面与应用层各一）、`session-tree`、`config-panel`、`session-panel`、`background-jobs`。
 - 本机全量测试没跑完：机器内存不足，测试进程被停掉。全量测试与打包冒烟交给 pigeon-verify。
+
+## 十、续验修改第二批（决策 464–470）
+
+### 七件修改
+
+- 会话回退（464）：消息树改成当前路径的单行列表，分叉用行尾的版本箭头 `‹2/2›`，←/→ 就地切换；回车弹动作菜单，做不到的项不出现。版本的选择在 `MessageVersions`（按 `RewindNode.parent` 还原；没看过的分叉取当前路径上的、都不在取最近有动静的那个），"回退后还没发"作为一个暗色版本；菜单打开前依次规划"退到这一条之前""整支切过去""撤销上次退代码"三者，只给做得成的。上一版的连接线画法与它的用例换掉。
+- 设置视图（464、465）：/config 打开整屏视图（`config` 视图，布局同树形视图），按组列出全部简单配置项，数字与字符串就地输入，键位一组可按下新键绑定；写入前合并三层核对跨字段约束。读写改成按路径（任意层），类型加了小数与带格式的字符串，整数不再限 0–999。等新键与就地输入时按键全归视图（Shift+Tab、Ctrl+X 也能绑）。
+- /resume 打字即筛选（466）：选择器自己收可打印的字、Backspace 与 Esc，停下 150 毫秒检索、迟到的结果丢弃；`application/search.ts` 改成 `createSessionFilter`；/search 命令、壳的 `search` 选项与命令表项删去。
+- 审批区（467）：`ApprovalArea` 放在主视图输入框上方与各视图的状态行之上，限高（留开头与按键行，中间写明省略），内容经 036 净化——此前树形视图等视图里的审批框原样显示，没有净化，这次一并补上。消息流的 `addApprovalBlock` 换成答完写一行结论的 `addConclusion`；回看历史按工具结果上记的审批结果（人答过的）补一行结论。
+- 状态栏（468）：只写上下文用量与累计 token 数（记账不变，取三类 token 之和）；模型名与花费去掉。
+- 审批模式（469）：运行面持当前模式单元，治理与 Run 开头记录、钩子的 permission_mode、脚本收回、派 worker 都按它读；切换写 `pigeon.approval-mode` 条目（会话文件没建时留在内存，同钩子记录）；trace 与 replay 认它；主会话的单元在 /reload、换工作树、/resume 时沿用，面板派会话按当时的模式新开单元。
+- 面板方向键（470）：两下 ← 开面板并选中来源会话（第一下状态行提示，Ctrl+C 退出同一做法），面板里 → 进入；新设置 `tui.leftArrowOpensPanel`。
+
+### 设置项核对（465）
+
+对着设置的 schema 逐项核过。放进设置视图的 72 项（组、范围与缺省）：
+
+| 路径 | 放否 | 组 | 范围与缺省 |
+|---|---|---|---|
+| `thinking.level` | 放 | model | off / minimal / low / medium / high / xhigh / max；缺省 by model |
+| `modelRequest.maxRetries` | 放 | model | 整数 >=0；缺省 4 |
+| `web.enabled` | 放 | web | 开关；缺省 true |
+| `web.search.backend` | 放 | web | deepseek / zai / tavily；缺省 deepseek |
+| `web.search.maxResults` | 放 | web | 整数 >=1，<=20；缺省 5 |
+| `web.search.timeoutMs` | 放 | web | 整数 >=1；缺省 60000 |
+| `web.fetch.timeoutMs` | 放 | web | 整数 >=1；缺省 30000 |
+| `web.fetch.maxBytes` | 放 | web | 整数 >=1；缺省 2097152 |
+| `web.fetch.maxChars` | 放 | web | 整数 >=1；缺省 400000 |
+| `web.fetch.distillMaxTokens` | 放 | web | 整数 >=1；缺省 4096 |
+| `contextPrune.enabled` | 放 | context | 开关；缺省 true |
+| `contextPrune.protectTurns` | 放 | context | 整数 >=0；缺省 5 |
+| `contextPrune.horizonTurns` | 放 | context | 整数 >=1；缺省 20 |
+| `contextPrune.minBatchTokens` | 放 | context | 整数 >=0；缺省 10000 |
+| `contextPrune.minResultTokens` | 放 | context | 整数 >=1；缺省 500 |
+| `contextPrune.priceRatio` | 放 | context | 数 >=1；缺省 by model (50 if unknown) |
+| `contextPrune.writeMultiplier` | 放 | context | 数 >=0；缺省 by model |
+| `contextPrune.retentionSeconds` | 放 | context | 整数 >=1；缺省 by cache rules |
+| `contextPrune.onCompaction` | 放 | context | 开关；缺省 true |
+| `contextPrune.onIdle` | 放 | context | 开关；缺省 true |
+| `contextPrune.staleReads` | 放 | context | 开关；缺省 true |
+| `contextPrune.maxImageBytes` | 放 | context | 整数 >=1；缺省 8388608 |
+| `truncationContinuation.enabled` | 放 | context | 开关；缺省 true |
+| `truncationContinuation.maxConsecutive` | 放 | context | 整数 >=1；缺省 2 |
+| `truncationContinuation.maxPerRun` | 放 | context | 整数 >=1；缺省 5 |
+| `repetitionGuard.enabled` | 放 | context | 开关；缺省 true |
+| `repetitionGuard.mode` | 放 | context | abort / log；缺省 abort |
+| `repetitionGuard.preset` | 放 | context | omp / wide；缺省 omp |
+| `repetitionGuard.checkIntervalChars` | 放 | context | 整数 >=1；缺省 by preset (128) |
+| `repetitionGuard.windowChars` | 放 | context | 整数 >=1；缺省 by preset (4096) |
+| `repetitionGuard.maxPeriodChars` | 放 | context | 整数 >=1；缺省 by preset (1024) |
+| `repetitionGuard.minRepeats` | 放 | context | 整数 >=2；缺省 by preset (3) |
+| `repetitionGuard.minRepeatedChars` | 放 | context | 整数 >=1；缺省 by preset (1024) |
+| `repetitionGuard.shortPeriodChars` | 放 | context | 整数 >=0；缺省 by preset (60) |
+| `repetitionGuard.shortMinRepeats` | 放 | context | 整数 >=2；缺省 by preset (4) |
+| `repetitionGuard.shortMinRepeatedChars` | 放 | context | 整数 >=1；缺省 by preset (180) |
+| `repetitionGuard.similarity` | 放 | context | 数 >0，<=1；缺省 0.8 |
+| `repetitionGuard.segmentMaxChars` | 放 | context | 整数 >=1；缺省 by preset (700) |
+| `repetitionGuard.segmentMinChars` | 放 | context | 整数 >=1；缺省 by preset (60) |
+| `repetitionGuard.segmentWindow` | 放 | context | 整数 >=1；缺省 by preset (16) |
+| `repetitionGuard.minSegments` | 放 | context | 整数 >=1；缺省 by preset (8) |
+| `repetitionGuard.minCluster` | 放 | context | 整数 >=2；缺省 by preset (4) |
+| `repetitionGuard.minConsecutive` | 放 | context | 整数 >=1；缺省 by preset (3) |
+| `memory.projectLimitChars` | 放 | context | 整数 >=1；缺省 4000 |
+| `memory.userLimitChars` | 放 | context | 整数 >=1；缺省 4000 |
+| `tools.grep.maxResults` | 放 | tools | 整数 >=1；缺省 200 |
+| `tools.glob.maxResults` | 放 | tools | 整数 >=1；缺省 100 |
+| `tools.readFile.maxBytes` | 放 | tools | 整数 >=1；缺省 51200 |
+| `tools.readFile.maxLineChars` | 放 | tools | 整数 >=1；缺省 2000 |
+| `tools.runCommand.outputHeadBytes` | 放 | tools | 整数 >=1；缺省 8192 |
+| `tools.runCommand.outputTailBytes` | 放 | tools | 整数 >=0；缺省 24576 |
+| `tools.runCommand.savedOutputsMaxBytes` | 放 | tools | 整数 >=1；缺省 209715200 |
+| `tools.runCommand.timeoutSeconds` | 放 | tools | 整数 >=1；缺省 120 |
+| `tools.runCommand.maxTimeoutSeconds` | 放 | tools | 整数 >=1；缺省 600 |
+| `tools.runCommand.maxBackgroundJobs` | 放 | tools | 整数 >=1；缺省 2 |
+| `tools.runCommand.maxBackgroundJobsTotal` | 放 | tools | 整数 >=1；缺省 8 |
+| `tools.runCommand.backgroundOutputMaxBytes` | 放 | tools | 整数 >=1024；缺省 16777216 |
+| `tools.runCommand.backgroundCloseoutSeconds` | 放 | tools | 整数 >=0；缺省 600 |
+| `sessionSearch.enabled` | 放 | tools | 开关；缺省 true |
+| `loopGuard.enabled` | 放 | guards & hooks | 开关；缺省 true |
+| `loopGuard.remindAt` | 放 | guards & hooks | 整数 >=1；缺省 5 |
+| `loopGuard.warnAt` | 放 | guards & hooks | 整数 >=1；缺省 10 |
+| `loopGuard.stopAt` | 放 | guards & hooks | 整数 >=1；缺省 20 |
+| `disableAllHooks` | 放 | guards & hooks | 开关；缺省 false |
+| `stopHookBlockCap` | 放 | guards & hooks | 整数 >=1；缺省 8 |
+| `worktree.baseRef` | 放 | workspace | fresh / head；缺省 fresh |
+| `snapshot.untrackedFileMaxBytes` | 放 | workspace | 整数 >=0；缺省 10485760 |
+| `snapshot.untrackedTotalMaxBytes` | 放 | workspace | 整数 >=0；缺省 209715200 |
+| `sandbox.memory` | 放 | workspace | 字符串（格式核对）；缺省 half of the Docker host memory |
+| `sandbox.pids` | 放 | workspace | 整数 >=0；缺省 4096 |
+| `sandbox.cpus` | 放 | workspace | 数 >=0；缺省 0 (no limit) |
+| `tui.leftArrowOpensPanel` | 放 | interface | 开关；缺省 true |
+
+另有键位一组（每个动作一行，Pigeon 的 `pigeon.*` 在前、pi-tui 部件的 `tui.*` 在后）。
+
+不放的：
+
+| 路径 | 理由 |
+|---|---|
+| `$schema` | 只给编辑器用，不影响行为 |
+| `trustedDirectories` | 权限类（且只许写在用户级） |
+| `permissions.grants`、`permissions.readDeny` | 权限类（readDeny 已不生效）；`/grants` 照旧查看 |
+| `web.search.deepseek.baseUrl`、`web.search.zai.baseUrl`、`web.search.tavily.baseUrl`、`web.search.deepseek.model` | 自由文本的地址与模型名，写错了搜索就坏；照旧在设置文件里写 |
+| `loopGuard.exemptTools` | 数组 |
+| `sandbox.image`、`sandbox.dockerfile`、`sandbox.context`、`sandbox.build.*` | 自由文本与路径；Dockerfile 路径按各项目根解析，写进用户级对所有项目都生效没有意义；镜像与源另有环境变量 |
+| `orchestration.*`、`commands.roles`、`messaging.*` | 即将随子 agent 与会话统一改造删除（messaging 现在也不生效） |
+| `commands.commands` | 结构复杂（短名 → 命令串） |
+| `hooks.*` | 钩子配置本身 |
+| `mcp.servers` | 结构复杂 |
+| `modelInfo.models` | 按模型覆盖 |
+| `keybindings` | 不在本表逐项列，单独成键位组 |
+
+写入与校验：每改一项先核对整份用户级文件（schema 与层规则），再把三层合并起来跑合并后的检查（loopGuard 三个轮数递增、repetitionGuard 的窗口不小于最长重复单元乘最少重复次数、sandbox 的 image 与 dockerfile 不并存、memory 至少 6m 等），过不了即不写。各节都允许只写一个子字段（读取处逐项补缺省，三层按键深合并）。不随重建当场生效的几项写在文档里：`web.search.backend`（web_search 可用性变了要重启）、`worktree.baseRef`（新建工作树时才读）、`sandbox.*`（开沙箱时才读，改了要重新确认）。
+
+### 验证
+
+- `tsc --noEmit`、biome、dependency-cruiser 干净。
+- 本机分批跑了全部测试（内存不够一次跑完；每批两个并行进程）：`src/tui` 54 个文件全部通过（全屏用例里状态栏的断言跟着改了，重跑通过）；`src/application` 124 个文件，失败 2 条；其余目录 172 个文件，失败 2 条。这 4 条都是本机已知失败（`checkpoints-async` 保留修改时间的同长度覆盖、`spawn-worker-headless` 撞上时间上限、`container-host` 与 `container-round-trips` 本机没有建符号链接的权限），与本批改动无关。
+- 整套一次跑与打包冒烟交给 pigeon-verify。

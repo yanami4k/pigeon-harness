@@ -1,5 +1,5 @@
 // 斜杠命令分发（决策 067 拆分自 shell.ts，零行为变化）：grant 命令层在 application/grants.ts
-//（决策 030）、检索在 application/search.ts、恢复流程在
+//（决策 030）、恢复流程在
 // application/resume.ts；语法/语义错误响亮呈现，
 // 未知命令如实说明。worker 与 resume 的具体动作由壳转交给对应视图模块。
 // 决策 286：命令的用法与运行中能不能用在命令表（command-table.ts）；未知命令只报命令词。
@@ -14,7 +14,6 @@ import {
 } from "../application/sandbox-session.ts";
 import { SCRIPT_COMMAND_TEXTS, type ScriptCommands } from "../application/script-commands.ts";
 import { commandInputText } from "../application/script-texts.ts";
-import { runSearchCommand } from "../application/search.ts";
 import type { TuiWorktreesFace } from "../application/worktree-cleanup.ts";
 import type { SessionGrantStore } from "../approvals/grant-store.ts";
 import type { ConfigGrantRule } from "../state/grants.ts";
@@ -58,7 +57,6 @@ export interface CommandsHost {
   sessionId(): SessionId;
   grants(): TuiGrantsContext | undefined;
   workers(): TuiWorkersFace | undefined;
-  searchRoot(): string | undefined;
   resumeConfigured(): boolean;
   // 决策 237：沙箱会话在场；缺省 = 不在沙箱里
   sandbox?(): CommandsSandboxFace | undefined;
@@ -113,21 +111,6 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
     // 运行中提交在 handleSubmit 即被拒绝，退出键仍可用）
     if (tokens[0] === "quit") {
       host.requestExit();
-      return;
-    }
-    // M5 S2（决策 038）：/search 内容级检索——命令层在 application/search.ts；异步扫描完成后落消息区
-    const searchRoot = host.searchRoot();
-    if (tokens[0] === "search" && searchRoot !== undefined) {
-      void runSearchCommand({ root: searchRoot, args: tokens.slice(1) }).then(
-        (text) => {
-          host.addSystem(text.trimEnd());
-          host.render();
-        },
-        (error: unknown) => {
-          host.addAlert(failureLine("command", error));
-          host.render();
-        }
-      );
       return;
     }
     // 决策 237、245：沙箱会话——/export 手动交回；分叉、worker 与 /resume 换绑不支持，说明原因

@@ -103,6 +103,13 @@ export const SETTINGS_LAYER_LABELS: Readonly<Record<SettingsLayer, string>> = {
   local: "project local settings",
 };
 
+// 决策 470：终端界面的操作习惯——输入框为空时按两下 ← 打开会话面板（缺省开着）
+export const TuiSectionSchema = Type.Object(
+  { leftArrowOpensPanel: Type.Optional(Type.Boolean()) },
+  { additionalProperties: false }
+);
+export type TuiSection = Static<typeof TuiSectionSchema>;
+
 // 各节：节名 → schema（节名 camelCase）
 export const SETTINGS_SECTIONS = {
   mcp: McpSectionSchema,
@@ -126,6 +133,7 @@ export const SETTINGS_SECTIONS = {
   messaging: MessagingSectionSchema,
   keybindings: KeybindingsSectionSchema,
   modelRequest: ModelRequestSectionSchema,
+  tui: TuiSectionSchema,
 } as const satisfies Record<string, TSchema>;
 export type SettingsSectionName = keyof typeof SETTINGS_SECTIONS;
 
@@ -159,6 +167,7 @@ export const SettingsFileSchema = Type.Object(
     messaging: Type.Optional(MessagingSectionSchema),
     keybindings: Type.Optional(KeybindingsSectionSchema),
     modelRequest: Type.Optional(ModelRequestSectionSchema),
+    tui: Type.Optional(TuiSectionSchema),
     [DISABLE_ALL_HOOKS_KEY]: Type.Optional(Type.Boolean()),
     [STOP_HOOK_BLOCK_CAP_KEY]: Type.Optional(Type.Integer({ minimum: 1 })),
     trustedDirectories: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
@@ -337,6 +346,7 @@ export interface MergedSettings {
   // 决策 439：写了 keybindings 却不被采用的层（项目共享层、被 git 跟踪的 settings.local.json）
   keybindingsIgnored?: SettingsLayer[];
   modelRequest?: ModelRequestSection;
+  tui?: TuiSection;
   trustedDirectories: string[];
   // 停用全部钩子（324）：三层按标量覆盖（高优先层说了算），缺省 false
   disableAllHooks: boolean;

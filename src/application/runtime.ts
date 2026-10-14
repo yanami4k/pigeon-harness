@@ -104,6 +104,7 @@ import type {
   TruncationContinuationSettings,
 } from "../state/runaway-config.ts";
 import type { ThinkingLevel } from "../state/runtime-events.ts";
+import { SESSION_ENTRY_VERSION, SessionEntryType } from "../state/session-entries.ts";
 import type { ToolScope, WorkerRole } from "../state/session-payloads.ts";
 import {
   backgroundJobLimitsOf,
@@ -146,7 +147,7 @@ import {
   JobOutputParamsSchema,
 } from "../tools/job-tools.ts";
 import { createLocalWorkspaceHost } from "../tools/local-host.ts";
-import type { ToolPolicyLike } from "../tools/policy.ts";
+import type { ApprovalMode, ToolPolicyLike } from "../tools/policy.ts";
 import {
   createReadFileTool,
   type OutsideReadMode,
@@ -294,6 +295,9 @@ export interface RuntimeDeps {
   toolPolicy?: ToolPolicyLike & { readonly scopes?: readonly ToolScope[] };
   sessionId: SessionId;
   yolo: boolean;
+  // 决策 469：主会话的审批模式单元（会话中途可切换；/reload 等重建运行面时沿用同一个单元）。缺省 = 按 yolo 旗标新建；
+  // 委派策略（worker）在场时不用它，模式随派出时定
+  approvalModeCell?: ApprovalModeCell;
   provider: string;
   modelId: string;
   // 审批 handler 由 Actor 注入（决策 025）：工厂收 grantStore——审批提示的 [a]/[d]
@@ -478,8 +482,18 @@ export interface FrozenSessionPrompt {
   toolEnvironment?: ToolEnvironment;
 }
 
+// 决策 469：当前的审批模式（运行面、壳与派出的会话共用一个单元）
+export interface ApprovalModeCell {
+  current: ApprovalMode;
+}
+
 export interface RuntimeBundle {
   adapter: PiRuntimeAdapter;
+  // 决策 469：会话中途切换审批模式（worker 等委派策略的运行面没有）：切换写一条会话记录，之后的工具调用按新模式判定
+  approvalMode?: {
+    get(): ApprovalMode;
+    set(mode: ApprovalMode): void;
+  };
   // 本会话的会话存储写者（决策 176）
   sessionStore: SessionStoreWriter;
   // M4 S6：grant 运行态（审批提示 [a]/[d] 与 /grants /revoke /grants save 共用同一存储）
@@ -666,6 +680,11 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
   // run_command 的三处说明与系统提示里的审批说法都按它与执行端的平台生成，不写死本地、人工批准的说法；
   // 钩子 JSON 的 permission_mode 也用它（324）
   const approvalMode = deps.toolPolicy?.approvalMode ?? (deps.yolo ? "yolo" : "prompt");
+  // 决策 469：主会话的当前模式单元（委派策略的运行面没有，模式不变）。run_command 的说明与工作区外写入仍按开会话时的模式
+  const modeCell: ApprovalModeCell | undefined =
+    deps.toolPolicy !== undefined
+      ? undefined
+      : (deps.approvalModeCell ?? { current: approvalMode });
   // 最近一个已收尾的 Run：收尾类钩子（Stop / StopFailure / SubagentStop、自动压缩的 PostCompact）在 Run 窗口外触发，
   // 记录挂到刚结束的那个 Run；其余 Run 之外的钩子（下一条消息的 UserPromptSubmit、手动压缩、Notification、
   // SessionEnd 等）按会话级记录，不挂上一个 Run
@@ -689,7 +708,7 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
         : undefined),
     ...(deps.hooksNotice !== undefined ? { notice: deps.hooksNotice } : {}),
     ...(deps.workspaceHost !== undefined ? { workspaceHost: deps.workspaceHost } : {}),
-    permissionMode: approvalMode,
+    permissionMode: modeCell !== undefined ? () => modeCell.current : approvalMode,
   });
   // PreToolUse 钩子的 additionalContext 随工具结果交给模型：按 toolCallId 暂存，afterToolCall 时一并追加
   const preToolContexts = new Map<string, string[]>();
@@ -1299,6 +1318,7 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
         ]
       : [];
   const adapter = new PiRuntimeAdapter({
+    ...(modeCell !== undefined ? { approvalMode: () => modeCell.current } : {}),
     snapshot: {
       version: INJECTION_SNAPSHOT_VERSION,
       model: {
@@ -1607,6 +1627,22 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     governedRegistry.list().map((registration) => [registration.name, registration.tier])
   );
   return {
+    ...(modeCell !== undefined
+      ? {
+          approvalMode: {
+            get: () => modeCell.current,
+            set: (mode: ApprovalMode) => {
+              if (mode === modeCell.current) return;
+              const from = modeCell.current;
+              modeCell.current = mode;
+              sessionStore.append({
+                customType: SessionEntryType.ApprovalMode,
+                data: { version: SESSION_ENTRY_VERSION, from, to: mode, changedAt: Date.now() },
+              });
+            },
+          },
+        }
+      : {}),
     adapter,
     sessionStore,
     grantStore,

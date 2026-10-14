@@ -6,7 +6,7 @@
 import type { EnterWorktreeSlot } from "../application/enter-worktree-tool.ts";
 import { type LaunchFlags, orchestrationSettingsOf } from "../application/launch-flags.ts";
 import type { PeerSlot } from "../application/peer-tools.ts";
-import type { MemoryWriteConfig, RuntimeBundle } from "../application/runtime.ts";
+import type { ApprovalModeCell, MemoryWriteConfig, RuntimeBundle } from "../application/runtime.ts";
 import { ScriptGate, scriptGateSettingsOf } from "../application/script-naming.ts";
 import { ScriptSlot } from "../application/script-tool.ts";
 import {
@@ -41,6 +41,8 @@ export function spawnWorkerOption(
 
 // 重建所需的、跨快照不变的部分（入口在开局时备好）
 export interface MainReloadContext {
+  // 决策 469：主会话的审批模式单元（重建沿用，切换过的模式不丢）
+  approvalModeCell?: ApprovalModeCell;
   governanceRoot: string;
   // 决策 445、446：主会话的工作区根（独立工作树）；缺省按会话推导
   workspaceRoot?: string | undefined;
@@ -86,6 +88,9 @@ export async function reopenMainSessionForReload(
   await current.bundle.sessionStore.flush();
   const opened = await openSessionRuntime({
     governanceRoot: context.governanceRoot,
+    ...(context.approvalModeCell !== undefined
+      ? { approvalModeCell: context.approvalModeCell }
+      : {}),
     turnSnapshots: true,
     ...(context.workspaceRoot !== undefined ? { workspaceRoot: context.workspaceRoot } : {}),
     ...(context.enterWorktree !== undefined ? { enterWorktree: context.enterWorktree } : {}),

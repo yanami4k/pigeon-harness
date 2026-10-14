@@ -8,7 +8,8 @@ import { getKeybindings } from "@earendil-works/pi-tui";
 import { afterEach, test } from "vitest";
 import { newSessionId } from "../state/ids.ts";
 import { validateSettingsLayer } from "../state/settings.ts";
-import { installKeybindings, isKey } from "./keybindings.ts";
+import { ConfigPanel } from "./config-panel.ts";
+import { installKeybindings, isKey, keybindingRows } from "./keybindings.ts";
 import { ScriptedRuntime } from "./runtime-fixtures.ts";
 import { PigeonTuiShell } from "./shell.ts";
 import { MockTerminal, screenText, settle } from "./testing.ts";
@@ -90,4 +91,34 @@ test("设置文件：keybindings 的键须是动作名的样子（pigeon.* 或 t
   assert.ok("problems" in bad && /is not an action name/.test(bad.problems.join("")));
   const badValue = validateSettingsLayer({ keybindings: { "pigeon.tree": 3 } }, source);
   assert.ok("problems" in badValue);
+});
+
+test("决策 465：设置视图的键位组——Pigeon 动作在前；两个 Pigeon 动作绑了同一个键，两行都标出冲突（醒目）；新动作在缺省表里", () => {
+  installKeybindings({ "pigeon.tree": "ctrl+o" });
+  try {
+    const rows = keybindingRows({ "pigeon.tree": "ctrl+o" });
+    assert.ok(rows[0]?.action.startsWith("pigeon."));
+    const tree = rows.find((row) => row.action === "pigeon.tree");
+    const output = rows.find((row) => row.action === "pigeon.toggleToolOutput");
+    assert.deepEqual(tree?.conflicts, ["pigeon.toggleToolOutput"]);
+    assert.deepEqual(output?.conflicts, ["pigeon.tree"]);
+    assert.equal(tree?.userSet, true);
+    assert.deepEqual(tree?.defaults, ["ctrl+x"]);
+    const mode = rows.find((row) => row.action === "pigeon.toggleMode");
+    assert.deepEqual(mode?.keys, ["shift+tab"]);
+    assert.deepEqual(rows.find((row) => row.action === "pigeon.openPanel")?.keys, ["left"]);
+    assert.deepEqual(rows.find((row) => row.action === "tui.editor.cursorLeft")?.conflicts, []);
+    const panel = new ConfigPanel();
+    panel.open(
+      [],
+      () => {},
+      () => {},
+      () => 200,
+      () => rows
+    );
+    const raw = panel.view.render(160).join("\n");
+    assert.ok(raw.includes("\x1b[31mconflicts with pigeon.toggleToolOutput"), raw);
+  } finally {
+    installKeybindings(undefined);
+  }
 });

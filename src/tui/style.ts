@@ -10,6 +10,11 @@ export function failureMark(text: string): string {
   return text === "" ? text : `\x1b[22m\x1b[31m${text}\x1b[39m\x1b[2m`;
 }
 
+// 醒目的提示色（状态栏里的 yolo：放手模式下工具调用不再问人）。只包受信的固定文字
+export function warning(text: string): string {
+  return text === "" ? text : `\x1b[31m${text}\x1b[39m`;
+}
+
 // 加粗（欢迎头的名字与版本）
 export function bold(text: string): string {
   return text === "" ? text : `\x1b[1m${text}\x1b[22m`;

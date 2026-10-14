@@ -38,7 +38,7 @@ import {
   worktreeSectionOf,
 } from "../state/settings.ts";
 import { worktreeBaseModeOf } from "../state/worktree-config.ts";
-import type { TuiPoolFace, TuiRuntimeFace } from "./shell.ts";
+import type { ApprovalModeControl, TuiPoolFace, TuiRuntimeFace } from "./shell.ts";
 
 export interface SessionPoolContext {
   governanceRoot: string;
@@ -52,13 +52,18 @@ export interface SessionPoolContext {
   webToolsFor?: (snapshot: SettingsSnapshot) => { webTools?: WebToolsConfig };
   // /take 取回到哪（主会话当前的工作区）
   mainWorkspace(): string;
+  // 决策 469：派出时主会话当前的审批模式（派出的会话各有自己的模式，从这里起）；缺省按启动参数
+  approvalMode?(): "prompt" | "yolo";
   // 工作树建立与清理、钩子、MCP 与打转的说明（写明来源会话）；alert 为报错，醒目显示
   notice(line: string, alert?: boolean): void;
   // 测试用：在用锁的家目录（缺省用户家目录）
   homeDir?: string;
 }
 
-type PooledLive = Pick<TuiRuntimeFace, "subscribe" | "subscribeStream" | "subscribeToolResults">;
+type PooledLive = Pick<TuiRuntimeFace, "subscribe" | "subscribeStream" | "subscribeToolResults"> & {
+  // 决策 469：这个会话自己的审批模式
+  approvalMode?: ApprovalModeControl;
+};
 
 // 两个路径是不是同一个目录（实际位置；有一个不在即不是）
 function sameDir(left: string, right: string): boolean {
@@ -104,6 +109,9 @@ export function createSessionPool(context: SessionPoolContext): {
       try {
         opened = await openSessionRuntime({
           governanceRoot: context.governanceRoot,
+          approvalModeCell: {
+            current: context.approvalMode?.() ?? (context.flags.yolo ? "yolo" : "prompt"),
+          },
           // 共用目录的会话工作区就是当前目录（会话文件头记的工作目录即此，没有工作树）
           workspaceRoot: worktree?.path ?? context.governanceRoot,
           sessionId,
@@ -217,6 +225,7 @@ export function createSessionPool(context: SessionPoolContext): {
           subscribe: (listener) => adapter.subscribe(listener),
           subscribeStream: (listener) => adapter.subscribeStream(listener),
           subscribeToolResults: (listener) => adapter.subscribeToolResults(listener),
+          ...(bundle.approvalMode !== undefined ? { approvalMode: bundle.approvalMode } : {}),
         },
         take: (state) => {
           // 决策 459：共用目录的会话没有工作树，改动已直接在目录里
