@@ -8,7 +8,7 @@ import { loadStoreSession } from "../persistence/session-view.ts";
 import type { RunId } from "../state/ids.ts";
 import { type StoreSessionView, storeMessageAt } from "../state/session-judge.ts";
 import type { ForkPoint } from "../state/session-payloads.ts";
-import { isStatusMessage } from "../state/status-text.ts";
+import { agentMessageMarkOf, isStatusMessage } from "../state/status-text.ts";
 import { ForkError, type ForkRunOptions, runForkBranch } from "./fork.ts";
 import type { OpenedSessionRuntime } from "./session-runtime.ts";
 import { sessionsDirOf } from "./workspace.ts";
@@ -53,7 +53,10 @@ export function parseForkCommand(raw: string): { at?: ForkAt; input?: string } {
 function taskSeqOf(session: StoreSessionView, runId: RunId): number {
   const messages = session.runs.find((run) => run.runId === runId)?.messages ?? [];
   const index = messages.findIndex(
-    (ref) => ref.message.role === "user" && !isStatusMessage(ref.message)
+    (ref) =>
+      ref.message.role === "user" &&
+      !isStatusMessage(ref.message) &&
+      agentMessageMarkOf(ref.message) === undefined
   );
   return index >= 0 ? index + 1 : 1;
 }

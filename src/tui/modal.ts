@@ -112,6 +112,8 @@ export function askApprovalPanel(
     const withdraw = (): void => {
       if (host.pendingApproval() !== pending) return;
       host.setPendingApproval(null);
+      // 写到一半的拒绝理由不留在输入框里
+      if (host.reasonMode()) host.clearInput();
       host.setReasonMode(false);
       if (host.settleApproval !== undefined) host.settleApproval(withdrawnLine(request));
       else approvalLine(host, withdrawnLine(request));
@@ -120,7 +122,10 @@ export function askApprovalPanel(
       resolve({ key: "cancel", reason: APPROVAL_WITHDRAWN_REASON });
     };
     if (signal.aborted) withdraw();
-    else signal.addEventListener("abort", withdraw, { once: true });
+    else {
+      signal.addEventListener("abort", withdraw, { once: true });
+      void promise.finally(() => signal.removeEventListener("abort", withdraw));
+    }
   }
   return promise;
 }

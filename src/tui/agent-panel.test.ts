@@ -103,3 +103,14 @@ test("已结束的保留期过了、下层还有在跑的：照样列着才钻�
   assert.equal(panel.up(), false);
   assert.equal(panel.isFocused(), false);
 });
+
+test("x 清掉的行再有变化（又干起来）即重新列出", () => {
+  const { panel, add, advance } = fixture();
+  const done = add("general-1", "idle", undefined);
+  panel.clear(done);
+  assert.deepEqual(panel.render(80), []);
+  advance(1000);
+  done.state = "running";
+  done.updatedAt += 1000;
+  assert.deepEqual(plain(panel.render(80)), ["  general-1  general · running"]);
+});

@@ -55,7 +55,6 @@ function makeShell() {
   let exits = 0;
   const face: TuiAgentsFace = {
     list: () => agents,
-    subscribe: () => () => {},
     running: () => agents.filter((agent) => agent.state === "running").length,
     stop: async (agent) => {
       stopped.push(agent.agentName);
@@ -168,4 +167,39 @@ test("停下等审批的子 agent：挂着的审批从审批区收掉、留一�
   assert.equal(asked, 0);
   assert.equal(decision.approved, false);
   shell.stop();
+});
+
+test("审批挂着时退出确认照样先答：y 退出、不当作批准；撤回审批时写到一半的拒绝理由一并清掉", async () => {
+  const { shell, term, exits } = makeShell();
+  shell.start();
+  await settle();
+  const controller = new AbortController();
+  const answer = askApprovalPanel(shell, {
+    toolName: "edit_file",
+    toolCallId: "t1",
+    args: { path: "a.ts" },
+    subagent: { path: "general-1" },
+    signal: controller.signal,
+  });
+  await settle();
+  term.input("r");
+  term.input("do not touch");
+  await settle();
+  controller.abort();
+  await answer;
+  await settle();
+  assert.ok(!screenText(term).includes("do not touch"), "拒绝理由不留在输入框里");
+  const second = askApprovalPanel(shell, {
+    toolName: "edit_file",
+    toolCallId: "t2",
+    args: { path: "b.ts" },
+  });
+  await settle();
+  shell.requestExit();
+  await settle();
+  term.input("y");
+  await settle();
+  assert.equal(exits(), 1, "y 答的是退出确认");
+  const result = await second;
+  assert.notEqual(result.key, "y", "没有当作批准");
 });

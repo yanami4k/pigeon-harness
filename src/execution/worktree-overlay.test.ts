@@ -108,7 +108,7 @@ test("硬性规则：只写入 worker 改过的文件，worker 没碰的文件�
       applied: ["b.txt", "deep/er/x.txt", "n.txt"],
       unchanged: [],
       conflicts: [],
-      deletedByWorker: ["d.txt"],
+      deletedInWorktree: ["d.txt"],
     });
     assert.equal(
       readFileSync(join(f.main, "b.txt"), "utf8"),
@@ -143,7 +143,7 @@ test("硬性规则：worker 删除的文件不自动删，只在结果里列出�
       applied: [],
       unchanged: [],
       conflicts: [],
-      deletedByWorker: ["c.txt", "d.txt"],
+      deletedInWorktree: ["c.txt", "d.txt"],
     });
     assert.equal(readFileSync(join(f.main, "d.txt"), "utf8"), "to be deleted by worker\n");
     assert.equal(readFileSync(join(f.main, "c.txt"), "utf8"), mainC);
@@ -179,7 +179,7 @@ test("硬性规则：主工作目录有未提交改动（含已暂存的）时�
       applied: ["a.txt"],
       unchanged: [],
       conflicts: [],
-      deletedByWorker: [],
+      deletedInWorktree: [],
     });
     assert.equal(
       readFileSync(join(f.main, "a.txt"), "utf8"),
@@ -228,7 +228,7 @@ test("硬性规则：叠不上时列出冲突文件、不写入冲突的那部�
       applied: ["c.txt"],
       unchanged: ["same.txt"],
       conflicts: ["b.txt", "bin.dat", "both.txt"],
-      deletedByWorker: [],
+      deletedInWorktree: [],
     });
     assert.equal(
       readFileSync(join(f.main, "b.txt"), "utf8"),
@@ -271,7 +271,7 @@ test("硬性规则：不回退主工作目录——主已删掉的文件 worker 
       applied: ["bin.dat"],
       unchanged: [],
       conflicts: ["c.txt"],
-      deletedByWorker: [],
+      deletedInWorktree: [],
     });
     assert.equal(existsSync(join(f.main, "c.txt")), false, "主已删的文件不写回");
     assert.deepEqual(readFileSync(join(f.main, "bin.dat")), Buffer.from([0, 9, 9]));
@@ -289,7 +289,7 @@ test("worker 相对起点没有改动：三份清单全空，主工作目录一�
       base: f.base,
       worktreePath: f.worker,
     });
-    assert.deepEqual(result, { applied: [], unchanged: [], conflicts: [], deletedByWorker: [] });
+    assert.deepEqual(result, { applied: [], unchanged: [], conflicts: [], deletedInWorktree: [] });
     assert.deepEqual(snapshotOf(f.main, ["a.txt", "b.txt", "c.txt", "d.txt", "u.txt"]), before);
   } finally {
     f.cleanup();

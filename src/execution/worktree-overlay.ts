@@ -43,7 +43,7 @@ export interface OverlayResult {
   // 叠不上、未写入的文件
   conflicts: string[];
   // worker 删除的文件（主工作目录里未删）
-  deletedByWorker: string[];
+  deletedInWorktree: string[];
   // 决策 381：worker 新建却因过大没写进树、因而没叠回的文件；没有即缺省
   skipped?: SkippedFile[];
 }
@@ -146,14 +146,6 @@ function workerChanges(input: OverlayInput): {
   return { top, base, workerTree, changes, skipped };
 }
 
-// 叠回会写到的路径（相对仓库根，正斜杠；worker 删除的不算——叠加不删文件）
-export function workerOverlayPaths(input: OverlayInput): string[] {
-  return workerChanges(input)
-    .changes.filter((change) => change.status !== "D")
-    .map((change) => change.path)
-    .sort();
-}
-
 export function overlayWorktreeChanges(input: OverlayInput): OverlayResult {
   const { top, base, workerTree, changes, skipped } = workerChanges(input);
   const topResolved = resolve(top);
@@ -161,7 +153,7 @@ export function overlayWorktreeChanges(input: OverlayInput): OverlayResult {
     applied: [],
     unchanged: [],
     conflicts: [],
-    deletedByWorker: [],
+    deletedInWorktree: [],
     ...(skipped.length > 0 ? { skipped } : {}),
   };
   const scratch = mkdtempSync(join(tmpdir(), "pigeon-overlay-"));
@@ -187,7 +179,7 @@ function sorted(result: OverlayResult): OverlayResult {
     applied: [...result.applied].sort(),
     unchanged: [...result.unchanged].sort(),
     conflicts: [...result.conflicts].sort(),
-    deletedByWorker: [...result.deletedByWorker].sort(),
+    deletedInWorktree: [...result.deletedInWorktree].sort(),
     ...(result.skipped !== undefined ? { skipped: result.skipped } : {}),
   };
 }
@@ -204,11 +196,11 @@ function applyChanges(
   for (const { status, path } of changes) {
     const target = resolve(top, path);
     if (!target.startsWith(topResolved + sep)) {
-      throw new OverlayError(`A path changed by the worker is outside the repository: ${path}`);
+      throw new OverlayError(`A path changed in the worktree is outside the repository: ${path}`);
     }
     if (status === "D") {
       // ② worker 删除的不自动删
-      result.deletedByWorker.push(path);
+      result.deletedInWorktree.push(path);
       continue;
     }
     const theirs = entryOf(top, workerTree, path);
@@ -287,7 +279,7 @@ function applyChanges(
           "-L",
           "starting snapshot",
           "-L",
-          "worker",
+          "worktree",
           oursFile,
           baseFile,
           theirsFile,

@@ -104,16 +104,6 @@ import {
   withoutStatusMarker,
 } from "../state/status-text.ts";
 
-// 一条用户消息；mark 在场即 agent 之间的传话（决策 480）
-function userMessage(text: string, mark?: AgentMessageMark): AgentMessage {
-  return {
-    role: "user",
-    content: [{ type: "text", text }],
-    timestamp: Date.now(),
-    ...(mark !== undefined ? { [AGENT_MESSAGE_MARKER]: mark } : {}),
-  } as AgentMessage;
-}
-
 import type { ToolErrorKind, ToolExecution } from "../state/tool-execution.ts";
 import { classifyToolError } from "../tools/error-kind.ts";
 import type { ApprovalMode } from "../tools/policy.ts";
@@ -132,6 +122,16 @@ import { isContextOverflowReply } from "./overflow.ts";
 import { guardRepetition, type RepetitionHit } from "./repetition-guard.ts";
 import type { SessionStoreSink } from "./session-store.ts";
 import { type InjectionSnapshot, InjectionSnapshotSchema } from "./snapshot.ts";
+
+// 一条用户消息；mark 在场即 agent 之间的传话（决策 480）
+function userMessage(text: string, mark?: AgentMessageMark): AgentMessage {
+  return {
+    role: "user",
+    content: [{ type: "text", text }],
+    timestamp: Date.now(),
+    ...(mark !== undefined ? { [AGENT_MESSAGE_MARKER]: mark } : {}),
+  } as AgentMessage;
+}
 
 // 快照里没给推理档位时的兜底：off（不请求推理）。装配层（buildRuntime）总会按启动参数、设置与模型信息定下档位写进快照
 // （决策 390：支持推理的模型缺省 high，见 state/thinking-config.ts），这里只兜直接构造的适配器与旧快照

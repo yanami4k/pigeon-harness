@@ -81,6 +81,13 @@ const PROGRAM_NOTICE_PREFIXES = [
   LEGACY_JOB_NOTICE_PREFIX,
 ];
 
+// 决策 480：agent 之间的传话的正文（边界标记之间的那段）；认不出边界即原文
+export function agentMessageBody(text: string): string {
+  const match =
+    /<<<BEGIN AGENT-MESSAGE [0-9a-f]+>>>\n([\s\S]*?)\n<<<END AGENT-MESSAGE [0-9a-f]+>>>/.exec(text);
+  return match?.[1] ?? text;
+}
+
 export function isProgramNotice(text: string): boolean {
   return PROGRAM_NOTICE_PREFIXES.some((prefix) => text.startsWith(prefix));
 }
@@ -185,8 +192,15 @@ export function messageLines(
         continue;
       }
       // 决策 480：agent 之间的传话（按消息上的标记认）不是人说的话，回看时显示成系统行，不成为回退点
-      if (message.role === "user" && agentMessageMarkOf(message.raw) !== undefined) {
-        lines.push({ kind: "notice", text: clip(block.text, entryChars) });
+      const mark = message.role === "user" ? agentMessageMarkOf(message.raw) : undefined;
+      if (mark !== undefined) {
+        lines.push({
+          kind: "notice",
+          text: clip(
+            `agent ${mark.kind} from ${mark.from}: ${agentMessageBody(block.text)}`,
+            entryChars
+          ),
+        });
         continue;
       }
       if (message.role === "user") {

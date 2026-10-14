@@ -165,7 +165,7 @@ interface WorkerFacts {
 }
 
 // 一个 worker 的事实：所属会话、是否在用
-function workerFacts(
+function worktreeFacts(
   scope: WorktreeScope,
   governanceRoot: string,
   workerSessionId: string | undefined,
@@ -237,7 +237,7 @@ export function listLeftoverWorktrees(scope: WorktreeScope): LeftoverWorktree[] 
     const workerSessionId = match?.[1];
     const name = match?.[2] ?? dirName;
     const present = existsSync(path);
-    const facts = workerFacts(scope, governanceRoot, workerSessionId, present ? path : undefined);
+    const facts = worktreeFacts(scope, governanceRoot, workerSessionId, present ? path : undefined);
     const base = startCommitOf(repoRoot, entry.branch);
     items.push({
       kind: present ? "worktree" : "missing-dir",
@@ -306,7 +306,7 @@ export function listLeftoverWorktrees(scope: WorktreeScope): LeftoverWorktree[] 
         continue;
       }
       const match = WORKER_DIR.exec(dirName);
-      const facts = workerFacts(scope, governanceRoot, match?.[1], path);
+      const facts = worktreeFacts(scope, governanceRoot, match?.[1], path);
       items.push({
         kind: "orphan-dir",
         name: match?.[2] ?? dirName,

@@ -468,8 +468,8 @@ export function takePooledChanges(input: {
       `conflicts, not written: ${result.conflicts.join(", ")} (still in worktree ${input.worktreePath})`
     );
   }
-  if (result.deletedByWorker.length > 0) {
-    lines.push(`deleted in session, kept here: ${result.deletedByWorker.join(", ")}`);
+  if (result.deletedInWorktree.length > 0) {
+    lines.push(`deleted in session, kept here: ${result.deletedInWorktree.join(", ")}`);
   }
   if ((result.skipped?.length ?? 0) > 0) {
     lines.push(
@@ -478,7 +478,7 @@ export function takePooledChanges(input: {
   }
   const complete =
     result.conflicts.length === 0 &&
-    result.deletedByWorker.length === 0 &&
+    result.deletedInWorktree.length === 0 &&
     (result.skipped?.length ?? 0) === 0;
   return {
     text: lines.length > 0 ? lines.join("\n") : `no changes to take from session ${input.name}`,

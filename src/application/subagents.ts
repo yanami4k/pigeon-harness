@@ -207,6 +207,10 @@ export interface SubagentRecord extends AgentNode {
   stoppedByParent?: boolean;
   // 续接认回、还没重开的：有消息来时按它重开
   reopen?: () => Promise<SubagentRuntime>;
+  // 被停下之后静着：它自己的后台作业结束（停下时一并停掉的也算）不叫醒它，收到消息才再干
+  dormant?: boolean;
+  // 一次干活还没收尾（叫停之后这一轮还在退出的路上）：这期间不另起一次
+  activating?: boolean;
   // 还没有运行面时收到的（续接认回的、或撞上并发上限一时开不了的）：开好后一并递出；使用者亲手打的没有传话条目
   inbox?: Array<{ text: string; entry?: AgentMessageRecord }>;
 }
@@ -231,6 +235,22 @@ function stateOf(record: SubagentRecord): AgentState {
 
 // 释放一批子 agent 时等它们这一轮收尾的上限
 const SHUTDOWN_WAIT_MS = 5_000;
+
+// 等一件事，至多等 ms；定时器到时或事情先完都清掉，不拖住进程退出
+async function raceWithin(work: Promise<unknown>, ms: number): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      work,
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, ms);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 const NAME_LIMIT = 40;
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/;
@@ -545,6 +565,19 @@ export class AgentHub {
     record: SubagentRecord,
     first: (runtime: SubagentRuntime) => Promise<AgentRunOutcome>
   ): Promise<void> {
+    record.activating = true;
+    try {
+      await this.#activateOnce(record, first);
+    } finally {
+      record.activating = false;
+    }
+    this.#pump();
+  }
+
+  async #activateOnce(
+    record: SubagentRecord,
+    first: (runtime: SubagentRuntime) => Promise<AgentRunOutcome>
+  ): Promise<void> {
     let runtime: SubagentRuntime;
     try {
       runtime = record.runtime ?? (await (record.opening as Promise<SubagentRuntime>));
@@ -559,13 +592,11 @@ export class AgentHub {
       record.updatedAt = this.#now();
       this.#changed();
       this.#report(record, undefined);
-      this.#pump();
       return;
     }
     delete record.opening;
     if (record.state === "stopped") {
       this.#report(record, runtime);
-      this.#pump();
       return;
     }
     record.state = "running";
@@ -618,7 +649,6 @@ export class AgentHub {
     record.updatedAt = this.#now();
     this.#changed();
     this.#report(record, runtime);
-    this.#pump();
   }
 
   // 交回结果：前台的直接作工具结果，后台的作一条消息给派出方
@@ -663,6 +693,7 @@ export class AgentHub {
 
   // 递给一个子 agent：在跑的这一轮结束后递，停着的叫它接着干（撞上并发上限即先排着，有空位再开），续接认回的先重开会话
   #deliverTo(record: SubagentRecord, text: string, entry: AgentMessageRecord): void {
+    record.dormant = false;
     const runtime = record.runtime;
     if (runtime !== undefined) {
       runtime.record(entry);
@@ -688,7 +719,15 @@ export class AgentHub {
 
   // 停着的子 agent 有待递的：没撞并发上限即叫它接着干
   #startIfRoom(record: SubagentRecord): void {
-    if (this.#active(record) || this.#closing) return;
+    // 停下之后静着的不自己醒（排着的通知留着，收到新消息才再干）
+    if (
+      this.#active(record) ||
+      this.#closing ||
+      record.activating === true ||
+      record.dormant === true
+    ) {
+      return;
+    }
     const waiting = (record.runtime?.pendingNotices() ?? 0) > 0 || (record.inbox?.length ?? 0) > 0;
     if (!waiting) return;
     if (record.runtime === undefined && record.reopen === undefined) return;
@@ -850,6 +889,7 @@ export class AgentHub {
     await Promise.all(children.map((child) => this.#halt(child, state)));
     if (!this.#active(record)) return;
     record.state = state;
+    record.dormant = true;
     record.updatedAt = this.#now();
     this.#changed();
     if (record.runtime !== undefined) {
@@ -876,7 +916,10 @@ export class AgentHub {
     const busy = this.agentsOf(sessionId).filter(
       (agent) => this.#active(agent) || agent.runtime?.hasJobs?.() === true
     );
-    for (const agent of busy) agent.stoppedByParent = true;
+    for (const agent of busy) {
+      agent.stoppedByParent = true;
+      agent.dormant = true;
+    }
     await Promise.all(busy.map((agent) => this.#halt(agent, "stopped")));
     for (const agent of busy) agent.runtime?.stopJobs?.();
   }
@@ -889,7 +932,8 @@ export class AgentHub {
   // 决策 482：使用者在子 agent 里亲手打的字——算使用者的话，不附信任说明、不记传话条目；在跑的这一轮结束后递，
   // 停着的叫它接着干（撞上并发上限即如实说）；不能发时返回原因
   sendFromUser(record: SubagentRecord, text: string): string | undefined {
-    if (!this.#agents.includes(record)) return `${record.agentName} is gone`;
+    if (this.#closing || !this.#agents.includes(record)) return `${record.agentName} is gone`;
+    record.dormant = false;
     if (
       record.runtime === undefined &&
       record.opening === undefined &&
@@ -946,13 +990,13 @@ export class AgentHub {
     await Promise.all(agents.map((agent) => this.#halt(agent, "stopped")));
     // 等这一轮收尾，有上限：卡在审批上的等不到人答，到时照样释放
     const settled = Promise.all(agents.map((agent) => agent.activity?.catch(() => {})));
-    await Promise.race([settled, new Promise((resolve) => setTimeout(resolve, SHUTDOWN_WAIT_MS))]);
+    await raceWithin(settled, SHUTDOWN_WAIT_MS);
     // 释放也有上限：手上的工具调用等不到收尾的，到时不再等（运行面随进程或之后的收尾释放）
     const closed = Promise.all(
       agents.map((agent) =>
         agent.runtime?.close({ interrupted: interrupted.has(agent) }).catch(() => {})
       )
     );
-    await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, SHUTDOWN_WAIT_MS))]);
+    await raceWithin(closed, SHUTDOWN_WAIT_MS);
   }
 }

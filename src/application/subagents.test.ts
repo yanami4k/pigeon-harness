@@ -360,3 +360,19 @@ test("加序号后名字仍至多 40 个字符（截短原名）", async () => {
   await tick();
   assert.equal(agents[1]?.spec.name, `${"a".repeat(38)}-2`);
 });
+
+test("被停下的子 agent 静着：它自己的后台作业结束不叫醒它；收到消息才再干", async () => {
+  const { host, agents } = harness();
+  await host.spawn({ task: "a" });
+  await tick();
+  const child = agents[0];
+  assert.equal(await host.stop("general-1"), "Stopped general-1.");
+  await tick();
+  child?.notices.push("[job ended]");
+  child?.spec.wake();
+  await tick();
+  assert.equal(child?.inputs.length, 1, "没有叫醒");
+  assert.equal(host.send("general-1", "go on"), "Sent to general-1.");
+  await tick();
+  assert.equal(child?.inputs.length, 2);
+});

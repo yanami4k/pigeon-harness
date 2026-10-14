@@ -95,7 +95,7 @@ import type { TurnCompletedPayload } from "../state/runtime-events.ts";
 import { RuntimeEventKind } from "../state/runtime-events.ts";
 import type { RewindMode, RunStopCause } from "../state/session-entries.ts";
 import { toolResultModelUsage } from "../state/tool-usage.ts";
-import { AgentPanel, agentActive } from "./agent-panel.ts";
+import { AgentPanel, agentActive, agentStateWord } from "./agent-panel.ts";
 import { openExternalUrl, PigeonAltScreen, TrimmedTranscript } from "./alt-screen.ts";
 import type { ApprovalBlockLine, ApprovalPanelResult, TuiApprovalFace } from "./approval.ts";
 import { ApprovalArea } from "./approval-area.ts";
@@ -307,7 +307,6 @@ const OVERRIDE_LAYER = { project: "project settings", local: "project local sett
 export interface TuiAgentsFace {
   // 某会话（连同各层）的全部子 agent
   list(sessionId: string): readonly SubagentRecord[];
-  subscribe(listener: () => void): () => void;
   // 整个进程里还在跑的子 agent 个数（退出前确认用）
   running(): number;
   // 在等审批的子 agent（路径）
@@ -393,6 +392,8 @@ export class PigeonTuiShell
         unsubscribe: () => void;
         back: ShellView;
         pooledId?: string;
+        // 已接上实时订阅
+        live: boolean;
       }
     | undefined;
   private exitConfirmOn = false;
@@ -638,6 +639,8 @@ export class PigeonTuiShell
 
   // 按键让给别人：全屏的搜索框开着（浮层），或输入框的补全列表开着（Esc、方向键、回车归它）；审批面板挂着时不让
   private keysToOthers(_data: string): boolean {
+    // 决策 482：退出前的确认等着答时不让
+    if (this.exitConfirmOn) return false;
     // 查找框开着时一律让给它——审批或消息面板挂着也让（键入查找框的字母不能被面板拿去作答）
     if (this.tui.hasOverlay()) return true;
     if (this.pendingApprovalState !== null) return false;
@@ -804,6 +807,16 @@ export class PigeonTuiShell
       const id = this.pooledSession.id;
       const card = this.options.pool?.source.list().find((item) => item.id === id);
       this.statusLine.setText(`session: ${card?.name ?? "?"} ${card?.state ?? "unknown"}`);
+      return;
+    }
+    // 决策 482：进入的子 agent 里状态行写它的名字与状态
+    if (
+      this.view === "agent" &&
+      this.agentSession !== undefined &&
+      this.pendingApprovalState === null
+    ) {
+      const record = this.agentSession.record;
+      this.statusLine.setText(`sub-agent: ${record.agentName} ${agentStateWord(record.state)}`);
       return;
     }
     // 状态行纯 ASCII，只写状态词（空闲与审批挂着时不写：审批框就在眼前）；审批期间输入归模态键控，运行中与 resume 期间
@@ -997,6 +1010,7 @@ export class PigeonTuiShell
   private agentCostTimer: ReturnType<typeof setTimeout> | undefined;
   agentsChanged(): void {
     this.scheduleAgentRetain();
+    this.attachAgentLive();
     if (this.agentCostTimer === undefined) {
       this.agentCostTimer = setTimeout(() => {
         this.agentCostTimer = undefined;
@@ -1039,6 +1053,11 @@ export class PigeonTuiShell
   private handleAgentPanelKey(data: string): { consume: true } | undefined {
     const panel = this.agentPanel;
     const face = this.options.agents;
+    // 列着的行都撤下了：回输入框，这个键照常交给输入框
+    if (!panel.hasRows()) {
+      panel.blur();
+      return undefined;
+    }
     if (matchesKey(data, "escape")) {
       panel.blur();
     } else if (matchesKey(data, "up")) {
@@ -1094,37 +1113,48 @@ export class PigeonTuiShell
         );
       }
     }
-    const disposers: Array<() => void> = [];
-    const live = face.live(record);
-    if (live !== undefined) {
-      disposers.push(
-        live.subscribe((event) => {
-          projectRuntimeEvent(flow, event, { turnErrors: true });
-          this.updateStatus();
-          this.tui.requestRender();
-        }),
-        live.subscribeStream((delta) => {
-          if (delta.kind === "thinking") flow.appendThinkingDelta(delta.delta);
-          else flow.appendDelta(delta.delta);
-          this.tui.requestRender();
-        })
-      );
-      const offResults = live.subscribeToolResults?.((notice) => {
-        attachToolResultTo(flow, notice);
-        this.tui.requestRender();
-      });
-      if (offResults !== undefined) disposers.push(offResults);
-    }
     this.agentSession = {
       record,
       flow,
       back,
       ...(pooledId !== undefined ? { pooledId } : {}),
-      unsubscribe: () => {
-        for (const dispose of disposers) dispose();
-      },
+      unsubscribe: () => {},
+      live: false,
     };
+    this.attachAgentLive();
     this.showView("agent");
+  }
+
+  // 进入时还没有运行面的子 agent（续接认回的、还在开的）：开好之后接上实时
+  private attachAgentLive(): void {
+    const session = this.agentSession;
+    if (session === undefined || session.live) return;
+    const live = this.options.agents?.live(session.record);
+    if (live === undefined) return;
+    const flow = session.flow;
+    const disposers = [
+      live.subscribe((event) => {
+        projectRuntimeEvent(flow, event, { turnErrors: true });
+        this.updateStatus();
+        this.tui.requestRender();
+      }),
+      live.subscribeStream((delta) => {
+        if (delta.kind === "thinking") flow.appendThinkingDelta(delta.delta);
+        else flow.appendDelta(delta.delta);
+        this.tui.requestRender();
+      }),
+    ];
+    const offResults = live.subscribeToolResults?.((notice) => {
+      attachToolResultTo(flow, notice);
+      this.tui.requestRender();
+    });
+    if (offResults !== undefined) disposers.push(offResults);
+    const previous = session.unsubscribe;
+    session.unsubscribe = () => {
+      previous();
+      for (const dispose of disposers) dispose();
+    };
+    session.live = true;
   }
 
   private leaveAgentSession(): void {
@@ -2673,16 +2703,9 @@ export class PigeonTuiShell
 
   // 视图的按键。Ctrl+C 与审批挂起期间放给壳级键控；会话回退打开时按键全归它
   private handleScreenKey(data: string): { consume: true } | undefined {
-    if (data === "\x03" || this.pendingApprovalState !== null) return undefined;
-    // 决策 442：设置面板开着时它独占方向键与回车
-    if (this.configPanel.isOpen()) return undefined;
-    // 有一方接管了 Esc（/memory edit 排队保存时）：Esc 归它，排在视图与取消键之前
-    if (this.escapeCapture !== undefined && matchesKey(data, "escape")) {
-      this.escapeCapture();
-      return { consume: true };
-    }
-    // 决策 482：有子 agent 在跑时退出前的确认：y 或 Enter 退出，别的键取消
-    if (this.exitConfirmOn) {
+    // 决策 482：有子 agent 在跑时退出前的确认，排在审批、设置面板与别的按键之前：y 或 Enter 退出，别的键取消
+    //（Ctrl+C 照旧归退出键）
+    if (this.exitConfirmOn && data !== "\x03") {
       this.exitConfirmOn = false;
       if (data === "y" || data === "Y" || matchesKey(data, "enter")) {
         this.exitConfirmed = true;
@@ -2691,6 +2714,14 @@ export class PigeonTuiShell
         this.updateStatus();
         this.tui.requestRender();
       }
+      return { consume: true };
+    }
+    if (data === "\x03" || this.pendingApprovalState !== null) return undefined;
+    // 决策 442：设置面板开着时它独占方向键与回车
+    if (this.configPanel.isOpen()) return undefined;
+    // 有一方接管了 Esc（/memory edit 排队保存时）：Esc 归它，排在视图与取消键之前
+    if (this.escapeCapture !== undefined && matchesKey(data, "escape")) {
+      this.escapeCapture();
       return { consume: true };
     }
     // 决策 482：子 agent 面板（输入框为空时 ↓ 进入）与进入的子 agent（Esc 回去）

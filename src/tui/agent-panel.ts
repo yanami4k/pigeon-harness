@@ -25,6 +25,10 @@ function oneLine(text: string): string {
   return sanitizeTerminalText(text.replace(/\s+/g, " ").trim());
 }
 
+export function agentStateWord(state: AgentState): string {
+  return STATE_WORD[state];
+}
+
 export function agentActive(record: Pick<SubagentRecord, "state">): boolean {
   return record.state === "starting" || record.state === "running";
 }
@@ -45,15 +49,20 @@ export class AgentPanel implements Component {
   private level: SubagentRecord | undefined;
   private selectedRecord: SubagentRecord | undefined;
   private focused = false;
-  // x 清掉的行
-  private readonly cleared = new WeakSet<SubagentRecord>();
+  // x 清掉的行与清掉时它最后的变化时刻（之后又有变化即重新列出）
+  private readonly cleared = new WeakMap<SubagentRecord, number>();
 
   constructor(source: AgentPanelSource) {
     this.source = source;
   }
 
+  private isCleared(record: SubagentRecord): boolean {
+    const at = this.cleared.get(record);
+    return at !== undefined && record.updatedAt <= at;
+  }
+
   private shown(record: SubagentRecord): boolean {
-    if (this.cleared.has(record)) return false;
+    if (this.isCleared(record)) return false;
     if (agentActive(record) || record.state === "interrupted") return true;
     if (this.source.now() - record.updatedAt < AGENT_ROW_RETAIN_MS) return true;
     // 已结束的保留期过了，下层还有可列的照样列着（不然钻不进去）
@@ -74,7 +83,7 @@ export class AgentPanel implements Component {
   private descendants(record: SubagentRecord): number {
     let count = 0;
     for (const child of this.source.agents()) {
-      if (child.parent !== record || this.cleared.has(child)) continue;
+      if (child.parent !== record || this.isCleared(child)) continue;
       const below = this.descendants(child);
       const visible =
         agentActive(child) ||
@@ -108,7 +117,7 @@ export class AgentPanel implements Component {
         (record) =>
           !agentActive(record) &&
           record.state !== "interrupted" &&
-          !this.cleared.has(record) &&
+          !this.isCleared(record) &&
           this.source.now() - record.updatedAt < AGENT_ROW_RETAIN_MS
       );
   }
@@ -181,7 +190,7 @@ export class AgentPanel implements Component {
 
   // x 清掉已结束的一行（在跑的由壳先停下）
   clear(record: SubagentRecord): void {
-    this.cleared.add(record);
+    this.cleared.set(record, record.updatedAt);
   }
 
   // 换会话：回到最上层、不选中

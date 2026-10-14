@@ -329,10 +329,17 @@ export async function main(argv: string[]): Promise<void> {
       : undefined;
   let agentCatalog: AgentTypeCatalog = loadAgentTypes({ governanceRoot });
   // 决策 482：在等审批的子 agent（路径），子 agent 面板据此标出
+  const waitingCounts = new Map<string, number>();
   const waitingAgents = new Set<string>();
   const agentWaiting = (path: string, on: boolean): void => {
-    if (on) waitingAgents.add(path);
-    else waitingAgents.delete(path);
+    const count = (waitingCounts.get(path) ?? 0) + (on ? 1 : -1);
+    if (count > 0) {
+      waitingCounts.set(path, count);
+      waitingAgents.add(path);
+    } else {
+      waitingCounts.delete(path);
+      waitingAgents.delete(path);
+    }
     shellHolder.current?.agentsChanged();
   };
   if (agentHub !== undefined) {
@@ -512,7 +519,6 @@ export async function main(argv: string[]): Promise<void> {
       ? {
           agents: {
             list: (id: string) => agentHub.agentsOf(id),
-            subscribe: (listener: () => void) => agentHub.subscribe(listener),
             running: () => agentHub.runningTotal(),
             waiting: () => waitingAgents,
             stop: (record: SubagentRecord) => agentHub.stop(record),

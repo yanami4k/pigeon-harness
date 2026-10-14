@@ -12,7 +12,7 @@
 // 分支会话开头从来源复制来的历史不在原生视图的消息里（属于来源会话），这里自然不抽。
 import { tokenizeSearchText } from "./session-search-tokens.ts";
 import type { SessionView, ViewBlock, ViewMessage, ViewToolCall } from "./session-view.ts";
-import { isStatusMessage } from "./status-text.ts";
+import { agentMessageMarkOf, isStatusMessage } from "./status-text.ts";
 
 export const SEARCH_SESSIONS_TOOL = "search_sessions";
 export const READ_SESSION_ENTRY_TOOL = "read_session_entry";
@@ -190,7 +190,13 @@ export function extractSessionSearch(view: SessionView, createdAt: number): Sess
       if (isStatusMessage(message.raw)) {
         continue;
       }
-      if (message.role === "user" && firstUserText === undefined && text.trim() !== "") {
+      // 决策 480：agent 之间的传话（按消息上的标记认）照样检索，但不当使用者的第一句
+      if (
+        message.role === "user" &&
+        firstUserText === undefined &&
+        agentMessageMarkOf(message.raw) === undefined &&
+        text.trim() !== ""
+      ) {
         firstUserText = text;
       }
       if (text !== "") {

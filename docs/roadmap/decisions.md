@@ -492,7 +492,7 @@
 | 476 | pigeon trace 与 pigeon session list 的花费改成 token 数，与状态栏一致（不写金额、不写币种）：trace 每轮末尾写这一轮合计的 token 数，session list 每行写会话合计；写法同状态栏（1.2k、1.2M）；会话摘要里的金额字段照旧算、不删；模型信息里给上下文裁剪算价格比的价格不动 | 产品体验 | 命令行 |
 | 477 | 旧会话里已删功能留下的程序文字回看时照旧认出：worker、脚本编排、跨会话消息的通知前缀（含旧中文前缀）仍按程序通知显示，/orchestrate 交给模型的包装仍还原成人敲的命令；只为显示，不再据此重建任何状态；读旧 worker 记录的其余代码全删 | 子 agent 与会话的统一改造 | 会话记录 |
 | 478 | 已删的设置节写在任何一层设置文件里即开局报错，写明是哪个文件、哪一节已删、请删掉（不当成拼错的键）；先是 messaging，orchestration 与 commands.roles 随 worker 重度管理一起删除时加入 | 子 agent 与会话的统一改造 | 配置 |
-| 479 | worker 重度管理删除时的几处细化：启动参数 --no-spawn-workers 改名 --no-subagents（旧名不留）、--worker-concurrency 与 --worker-limit 删除；任务清单开关由 orchestration.taskList 改为 tools.taskList（缺省开）；/take 只取回会话面板里的会话；审批不再有等待时限与撤回；旧会话里 worker 子会话的用量不再计入本会话 | 子 agent 与会话的统一改造 | 运行时 / 终端界面 |
+| 479 | worker 重度管理删除时的几处细化：启动参数 --no-spawn-workers 改名 --no-subagents（旧名不留）、--worker-concurrency 与 --worker-limit 删除；任务清单开关由 orchestration.taskList 改为 tools.taskList（缺省开）；/take 只取回会话面板里的会话；审批不再有等待时限与撤回；旧会话里 worker 子会话的用量不再计入本会话（部分已改：子 agent 被停下时挂着的审批自动撤回，见 480） | 子 agent 与会话的统一改造 | 运行时 / 终端界面 |
 | 480 | 子 agent 第一段施工的细化：四件工具 spawn_agent、send_message、list_agents、stop_agent；同时在跑的上限按所属会话连同下层计；子 agent 与派出方共用审批模式、派出时带上派出方的放权，之后给子 agent 的放权只对它自己有效；会话放在所属会话名下的 subagents 文件夹；传话一律在收件方记 pigeon.agent-message；临时工作树从派出方工作目录的快照起步、释放时没有改动即删；续接时认回子 agent，没干完的标已中断 | 子 agent 与会话的统一改造 | 运行时 / 终端界面 |
 | 481 | pigeon run 的子 agent：--no-subagents 关掉、沙箱不提供；无审批通道；主 agent 停下时等子 agent 干完并把结果交给它接着干，连续干等超过 agents.runWaitMinutes 即停掉剩下的并写一行；运行的上限照停；轮数与结果指标只计主 agent | 子 agent 与会话的统一改造 | 运行时 |
 | 482 | 子 agent 的界面：输入框下方的子 agent 面板一次一层、(+N)、钻进下层写路径，↓ 进、Enter 进入会话（打的字算使用者的话）、x 停或清、已结束的行保留约 30 秒；续接后没干完的标 interrupted；有子 agent 在跑时 Ctrl+C 或 /exit 先问一句 | 子 agent 与会话的统一改造 | 终端界面 |
@@ -4277,7 +4277,9 @@
 - 结论：随子 agent 与会话的统一改造删掉的设置节（先是 `messaging`，之后是 `orchestration` 与 `commands.roles`），写在用户级、项目共享或项目个人任何一层里，开局即报错：`settings file <文件> (<层>): <节> has been removed; delete this section`，节里的一个键已删时为 `<节>.<键> has been removed; delete it`；`orchestration` 一节里写了 `taskList` 的另在句末注明它已搬到 `tools.taskList`（479）。不静默忽略，也不按"未知键"列出全部可用的键。
 - 理由：照 475 旧金额写法开局报错的先例；静默忽略会让写过并发上限之类设置的人以为还在生效，报"未知键"又像是拼错了。
 
-### 479 worker 重度管理删除时的细化（设计）
+### 479 〔部分已改〕worker 重度管理删除时的细化（设计）
+
+- 状态：部分已改——审批照旧没有等待时限，但子 agent 被停下时它挂着的审批自动撤回（审批区收掉、消息区留一行结论），见 480。判断现状以代码为准，下文为当时的原文。
 
 - 结论：启动参数 `--no-spawn-workers` 改名 `--no-subagents`（关掉派子 agent），旧名不留别名、按未知参数报错；`--worker-concurrency` 与 `--worker-limit` 删除。任务清单两件工具（update_tasks、list_tasks）留着，开关由 `orchestration.taskList` 搬到 `tools.taskList`（缺省开），`orchestration` 整节删除并开局报错（478）。`/take` 只取回会话面板里的会话，`session:`、`worker:` 前缀去掉。审批不再有等待时限与撤回：请求一直等人答（457 对子 agent 审批的口径）。旧会话里 worker 子会话的用量不再计入本会话的累计 token 数；`/fork` 留作使用者的会话分支命令，与派生无关。迁移命令不再把旧 `orchestration.json` 并入设置：只把其中的 `taskList` 搬到 `tools.taskList`，旧 `commands.json` 的 `roles` 不并入，原文照旧进备份。
 - 理由：名字照新的形态改，免得留下只对已删功能有意义的参数与键；任务清单与 worker 无关，只是寄放在编排设置里。
@@ -4305,5 +4307,5 @@
 
 ### 482 子 agent 的界面（设计）
 
-- 结论：照 457 与 Claude Code 的子代理面板：输入框下方列当前会话（进入的面板会话里列那个会话）的子 agent，一次一层，行写名字、类型与状态，有下层的标 (+N)，钻进下层时第一行写回到会话的路径；在跑与已中断的一直列着，已结束的保留约 30 秒，`x` 提前清掉（只是不列，通讯录里还在）。输入框为空时 ↓ 进入面板，↑↓ 选、→ ← 进出下层、Enter 进入它的会话、`x` 停下在跑的、Esc 回输入框；进入子 agent 的会话后打的字算使用者的话（不附信任说明），斜杠命令不收，Esc 回去。Ctrl+C 或 `/exit` 时还有子 agent 在跑即在状态行问 `sub-agents are still running; exit anyway? (y/n)`，`y` 或 Enter 退出。
+- 结论：照 457 与 Claude Code 的子代理面板：输入框下方列当前会话（进入的面板会话里列那个会话）的子 agent，一次一层，行写名字、类型与状态，有下层的标 (+N)，钻进下层时第一行写回到会话的路径；在跑与已中断的一直列着，已结束的保留约 30 秒，`x` 提前清掉（只是不列，通讯录里还在）。输入框为空时 ↓ 进入面板，↑↓ 选、→ ← 进出下层、Enter 进入它的会话、`x` 停下在跑的、Esc 回输入框；进入子 agent 的会话后打的字算使用者的话（不附信任说明），斜杠命令不收，Esc 回去。Ctrl+C 或 `/exit` 时还有子 agent 在跑即在状态行问 `sub-agents are still running; exit anyway? (y/n)`，`y` 或 Enter 退出（审批挂着时同样先答它）。进入的子 agent 视图的标题行同面板会话，写在哪、怎么回去（460），状态行写它的名字与状态。子 agent 被停下后静着：它自己的后台作业结束不叫醒它，收到消息才再干。
 - 理由：子 agent 只在派出它的会话里看得见，会话面板只列会话（457）；按键与 Claude Code 的面板一致，只写状态、不写按键说明（460）。
