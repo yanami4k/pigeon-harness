@@ -1,5 +1,4 @@
-// 树形视图（决策 301 第 2 项）：可切换进出的整屏视图，按主 agent、脚本、阶段、worker 分层。脚本与阶段两层本段只留节点类型与
-// 数据接口（OrchestrationScriptNode，由脚本编排接上），没有数据时不显示；嵌套派出的 worker 挂在派出它的 worker 之下。
+// 树形视图（决策 301 第 2 项）：可切换进出的整屏视图，按主 agent、worker 分层；嵌套派出的 worker 挂在派出它的 worker 之下。
 // worker 节点缺省收起，展开才显示该 worker 最近的若干条工具调用；开了任务清单时，worker 节点旁按标签标出对应的清单项。
 // 选中 worker 节点可进入它的会话或停止它（按键在壳里路由）。纯 ASCII chrome；内容（任务标题、工具参数摘要）按显示宽度截断。
 import type { Component } from "@earendil-works/pi-tui";
@@ -15,33 +14,16 @@ export const TREE_RECENT_TOOLS = 5;
 
 export const TREE_HEADER = "== workers tree ==";
 
-// 脚本编排的数据接口（决策 294 D、301）：一次脚本编排与其各阶段，阶段列出它派出的 worker
-export interface OrchestrationPhaseNode {
-  id: string;
-  title: string;
-  // 阶段状态的一个词（如 running、done）；缺省不写
-  state?: string;
-  workers: readonly SessionId[];
-}
-
-export interface OrchestrationScriptNode {
-  id: string;
-  title: string;
-  state?: string;
-  phases: readonly OrchestrationPhaseNode[];
-}
-
 export interface TreeSources {
   mainSessionId: SessionId;
   statuses: readonly WorkerStatus[];
   tracker: WorkerActivityTracker;
-  scripts: readonly OrchestrationScriptNode[];
   // 任务清单开着时在场
   tasks?: readonly TaskItem[];
   now: number;
 }
 
-export type TreeLineKind = "main" | "script" | "phase" | "worker" | "tool";
+export type TreeLineKind = "main" | "worker" | "tool";
 
 export interface TreeLine {
   kind: TreeLineKind;
@@ -76,10 +58,6 @@ export function buildTreeLines(
     list.push(status);
     byParent.set(status.parentSessionId, list);
   }
-  // 归在某个阶段下的 worker 不再按派出方重复列出
-  const inPhase = new Set<SessionId>(
-    sources.scripts.flatMap((script) => script.phases.flatMap((phase) => [...phase.workers]))
-  );
   const pushWorker = (status: WorkerStatus, depth: number): void => {
     const marks = taskMarks(status, sources.tasks);
     const open = expanded.has(status.sessionId);
@@ -111,31 +89,12 @@ export function buildTreeLines(
       }
     }
     for (const child of byParent.get(status.sessionId) ?? []) {
-      if (!inPhase.has(child.sessionId)) pushWorker(child, depth + 1);
+      pushWorker(child, depth + 1);
     }
   };
   const bySession = new Map(sources.statuses.map((status) => [status.sessionId, status]));
-  for (const script of sources.scripts) {
-    lines.push({
-      kind: "script",
-      depth: 1,
-      text: `script ${script.title}${script.state !== undefined ? `  ${script.state}` : ""}`,
-    });
-    for (const phase of script.phases) {
-      lines.push({
-        kind: "phase",
-        depth: 2,
-        text: `phase ${phase.title}${phase.state !== undefined ? `  ${phase.state}` : ""}`,
-      });
-      for (const id of phase.workers) {
-        const status = bySession.get(id);
-        if (status !== undefined) pushWorker(status, 3);
-      }
-    }
-  }
   // 主 agent（或人）直接派出的：派出方是主会话，或派出方不在本编排器里
   for (const status of sources.statuses) {
-    if (inPhase.has(status.sessionId)) continue;
     const parent = status.parentSessionId;
     if (parent !== undefined && parent !== sources.mainSessionId && bySession.has(parent)) continue;
     pushWorker(status, 1);

@@ -17,24 +17,20 @@ import {
   WEB_FETCH_SENTENCE,
   WEB_TOOLS_SENTENCE,
 } from "./runtime.ts";
-import { ScriptGate } from "./script-naming.ts";
-import { ScriptSlot } from "./script-tool.ts";
 import { SpawnWorkerSlot } from "./spawn-worker-tool.ts";
 import { statusTextOf } from "./status-fixtures.ts";
 
 const SPAWN =
   "spawn_worker wait_workers worker_status message_worker stop_worker take_worker".split(" ");
 const SESSIONS = ["search_sessions", "read_session_entry", "list_sessions"];
-const TOOLS = [...SPAWN, "orchestrate", "web_search", "web_fetch", ...SESSIONS];
+const TOOLS = [...SPAWN, "web_search", "web_fetch", ...SESSIONS];
 // history：other 为会话树外有会话，family 为只有本会话派出的子会话，empty 为只有空的会话文件，
 // headerOnly 为会话树外只有从没开始过对话（只有文件头）的会话（决策 432）
 const ALL = {
   git: true,
-  docker: true,
   history: "other" as "other" | "family" | "empty" | "headerOnly",
   key: true,
 };
-const DOCKER = process.platform === "win32" ? "docker.exe" : "docker";
 const backend = { id: "fake", search: async () => ({ backend: "fake", query: "", results: [] }) };
 
 // 按给定环境装一个主会话运行面并跑一轮，交回广告的工具、Run 开始条目的没注册记录、开工状态块（决策 363：联网的说法在它的
@@ -44,7 +40,6 @@ async function assemble(env: typeof ALL, frozenPrompt?: FrozenSessionPrompt) {
   const bin = mkdtempSync(join(tmpdir(), "pigeon-tool-env-bin-"));
   try {
     if (env.git) execFileSync("git", ["init", "-q"], { cwd: root });
-    if (env.docker) writeFileSync(join(bin, DOCKER), "", { mode: 0o755 });
     const sessionId = newSessionId();
     const earlier = newSessionId();
     const parent = env.history === "family" ? { parentSessionId: sessionId } : {};
@@ -78,7 +73,6 @@ async function assemble(env: typeof ALL, frozenPrompt?: FrozenSessionPrompt) {
       provider: "fake-provider",
       modelId: "fake-model-1",
       spawnWorker: new SpawnWorkerSlot(),
-      scriptOrchestration: new ScriptSlot(new ScriptGate({ modelDecides: true })),
       webTools: {
         search: env.key
           ? { backend, defaultMaxResults: 5 }
@@ -110,8 +104,7 @@ async function assemble(env: typeof ALL, frozenPrompt?: FrozenSessionPrompt) {
 
 const CASES: Array<[string, Partial<typeof ALL>, string[]]> = [
   ["环境齐全：各组都注册、不带没注册的记录", {}, []],
-  ["缺 docker：不注册 orchestrate", { docker: false }, ["orchestrate"]],
-  ["不是 git 仓库：不注册派 worker 一组与 orchestrate", { git: false }, [...SPAWN, "orchestrate"]],
+  ["不是 git 仓库：不注册派 worker 一组", { git: false }, SPAWN],
   [
     "缺搜索 key：不注册 web_search，提示换成 web_fetch 那句并在终端提示",
     { key: false },
@@ -144,21 +137,17 @@ for (const [label, lacking, missing] of CASES) {
 }
 
 test("一次会话内工具清单固定：/reload 沿用开局的检查结果，搜索后端改了只提示重启后生效", async () => {
-  const first = await assemble({ ...ALL, docker: false, key: false });
+  const first = await assemble({ ...ALL, key: false });
   const reloaded = await assemble(ALL, first.frozen);
-  assert.deepEqual(
-    [reloaded.absent, reloaded.notice !== undefined],
-    [["orchestrate", "web_search"], true]
-  );
+  assert.deepEqual([reloaded.absent, reloaded.notice !== undefined], [["web_search"], true]);
 });
 
-test("治理根与工作区根分开（--governance-root）时，git 工作区探针看工作区根：工作区是 git 仓库、治理根不是，派 worker 一组与 orchestrate 照注册", async () => {
+test("治理根与工作区根分开（--governance-root）时，git 工作区探针看工作区根：工作区是 git 仓库、治理根不是，派 worker 一组照注册", async () => {
   const workspace = mkdtempSync(join(tmpdir(), "pigeon-tool-env-ws-"));
   const gov = mkdtempSync(join(tmpdir(), "pigeon-tool-env-gov-"));
   const bin = mkdtempSync(join(tmpdir(), "pigeon-tool-env-bin-"));
   try {
     execFileSync("git", ["init", "-q"], { cwd: workspace });
-    writeFileSync(join(bin, DOCKER), "", { mode: 0o755 });
     const streamFn = createFakeStreamFn({ replies: [{ text: "好" }] });
     const bundle = buildRuntime({
       streamFn,
@@ -170,7 +159,6 @@ test("治理根与工作区根分开（--governance-root）时，git 工作区�
       provider: "fake-provider",
       modelId: "fake-model-1",
       spawnWorker: new SpawnWorkerSlot(),
-      scriptOrchestration: new ScriptSlot(new ScriptGate({ modelDecides: true })),
       webTools: {
         search: { backend, defaultMaxResults: 5 },
         fetch: { timeoutMs: 1000, maxBytes: 1000, maxChars: 1000 },
@@ -180,7 +168,7 @@ test("治理根与工作区根分开（--governance-root）时，git 工作区�
     });
     const advertised = bundle.adapter.snapshot().tools.advertised;
     await bundle.adapter.run("你好").finally(() => disposeRuntime(bundle));
-    for (const tool of [...SPAWN, "orchestrate"]) {
+    for (const tool of SPAWN) {
       assert.ok(advertised.includes(tool), `${tool} 应注册`);
     }
   } finally {

@@ -20,7 +20,6 @@
 // - [r]（决策 066）：拒绝并说明——打开理由行（Esc 回面板不算拒绝，回车提交），理由逐字回模型
 //   并在决定记录里记为人写。
 import { approvalSourceLine, summarizeArgs } from "../application/format.ts";
-import { collectSourceLine, SCRIPT_KIND_KEY_LABEL } from "../application/script-texts.ts";
 import type { SessionGrantStore } from "../approvals/grant-store.ts";
 import {
   type ApprovalDecision,
@@ -66,8 +65,7 @@ export const PEER_HOLD_WITHDRAWN = "[message] held message expired or was droppe
 // 面板里显示的消息内容上限（全文在放行后交给 agent）
 const PEER_TEXT_SHOWN = 2000;
 
-// s：本次脚本内同类都允许（决策 303 的脚本部分；只在请求带同类时提供）
-export type ApprovalPanelKey = "y" | "n" | "a" | "d" | "s";
+export type ApprovalPanelKey = "y" | "n" | "a" | "d";
 
 // 面板决议：四键之一；r = 拒绝并说明（决策 066，携带人写理由）；
 // cancel = 面板未能完成交互（壳停止/并发防御），携带逐字理由
@@ -117,9 +115,6 @@ export function approvalBlockText(
   const source = approvalSourceLine(request);
   if (source !== undefined) {
     lines.push(source);
-  } else if (request.script !== undefined) {
-    // 决策 311：脚本结束时整批收回的请示
-    lines.push(collectSourceLine(request.script.title ?? "", request.script.runId));
   } else if (labelMainSource) {
     lines.push(MAIN_SOURCE_LINE);
   }
@@ -144,14 +139,10 @@ export function approvalBlockText(
   if (request.diffPreview !== undefined) {
     lines.push("diff:", request.diffPreview);
   }
-  const scriptKey =
-    request.script?.kind !== undefined && request.protectedPath === undefined
-      ? ` / ${SCRIPT_KIND_KEY_LABEL}`
-      : "";
   lines.push(
     approvalKeyLabels(
       // 决策 326 ①：受保护路径的请示只有批准一次或拒绝，不提供放权键与"同类都允许"
-      (request.protectedPath !== undefined
+      request.protectedPath !== undefined
         ? APPROVAL_KEYS_BASE
         : request.host !== undefined
           ? `${APPROVAL_KEYS_BASE} / ${hostGrantKeyLabel(request)}`
@@ -159,7 +150,7 @@ export function approvalBlockText(
             ? `${APPROVAL_KEYS_BASE} / ${execGrantKeyLabel(request)}`
             : directoryGrant
               ? `${APPROVAL_KEYS_BASE} / [a] allow for this session / [d] allow for this session (this directory)`
-              : `${APPROVAL_KEYS_BASE} / [a] allow for this session`) + scriptKey
+              : `${APPROVAL_KEYS_BASE} / [a] allow for this session`
     )
   );
   return lines.join("\n");
@@ -183,12 +174,8 @@ export interface ApprovalBlockLine {
 }
 
 function keysLabel(request: ApprovalRequest, directoryGrant: boolean): string {
-  const scriptKey =
-    request.script?.kind !== undefined && request.protectedPath === undefined
-      ? ` / ${SCRIPT_KIND_KEY_LABEL}`
-      : "";
   return approvalKeyLabels(
-    (request.protectedPath !== undefined
+    request.protectedPath !== undefined
       ? APPROVAL_KEYS_BASE
       : request.host !== undefined
         ? `${APPROVAL_KEYS_BASE} / ${hostGrantKeyLabel(request)}`
@@ -196,7 +183,7 @@ function keysLabel(request: ApprovalRequest, directoryGrant: boolean): string {
           ? `${APPROVAL_KEYS_BASE} / ${execGrantKeyLabel(request)}`
           : directoryGrant
             ? `${APPROVAL_KEYS_BASE} / [a] allow for this session / [d] allow for this session (this directory)`
-            : `${APPROVAL_KEYS_BASE} / [a] allow for this session`) + scriptKey
+            : `${APPROVAL_KEYS_BASE} / [a] allow for this session`
   );
 }
 
@@ -246,13 +233,7 @@ export function approvalBlockLines(
   if (protectedLine !== undefined) lines.push({ kind: "warning", text: protectedLine });
   const outsideLine = outsidePathLine(request);
   if (outsideLine !== undefined) lines.push({ kind: "warning", text: outsideLine });
-  const source =
-    approvalSourceLine(request) ??
-    (request.script !== undefined
-      ? collectSourceLine(request.script.title ?? "", request.script.runId)
-      : labelMainSource
-        ? MAIN_SOURCE_LINE
-        : undefined);
+  const source = approvalSourceLine(request) ?? (labelMainSource ? MAIN_SOURCE_LINE : undefined);
   if (source !== undefined) lines.push({ kind: "detail", text: source });
   // 其余参数：专门显示过的字段去掉，剩下的照旧列出（不是对象的参数原样列）
   const rest =
@@ -365,10 +346,7 @@ export function createTuiApprovalHandler(
       return { approved: false, reason: cancelReasonForModel(result.reason) };
     }
     // 受保护路径：面板不收放权键；万一收到按批准一次处理，不建放权
-    if (
-      request.protectedPath !== undefined &&
-      (result.key === "a" || result.key === "d" || result.key === "s")
-    ) {
+    if (request.protectedPath !== undefined && (result.key === "a" || result.key === "d")) {
       panel.noteApproval(approvedLine(request));
       return { approved: true };
     }
@@ -400,13 +378,6 @@ export function createTuiApprovalHandler(
       panel.noteApproval(grantedLine(request, scope));
       return { approved: true };
     }
-    // 决策 303（脚本部分）：本次脚本内同类都允许——批准这一次，同一脚本里之后的同类由包装层放行
-    if (result.key === "s" && request.script?.kind !== undefined) {
-      panel.noteApproval(
-        `${sourceOf(request)}✓ allowed for this script: ${request.toolName} (${request.script.kind})`
-      );
-      return { approved: true, scope: "script-kind" };
-    }
     if (result.key === "y") {
       panel.noteApproval(approvedLine(request));
       return { approved: true };
@@ -422,18 +393,17 @@ export function createTuiApprovalHandler(
   };
 }
 
-// 决策 439：提示里的 [y] [n] [r] [a] [d] [s] 按实际生效的键位写（改过键位时提示跟着变）；键位表取不到时照原样
+// 决策 439：提示里的 [y] [n] [r] [a] [d] 按实际生效的键位写（改过键位时提示跟着变）；键位表取不到时照原样
 const PANEL_KEY_IDS = {
   y: "pigeon.approval.approve",
   n: "pigeon.approval.reject",
   r: "pigeon.approval.rejectWithReason",
   a: "pigeon.approval.grant",
   d: "pigeon.approval.grantDirectory",
-  s: "pigeon.approval.scriptKind",
 } as const;
 
 export function approvalKeyLabels(text: string): string {
-  return text.replace(/\[([ynrads])\]/g, (match, key: keyof typeof PANEL_KEY_IDS) => {
+  return text.replace(/\[([ynrad])\]/g, (match, key: keyof typeof PANEL_KEY_IDS) => {
     const keys = keyLabelsOf(PANEL_KEY_IDS[key]);
     return keys.length > 0 ? `[${keys.join("/")}]` : match;
   });

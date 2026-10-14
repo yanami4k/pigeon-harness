@@ -83,13 +83,12 @@ export const NESTED_ORCHESTRATION_TOOLS: readonly string[] = [
   "stop_worker",
 ];
 
-// 决策 360：不能交给 worker 的工具——写记忆（331：worker 只推送）、取用 worker 改动（279：叠加只往主工作目录）、
-// 提交编排脚本（309）与任务清单（294 B1）只给主会话；派出与等待等编排工具按层数自动给（299），也不在清单里选。
+// 决策 360：不能交给 worker 的工具——写记忆（331：worker 只推送）、取用 worker 改动（279：叠加只往主工作目录）
+// 与任务清单（294 B1）只给主会话；派出与等待等编排工具按层数自动给（299），也不在清单里选。
 // 名字与 application 层的工具名一致（本层不依赖 application）
 export const MAIN_ONLY_TOOLS: readonly string[] = [
   UPDATE_MEMORY_TOOL,
   "take_worker",
-  "orchestrate",
   "update_tasks",
   "list_tasks",
   ...NESTED_ORCHESTRATION_TOOLS,

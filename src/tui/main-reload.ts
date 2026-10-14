@@ -7,8 +7,6 @@ import type { EnterWorktreeSlot } from "../application/enter-worktree-tool.ts";
 import { type LaunchFlags, orchestrationSettingsOf } from "../application/launch-flags.ts";
 import type { PeerSlot } from "../application/peer-tools.ts";
 import type { ApprovalModeCell, MemoryWriteConfig, RuntimeBundle } from "../application/runtime.ts";
-import { ScriptGate, scriptGateSettingsOf } from "../application/script-naming.ts";
-import { ScriptSlot } from "../application/script-tool.ts";
 import {
   type OpenedSessionRuntime,
   type OpenSessionRuntimeRequest,
@@ -26,15 +24,13 @@ import { loopGuardSettingsOf, memoryLimitsOf, type SettingsSnapshot } from "../s
 import type { WorkspaceHost } from "../tools/workspace-host.ts";
 
 // 决策 264–267：派 worker 开着时每个打开的会话一个工具槽（只给主会话注册，沙箱与 worker 会话由装配层略过）
-// 决策 309：脚本编排随派 worker 一并给（每个打开的会话一个槽与点名状态）
 export function spawnWorkerOption(
   flags: LaunchFlags,
   orchestration: OrchestrationSettings
-): { spawnWorker?: SpawnWorkerSlot; scriptOrchestration?: ScriptSlot } {
+): { spawnWorker?: SpawnWorkerSlot } {
   return flags.spawnWorkers
     ? {
         spawnWorker: new SpawnWorkerSlot(spawnWorkerSettingsOf(orchestration)),
-        scriptOrchestration: new ScriptSlot(new ScriptGate(scriptGateSettingsOf(orchestration))),
       }
     : {};
 }

@@ -22,12 +22,6 @@ import { PROGRAM_NOTE_PREFIX } from "./enter-worktree-tool.ts";
 import { plural, summarizeArgs, workEndLine } from "./format.ts";
 import { LEGACY_LOOP_REMINDER_PREFIX, LOOP_REMINDER_PREFIX } from "./loop-guard.ts";
 import { PEER_NOTICE_PREFIXES } from "./peer-messaging.ts";
-import { LEGACY_SCRIPT_KEYWORD, SCRIPT_COMMAND } from "./script-naming.ts";
-import {
-  commandInputText,
-  LEGACY_SCRIPT_NOTICE_PREFIX,
-  SCRIPT_NOTICE_PREFIX,
-} from "./script-texts.ts";
 import { LEGACY_WORKER_NOTICE_PREFIX, WORKER_NOTICE_PREFIX } from "./worker-notices.ts";
 
 export const DEFAULT_HISTORY_LIMIT = 500;
@@ -62,6 +56,10 @@ function clip(text: string, chars: number): string {
   return text.length <= chars ? text : `${text.slice(0, chars)}… (${text.length} chars)`;
 }
 
+// 决策 457：脚本编排已删除，旧会话里它的结束汇总只用这两个前缀认出（回看时不当成人说的话）
+const SCRIPT_NOTICE_PREFIX = "[Script notice] ";
+const LEGACY_SCRIPT_NOTICE_PREFIX = "[脚本通知] ";
+
 // 进模型上下文的程序通知（打转提醒、worker 通知、脚本通知、后台作业通知、跨会话消息与回告）整条以用户消息存下；回看时同
 // 实时一样显示成系统行。决策 428：新通知是英文前缀，旧会话里是中文前缀，两种都认（跨会话通信生来就是英文）
 const PROGRAM_NOTICE_PREFIXES = [
@@ -91,13 +89,13 @@ export function isContinuationPrompt(text: string): boolean {
   return CONTINUATION_PROMPTS.has(text);
 }
 
-// /orchestrate 发起时交给模型的那段话是"固定的一句开头 + 换行 + 人写的任务"（script-texts.ts 的 commandInputText，开头取它
-// 给空任务时的输出）；旧会话里是决策 428 之前的中文原文。回看与回退时还原成人敲的命令
+// 决策 457：/orchestrate 已删除。旧会话里它交给模型的那段话是"固定的一句开头 + 换行 + 人写的任务"（决策 475 之后、之前的
+// 英文开头与决策 428 之前的中文原文）；回看与回退时仍还原成人敲的命令
+const ORCHESTRATE_COMMAND = "orchestrate";
 const ORCHESTRATE_LEADS: readonly string[] = [
-  commandInputText(""),
-  // 决策 475 之前（关键词还是中文）的英文开头与决策 428 之前的中文原文
-  commandInputText("", LEGACY_SCRIPT_KEYWORD),
-  `（人用 /${SCRIPT_COMMAND} 点名用${LEGACY_SCRIPT_KEYWORD}做这件事）\n`,
+  `(The user started this with /orchestrate, asking for it to be done with script orchestration, "script orchestration".)\n`,
+  `(The user started this with /orchestrate, asking for it to be done with script orchestration, "脚本编排".)\n`,
+  "（人用 /orchestrate 点名用脚本编排做这件事）\n",
 ];
 
 export interface UserTextParts {
@@ -126,7 +124,7 @@ export function userTextParts(text: string): UserTextParts {
   const lead = ORCHESTRATE_LEADS.find((prefix) => rest.startsWith(prefix));
   return {
     notices,
-    human: lead === undefined ? rest : `/${SCRIPT_COMMAND} ${rest.slice(lead.length)}`,
+    human: lead === undefined ? rest : `/${ORCHESTRATE_COMMAND} ${rest.slice(lead.length)}`,
   };
 }
 

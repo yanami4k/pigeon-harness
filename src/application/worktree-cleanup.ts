@@ -1,11 +1,11 @@
 // 留下的工作树的列出与删除（决策 448）：终端界面的 /worktrees 与命令行的 pigeon worktrees list|clean 共用。
-// 列出四类：.pigeon/state/worktrees/ 下 git 登记的工作树（worker、脚本编排、/fork 的）、登记还在而目录已不在的、没有工作树的
+// 列出四类：.pigeon/state/worktrees/ 下 git 登记的工作树（worker、/fork 的）、登记还在而目录已不在的、没有工作树的
 // pigeon/ 分支（以前留下的旧分支等）、该目录下 git 不认的残留目录。每项给所属会话（派出它的会话，读 worker 会话文件头）、
 // 是否在用、未取走的改动（worker 相对起点改过、内容又与主检出不同的文件数）与占用大小。
 // - 比较的基准一律是主检出（不是当前目录）；当前目录在 worker 工作树里时拒绝列出与删除。
 // - 起点优先取派出记录里的起点提交，其次分支引用日志里最早的一条；都取不到记为"不明"，按有改动对待。
 // - 在用：worker 会话正被一个仍在的进程打开；所属会话正被另一个仍在的进程打开；刚建、还没有 worker 会话记录（10 分钟内）；
-//   终端界面另给本进程里仍可能用到它的 worker（在跑、排队、等补批、脚本还没收回）。读锁出错也按在用算。
+//   终端界面另给本进程里仍可能用到它的 worker（在跑、排队、等补批）。读锁出错也按在用算。
 // 删除缺省只删没有未取走改动的；点名或 --all 才删有改动的，并明说会丢。在用的一律不删。删之前重新核一遍：
 // 期间变成在用或改动有变化的剔除并说明。删除不跟随链接（worktree.ts 的 removeWorktree）。
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
@@ -68,7 +68,7 @@ export interface WorktreeScope {
   workspaceRoot: string;
   // 治理根（.pigeon 所在）；缺省主仓库根
   governanceRoot?: string;
-  // 终端界面：本进程里仍可能用到工作树的 worker 会话号（在跑、排队、等补批、脚本还没收回）
+  // 终端界面：本进程里仍可能用到工作树的 worker 会话号（在跑、排队、等补批）
   liveWorkers?: () => ReadonlySet<string>;
   // 测试用的时钟（判断"刚建"）
   now?: () => number;

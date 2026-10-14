@@ -78,7 +78,7 @@ function makeShell(
   result: RunResult,
   hooks: StubHooks,
   ...moreResults: RunResult[]
-): { shell: PigeonTuiShell; runtime: StubRuntime; cleanup: () => void } {
+): { shell: PigeonTuiShell; term: MockTerminal; runtime: StubRuntime; cleanup: () => void } {
   const root = mkdtempSync(join(tmpdir(), "pigeon-tui-stop-"));
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-stop-log-"));
   const term = new MockTerminal(80, 24);
@@ -92,6 +92,7 @@ function makeShell(
   });
   return {
     shell,
+    term,
     runtime,
     cleanup: () => {
       rmSync(root, { recursive: true, force: true });
@@ -109,11 +110,12 @@ test("出错收尾的 Run 跑 StopFailure 而不是 Stop（复审 P2 回归）",
     turns: 1,
     failure: null,
   } as unknown as RunResult;
-  const { shell, cleanup } = makeShell(result, hooks);
+  const { shell, term, cleanup } = makeShell(result, hooks);
   try {
     shell.start();
     await settle();
-    shell.submitInput("干活");
+    term.input("干活");
+    term.input("\r");
     await settle();
     await settle();
     assert.ok(hooks.events.includes("StopFailure"), JSON.stringify(hooks.events));
@@ -140,11 +142,12 @@ test("Stop 钩子 continue:false：不再开新一轮（复审 P2 回归）", as
     turns: 1,
     failure: null,
   } as unknown as RunResult;
-  const { shell, cleanup } = makeShell(result, hooks);
+  const { shell, term, cleanup } = makeShell(result, hooks);
   try {
     shell.start();
     await settle();
-    shell.submitInput("干活");
+    term.input("干活");
+    term.input("\r");
     await settle();
     await settle();
     assert.deepEqual(
@@ -181,11 +184,12 @@ test("Stop 拦下后续跑的那一轮出错：循环停、那一轮触发 StopF
     turns: 1,
     failure: null,
   } as unknown as RunResult;
-  const { shell, runtime, cleanup } = makeShell(ok, hooks, failed);
+  const { shell, term, runtime, cleanup } = makeShell(ok, hooks, failed);
   try {
     shell.start();
     await settle();
-    shell.submitInput("干活");
+    term.input("干活");
+    term.input("\r");
     await settle();
     await settle();
     assert.equal(runtime.runs.length, 2, "只续跑了一轮");

@@ -37,7 +37,6 @@ import {
   type RewindNode,
   rewindTree,
 } from "./rewind.ts";
-import { commandInputText } from "./script-texts.ts";
 import { sessionCostTally } from "./session-cost.ts";
 import { type OpenedSessionRuntime, openSessionRuntime } from "./session-runtime.ts";
 import { statusFromEntries } from "./status-block.ts";
@@ -50,6 +49,11 @@ import {
   textOf,
 } from "./tui-session-fixtures.ts";
 import { sessionsDirOf } from "./workspace.ts";
+
+// 已删除的 /orchestrate 当年交给模型的包装（旧会话里的样子）
+function commandInputText(task: string): string {
+  return `(The user started this with /orchestrate, asking for it to be done with script orchestration, "script orchestration".)\n${task}`;
+}
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {

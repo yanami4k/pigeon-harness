@@ -22,8 +22,6 @@ import { isKey } from "./keybindings.ts";
 // 挂起中的审批决议（resolve 四键或 cancel）；串行不变量（决策 002）下同时最多一个
 export interface PendingApproval {
   resolve: (result: ApprovalPanelResult) => void;
-  // 决策 303（脚本部分）：面板提供 [s] 本次脚本内同类都允许
-  scriptKind?: boolean;
   // 决策 326 ①：受保护路径的请示只收 [y]/[n]/[r]，不收放权键
   protectedPath?: boolean;
   // 决策 450：扣住待放行的消息——只收 [y]/[n]；有工具审批要上面板时让位
@@ -123,9 +121,6 @@ export function askApprovalPanel(
   const { promise, resolve } = Promise.withResolvers<ApprovalPanelResult>();
   const pending: PendingApproval = {
     resolve,
-    ...(request.script?.kind !== undefined && request.protectedPath === undefined
-      ? { scriptKind: true }
-      : {}),
     ...(request.protectedPath !== undefined ? { protectedPath: true } : {}),
     ...(request.peerMessage !== undefined
       ? { peerMessage: true, peerChoice: "drop" as const, peerChosen: false }
@@ -261,9 +256,7 @@ export function handleModalKey(host: ModalHost, data: string): { consume: true }
             ? "a"
             : isKey(data, "pigeon.approval.grantDirectory")
               ? "d"
-              : isKey(data, "pigeon.approval.scriptKind")
-                ? "s"
-                : undefined;
+              : undefined;
     // 决策 450：扣住的消息是二选一的列表——方向键在"丢弃"（缺省）与"放行"之间切换，回车确认；没用方向键选过时回车
     // 不作答，字母键一律不作答（正在给 agent 打字的 "yes" 与回车不会放行消息，也不会丢掉它）
     if (approval.peerMessage === true) {
@@ -296,8 +289,7 @@ export function handleModalKey(host: ModalHost, data: string): { consume: true }
     if (
       key === "y" ||
       key === "n" ||
-      ((key === "a" || key === "d") && approval.protectedPath !== true) ||
-      (key === "s" && approval.scriptKind === true)
+      ((key === "a" || key === "d") && approval.protectedPath !== true)
     ) {
       host.setPendingApproval(null);
       host.updateStatus();

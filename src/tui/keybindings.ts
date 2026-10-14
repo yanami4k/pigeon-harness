@@ -29,7 +29,6 @@ declare module "@earendil-works/pi-tui" {
     "pigeon.approval.rejectWithReason": true;
     "pigeon.approval.grant": true;
     "pigeon.approval.grantDirectory": true;
-    "pigeon.approval.scriptKind": true;
   }
 }
 
@@ -67,10 +66,6 @@ export const PIGEON_KEYBINDINGS = {
   "pigeon.approval.grantDirectory": {
     defaultKeys: "d",
     description: "Allow for this session in this directory",
-  },
-  "pigeon.approval.scriptKind": {
-    defaultKeys: "s",
-    description: "Allow this kind for the rest of the script",
   },
 } as const satisfies KeybindingDefinitions;
 

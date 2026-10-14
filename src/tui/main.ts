@@ -86,11 +86,6 @@ import {
   sandboxStatusFacts,
   startSandbox,
 } from "../application/sandbox-session.ts";
-import { wrapScriptApprovals } from "../application/script-approvals.ts";
-import { type ScriptCommands, scriptCommands } from "../application/script-commands.ts";
-import { createSessionScripts, modelPricing } from "../application/script-host.ts";
-import type { ScriptGate } from "../application/script-naming.ts";
-import type { ScriptRuns } from "../application/script-runner.ts";
 import { sessionNameOf } from "../application/session-name.ts";
 import {
   type OpenedSessionRuntime,
@@ -236,7 +231,7 @@ export async function main(argv: string[]): Promise<void> {
   if (namedWorktree?.created === true && namedWorktree.fetchFailed === true) {
     early.push({ line: `worktree base: ${namedWorktree.baseLabel}`, alert: true });
   }
-  // 决策 446：会话移进工作树后换成工作树（worker 编排、取用、脚本等闭包按它取）
+  // 决策 446：会话移进工作树后换成工作树（worker 编排、取用等闭包按它取）
   let workspaceRoot = namedWorktree?.path ?? governanceRoot;
   // 决策 445、446：本会话当前所在的独立工作树（退出时按它清理）
   let activeWorktree: NamedWorktree | undefined = namedWorktree;
@@ -290,26 +285,19 @@ export async function main(argv: string[]): Promise<void> {
   };
   // 决策 331、332：/memory 的上下文（两层上限取本会话的设置快照）
   const memoryContext = { governanceRoot: governanceRoot, limits: memoryLimitsOf(settings) };
-  // 决策 309–314：各会话的脚本编排（运行器、命令面与点名状态），按会话的运行面取
-  const scriptsOf = new WeakMap<
-    RuntimeBundle,
-    { runs: ScriptRuns; commands: ScriptCommands; gate: ScriptGate }
-  >();
   const workersFor = (
     opened: OpenedSessionRuntime,
     parentSessionId?: SessionId
   ): TuiWorkersFace => {
     const { bundle } = opened;
-    // 决策 446：worker 编排、取用与脚本一律按这个运行面自己的工作区（移进独立工作树后即工作树），不读外层可变的工作区
+    // 决策 446：worker 编排与取用一律按这个运行面自己的工作区（移进独立工作树后即工作树），不读外层可变的工作区
     const workspaceRoot = opened.scope.workspaceRoot;
-    const scriptHolder: { current?: ScriptRuns } = {};
     const deps = {
       governanceRoot: governanceRoot,
       workspaceRoot,
       bundle,
-      // worker 请求自带其会话的放权落点；此处绑定的父会话存储只是缺省。
-      // 决策 303（脚本部分）：脚本派出的 worker 的请求——同类已放行即批准，否则补上脚本名与同类交给人
-      approvals: wrapScriptApprovals(createHandler(bundle.grantStore), () => scriptHolder.current),
+      // worker 请求自带其会话的放权落点；此处绑定的父会话存储只是缺省
+      approvals: createHandler(bundle.grantStore),
       streamFn,
       provider: flags.provider,
       modelId: flags.modelId,
@@ -345,42 +333,6 @@ export async function main(argv: string[]): Promise<void> {
         onNotice: () => shellHolder.current?.render(),
       });
       notices = bound.notices;
-      // 决策 309–314：脚本编排的运行器——汇总与 worker 完成通知同一条队列；收回按写操作请示（放手模式或已放权即直接做）
-      const scriptSlot = opened.scriptOrchestration;
-      if (scriptSlot !== undefined) {
-        const runs = createSessionScripts({
-          orchestrator,
-          governanceRoot: governanceRoot,
-          workspaceRoot,
-          sessionId: bundle.adapter.sessionId,
-          flush: () => bundle.sessionStore.flush(),
-          ...(bound.notices !== undefined ? { notices: bound.notices } : {}),
-          approval: {
-            // 决策 469：按主会话当前的审批模式
-            yolo: () => mainModeCell.current === "yolo",
-            grants: bundle.grantStore,
-            configGrants: bundle.configGrants,
-            handler: createHandler(bundle.grantStore),
-          },
-          provider: flags.provider,
-          // 决策 314：金额额度要模型有价格；决策 313：脚本卡住的判定时长
-          pricing: () => modelPricing(flags.provider, bundle.adapter.transcript()),
-          stallMs: orchestration.scriptStallMs,
-          settings: bundle.settings,
-          emit: (line) => {
-            shellHolder.current?.addSystem(line);
-            shellHolder.current?.render();
-          },
-          onChange: () => shellHolder.current?.render(),
-        });
-        scriptHolder.current = runs;
-        scriptSlot.bind({ runs, workspaceRoot });
-        scriptsOf.set(bundle, {
-          runs,
-          commands: scriptCommands(runs, orchestrator),
-          gate: scriptSlot.gate,
-        });
-      }
     }
     if (opened.restored !== undefined && parentSessionId === undefined) {
       restoreSessionWorkers({
@@ -678,10 +630,6 @@ export async function main(argv: string[]): Promise<void> {
     },
     // 决策 301：树形视图按标签标出清单项（换绑后跟着当前会话）
     taskItems: () => slot.bundle.taskList?.items(),
-    // 决策 309、301：脚本编排——点名只看人的输入、树形视图的脚本与阶段两层、/orchestrate（换绑后跟着当前会话）
-    onHumanInput: (text) => scriptsOf.get(slot.bundle)?.gate.humanInput(text),
-    scripts: () => scriptsOf.get(slot.bundle)?.runs.nodes() ?? [],
-    scriptCommands: () => scriptsOf.get(slot.bundle)?.commands,
     // 决策 331：/memory 查看与编辑两层记忆（编辑时暂停界面打开 $VISUAL / $EDITOR）
     memory: {
       view: () => memoryViewText(memoryContext),
@@ -721,7 +669,7 @@ export async function main(argv: string[]): Promise<void> {
       ? {
           worktrees: createTuiWorktreesFace({
             workspaceRoot: governanceRoot,
-            // 本进程里仍可能用到工作树的 worker：在跑、排队、等补批续做、脚本派出的（整次收回之前）
+            // 本进程里仍可能用到工作树的 worker：在跑、排队、等补批续做
             liveWorkers: () =>
               new Set(
                 (slot.workers?.status() ?? [])
@@ -729,8 +677,7 @@ export async function main(argv: string[]): Promise<void> {
                     (status) =>
                       status.state === "running" ||
                       status.state === "queued" ||
-                      status.outcome?.recoverable === true ||
-                      (status.script !== undefined && status.worktreeRemoved === undefined)
+                      status.outcome?.recoverable === true
                   )
                   .map((status) => status.sessionId)
               ),

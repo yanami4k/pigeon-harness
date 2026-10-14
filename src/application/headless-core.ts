@@ -15,7 +15,6 @@
 // 释放运行面之前停掉仍在跑的 worker（撞上限、外部中止时），等其收尾记录写进本会话。执行端另一侧的工作区（容器）与分支会话不注册。
 // 任务清单（294 B1）：开着时给主 agent 注册两件清单工具
 
-import type { ScriptLauncher } from "../execution/script-sandbox.ts";
 import type { MemoryLayer } from "../memory/learned.ts";
 import type { WorkerOrchestrator } from "../orchestration/workers.ts";
 import { loadStoreSession } from "../persistence/session-view.ts";
@@ -55,10 +54,6 @@ import type { PeerMessaging } from "./peer-messaging.ts";
 import { openPeerInbox } from "./peer-session.ts";
 import { PeerSlot } from "./peer-tools.ts";
 import type { LearnedMemoryConfig, RuntimeBundle } from "./runtime.ts";
-import { createSessionScripts, modelPricing } from "./script-host.ts";
-import { ScriptGate, scriptGateSettingsOf } from "./script-naming.ts";
-import type { ScriptRuns } from "./script-runner.ts";
-import { ScriptSlot } from "./script-tool.ts";
 import { bindSpawnWorkers, stopAllWorkers } from "./spawn-worker-host.ts";
 import {
   type SpawnWorkerBudget,
@@ -165,11 +160,6 @@ export interface HeadlessRunOptions {
   // 决策 264–267：派 worker（给主 agent 注册 spawn_worker）；缺省关着——pigeon run 由启动参数缺省打开，跑批器各条件明确关掉。
   // 注入了执行端（容器工作区）或是分支会话时不注册
   spawnWorkers?: boolean;
-  // 决策 294 D、309：脚本编排（注册 orchestrate，任务描述算作点名）；缺省关着——pigeon run 随派 worker 打开，跑批器各条件不给。
-  // 派 worker 关着时不给
-  scriptOrchestration?: boolean;
-  // 测试注入脚本的执行容器（缺省为 Docker 容器）
-  scriptLauncher?: () => Promise<ScriptLauncher>;
   // 决策 297–303：编排设定（同时在跑的上限缺省 8、不设总数上限、层数、每个 worker 的上限、卡住与审批时限）
   orchestration?: OrchestrationSettings;
   // 决策 294 B1：任务清单工具；缺省关着——pigeon run 按编排配置缺省打开，跑批器各条件不给
@@ -260,23 +250,6 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
           })
         )
       : undefined;
-  // 决策 309：脚本编排——任务描述算作点名，整次运行（含回炉各轮）都算
-  const scriptSlot =
-    spawnSlot !== undefined && options.scriptOrchestration === true
-      ? new ScriptSlot(
-          new ScriptGate(
-            scriptGateSettingsOf(options.orchestration ?? DEFAULT_ORCHESTRATION_SETTINGS)
-          )
-        )
-      : undefined;
-  // 决策 475：任务描述里的额度写成了金额：整次运行不算点名，说明原因
-  const budgetProblem = scriptSlot?.gate.runTask(options.task);
-  if (budgetProblem !== undefined) {
-    (options.warn ?? ((line: string) => console.error(line)))(
-      `script orchestration not enabled: ${budgetProblem}`
-    );
-  }
-  let scripts: ScriptRuns | undefined;
   let workers: WorkerOrchestrator | undefined;
   let spawnBudget: SpawnWorkerBudget | undefined;
   let notices: WorkerNotices | undefined;
@@ -315,7 +288,6 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
     ...(options.startMcp !== undefined ? { startMcp: options.startMcp } : {}),
     ...(learnedMemory !== undefined ? { learnedMemory } : {}),
     ...(spawnSlot !== undefined ? { spawnWorker: spawnSlot } : {}),
-    ...(scriptSlot !== undefined ? { scriptOrchestration: scriptSlot } : {}),
     ...(options.taskList === true ? { taskList: true } : {}),
     ...(options.webTools !== undefined ? { webTools: options.webTools } : {}),
     ...(peerSlot !== undefined ? { peers: peerSlot } : {}),
@@ -397,30 +369,6 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
         });
         spawnBudget = bound.budget;
         notices = bound.notices;
-        // 决策 309–314：脚本编排的运行器——无人值守：收回在放手模式或已放权时才做；pigeon run 的总额度用完即不再派
-        if (scriptSlot !== undefined) {
-          const orchestrator = workers;
-          scripts = createSessionScripts({
-            orchestrator,
-            governanceRoot: options.governanceRoot,
-            workspaceRoot: options.workspaceRoot,
-            settings: bundle.settings,
-            sessionId,
-            flush: () => bundle.sessionStore.flush(),
-            ...(notices !== undefined ? { notices } : {}),
-            approval: {
-              yolo: options.yolo,
-              grants: bundle.grantStore,
-              configGrants: bundle.configGrants,
-            },
-            provider: surface.provider,
-            pricing: () => modelPricing(surface.provider, bundle.adapter.transcript()),
-            stallMs: (options.orchestration ?? DEFAULT_ORCHESTRATION_SETTINGS).scriptStallMs,
-            hostExhausted: () => spawnBudget?.exhausted === true,
-            ...(options.scriptLauncher !== undefined ? { launcher: options.scriptLauncher } : {}),
-          });
-          scriptSlot.bind({ runs: scripts, workspaceRoot: options.workspaceRoot });
-        }
       }
       options.onBundle?.(bundle);
     },
@@ -701,13 +649,6 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
     deadline = undefined;
     unsubscribe();
     options.abortSignal?.removeEventListener("abort", onAbort);
-    // 还在跑的脚本停下（在跑的 worker 随之停下，汇总照常交回），再停掉其余 worker
-    if (scripts !== undefined) {
-      const live = scripts.running();
-      await Promise.all(live.map((runId) => scripts?.stop(runId)));
-      await Promise.all(live.map((runId) => scripts?.settled(runId)));
-      scripts.dispose();
-    }
     // 派出的 worker 在释放之前停掉并收尾（收尾记录写进本会话）
     if (workers !== undefined) {
       await stopAllWorkers(workers);

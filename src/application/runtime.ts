@@ -218,12 +218,6 @@ import {
 } from "./peer-tools.ts";
 import { createHostProtectedPathResolver, createProtectedPathResolver } from "./protected-paths.ts";
 import {
-  createOrchestrateTool,
-  ORCHESTRATE_TOOL,
-  orchestrateRegistration,
-  type ScriptSlot,
-} from "./script-tool.ts";
-import {
   grantEventSink,
   openSessionStore,
   type SessionStoreWriter,
@@ -397,9 +391,6 @@ export interface RuntimeDeps {
   // （装配层缺省；终端界面与 pigeon run 由启动参数缺省打开，跑批器各条件明确关掉）。委派策略在场（worker 自己，深度 1）或
   // 注入了执行端（沙箱）时一律不注册
   spawnWorker?: SpawnWorkerSlot;
-  // 决策 294 D、309：提交编排脚本的工具。在场即给主 agent 注册 orchestrate（运行器建好后由装配方绑定到这个槽上）；能否执行由槽里的
-  // 点名判定管。缺省关着（跑批器各条件不给）；委派策略在场（worker）或注入了执行端（沙箱）时不注册
-  scriptOrchestration?: ScriptSlot;
   // 决策 446：模型建工作树并把会话移进去的工具（终端界面主会话给；绑定由终端界面做）。worker、沙箱与非 git 工作区不注册
   enterWorktree?: EnterWorktreeSlot;
   // 决策 450：本机会话间通信的两件工具（开了收件口的主会话给；收件口由入口打开后绑定）。worker 与沙箱不注册
@@ -804,7 +795,6 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     sessionsDir,
     current,
     searchBackend: deps.webTools?.search.backend !== undefined,
-    ...(deps.env !== undefined ? { env: deps.env } : {}),
   });
   const skippedTools: SkippedTools[] = [];
   const skip = (tools: string[], reason: string): false => {
@@ -917,22 +907,6 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
       : undefined;
   if (peerSlot !== undefined) {
     for (const registration of peerToolRegistrations()) registry.register(registration);
-  }
-  // 决策 309：提交编排脚本的工具——只给主会话；worker 与沙箱不注册。决策 359：脚本派的 worker 要 git 工作区、脚本跑在
-  // docker 里，两样缺一即不注册
-  const scriptCandidate =
-    deps.workspaceHost === undefined && deps.toolPolicy === undefined
-      ? deps.scriptOrchestration
-      : undefined;
-  const scriptSlot =
-    scriptCandidate !== undefined &&
-    (environment.check("gitWorkspace") ||
-      skip([ORCHESTRATE_TOOL], "workspace is not a git repository")) &&
-    (environment.check("dockerOnPath") || skip([ORCHESTRATE_TOOL], "docker not found on PATH"))
-      ? scriptCandidate
-      : undefined;
-  if (scriptSlot !== undefined) {
-    registry.register(orchestrateRegistration());
   }
   // 决策 294 B1：任务清单——只给主会话
   const taskList =
@@ -1061,7 +1035,6 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     ...(takeSlot !== undefined ? [TAKE_WORKER_TOOL] : []),
     ...(enterWorktreeSlot !== undefined ? [ENTER_WORKTREE_TOOL] : []),
     ...(peerSlot !== undefined ? [LIST_PEERS_TOOL, SEND_MESSAGE_TOOL] : []),
-    ...(scriptSlot !== undefined ? [ORCHESTRATE_TOOL] : []),
     ...(taskList !== undefined ? [UPDATE_TASKS_TOOL, LIST_TASKS_TOOL] : []),
     ...(webTools !== undefined ? [...(webSearch ? [WEB_SEARCH_TOOL] : []), WEB_FETCH_TOOL] : []),
   ];
@@ -1449,7 +1422,6 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
       ...(takeSlot !== undefined ? [createTakeWorkerTool(takeSlot)] : []),
       ...(enterWorktreeSlot !== undefined ? [createEnterWorktreeTool(enterWorktreeSlot)] : []),
       ...(peerSlot !== undefined ? createPeerTools(peerSlot) : []),
-      ...(scriptSlot !== undefined ? [createOrchestrateTool(scriptSlot)] : []),
       ...(taskList !== undefined ? createTaskListTools(taskList) : []),
       ...webToolset,
     ],

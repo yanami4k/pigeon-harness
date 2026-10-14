@@ -68,7 +68,6 @@ import type {
   RewindNode,
   RewindOutcome,
 } from "../application/rewind.ts";
-import type { ScriptCommands } from "../application/script-commands.ts";
 import { createSessionFilter } from "../application/search.ts";
 import {
   accumulatedSessionCost,
@@ -173,7 +172,7 @@ import {
   WorkerPanel,
   workerStateWord,
 } from "./worker-panel.ts";
-import { type OrchestrationScriptNode, WorkerTree } from "./worker-tree.ts";
+import { WorkerTree } from "./worker-tree.ts";
 import {
   handleCancelCommand,
   handleSpawnCommand,
@@ -186,7 +185,6 @@ import {
 } from "./workers-view.ts";
 
 export type { TuiGrantsContext } from "./commands.ts";
-export type { OrchestrationScriptNode } from "./worker-tree.ts";
 export type { TuiWorkersFace } from "./workers-view.ts";
 
 // Application API 面：TUI 提交意图与订阅投影的唯一通道（决策 025 的实体）。
@@ -266,13 +264,6 @@ export interface TuiShellOptions {
   now?: () => number;
   // 决策 301：树形视图按标签标出清单项用的任务清单（清单关着时返回 undefined）；缺省不标
   taskItems?: () => readonly TaskItem[] | undefined;
-  // 决策 301：树形视图的脚本与阶段两层（脚本编排接上）；缺省没有这两层
-  scripts?: () => readonly OrchestrationScriptNode[];
-  // 决策 309：人的一条输入交给运行面之前（点名判定只挂在这里：提交与排队输入，模型读到的内容不经这里）
-  // 决策 475：返回给人看的说明（点名时额度写成了金额，这条不算点名），醒目显示
-  onHumanInput?: (text: string) => string | undefined;
-  // 决策 309、312、301：/orchestrate 的命令面（跟着当前会话）；缺省 = 命令不可用
-  scriptCommands?: () => ScriptCommands | undefined;
   // 决策 323、324：当前会话的钩子面（会话级事件与 /hooks）；缺省 = 本会话不接钩子
   hooks?: TuiHooksFace;
   // 决策 323：收尾钩子的连续拦截上限（取设置快照的 merged.stopHookBlockCap，/reload 后跟着变）；缺省 8
@@ -614,7 +605,6 @@ export class PigeonTuiShell
           mainSessionId: this.current.sessionId,
           statuses: this.workerStatuses(),
           tracker: this.tracker,
-          scripts: options.scripts?.() ?? [],
           ...(tasks !== undefined ? { tasks } : {}),
           now: this.now(),
         };
@@ -979,9 +969,7 @@ export class PigeonTuiShell
       return;
     }
     if (this.isBusy()) {
-      // /orchestrate <任务> 是交给模型的一条输入：运行中与普通输入一样排队，空闲后再派发；它的 resume、stop、drop 与不带
-      // 参数的用法由程序直接做，照常立即执行
-      if (value.startsWith("/") && !isOrchestrateTask(value)) {
+      if (value.startsWith("/")) {
         // 运行中的斜杠命令不排队：放行的照常执行，改主会话状态或工作目录的拒绝并说明原因、输入留在输入框
         const rejection = rejectWhileRunning(value);
         if (rejection !== undefined) {
@@ -1007,7 +995,7 @@ export class PigeonTuiShell
     return this.running || this.resuming || this.rewinding;
   }
 
-  // 立即提交一条输入（空闲时的回车，或空闲后从队列取出的一条）；echo 为 false 时不回显（/orchestrate 交给模型的原文）
+  // 立即提交一条输入（空闲时的回车，或空闲后从队列取出的一条）；echo 为 false 时不回显
   private submitNow(value: string, echo = true): void {
     // 决策 452：人的下一条输入或命令出现之前，先落上一次工作的收尾行（排队的输入在收尾时依次发出）
     this.renderWorkEnd();
@@ -1025,11 +1013,6 @@ export class PigeonTuiShell
     this.beginWork();
     this.updateStatus();
     this.tui.requestRender();
-    // 决策 309：点名只看人的这条输入
-    const budgetProblem = this.options.onHumanInput?.(value);
-    if (budgetProblem !== undefined) {
-      this.flow.addAlert(`script orchestration not enabled: ${budgetProblem}`);
-    }
     // 决策 323、324：UserPromptSubmit 挡在每条输入前——可拦下、可补上下文；随后才是唯一提交通道
     //（application API：当前会话运行面——/resume 换绑后是新面）。终态摘要在 run() 决议后落
     void this.runWithHooks(value);
@@ -1117,11 +1100,6 @@ export class PigeonTuiShell
   // 决策 297：worker 完成通知到来时叫醒主 agent——与排队输入同一个出口；在跑时不动，通知留在运行面上，下一轮或这一轮结束后再递
   runNotices(): void {
     this.drainQueue();
-  }
-
-  // 决策 309：/orchestrate 的命令面（CommandsHost）
-  scriptCommands(): ScriptCommands | undefined {
-    return this.options.scriptCommands?.();
   }
 
   // 决策 331：/memory 的命令面（CommandsHost）
@@ -1997,17 +1975,6 @@ export class PigeonTuiShell
       this.tui.start();
       this.tui.requestRender(true);
     }
-  }
-
-  // 以人的输入提交一条（/orchestrate 发起）：空闲即发，运行中排队
-  // 命令代人交给模型的一条输入（/orchestrate）：人已看到自己输的命令，这条不回显
-  submitInput(text: string): void {
-    if (this.isBusy()) {
-      this.queue.enqueue(text);
-      this.tui.requestRender();
-      return;
-    }
-    this.submitNow(text, false);
   }
 
   // ---- 决策 286：排队接口（编排一段在"下一轮发什么"处接入 worker 完成通知）----
@@ -3004,18 +2971,6 @@ export class PigeonTuiShell
         if (selected !== undefined) {
           this.openWorkerSession(selected, { view: "tree", mode: "running" });
         }
-      } else if (data === "X" && this.tree.selected() !== undefined) {
-        // 决策 301：选中的 worker 属于某个脚本时停止整个脚本，否则同 x
-        const selected = this.tree.selected() as SessionId;
-        const scripts = this.options.scriptCommands?.();
-        const write = (line: string): void => {
-          this.flow.addSystem(line);
-          this.tui.requestRender();
-        };
-        void (scripts?.stopOfWorker(selected) ?? Promise.resolve(undefined)).then((line) => {
-          if (line !== undefined) write(line);
-          else this.stopWorker(selected, write);
-        });
       } else if (data === "x") {
         const selected = this.tree.selected();
         if (selected !== undefined) this.stopWorker(selected, (line) => this.flow.addSystem(line));
@@ -3439,16 +3394,6 @@ function isSandboxSession(root: string, sessionId: string): boolean {
   } catch {
     return false;
   }
-}
-
-// /orchestrate <任务>（交给模型的一条输入）；resume、stop、drop 与不带参数的不算
-function isOrchestrateTask(value: string): boolean {
-  const tokens = slashTokens(value);
-  return (
-    tokens[0] === "orchestrate" &&
-    tokens.length > 1 &&
-    !["resume", "stop", "drop"].includes(tokens[1] ?? "")
-  );
 }
 
 // 答完的审批收成的一行：多行（heredoc 一类的命令、多行理由）只取首行，后面写 …

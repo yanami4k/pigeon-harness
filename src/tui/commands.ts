@@ -12,9 +12,6 @@ import {
   SANDBOX_RESUME_UNSUPPORTED,
   SANDBOX_WORKERS_UNSUPPORTED,
 } from "../application/sandbox-session.ts";
-import { SCRIPT_COMMAND_TEXTS, type ScriptCommands } from "../application/script-commands.ts";
-import { scriptBudgetProblem } from "../application/script-naming.ts";
-import { commandInputText } from "../application/script-texts.ts";
 import type { TuiWorktreesFace } from "../application/worktree-cleanup.ts";
 import type { SessionGrantStore } from "../approvals/grant-store.ts";
 import type { ConfigGrantRule } from "../state/grants.ts";
@@ -74,9 +71,6 @@ export interface CommandsHost {
   tasks?(): string | undefined;
   // 决策 301：/agents 切换树形视图
   toggleTree?(): void;
-  // 决策 309：脚本编排的命令面（缺省 = /orchestrate 不可用）与以人的输入提交一条（空闲即发、运行中排队）
-  scriptCommands?(): ScriptCommands | undefined;
-  submitInput?(text: string): void;
   // 决策 323、324：本会话的钩子面（/hooks 的只读清单）；缺省 = /hooks 不可用
   hooksView?(): TuiHooksFace | undefined;
   // 决策 331：/memory 的命令面（缺省 = /memory 不可用）
@@ -232,47 +226,6 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
     // 决策 294 B1：/tasks 查看任务清单（完整的清单显示留给编排二段）
     if (tokens[0] === "tasks" && host.tasks !== undefined) {
       host.addSystem(host.tasks() ?? "task list is off");
-      return;
-    }
-    // 决策 309、312、301：/orchestrate——发起即以人的输入提交（交给模型的文字带关键词，点名由程序判断）；续跑、停止、放弃由程序直接做
-    const scripts = host.scriptCommands?.();
-    if (tokens[0] === "orchestrate" && scripts !== undefined) {
-      const sub = tokens[1];
-      const done = (text: string) => {
-        host.addSystem(text);
-        host.render();
-      };
-      const failed = (error: unknown) => {
-        host.addAlert(failureLine("command", error));
-        host.render();
-      };
-      if (sub === "resume" || sub === "drop") {
-        const runId = tokens[2];
-        if (runId === undefined) {
-          host.addSystem(SCRIPT_COMMAND_TEXTS.usage);
-        } else if (sub === "drop") {
-          host.addSystem(scripts.drop(runId));
-        } else {
-          void scripts.resume(runId, tokens.slice(3).join(" ")).then(done, failed);
-        }
-        return;
-      }
-      if (sub === "stop") {
-        void scripts.stop(tokens[2]).then(done, failed);
-        return;
-      }
-      const task = value.trim().slice("/orchestrate".length).trim();
-      if (task === "" || host.submitInput === undefined) {
-        host.addSystem(SCRIPT_COMMAND_TEXTS.usage);
-        return;
-      }
-      // 决策 475：额度只收 token，金额写法说明原因、不发起
-      const problem = scriptBudgetProblem(task);
-      if (problem !== undefined) {
-        host.addAlert(problem);
-        return;
-      }
-      host.submitInput(commandInputText(task));
       return;
     }
     // 决策 331：/memory 查看两层记忆；/memory edit project|user 用编辑器修改一层（存盘后校验，不合格保留原内容）

@@ -31,7 +31,6 @@ test("缺省键位与改用之前逐个一致", () => {
     ["r", "pigeon.approval.rejectWithReason"],
     ["a", "pigeon.approval.grant"],
     ["d", "pigeon.approval.grantDirectory"],
-    ["s", "pigeon.approval.scriptKind"],
   ] as const) {
     assert.ok(isKey(key, id), `${key} → ${id}`);
   }

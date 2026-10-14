@@ -21,7 +21,6 @@ import { ScriptedRuntime } from "./runtime-fixtures.ts";
 import { PigeonTuiShell, type TuiShellOptions } from "./shell.ts";
 import { assertWidthsWithin, MockTerminal, screenFlat, settle } from "./testing.ts";
 import { WorkerActivityTracker } from "./worker-activity.ts";
-import type { OrchestrationScriptNode } from "./worker-tree.ts";
 
 // 本文件建的临时目录在全部测试之后删掉（不靠进程退出时的清理）
 const tempDirs: string[] = [];
@@ -179,17 +178,15 @@ test("编排面板的过滤：行数有上限、超出折成 +N；结束的过�
   }
 });
 
-test("树形视图：Ctrl+X 与 /agents 切换整屏；主 agent、嵌套 worker 分层；展开才显示最近的工具调用；按标签标出清单项；脚本与阶段有数据才显示", async () => {
+test("树形视图：Ctrl+X 与 /agents 切换整屏；主 agent、嵌套 worker 分层；展开才显示最近的工具调用；按标签标出清单项", async () => {
   const h = orchestrationHarness({ maxDepth: 2 });
   const tasks: TaskItem[] = [
     { id: "1", title: "写登录", status: "in_progress", workerLabel: "T1" },
     { id: "2", title: "写注册", status: "pending" },
   ];
-  let scripts: OrchestrationScriptNode[] = [];
   const { term, shell, sessionId } = shellWith({
     workers: h.face,
     taskItems: () => tasks,
-    scripts: () => scripts,
   });
   try {
     shell.start();
@@ -201,7 +198,7 @@ test("树形视图：Ctrl+X 与 /agents 切换整屏；主 agent、嵌套 worker
       label: "T1",
       origin: "agent",
     });
-    const child = h.orchestrator.spawn({
+    h.orchestrator.spawn({
       role: "explorer",
       task: "查接口",
       name: "sub-b",
@@ -230,10 +227,6 @@ test("树形视图：Ctrl+X 与 /agents 切换整屏；主 agent、嵌套 worker
     assert.ok(!childLine.includes("[task"), childLine);
     assert.ok(childLine.indexOf("[+]") > parentLine.indexOf("[+]"), "嵌套的 worker 缩进一层");
     assert.ok(!tree.some((line) => line.includes("| $ read_file")), "收起时不显示调用");
-    assert.ok(
-      !tree.some((line) => /^ .\s*(script|phase) /.test(line)),
-      "没有脚本数据：不显示这两层"
-    );
     // 展开：最近 5 条调用（f3 到 f7），已结束的带结果状态
     await type(term, RIGHT);
     const expanded = lines(term).filter((line) => line.includes("| $ read_file"));
@@ -241,22 +234,6 @@ test("树形视图：Ctrl+X 与 /agents 切换整屏；主 agent、嵌套 worker
       expanded.map((line) => line.trim()),
       [3, 4, 5, 6, 7].map((i) => `| $ read_file {"path":"f${i}"}${i < 7 ? " -> ok" : ""}`)
     );
-    // 脚本与阶段两层：接上数据即显示，阶段下的 worker 不再挂在派出方下
-    scripts = [
-      {
-        id: "s1",
-        title: "batch",
-        state: "running",
-        phases: [{ id: "p1", title: "stage one", workers: [child] }],
-      },
-    ];
-    await type(term, DOWN);
-    const layered = lines(term);
-    const scriptAt = layered.findIndex((line) => line.includes("script batch  running"));
-    const phaseAt = layered.findIndex((line) => line.includes("phase stage one"));
-    const childAt = layered.findIndex((line) => line.includes("sub-b"));
-    assert.ok(scriptAt > 0 && phaseAt > scriptAt && childAt > phaseAt, layered.join("\n"));
-    assert.equal(layered.filter((line) => line.includes("sub-b")).length, 1);
     // Esc 回主会话；/agents 同样打开，Ctrl+X 关上
     await type(term, ESC);
     assert.equal(shell.currentView(), "main");

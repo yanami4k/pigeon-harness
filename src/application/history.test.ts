@@ -27,8 +27,12 @@ import {
   PEER_IDLE_NOTICE_PREFIX,
   wrapPeerMessage,
 } from "./peer-messaging.ts";
-import { commandInputText } from "./script-texts.ts";
 import { createFixtureSession, forkFixture } from "./session-store-fixtures.ts";
+
+// 已删除的 /orchestrate 当年交给模型的包装（旧会话里的样子）
+function commandInputText(task: string): string {
+  return `(The user started this with /orchestrate, asking for it to be done with script orchestration, "script orchestration".)\n${task}`;
+}
 
 async function withRoot(run: (root: string, sessionsDir: string) => Promise<void>): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "pigeon-history-"));

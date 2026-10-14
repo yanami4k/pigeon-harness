@@ -6,8 +6,6 @@
 // - stallMinutes：卡住判定（298，缺省 10 分钟没有新的模型回复或工具结果即中断）
 // - approvalTimeoutMinutes：worker 的审批请求等待时限（303，缺省 5 分钟）
 // - taskList：任务清单工具开关（294 B1，缺省开）
-// - script.modelDecides：脚本编排由模型自行判断何时用（309，缺省关：须人点名）；script.budget：单次脚本的缺省花费上限（314，
-//   写法同点名时的额度，如 "¥20"、"$5"、"2m"；缺省不限）
 import { type Static, Type } from "typebox";
 
 export const OrchestrationSectionSchema = Type.Object(
@@ -27,17 +25,6 @@ export const OrchestrationSectionSchema = Type.Object(
     stallMinutes: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
     approvalTimeoutMinutes: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
     taskList: Type.Optional(Type.Boolean()),
-    script: Type.Optional(
-      Type.Object(
-        {
-          modelDecides: Type.Optional(Type.Boolean()),
-          // 决策 475：只收 token（如 300k、2m）；旧的金额写法（¥、$）在合并检查里报错说明
-          budget: Type.Optional(Type.String({ minLength: 1 })),
-          stallMinutes: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
-        },
-        { additionalProperties: false }
-      )
-    ),
   },
   { additionalProperties: false }
 );
@@ -54,11 +41,6 @@ export interface OrchestrationSettings {
   stallMs: number;
   approvalTimeoutMs: number;
   taskList: boolean;
-  // 决策 309、314：脚本编排由模型判断（缺省关）与缺省额度的写法（缺省不限；解析在 application）
-  scriptModelDecides: boolean;
-  scriptBudget?: string;
-  // 决策 313 验收：脚本卡住的判定（没有 worker 在跑或排队、脚本又没结束，持续这么久即停掉；缺省 10 分钟）
-  scriptStallMs: number;
 }
 
 export const DEFAULT_ORCHESTRATION_SETTINGS: Readonly<OrchestrationSettings> = {
@@ -69,8 +51,6 @@ export const DEFAULT_ORCHESTRATION_SETTINGS: Readonly<OrchestrationSettings> = {
   stallMs: 10 * 60_000,
   approvalTimeoutMs: 5 * 60_000,
   taskList: true,
-  scriptModelDecides: false,
-  scriptStallMs: 10 * 60_000,
 };
 
 export function orchestrationSettings(
@@ -93,29 +73,5 @@ export function orchestrationSettings(
         ? Math.round(file.approvalTimeoutMinutes * 60_000)
         : base.approvalTimeoutMs,
     taskList: file?.taskList ?? base.taskList,
-    scriptModelDecides: file?.script?.modelDecides ?? base.scriptModelDecides,
-    ...(file?.script?.budget !== undefined ? { scriptBudget: file.script.budget } : {}),
-    scriptStallMs:
-      file?.script?.stallMinutes !== undefined
-        ? Math.round(file.script.stallMinutes * 60_000)
-        : base.scriptStallMs,
   };
-}
-
-// 决策 475：脚本的额度只收 token：整数或小数，可带 k（千）、m（百万）。金额写法（¥、$）与"万"不再收
-export const SCRIPT_BUDGET_TOKENS = /^(\d+(?:\.\d+)?)\s*([kKmM])?$/;
-
-export function scriptBudgetTokens(text: string): number | undefined {
-  const match = SCRIPT_BUDGET_TOKENS.exec(text.trim());
-  if (match === null) return undefined;
-  const scale = match[2] === undefined ? 1 : /[kK]/.test(match[2]) ? 1_000 : 1_000_000;
-  const tokens = Math.round(Number(match[1]) * scale);
-  return Number.isFinite(tokens) && tokens > 0 ? tokens : undefined;
-}
-
-// 设置里缺省额度的问题（没有为 undefined）
-export function scriptBudgetSettingProblem(text: string): string | undefined {
-  return scriptBudgetTokens(text) === undefined
-    ? `script.budget ${JSON.stringify(text)} is not a token count; write tokens like "300k" or "2m" (money amounts are no longer supported)`
-    : undefined;
 }

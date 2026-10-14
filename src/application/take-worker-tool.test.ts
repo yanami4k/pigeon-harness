@@ -21,7 +21,6 @@ import { WorkerOrchestrator, type WorkerStatus } from "../orchestration/workers.
 import { createFakeStreamFn } from "../pi-runtime/fixtures.ts";
 import { newGrantId, newSessionId } from "../state/ids.ts";
 import { buildRuntime, disposeRuntime } from "./runtime.ts";
-import { collectApprover } from "./script-host.ts";
 import { SpawnWorkerBudget, SpawnWorkerSlot } from "./spawn-worker-tool.ts";
 import {
   createTakeWorkerTool,
@@ -422,38 +421,6 @@ test("决策 340：叠回内容含 .pigeon 下的路径时 take_worker 按受保
   const yolo = await takeWithGrant(true, true);
   assert.deepEqual(yolo.asked, [], "yolo 放行");
   assert.equal(yolo.settings, '{"permissions":{}}\n');
-});
-
-test("决策 340：脚本整批收回含 .pigeon 下的路径时按受保护路径请示，放权不算", async () => {
-  const f = protectedFixture(true);
-  try {
-    const status = f.slot.host?.orchestrator.status()[0];
-    assert.ok(status?.workspace.kind === "git-worktree");
-    const asked: ApprovalRequest[] = [];
-    const approve = collectApprover(f.main, {
-      yolo: false,
-      grants: { match: () => ({ granted: true }) },
-      handler: async (request) => {
-        asked.push(request);
-        return { approved: false };
-      },
-    });
-    const target = {
-      name: "fix-a",
-      worktree: status.workspace.path,
-      base: status.workspace.baseCommit ?? "",
-    };
-    assert.equal(
-      await approve({ runId: "r1", title: "脚本", workers: ["fix-a"], targets: [target] }),
-      false
-    );
-    assert.deepEqual(
-      asked.map((request) => request.protectedPath),
-      [".pigeon/settings.json"]
-    );
-  } finally {
-    f.cleanup();
-  }
 });
 
 // 决策 448：完整取回（没有冲突、没有因过大留下的文件）之后经编排器删工作树与分支；有冲突的、取回失败的不删

@@ -2,7 +2,6 @@
 // /resume 的用法提示从表生成，补全的命令清单也从表来。运行中放行的是只读类命令与 /cancel、/quit；
 // 改主会话状态或工作目录的命令运行中仍拒。分发本身仍在 commands.ts。
 // 决策 301：进入 worker 会话后只放行表里标了 inWorkerSession 的命令（/stop、/approve 只在 worker 会话里用），其余拒绝。
-import { SCRIPT_COMMAND_USAGE } from "../application/script-commands.ts";
 
 export interface SlashCommandSpec {
   // 命令词（不含斜杠）；/grants save 以 "grants save" 两词记
@@ -98,13 +97,6 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     usage: "/tasks",
     whileRunning: { allow: true },
     inWorkerSession: true,
-  },
-  // 决策 309、312、301：/orchestrate 点名发起、续跑、停止、放弃；运行中可用（发起的那条输入照常排队）
-  {
-    name: "orchestrate",
-    // "额度"是人输入里认的关键词，用法与命令同出一处（script-commands.ts）
-    usage: SCRIPT_COMMAND_USAGE,
-    whileRunning: { allow: true },
   },
   // 决策 323、324：/hooks 只读列出生效的钩子与停用开关，运行中可用
   {
