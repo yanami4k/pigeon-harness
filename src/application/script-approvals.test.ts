@@ -20,11 +20,11 @@ const run = (command: string, needsShell = false): ApprovalRequest => ({
 });
 
 test("跑命令的同类：程序名加第一个子命令词；参数像路径时只取程序名", () => {
-  assert.equal(scriptApprovalKind(run("npm test"))?.text, "跑命令 npm test");
-  assert.equal(scriptApprovalKind(run("npm test -- --watch"))?.text, "跑命令 npm test");
-  assert.equal(scriptApprovalKind(run("git status"))?.text, "跑命令 git status");
-  assert.equal(scriptApprovalKind(run("pytest tests/a.py"))?.text, "跑命令 pytest");
-  assert.equal(scriptApprovalKind(run("node --test a.ts"))?.text, "跑命令 node");
+  assert.equal(scriptApprovalKind(run("npm test"))?.text, "run command npm test");
+  assert.equal(scriptApprovalKind(run("npm test -- --watch"))?.text, "run command npm test");
+  assert.equal(scriptApprovalKind(run("git status"))?.text, "run command git status");
+  assert.equal(scriptApprovalKind(run("pytest tests/a.py"))?.text, "run command pytest");
+  assert.equal(scriptApprovalKind(run("node --test a.ts"))?.text, "run command node");
 });
 
 test("高危名单不给同类：名单写成常量，任一词的程序名在名单里即不给", () => {
@@ -78,20 +78,20 @@ test("网络档取网站；其余工具取工具加目录，无路径取工具",
     args: { url: "https://docs.example/a" },
     host: "docs.example",
   };
-  assert.equal(scriptApprovalKind(fetch)?.text, "访问网站 docs.example");
+  assert.equal(scriptApprovalKind(fetch)?.text, "access site docs.example");
   const edit: ApprovalRequest = {
     toolName: "edit_file",
     toolCallId: "c",
     args: { path: "src/a/b.ts" },
   };
-  assert.equal(scriptApprovalKind(edit)?.text, "用 edit_file 处理 src/a/ 下的文件");
+  assert.equal(scriptApprovalKind(edit)?.text, "use edit_file on files under src/a/");
   assert.notEqual(
     scriptApprovalKind(edit)?.key,
     scriptApprovalKind({ ...edit, args: { path: "src/c.ts" } })?.key
   );
   assert.equal(
     scriptApprovalKind({ toolName: "mcp__x__y", toolCallId: "c", args: {} })?.text,
-    "调用 mcp__x__y"
+    "call mcp__x__y"
   );
 });
 

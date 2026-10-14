@@ -20,7 +20,7 @@ test("容器执行端（linux）且自动批准：需要 shell 的命令经 /bin
   const texts = runCommandTexts({ platform: "linux", approval: "yolo" });
   assert.equal(
     texts.registry,
-    "在工作区根运行一条命令（普通命令直接执行，需要 shell 语义的经 /bin/sh -c 执行）"
+    "run a command at the workspace root (plain commands directly, shell syntax through /bin/sh -c)"
   );
   // 决策 363：系统提示里的一句只说经哪个 shell，不提审批；审批的说法在状态块一节与工具说明里
   assertIncludesAll(texts.prompt, ["/bin/sh -c"]);
@@ -42,7 +42,7 @@ test("本地 Windows 执行端且有人工审批：需要 shell 的命令经人�
   const texts = runCommandTexts({ platform: "win32", approval: "prompt" });
   assert.equal(
     texts.registry,
-    "在工作区根运行一条命令（普通命令直接执行，需要 shell 语义的经 cmd.exe 执行）"
+    "run a command at the workspace root (plain commands directly, shell syntax through cmd.exe)"
   );
   assertIncludesAll(texts.prompt, ["cmd.exe"]);
   assert.doesNotMatch(texts.prompt, /批准|放权|approv|multiple lines/i);

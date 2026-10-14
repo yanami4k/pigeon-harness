@@ -111,7 +111,7 @@ export interface ToolResultMark {
 // 审批闸在 prompt 档而没有审批通道时的固定拒绝理由（application/governance.ts 用它，工具级分类据它认出策略拒绝）
 export const FAIL_CLOSED_APPROVAL_REASON =
   "The policy requires human approval, but no approval channel is configured";
-// 决策 428 之前的说法：旧会话记录里的工具结果是这一句
+// 决策 428 之前的说法：旧会话记录里的工具结果是这一句（旧会话里的中文原文，只用来认出旧记录）
 export const LEGACY_FAIL_CLOSED_APPROVAL_REASON = "策略要求人工审批但未配置审批通道";
 
 function isFailClosedReason(text: string): boolean {

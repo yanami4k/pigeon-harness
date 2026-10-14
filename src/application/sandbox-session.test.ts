@@ -102,11 +102,23 @@ test("pigeon run --sandbox：agent 在容器里改文件；返回前交回成分
     assert.equal(existsSync(join(repo, "made.txt")), false, "宿主工作目录不变");
     assert.equal(git(repo, "symbolic-ref", "--short", "HEAD"), "main");
     assert.match(result.sandboxNotice ?? "", /git diff main\.\.pigeon\/sandbox-/);
-    assert.ok(logs.some((line) => line.includes("沙箱已就绪")));
+    // 就绪那一行不写（文档写明）：原先是"沙箱已就绪：容器 pigeon-sandbox-…（镜像 …）…"，改英文即
+    // "sandbox ready: container pigeon-sandbox-… (image …) …"——两种写法与容器名都不出现
+    assert.ok(
+      !logs.some(
+        (line) =>
+          /\bready\b/i.test(line) ||
+          line.includes("沙箱已就绪") ||
+          line.includes(`pigeon-sandbox-${sessionId}`)
+      ),
+      logs.join("｜")
+    );
     // 决策 252：不启动 MCP 服务；开沙箱时列出已配置却不可用的服务名
     assert.equal(mcp.counter.calls, 0, "沙箱里不启动 MCP 服务");
     assert.ok(
-      logs.some((line) => line.includes("不启动 MCP 服务") && line.includes("docs")),
+      logs.some(
+        (line) => line.includes("MCP servers don't run in the sandbox") && line.includes("docs")
+      ),
       logs.join("｜")
     );
     assert.deepEqual(fake.state().containers, {}, "交回后删除容器");
@@ -117,7 +129,7 @@ test("pigeon run --sandbox：agent 在容器里改文件；返回前交回成分
   }
 });
 
-test("资源上限取自设置的 sandbox 一节（决策 333）：写 0 的项不带参数，给了的按设置；就绪提示写明上限", async () => {
+test("资源上限取自设置的 sandbox 一节（决策 333）：写 0 的项不带参数，给了的按设置", async () => {
   const repo = makeRepo();
   const home = mkdtempSync(join(tmpdir(), "pigeon-sandbox-home-"));
   const fake = fakeSandboxDocker();
@@ -149,10 +161,6 @@ test("资源上限取自设置的 sandbox 一节（决策 333）：写 0 的项�
       assert.equal(at("--memory-swap"), String(2 * 1024 ** 3));
       assert.equal(at("--pids-limit"), undefined, "写 0 为不限");
       assert.equal(at("--cpus"), "2");
-      assert.ok(
-        logs.some((line) => line.includes("内存上限 2 GiB、进程数上限 不限、CPU 上限 2 核")),
-        logs.join("｜")
-      );
     } finally {
       await sandbox.discard();
     }
@@ -213,15 +221,15 @@ test("pigeon sandbox cache | clear-cache：查看占用与清空共用下载缓�
   const fake = fakeSandboxDocker();
   const docker = fake.docker;
   try {
-    assert.match(await runSandboxCommand(["cache"], { docker }), /pigeon-sandbox-cache 尚未建立/);
-    assert.match(await runSandboxCommand(["clear-cache"], { docker }), /本就是空的/);
+    assert.match(
+      await runSandboxCommand(["cache"], { docker }),
+      /pigeon-sandbox-cache does not exist/
+    );
+    assert.match(await runSandboxCommand(["clear-cache"], { docker }), /already empty/);
     fake.update((state) => {
       state.volumes["pigeon-sandbox-cache"] = { size: "1.2GB" };
     });
-    assert.match(
-      await runSandboxCommand(["cache"], { docker }),
-      /pigeon-sandbox-cache：占用 1\.2GB；清空：pigeon sandbox clear-cache/
-    );
+    assert.match(await runSandboxCommand(["cache"], { docker }), /pigeon-sandbox-cache: 1\.2GB$/m);
     // 有沙箱容器挂着：不能清空，说明原因
     fake.update((state) => {
       state.containers.busy = {
@@ -232,18 +240,21 @@ test("pigeon sandbox cache | clear-cache：查看占用与清空共用下载缓�
         volumes: ["pigeon-sandbox-cache"],
       };
     });
-    await assert.rejects(runSandboxCommand(["clear-cache"], { docker }), /正被沙箱容器使用/);
-    assert.match(await runSandboxCommand(["cache"], { docker }), /1 个沙箱容器正在使用/);
+    await assert.rejects(
+      runSandboxCommand(["clear-cache"], { docker }),
+      /is in use by a sandbox container/
+    );
+    assert.match(await runSandboxCommand(["cache"], { docker }), /used by 1 sandbox container$/m);
     fake.update((state) => {
       delete state.containers.busy;
     });
-    assert.match(await runSandboxCommand(["clear-cache"], { docker }), /^已清空沙箱下载缓存/);
+    assert.match(await runSandboxCommand(["clear-cache"], { docker }), /^sandbox cache cleared/);
     assert.deepEqual(fake.state().removedVolumes, ["pigeon-sandbox-cache"]);
     await assert.rejects(
       runSandboxCommand(["nope"], { docker }),
-      /用法：pigeon sandbox list \| clean \| cache \| clear-cache/
+      /usage: pigeon sandbox list \| clean \| cache \| clear-cache/
     );
-    await assert.rejects(runSandboxCommand([], { docker }), /用法/);
+    await assert.rejects(runSandboxCommand([], { docker }), /usage/);
   } finally {
     fake.cleanup();
   }

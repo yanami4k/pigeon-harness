@@ -357,10 +357,7 @@ test("会话存储建不起文件时向标准错误输出告警一次，运行�
     assert.equal(first.status, "completed");
     assert.equal(second.status, "completed");
     assert.equal(warnings.length, 1, warnings.join("\n"));
-    assert.match(
-      warnings[0] ?? "",
-      /^会话存储告警：新会话存储打开失败.*（会话记录缺这一条，运行不受影响）$/
-    );
+    assert.match(warnings[0] ?? "", /^session store warning: opening the session file failed/);
     assert.equal(locateSessionFile(sessionsDir, sessionId), undefined);
   } finally {
     rmSync(root, { recursive: true, force: true });

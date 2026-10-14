@@ -1,6 +1,6 @@
 // M2 S3：TUI 审批面板离屏测试（与 shell.test.ts 同一 Mock Terminal + 虚拟屏幕路径）。
 // 断言面：
-//   - 审批块渲染：工具名 + pretty JSON 参数 + diff 预览 + 四键提示（措辞与 cli 版同口径，
+//   - 审批区渲染（底部圆角框）：工具名 + 路径 + 其余参数的 pretty JSON + diff 预览 + 四键提示（措辞与 cli 版同口径，
 //     [d] 仅在 args.path 可定位目录时提供，决策 3a）；
 //   - 四键各自 resolve 的 ApprovalDecision 形状：[y] 批准一次 / [n] 拒绝（无理由输入通道，
 //     决策 029）/ [a] 工具级会话 grant / [d] 目录限定会话 grant（pathPrefix=调用目录）；
@@ -28,12 +28,21 @@ import { ToolRegistry } from "../tools/registry.ts";
 import {
   APPROVAL_CANCEL_CLOSED,
   APPROVAL_CANCEL_DETACHED,
+  cancelReasonForModel,
   createTuiApprovalHandler,
 } from "./approval.ts";
 import { PigeonTuiShell, type TuiRuntimeFace } from "./shell.ts";
-import { MockTerminal, screenFlat, screenText, settle } from "./testing.ts";
+import { MockTerminal, screenFlat, screenText, settle, squashSpaces } from "./testing.ts";
 
 const SESSION_ID: SessionId = newSessionId();
+
+// 审批区框里的文字拼成一串：每行去掉左右框线再拼接（框内折行的长行还原为连续串，配合 squashSpaces 比较）
+function boxFlat(term: MockTerminal): string {
+  return term.screen
+    .contentLines()
+    .map((line) => line.replace(/^\s*│ ?/, "").replace(/\s*│\s*$/, ""))
+    .join("");
+}
 
 // 最小 application 面：记录 run 提交（面板期间输入不得漏进 run）
 class StubRuntime implements TuiRuntimeFace {
@@ -81,7 +90,7 @@ function makePanel(): {
 } {
   const root = mkdtempSync(join(tmpdir(), "pigeon-tui-approval-"));
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-log-"));
-  const term = new MockTerminal(80, 24);
+  const term = new MockTerminal(80, 60);
   const runtime = new StubRuntime();
   const store = new SessionGrantStore({ workspaceRoot: root });
   const shell = new PigeonTuiShell({ terminal: term, runtime, sessionId: SESSION_ID, logDir });
@@ -108,24 +117,30 @@ test("审批块渲染工具名/参数/diff/四键提示；[y] resolve 批准一�
     const pending = handler(REQUEST);
     await settle();
     const text = screenText(term);
-    assert.ok(text.includes("—— 人工审批 ——"), text);
-    assert.ok(text.includes("工具：edit_file"), text);
-    assert.ok(text.includes('"path": "src/a.ts"'), `pretty JSON 参数\n${text}`);
-    assert.ok(text.includes("改动预览："), text);
-    assert.ok(text.includes("@@ -1 +1 @@ -alpha +STEP1"), text);
+    assert.ok(text.includes("╭"), `审批区（圆角框）挂着\n${text}`);
+    assert.match(text, /│ edit_file +│/, "框内第一行是工具名（不带 tool: 前缀）");
+    assert.ok(!text.includes("tool: edit_file"), text);
+    assert.match(text, /│ src\/a\.ts +│/, "要批的那件事：文件路径单独一行");
+    assert.ok(text.includes("args: {"), `其余参数 pretty JSON\n${text}`);
+    assert.ok(text.includes('"op": "replace"'), `pretty JSON 参数\n${text}`);
+    assert.ok(!text.includes('"path"'), `已专门显示的 path 不再进 JSON\n${text}`);
+    assert.ok(text.includes("@@ -1 +1 @@ -alpha +STEP1"), `改动预览原样\n${text}`);
     assert.ok(
-      screenFlat(term).includes(
-        "批准执行？[y] 批准一次 / [n] 拒绝 / [r] 拒绝并说明 / [a] 本会话允许 / [d] 本会话允许(仅限当前调用所在目录)"
+      squashSpaces(boxFlat(term)).includes(
+        squashSpaces(
+          "[y] approve once / [n] reject / [r] reject with reason / [a] allow for this session / [d] allow for this session (this directory)"
+        )
       ),
       `按键提示与 cli 版同口径，含 [r] 拒绝并说明（折行后拼接还原）\n${text}`
     );
-    assert.ok(text.includes("state: approval"), `审批期间状态栏\n${text}`);
-
     term.input("y");
     assert.deepEqual(await pending, { approved: true });
     await settle();
-    assert.ok(screenText(term).includes("审批结果：人工批准"));
-    assert.ok(screenText(term).includes("state: idle"), "决议后状态栏复原");
+    // 验收修改：答完整块收成一行结论（结论、工具与关键参数）
+    const after = screenText(term);
+    assert.ok(after.includes("✓ approved edit_file: src/a.ts"), after);
+    assert.ok(!after.includes("╭"), "审批区收起，整块不留");
+    assert.ok(!after.includes("[y] approve once"), "按键提示不留");
   } finally {
     shell.stop();
     cleanup();
@@ -142,7 +157,7 @@ test("[n] resolve 拒绝且无理由（四键面板无理由输入通道，决�
     term.input("N");
     assert.deepEqual(await pending, { approved: false });
     await settle();
-    assert.ok(screenText(term).includes("审批结果：人工拒绝"));
+    assert.ok(screenText(term).includes("✗ rejected edit_file: src/a.ts"), screenText(term));
   } finally {
     shell.stop();
     cleanup();
@@ -166,8 +181,8 @@ test("[a] resolve 批准并创建工具级会话 grant（pathPrefix 缺省），
     assert.equal(grants[0]?.hitCount, 0);
     await settle();
     const text = screenText(term);
-    assert.ok(text.includes("审批结果：人工授权（会话 grant）"), text);
-    assert.ok(text.includes(`已创建会话放权 ${grants[0]?.grantId}（edit_file）`), text);
+    assert.ok(text.includes("✓ allowed for this session: edit_file"), text);
+    assert.ok(!text.includes("╭"), "审批区收起，整块不留");
   } finally {
     shell.stop();
     cleanup();
@@ -205,8 +220,10 @@ test("[d] 无 path 时不提供该键；仍按下与 cli 版同语义退化为�
     await settle();
     const text = screenText(term);
     assert.ok(
-      screenFlat(term).includes(
-        "批准执行？[y] 批准一次 / [n] 拒绝 / [r] 拒绝并说明 / [a] 本会话允许"
+      squashSpaces(boxFlat(term)).includes(
+        squashSpaces(
+          "[y] approve once / [n] reject / [r] reject with reason / [a] allow for this session"
+        )
       ),
       `无 path 时提示不含 [d]\n${text}`
     );
@@ -220,7 +237,7 @@ test("[d] 无 path 时不提供该键；仍按下与 cli 版同语义退化为�
   }
 });
 
-test("fail-closed：壳停止时挂起的审批按拒绝处理，理由逐字（决策 029）", async () => {
+test("fail-closed：壳停止时挂起的审批按拒绝处理，理由逐字（决策 029；交给模型的为英文，决策 428）", async () => {
   const { shell, handler, cleanup } = makePanel();
   try {
     shell.start();
@@ -228,7 +245,11 @@ test("fail-closed：壳停止时挂起的审批按拒绝处理，理由逐字（
     const pending = handler(REQUEST);
     await settle();
     shell.stop();
-    assert.deepEqual(await pending, { approved: false, reason: APPROVAL_CANCEL_CLOSED });
+    assert.deepEqual(await pending, {
+      approved: false,
+      reason: cancelReasonForModel(APPROVAL_CANCEL_CLOSED),
+    });
+    assert.match(cancelReasonForModel(APPROVAL_CANCEL_CLOSED), /^The terminal UI stopped/);
   } finally {
     cleanup();
   }
@@ -241,8 +262,9 @@ test("fail-closed：面板未装配（face getter 返回 undefined）按拒绝�
     const detached = createTuiApprovalHandler(store, () => undefined);
     assert.deepEqual(await detached(REQUEST), {
       approved: false,
-      reason: APPROVAL_CANCEL_DETACHED,
+      reason: cancelReasonForModel(APPROVAL_CANCEL_DETACHED),
     });
+    assert.match(cancelReasonForModel(APPROVAL_CANCEL_DETACHED), /^No approval panel/);
     assert.equal(store.list().length, 0, "fail-closed 不得创建 grant");
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -277,7 +299,7 @@ test("集成：真实 adapter 审批闸挂起等按键——[y] 批准后写副�
   const root = mkdtempSync(join(tmpdir(), "pigeon-tui-approval-e2e-"));
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-log-"));
   writeFileSync(join(root, "a.ts"), "alpha\n");
-  const term = new MockTerminal(80, 24);
+  const term = new MockTerminal(80, 60);
   const store = new SessionGrantStore({ workspaceRoot: root });
   const registry = new ToolRegistry();
   registry.register({
@@ -344,20 +366,20 @@ test("集成：真实 adapter 审批闸挂起等按键——[y] 批准后写副�
     term.input("\r");
     // 审批闸挂起：等审批块出现（真实 adapter 异步跑循环）
     let text = "";
-    for (let waited = 0; waited < 5000 && !text.includes("—— 人工审批 ——"); waited += 50) {
+    for (let waited = 0; waited < 5000 && !text.includes("╭"); waited += 50) {
       await settle(50);
       text = screenText(term);
     }
-    assert.ok(text.includes("工具：edit_file"), `审批块\n${text}`);
+    assert.match(text, /│ edit_file +│/, `审批区第一行是工具名\n${text}`);
     assert.equal(readFileSync(join(root, "a.ts"), "utf8"), "alpha\n", "批准前副作用不得发生");
     term.input("y");
-    for (let waited = 0; waited < 5000 && !screenText(term).includes("== run:"); waited += 50) {
+    for (let waited = 0; waited < 5000 && !screenText(term).includes("done · "); waited += 50) {
       await settle(50);
     }
     assert.equal(readFileSync(join(root, "a.ts"), "utf8"), "STEP1\n", "批准后写副作用真实发生");
     const finalText = screenText(term);
-    assert.ok(finalText.includes("审批结果：人工批准"), finalText);
-    assert.ok(finalText.includes("== run: completed"), finalText);
+    assert.ok(finalText.includes("✓ approved edit_file: a.ts"), finalText);
+    assert.ok(finalText.includes("done · "), finalText);
   } finally {
     shell.stop();
     await adapter.dispose();
@@ -378,9 +400,9 @@ test("决策 326 ①：受保护路径的请示只给 [y]/[n]/[r]——不显示
     });
     await settle();
     const text = screenFlat(term);
-    assert.ok(text.includes("受保护路径：.pigeon/settings.json"), text);
-    assert.ok(text.includes("批准执行？[y] 批准一次 / [n] 拒绝 / [r] 拒绝并说明"), text);
-    assert.ok(!text.includes("[a] 本会话允许"), text);
+    assert.ok(text.includes("protected path: .pigeon/settings.json"), text);
+    assert.ok(text.includes("[y] approve once / [n] reject / [r] reject with reason"), text);
+    assert.ok(!text.includes("[a] allow"), text);
     let settled = false;
     void pending.then(() => {
       settled = true;

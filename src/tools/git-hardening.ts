@@ -59,3 +59,8 @@ export function hardenedGitArgs(cwd: string): string[] {
   const attrSource = attrSourceOf(cwd);
   return [...(attrSource !== null ? [attrSource] : []), ...GIT_HARDENING_CONFIG];
 }
+
+// 决策 436：这个 git 认不认 --attr-source（认才保证快照写树时没有跑 .gitattributes 指派的过滤，快照里存的是工作区原样内容）
+export function attrSourceSupported(cwd: string): boolean {
+  return attrSourceOf(cwd) !== null;
+}

@@ -8,9 +8,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, test } from "vitest";
 import { wrapScriptApprovals } from "../application/script-approvals.ts";
-import { scriptCommands } from "../application/script-commands.ts";
+import { SCRIPT_COMMAND_TEXTS, scriptCommands } from "../application/script-commands.ts";
 import { type PlanInput, scriptHarness, type WorkerPlan } from "../application/script-fixtures.ts";
-import { ScriptGate } from "../application/script-naming.ts";
+import { BUDGET_TOKENS_ONLY, ScriptGate } from "../application/script-naming.ts";
 import { commandInputText } from "../application/script-texts.ts";
 import { SessionGrantStore } from "../approvals/grant-store.ts";
 import type { ApprovalRequest } from "../approvals/handler.ts";
@@ -177,19 +177,23 @@ test("开跑的计划行、log 行与结束汇总进消息区；树形视图接�
         "调查",
         "修改",
       ]),
-      { unit: "cny", amount: 5 }
+      { unit: "tokens", amount: 300_000 }
     );
     await until(() => harness.sink.spawned.length === 1, "派出第一个");
     await settle();
     const flat = screenFlat(term);
-    assert.ok(flat.includes(`[脚本] t（运行号 ${runId}）开跑：阶段 调查 → 修改；额度 ¥5。`), flat);
-    assert.ok(flat.includes("[脚本 t] 开始了"), flat);
+    // 开跑那一行不写：原先是"[脚本] t（运行号 …）开跑：阶段 调查 → 修改；额度 …"，改英文即"[script] t (run …) started:
+    // phases 调查 → 修改; budget 300k"——两种写法与阶段连写都不出现
+    assert.ok(
+      !flat.includes("[script] t") && !flat.includes("[脚本] t") && !flat.includes("调查 → 修改"),
+      flat
+    );
+    assert.ok(flat.includes("[script t] 开始了"), flat);
     assert.ok(flat.includes(`${runId}-1`), "面板照常列出脚本派出的 worker");
     await type(term, CTRL_X);
     const tree = screenFlat(term);
     assert.ok(tree.includes(`script t (${runId})  running`), tree);
     assert.ok(tree.includes("phase 调查  running"), tree);
-    assert.ok(tree.includes("[X] stop script"), tree);
     release.resolve();
     await within(done, "脚本的汇总");
     await settle(150);
@@ -226,7 +230,7 @@ test("界面上停止整个脚本：树形视图里选中脚本下的 worker 按
     assert.equal(harness.sink.spawned.length, 2, "停止之后不再派");
     // 那一行写在主会话的消息区：关上树形视图再看
     await type(term, CTRL_X);
-    assert.ok(screenFlat(term).includes(`已停止脚本 ${runId}`));
+    assert.ok(screenFlat(term).includes(`stopped script ${runId}`));
     // /orchestrate stop 停在跑的全部
     const second = harness.nextNotice();
     const other = await harness.runs.start(script('await agent("四");'), undefined);
@@ -243,14 +247,55 @@ test("/orchestrate 发起：以人的输入提交，交给模型的文字带关�
   const { shell, term, runtime, gate, close } = scriptShell(() => ({}));
   shell.start();
   try {
-    await type(term, "/orchestrate 给各模块补测试 额度 ¥5\r");
-    assert.deepEqual(runtime.runs, [commandInputText("给各模块补测试 额度 ¥5")]);
+    await type(term, "/orchestrate 给各模块补测试 budget 300k\r");
+    assert.deepEqual(runtime.runs, [commandInputText("给各模块补测试 budget 300k")]);
     assert.ok(gate.allowed());
-    assert.deepEqual(gate.budget(), { unit: "cny", amount: 5 });
+    assert.deepEqual(gate.budget(), { unit: "tokens", amount: 300_000 });
     await type(term, "谢谢\r");
     assert.ok(!gate.allowed());
     await type(term, "/orchestrate\r");
-    assert.ok(screenFlat(term).includes("用法：/orchestrate <任务>"));
+    const usage = screenFlat(term);
+    assert.ok(usage.includes("usage: /orchestrate <task> [budget 300k]"), usage);
+    assert.ok(usage.includes("/orchestrate resume <run ID> [budget 300k]"), usage);
+    assert.ok(!/[¥￥$]|额度/.test(SCRIPT_COMMAND_TEXTS.usage), SCRIPT_COMMAND_TEXTS.usage);
+  } finally {
+    await close();
+  }
+});
+
+test("/orchestrate 写金额额度（决策 475）：不发起、醒目说明额度只收 token；没有点名", async () => {
+  const { shell, term, runtime, gate, close } = scriptShell(() => ({}));
+  shell.start();
+  try {
+    await type(term, "/orchestrate 给各模块补测试 budget $2\r");
+    assert.deepEqual(runtime.runs, [], "没有交给模型");
+    assert.ok(!gate.allowed());
+    await untilScreen(term, BUDGET_TOKENS_ONLY);
+    await type(term, "/orchestrate 给各模块补测试 budget ¥5\r");
+    await type(term, "/orchestrate 给各模块补测试 budget 3万\r");
+    assert.deepEqual(runtime.runs, []);
+    assert.equal(screenFlat(term).split(BUDGET_TOKENS_ONLY).length - 1, 3);
+    // 改成 token 写法即照常发起
+    await type(term, "/orchestrate 给各模块补测试 budget 2m\r");
+    assert.deepEqual(runtime.runs, [commandInputText("给各模块补测试 budget 2m")]);
+    assert.deepEqual(gate.budget(), { unit: "tokens", amount: 2_000_000 });
+  } finally {
+    await close();
+  }
+});
+
+test("/orchestrate resume 写金额额度（决策 475）：显示说明、不续跑", async () => {
+  const { harness, shell, term, close } = scriptShell(() => ({}));
+  shell.start();
+  try {
+    const done = harness.nextNotice();
+    const runId = await harness.runs.start(script('await agent("一"); return 1;'), undefined);
+    await within(done, "脚本的汇总");
+    await harness.runs.settled(runId);
+    await type(term, `/orchestrate resume ${runId} budget $2\r`);
+    await untilScreen(term, BUDGET_TOKENS_ONLY);
+    assert.equal(harness.sink.spawned.length, 1, "没有续跑");
+    assert.equal(harness.runs.budget(runId), undefined, "额度没换");
   } finally {
     await close();
   }
@@ -268,19 +313,20 @@ test("审批：本次脚本内同类都允许只对本脚本内同类生效；�
       undefined
     );
     await until(() => asked.length === 1, "第一次请示");
-    await untilScreen(term, "[s] 本次脚本内同类都允许");
+    await untilScreen(term, "[s] allow this kind for this script");
     await type(term, "s");
     // 按 s 之后第一个 worker 随即收尾（同步 git），回显要等重绘：等它出现，不靠固定的 settle
-    await untilScreen(term, "已允许本次脚本内同类调用（跑命令 npm test），脚本结束即失效");
+    await untilScreen(term, "✓ allowed for this script: run_command (run command npm test)");
     // 第二个 npm test 不再请示；rm 照常请示且不提供 [s]
     await until(() => asked.length === 2, "rm 的请示");
     assert.equal(asked[1]?.args && (asked[1].args as { command: string }).command, "rm -rf build");
     assert.equal(asked[1]?.script?.kind, undefined);
-    await untilScreen(term, "命令：rm -rf build");
-    const rmBlock = screenFlat(term).split("—— 人工审批 ——").at(-1) ?? "";
+    // 审批区框内命令本身单独一行（不带 command: 前缀）
+    await untilScreen(term, "│ rm -rf build ");
+    const rmBlock = screenFlat(term).split("╭").at(-1) ?? "";
     assert.ok(!rmBlock.includes("[s]"), rmBlock);
     await type(term, "s");
-    assert.ok(screenFlat(term).includes("state: approval"), "按 s 不起作用，仍在等审批");
+    assert.ok(screenFlat(term).includes("│ rm -rf build "), "按 s 不起作用，审批区仍挂着等审批");
     await type(term, "y");
     await within(first, "第一个脚本的汇总");
     // 另一个脚本里照常请示
@@ -310,7 +356,7 @@ test("收回的请示：来源写明脚本与运行号，按 take_worker 的写�
       tier: "write",
       script: { runId: "s1", title: "t" },
     });
-    assert.match(text, /^—— 人工审批 ——\n来源：脚本 t（运行号 s1）收回\n工具：take_worker/);
+    assert.match(text, /^-- approval --\n[^\n]*\bs1\b[^\n]*\ntool: take_worker/);
     assert.doesNotMatch(text, /\[s\]/);
     const done = harness.nextNotice();
     await harness.runs.start(

@@ -121,7 +121,8 @@ test("并行 worker：两个 implementer 各写自己的工作树，主工作区
       const workerWorkspace = worker.worker?.workspace;
       assert.equal(
         workerWorkspace?.kind === "git-worktree" ? workerWorkspace.branch : undefined,
-        `pigeon/${name}`
+        // 决策 447：分支带 worker 会话号后 8 位
+        `pigeon/${id.slice(-8).toLowerCase()}-${name}`
       );
       const calls = worker.runs.flatMap((run) => run.toolCalls);
       assert.deepEqual(

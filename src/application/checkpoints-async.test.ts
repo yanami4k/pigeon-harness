@@ -631,11 +631,15 @@ test("进程在拍完之前退出：该分叉点明确报错、不退回更早�
         });
       await assert.rejects(
         () => forkAt(4),
-        (error) => error instanceof ForkError && /没有拍成/.test(error.message)
+        (error) =>
+          error instanceof ForkError &&
+          /snapshot for tool result #\d+ was interrupted/.test(error.message)
       );
       await assert.rejects(
         () => forkAt(2),
-        (error) => error instanceof ForkError && /早于首次改动/.test(error.message)
+        (error) =>
+          error instanceof ForkError &&
+          /no baseline snapshot before the first change/.test(error.message)
       );
       const loaded = loadStoreSession(sessionsOf(root), sessionId);
       assert.equal(loaded?.view.forks.length, 0, "不留分叉记录");

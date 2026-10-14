@@ -18,7 +18,7 @@ export function searchToolRegistrations(): ToolRegistration[] {
   return [
     {
       name: GREP_TOOL,
-      description: "按正则搜索工作区内的文件内容",
+      description: "search file contents in the workspace by regex",
       parameters: GrepParamsSchema,
       tier: "read",
       pathConfinement: { kind: "workspace" },
@@ -26,7 +26,7 @@ export function searchToolRegistrations(): ToolRegistration[] {
     },
     {
       name: GLOB_TOOL,
-      description: "按文件名模式找工作区内的文件",
+      description: "find files in the workspace by name pattern",
       parameters: GlobParamsSchema,
       tier: "read",
       pathConfinement: { kind: "workspace" },

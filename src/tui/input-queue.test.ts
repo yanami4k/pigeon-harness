@@ -32,7 +32,7 @@ function makeShell(): {
     sessionId,
     logDir: root,
     sessions: { root },
-    search: { root },
+    tasks: () => undefined,
   });
   return {
     shell,
@@ -124,17 +124,14 @@ test("运行中只读命令照常执行，改状态的命令被拒并说明原�
     term.input("长任务");
     term.input("\r");
     await settle();
-    term.input("/sessions");
+    term.input("/tasks");
     term.input("\r");
     await settle();
-    assert.ok(screenFlat(term).includes("尚无会话记录"), "只读命令运行中照常执行");
+    assert.ok(screenFlat(term).includes("task list is off"), "只读命令运行中照常执行");
     term.input("/compact");
     term.input("\r");
     await settle();
-    assert.ok(
-      screenFlat(term).includes("运行中不能用 /compact：它会改动主会话状态（压缩对话上下文）"),
-      screenText(term)
-    );
+    assert.ok(screenFlat(term).includes("can't use /compact while running"), screenText(term));
     assert.equal(editorText(term), "/compact", "被拒的命令留在输入框");
     assert.deepEqual(runtime.runs, ["长任务"], "命令不排队");
   } finally {
@@ -146,8 +143,6 @@ test("命令放行表：只读类与 /cancel、/quit 运行中可用，其余逐
   const allowed = SLASH_COMMANDS.filter((spec) => spec.whileRunning.allow).map((spec) => spec.name);
   assert.deepEqual(allowed, [
     "quit",
-    "sessions",
-    "search",
     "grants",
     "cancel",
     "workers",
@@ -158,6 +153,12 @@ test("命令放行表：只读类与 /cancel、/quit 运行中可用，其余逐
     "orchestrate",
     "hooks",
     "memory",
+    // 决策 448：列出只读，删除只动留下的工作树
+    "worktrees",
+    // 决策 443：会话面板只看与派发
+    "panel",
+    // 决策 450：改名只动会话名录
+    "rename",
   ]);
   const rejected = SLASH_COMMANDS.filter((spec) => !spec.whileRunning.allow).map(
     (spec) => spec.name
@@ -172,11 +173,15 @@ test("命令放行表：只读类与 /cancel、/quit 运行中可用，其余逐
     "take",
     "memory edit",
     "reload",
+    // 决策 442：改设置后重建运行面
+    "config",
+    // 决策 435：回退会换掉对话与工作区文件
+    "rewind",
     "export",
   ]);
   for (const name of rejected) {
     const line = rejectWhileRunning(`/${name} x`);
-    assert.ok(line?.startsWith(`运行中不能用 /${name}：`), line);
+    assert.equal(line, `can't use /${name} while running`);
   }
   assert.equal(rejectWhileRunning("/grants"), undefined);
   assert.equal(rejectWhileRunning("/没有这个命令"), undefined, "未知命令交给分发如实说明");

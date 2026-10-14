@@ -240,7 +240,7 @@ test("dispose 空跑与幂等：从未 Run 直接释放不抛不悬挂，释放�
   await adapter.dispose();
 
   // 释放后的行为契约：再启动 Run 必须抛“已释放”错误
-  await assert.rejects(adapter.run("你好"), /已释放/);
+  await assert.rejects(adapter.run("你好"), /disposed/);
 });
 
 test("transcript 隔离：观察拷贝的嵌套修改不污染 Agent 状态与后续 Run", async () => {
@@ -341,7 +341,7 @@ test("模型身份守卫：options.model 携带 provider/id 直接抛错", () =>
         model: { provider: "evil-provider" },
         governance: createToolGovernance(),
       }),
-    /模型身份/
+    /model identity/
   );
   assert.throws(
     () =>
@@ -352,7 +352,7 @@ test("模型身份守卫：options.model 携带 provider/id 直接抛错", () =>
         model: { id: "evil-model" },
         governance: createToolGovernance(),
       }),
-    /模型身份/
+    /model identity/
   );
 });
 

@@ -58,13 +58,13 @@ test("工具结果缺省收起：调用行下方前 3 行与剩余行数；Ctrl+
     assert.ok(call >= 0, screenText(term));
     assert.match(lines[call + 1] ?? "", /\| 内容行1$/);
     assert.match(lines[call + 3] ?? "", /\| 内容行3$/);
-    assert.ok((lines[call + 4] ?? "").includes("... +7 lines (ctrl+o to expand)"));
+    assert.ok((lines[call + 4] ?? "").includes("... +7 lines"));
     assert.ok(!screenText(term).includes("内容行10"));
 
     term.input(CTRL_O);
     await settle();
     assert.ok(screenText(term).includes("内容行10"), "展开后显示全部");
-    assert.ok(screenText(term).includes("(ctrl+o to collapse)"));
+    assert.ok(!screenText(term).includes("ctrl+o"), "折叠提示不写按键");
 
     term.input(CTRL_O);
     await settle();
@@ -87,7 +87,7 @@ test("编辑类工具显示 diff 而不是回执全文", async () => {
     assert.ok(shown.includes("| --- b.ts"), shown);
     assert.ok(shown.includes("| +++ b.ts"), shown);
     assert.ok(shown.includes("| -const x = 1;"), shown);
-    assert.ok(shown.includes("... +1 lines (ctrl+o to expand)"), "4 行 diff 收起时显示前 3 行");
+    assert.ok(shown.includes("... +1 lines"), "4 行 diff 收起时显示前 3 行");
     term.input(CTRL_O);
     await settle();
     assert.ok(screenText(term).includes("| +const x = 2;"));
@@ -119,14 +119,14 @@ test("很长的结果展开后也有上限并注明截断；非本次运行的�
     assert.ok(lines.some((line) => /\| L200$/.test(line)));
     assert.ok(!lines.some((line) => /\| L201$/.test(line)), "超过 200 行不显示");
     assert.ok(
-      lines.some((line) => line.includes("... truncated: 300 more lines not shown")),
+      lines.some((line) => line.includes("... truncated, 300 more lines")),
       "注明截断"
     );
     assert.ok(!screenText(term).includes("幽灵结果"));
   });
   // 字符上限：单行超长时截到上限并注明
   const body = toolResultBody({ isError: false, text: "x".repeat(TOOL_EXPANDED_CHARS + 50) }, true);
-  assert.ok(body.includes("... truncated: 0 more lines not shown"));
+  assert.ok(body.includes("... truncated, 0 more lines"));
   assert.ok(body.length < TOOL_EXPANDED_CHARS + 200);
   assert.equal(toolResultBody({ isError: false, text: "" }, false), "");
 });

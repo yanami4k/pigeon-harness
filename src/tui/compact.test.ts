@@ -14,7 +14,7 @@ import type {
 import type { EventEnvelope } from "../state/events.ts";
 import { newRunId, newSessionId } from "../state/ids.ts";
 import { PigeonTuiShell, type TuiRuntimeFace } from "./shell.ts";
-import { MockTerminal, screenFlat, settle } from "./testing.ts";
+import { MockTerminal, screenFlat, settle, squashSpaces } from "./testing.ts";
 
 class FakeRuntime implements TuiRuntimeFace {
   readonly runs: string[] = [];
@@ -105,7 +105,7 @@ test("/compact 重点：经 application API 发起手动压缩，重点原样交
     await settle();
     assert.deepEqual(runtime.compacts, ["保留 a.ts 的改动"]);
     const text = screenFlat(term);
-    assert.ok(text.includes("上下文已压缩（手动）：约 12000 → 900 token"), text);
+    assert.ok(text.includes("context compacted (manual): ~12000 → 900 tokens"), text);
   } finally {
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });
@@ -127,7 +127,7 @@ test("/compact 不带重点：不给附加说明", async () => {
   }
 });
 
-test("自动压缩：运行面发出压缩提示时，消息区同样提示一行（注明是 Run 内还是 Run 开始前）", async () => {
+test("验收修改：自动压缩压成了不在消息区写（状态栏的用量随之下降）；没压成照报", async () => {
   const { shell, runtime, term, logDir } = makeShell();
   try {
     shell.start();
@@ -148,8 +148,7 @@ test("自动压缩：运行面发出压缩提示时，消息区同样提示一�
     });
     await settle();
     const text = screenFlat(term);
-    assert.ok(text.includes("上下文已压缩（自动，轮间）：约 990000 → 21000 token"), text);
-    assert.ok(text.includes("上下文已压缩（自动，Run 开始前）：约 985000 → 20500 token"), text);
+    assert.ok(!text.includes("context compacted"), text);
   } finally {
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });
@@ -165,7 +164,7 @@ test("/compact 没有压成：说明原因（没有可压缩的内容）", async
     term.input("/compact");
     term.input("\r");
     await settle();
-    assert.ok(screenFlat(term).includes("没有可压缩的内容"), screenFlat(term));
+    assert.ok(screenFlat(term).includes("nothing to compact"), screenFlat(term));
   } finally {
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });
@@ -214,12 +213,16 @@ test("自动压缩没压成与压缩前回调失败：消息区各提示一行�
     runtime.emit({ kind: "hook-failed", trigger: "turn", error: new Error("复盘失败") });
     await settle();
     const text = screenFlat(term);
+    // 折行点空格会被词界折行吃掉（testing.ts squashSpaces 注释），按去空格比对
+    const has = (line: string): boolean => squashSpaces(text).includes(squashSpaces(line));
     assert.ok(
-      text.includes("上下文压缩未完成（自动，轮间）：网关拒绝：花费上限；本轮按原上下文继续"),
+      has(
+        "compaction incomplete (auto, between turns): 网关拒绝：花费上限; continuing with the full context"
+      ),
       text
     );
-    assert.ok(text.includes("上下文压缩未完成（自动，Run 开始前）："), text);
-    assert.ok(text.includes("压缩前回调失败：复盘失败；压缩照常进行"), text);
+    assert.ok(has("compaction incomplete (auto, before run): "), text);
+    assert.ok(has("pre-compaction callback failed: 复盘失败; compacting anyway"), text);
   } finally {
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });
@@ -237,7 +240,7 @@ test("决策 340：/reload 交给装配方的重载入口，参数原样交出�
     logDir,
     reload: async (args) => {
       calls.push([...args]);
-      return ["已重读设置，自下一轮起生效：改了 permissions 节"];
+      return ["settings reloaded: permissions changed"];
     },
   });
   try {
@@ -247,7 +250,10 @@ test("决策 340：/reload 交给装配方的重载入口，参数原样交出�
     term.input("\r");
     await settle();
     assert.deepEqual(calls, [["confirm"]]);
-    assert.ok(screenFlat(term).includes("改了 permissions 节"), screenFlat(term));
+    assert.ok(
+      screenFlat(term).includes("settings reloaded: permissions changed"),
+      screenFlat(term)
+    );
   } finally {
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });
@@ -259,7 +265,7 @@ test("决策 340：/reload 交给装配方的重载入口，参数原样交出�
     plainTerm.input("/reload");
     plainTerm.input("\r");
     await settle();
-    assert.ok(screenFlat(plainTerm).includes("未知命令：/reload"), screenFlat(plainTerm));
+    assert.ok(screenFlat(plainTerm).includes("unknown command: /reload"), screenFlat(plainTerm));
   } finally {
     plain.stop();
     rmSync(plainLog, { recursive: true, force: true });

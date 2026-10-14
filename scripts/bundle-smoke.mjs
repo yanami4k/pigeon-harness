@@ -83,7 +83,8 @@ if (measureAt >= 0) {
   const git = (args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
   const dirty = git(["status", "--porcelain"]) !== "";
   const commit = git(["rev-parse", "--short", "HEAD"]);
-  const expected = `pigeon ${pkg.version}（提交 ${commit}（${dirty ? "有" : "无"}未提交改动））`;
+  // 与 describeHarness 同一写法（决策 462：给人看的输出为英文）
+  const expected = `pigeon ${pkg.version} (commit ${commit}${dirty ? ", uncommitted changes" : ""})`;
   for (const entry of [ENTRIES.bundle, BUNDLE_FILE]) {
     const version = pigeon(entry, ["--version"]);
     if (version.status !== 0 || version.stdout !== `${expected}\n`) {

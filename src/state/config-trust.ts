@@ -21,11 +21,11 @@ export const TRUST_ENTRY_KINDS = [
 export type TrustEntryKind = (typeof TRUST_ENTRY_KINDS)[number];
 
 export const TRUST_KIND_LABELS: Readonly<Record<TrustEntryKind, string>> = {
-  command: "命令短名",
-  sandbox: "沙箱配置",
-  "mcp-server": "MCP 服务",
-  permission: "放行规则",
-  hook: "钩子",
+  command: "command",
+  sandbox: "sandbox",
+  "mcp-server": "MCP server",
+  permission: "permission rule",
+  hook: "hook",
 };
 
 export interface TrustEntry {
@@ -45,8 +45,8 @@ export function trustKeyOf(entry: Pick<TrustEntry, "kind" | "id">): string {
 }
 
 function originOfLayers(layers: readonly SettingsLayer[] | undefined): string {
-  if (layers === undefined || layers.length === 0) return "设置";
-  return layers.map((layer) => SETTINGS_LAYER_LABELS[layer]).join("、");
+  if (layers === undefined || layers.length === 0) return "settings";
+  return layers.map((layer) => SETTINGS_LAYER_LABELS[layer]).join(", ");
 }
 
 function launchSummary(launch: McpLaunch): string {
@@ -56,7 +56,7 @@ function launchSummary(launch: McpLaunch): string {
   const env = Object.keys(launch.env ?? {});
   return [
     [launch.command, ...(launch.args ?? [])].join(" "),
-    ...(env.length > 0 ? [`（环境变量 ${env.join("、")}）`] : []),
+    ...(env.length > 0 ? [`(env: ${env.join(", ")})`] : []),
   ].join(" ");
 }
 
@@ -77,7 +77,7 @@ export function trustEntriesOf(input: TrustEntriesInput): TrustEntry[] {
     entries.push({
       kind: "command",
       id: name,
-      origin: layer !== undefined ? SETTINGS_LAYER_LABELS[layer] : "设置",
+      origin: layer !== undefined ? SETTINGS_LAYER_LABELS[layer] : "settings",
       summary: command,
       fingerprint: sha256Hex(canonicalJson({ command })),
     });
@@ -90,7 +90,7 @@ export function trustEntriesOf(input: TrustEntriesInput): TrustEntry[] {
         : "";
     const dockerNote =
       sandbox.dockerfile !== undefined
-        ? `；Dockerfile ${sandbox.dockerfile} 内容 sha256 ${sha256Hex(input.dockerfileContent ?? "").slice(0, 12)}${input.dockerfileContent === undefined ? "（文件不存在）" : ""}`
+        ? `; Dockerfile ${sandbox.dockerfile} content sha256 ${sha256Hex(input.dockerfileContent ?? "").slice(0, 12)}${input.dockerfileContent === undefined ? " (file missing)" : ""}`
         : "";
     entries.push({
       kind: "sandbox",
@@ -141,7 +141,7 @@ export function trustEntriesOf(input: TrustEntriesInput): TrustEntry[] {
       kind: "hook",
       id: `${hook.event}:${fingerprint.slice(0, 12)}`,
       origin: SETTINGS_LAYER_LABELS[hook.layer],
-      summary: `事件 ${hook.event}${hook.matcher !== undefined ? `、匹配 ${hook.matcher}` : ""}：${hook.command}${hook.host ? "（在宿主执行）" : ""}`,
+      summary: `event ${hook.event}${hook.matcher !== undefined ? `, matcher ${hook.matcher}` : ""}: ${hook.command}${hook.host ? " (runs on host)" : ""}`,
       fingerprint,
     });
   }
@@ -320,5 +320,5 @@ export function revertTrustEntries(
 
 // 给人看的一行
 export function describeTrustEntry(entry: TrustEntry): string {
-  return `[${entry.origin}] ${TRUST_KIND_LABELS[entry.kind]} ${entry.id}：${entry.summary}`;
+  return `[${entry.origin}] ${TRUST_KIND_LABELS[entry.kind]} ${entry.id}: ${entry.summary}`;
 }

@@ -134,7 +134,7 @@ test("parallel 为屏障：全部结束才返回；pipeline 每项各自走完�
   assert.ok(!started.some((task) => task.startsWith("s1")));
   gate("p2").resolve();
   await until(() => started.includes("s1 x") && started.includes("s1 y"));
-  assert.ok(harness.lines.some((line) => line === "[脚本 t] 并行结束 2"));
+  assert.ok(harness.lines.some((line) => line === "[script t] 并行结束 2"));
   // 流水线：x 的第一步做完即进第二步，不等 y 的第一步
   gate("s1 x").resolve();
   await until(() => started.includes("s2 x"));
@@ -145,11 +145,16 @@ test("parallel 为屏障：全部结束才返回；pipeline 每项各自走完�
   gate("s2 y").resolve();
   const text = await notice;
   assert.deepEqual(returned(text), { out: ["s2 x", "s2 y"] });
-  assert.equal(
-    harness.lines[0],
-    "[脚本] t（运行号 " +
-      text.match(/run ID (\w+)/)?.[1] +
-      "）开跑：阶段 并行 → 流水线；已知 2 项；额度 不限。"
+  // 开跑那一行不写（验收修改）：原先的计划行是"[脚本] t（运行号 …）开跑：阶段 并行 → 流水线；…"，改英文即
+  // "[script] t (run …) started: phases 并行 → 流水线; …"——两种写法与阶段连写都不出现（log 行是 "[script t] …"，不受影响）
+  assert.ok(
+    !harness.lines.some(
+      (line) =>
+        line.startsWith("[script] t") ||
+        line.startsWith("[脚本] t") ||
+        line.includes("并行 → 流水线")
+    ),
+    harness.lines.join("\n")
   );
   // 树形视图：脚本与阶段两层，worker 按阶段列出
   const [node] = harness.runs.nodes();
@@ -204,6 +209,48 @@ test("接力与收回：接力起点看得到上游的改动；按清单三方�
   );
   // 收回之后快照引用删掉
   assert.equal(git(harness.repo, "for-each-ref", "refs/pigeon/scripts/"), "");
+  // 决策 448：完整收回的三个删掉工作树与分支，有冲突的（改 a 二）留着
+  const left = harness.orchestrator
+    .status()
+    .filter((status) => status.workspace.kind === "git-worktree")
+    .map((status) => {
+      const workspace = status.workspace as { path: string; branch: string };
+      return {
+        removed: status.worktreeRemoved,
+        exists: existsSync(workspace.path),
+        branch: git(harness.repo, "branch", "--list", workspace.branch) !== "",
+      };
+    });
+  assert.equal(left.length, 4);
+  assert.equal(
+    left.filter((entry) => entry.removed === "taken" && !entry.exists && !entry.branch).length,
+    3
+  );
+  assert.equal(
+    left.filter((entry) => entry.removed === undefined && entry.exists && entry.branch).length,
+    1
+  );
+});
+
+test("决策 448：整次收回之后没列进收回清单、也没有改动的 worker 工作树一并删掉；有改动没收回的留着", async () => {
+  const harness = scriptHarness({
+    planner: (input) =>
+      input.task === "看看" ? { reply: "看完了" } : { files: { "k.txt": `${input.task}\n` } },
+  });
+  await runToEnd(
+    harness,
+    [
+      'await agent("看看");',
+      'await agent("改了不收");',
+      'const take = await agent("改了要收");',
+      "return { collect: [take] };",
+    ].join("\n")
+  );
+  const removed = harness.orchestrator
+    .status()
+    .map((status) => status.worktreeRemoved ?? "kept")
+    .sort();
+  assert.deepEqual(removed, ["kept", "taken", "unchanged"]);
 });
 
 test("收回：人没批准即不写主目录；脚本没有给 collect 即不请示", async () => {
@@ -269,7 +316,8 @@ test("等审批超时单独标出（补批后可续跑）", async () => {
   assert.ok(!/Failed: /.test(notice));
 });
 
-test("花费上限：到限即不再派、在跑的做完、汇总写明做完与未做；无价格的模型按 token", async () => {
+// 决策 475：额度只有 token——有价格的模型同样按 token 计到限，汇总照写花的钱
+test("花费上限：到限即不再派、在跑的做完、汇总写明做完与未做；有无价格都按 token", async () => {
   const harness = scriptHarness({ planner: () => ({ cost: 0.1, tokens: 1000 }) });
   const { notice } = await runToEnd(
     harness,
@@ -279,7 +327,7 @@ test("花费上限：到限即不再派、在跑的做完、汇总写明做完�
       'const four = await agent("四");',
       "return { r: [...both, three, four].map((x) => x.ok) };",
     ].join("\n"),
-    { budget: { unit: "usd", amount: 0.15 } }
+    { budget: { unit: "tokens", amount: 1500 } }
   );
   // 两个并行的都做完（到限时它们已在跑），之后的不再派
   assert.deepEqual(returned(notice), { r: [true, true, false, false] });

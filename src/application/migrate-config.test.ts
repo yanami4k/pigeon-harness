@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, test } from "vitest";
 import { snapshotWorkdir } from "../execution/workdir-snapshot.ts";
+import { globalExcludesFile } from "../persistence/global-ignore.ts";
 import { findLegacyLayout } from "../persistence/legacy-layout.ts";
 import { migrationBackupLocation } from "../persistence/migration-backup.ts";
 import { loadSettings } from "../persistence/settings.ts";
@@ -38,6 +39,14 @@ afterAll(() => {
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+// 决策 444：全局排除文件的内容（测试总装把全局配置与 XDG 目录指到临时位置；这里再核一遍确实不是真实用户目录）
+function globalIgnoreText(): string {
+  const file = globalExcludesFile(tmpdir()) ?? "";
+  assert.notEqual(file, "", "全局排除文件的位置应明确（测试总装没设 core.excludesFile）");
+  assert.ok(realpathSync.native(file).startsWith(realpathSync.native(tmpdir())), file);
+  return existsSync(file) ? readFileSync(file, "utf8") : "";
 }
 
 function repo(): string {
@@ -150,7 +159,7 @@ test("7 个旧文件迁入设置各节：去掉 version；key 不进设置并给
   assert.deepEqual(findLegacyLayout(root), []);
   const again = migrate(root, homeDir);
   assert.equal(again.changed, false);
-  assert.match(again.lines.join("\n"), /没有要迁移的内容/);
+  assert.match(again.lines.join("\n"), /nothing to migrate/);
 });
 
 test("目标设置已有同一节且内容不同：报错停下，什么都不改；内容相同则照常合并", () => {
@@ -162,7 +171,7 @@ test("目标设置已有同一节且内容不同：报错停下，什么都不�
   assert.throws(
     () => migrate(root),
     (error: unknown) => {
-      return error instanceof MigrationError && /commands 一节.*不同/.test(error.message);
+      return error instanceof MigrationError && /commands section that differs/.test(error.message);
     }
   );
   assert.ok(existsSync(join(root, ".pigeon", "commands.json")), "旧文件原样");
@@ -209,10 +218,9 @@ test("旧位置的程序状态挪进 .pigeon/state/；worker 工作树经 git wo
   assert.ok(listed.includes(`worktree ${movedSlash}`), listed);
   assert.ok(!listed.includes(`worktree ${legacySlash}`), listed);
   assert.equal(git(moved, "rev-parse", "--abbrev-ref", "HEAD"), "pigeon/w1");
-  assert.equal(
-    readFileSync(join(root, ".pigeon", ".gitignore"), "utf8"),
-    "state/\nsettings.local.json\n"
-  );
+  // 决策 444：不再写 .pigeon/.gitignore，忽略规则写进全局 git 排除文件（测试总装把它指到临时的 XDG 目录）
+  assert.equal(existsSync(join(root, ".pigeon", ".gitignore")), false);
+  assert.match(globalIgnoreText(), /\*\*\/\.pigeon\/state\//);
   assert.deepEqual(findLegacyLayout(root), []);
 });
 
@@ -222,17 +230,17 @@ test("锁被存活进程占用（有会话或 worker 正在运行）或工作树
     join(root, ".pigeon", "sessions", "enc", "s.jsonl.lock"),
     JSON.stringify({ pid: process.pid })
   );
-  assert.throws(() => migrate(root), /锁正被占用/);
+  assert.throws(() => migrate(root), /lock held by a running/);
   assert.ok(existsSync(join(root, ".pigeon", "sessions")));
   rmSync(join(root, ".pigeon", "sessions"), { recursive: true });
   const legacyTree = join(root, ".pigeon", "worktrees", "sess-w2");
   git(root, "worktree", "add", "-q", "-b", "pigeon/w2", legacyTree);
   git(root, "worktree", "lock", legacyTree);
-  assert.throws(() => migrate(root), /工作树被锁定/);
+  assert.throws(() => migrate(root), /worktree is locked/);
   assert.ok(existsSync(legacyTree));
 });
 
-test("迁移备份不在仓库里：git status 与快照提交里都没有备份文件与 key，备份里也没有 key 的值；仍写 .pigeon/.gitignore", () => {
+test("迁移备份不在仓库里：git status 与快照提交里都没有备份文件与 key，备份里也没有 key 的值；忽略规则在全局排除文件里", () => {
   const root = repo();
   const homeDir = home();
   const original = JSON.stringify({
@@ -247,11 +255,13 @@ test("迁移备份不在仓库里：git status 与快照提交里都没有备份
   assert.equal(backedUp.search.backend, "tavily");
   assert.match(backedUp.search.tavily.apiKey, /TAVILY_API_KEY/);
   assert.throws(() => execFileSync("grep", ["-rl", "tvly-secret", homeDir]), "备份目录里没有 key");
-  assert.ok(result.lines.join("\n").includes(`备份在 ${backupDir}`), "打印备份位置");
-  assert.equal(
-    readFileSync(join(root, ".pigeon", ".gitignore"), "utf8"),
-    "state/\nsettings.local.json\n"
+  assert.ok(
+    result.lines.join("\n").includes(`backup of moved files: ${backupDir}`),
+    "打印备份位置"
   );
+  // 决策 444：不再写 .pigeon/.gitignore；个人设置与程序状态的忽略规则在全局排除文件里
+  assert.equal(existsSync(join(root, ".pigeon", ".gitignore")), false);
+  assert.match(globalIgnoreText(), /\*\*\/\.pigeon\/settings\.local\.json/);
   const status = git(root, "status", "--porcelain", "--untracked-files=all", "--ignored");
   assert.ok(!/backup|\.bak|web\.json/.test(status), status);
   assert.match(status, /\.pigeon\/settings\.json/);
@@ -276,7 +286,7 @@ test("web.json 的备份位置已有旧备份（更早的迁移留下的原文�
     () => migrate(root, homeDir),
     (error: unknown) =>
       error instanceof MigrationError &&
-      /已存在/.test(error.message) &&
+      /already exists/.test(error.message) &&
       !/sk-older|sk-current/.test(error.message)
   );
   assert.equal(readFileSync(join(backupDir, "web.json"), "utf8"), older);
@@ -291,7 +301,7 @@ test("web.json 不是合法 JSON：报错不带解析细节，不摘录出 key",
     () => migrate(root),
     (error: unknown) =>
       error instanceof MigrationError &&
-      /web\.json 不是合法 JSON/.test(error.message) &&
+      /web\.json is not valid JSON/.test(error.message) &&
       !error.message.includes("sk-broken")
   );
 });
@@ -366,7 +376,7 @@ test("已删除功能的遗留挪出仓库到用户级备份（决策 331、341�
   const result = migrate(root, homeDir);
   const backup = migrationBackupLocation(root, homeDir);
   assert.equal(result.changed, true);
-  assert.match(result.lines.join("\n"), /把其中内容并入项目的 AGENTS\.md/);
+  assert.match(result.lines.join("\n"), /merge its contents into the project's AGENTS\.md/);
   for (const rel of [
     join("state", "learned"),
     join("state", "learned.lock"),
@@ -407,7 +417,7 @@ test("~/.pigeon/preferences.md 改名为 ~/.pigeon/AGENTS.md；目标已存在�
   const home2 = home();
   write(join(home2, ".pigeon", "preferences.md"), "旧\n");
   write(join(home2, ".pigeon", "AGENTS.md"), "已有\n");
-  assert.throws(() => migrate(root, home2), /AGENTS\.md 已存在/);
+  assert.throws(() => migrate(root, home2), /AGENTS\.md already exists/);
   assert.equal(readFileSync(join(home2, ".pigeon", "preferences.md"), "utf8"), "旧\n");
   assert.equal(readFileSync(join(home2, ".pigeon", "AGENTS.md"), "utf8"), "已有\n");
 });
@@ -417,11 +427,27 @@ test("迁移备份位置已被占用：拦阻、不覆盖，仓库里的旧文�
   const homeDir = home();
   write(join(root, ".pigeon", "memory-review.json"), { version: 1 });
   write(join(migrationBackupLocation(root, homeDir), "memory-review.json"), "已占用");
-  assert.throws(() => migrate(root, homeDir), /已存在/);
+  assert.throws(() => migrate(root, homeDir), /already exists/);
   assert.ok(existsSync(join(root, ".pigeon", "memory-review.json")), "旧文件原样");
   assert.equal(
     readFileSync(join(migrationBackupLocation(root, homeDir), "memory-review.json"), "utf8"),
     "已占用",
     "已有备份不被覆盖"
   );
+});
+
+test("在主目录下运行：项目共享设置就是用户级设置（同一个文件）——按用户级校验（用户级才能设的项不算错），并说明对所有项目生效", () => {
+  const homeDir = home();
+  write(projectSettingsPath(homeDir), { trustedDirectories: [join(homeDir, "work")] });
+  write(join(homeDir, ".pigeon", "loop-guard.json"), { version: 1, stopAt: 30 });
+  const result = migrate(homeDir, homeDir);
+  assert.equal(result.changed, true);
+  assert.match(
+    result.lines.join("\n"),
+    /in the home directory: user settings, applies to all projects/
+  );
+  assert.deepEqual(JSON.parse(readFileSync(projectSettingsPath(homeDir), "utf8")), {
+    trustedDirectories: [join(homeDir, "work")],
+    loopGuard: { stopAt: 30 },
+  });
 });

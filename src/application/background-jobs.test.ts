@@ -115,7 +115,11 @@ test("结束通知：还没递出时又结束的合并成一条；经 markReport
   try {
     const target = noticeTarget();
     let woken = 0;
-    new JobNotices(c.jobs, target, { wake: () => (woken += 1) });
+    const ended: string[] = [];
+    new JobNotices(c.jobs, target, {
+      wake: () => (woken += 1),
+      onEnded: (line) => ended.push(line),
+    });
     for (const name of ["cmd-a", "cmd-b", "cmd-c"]) await c.start(name);
     await c.finish(0);
     await c.finish(1);
@@ -135,6 +139,10 @@ test("结束通知：还没递出时又结束的合并成一条；经 markReport
     );
     assert.equal(c.jobs.get("j2").reported, true);
     assert.equal(woken, 3);
+    // 给人看的一行：每个作业结束时一次（合并、撤回重发的通知不重复）
+    assert.equal(ended.length, 3, ended.join("\n"));
+    assert.match(ended[0] ?? "", /^job j1 .+: \$ cmd-a$/);
+    assert.match(ended[2] ?? "", /^job j3 .+: \$ cmd-c$/);
   } finally {
     await c.cleanup();
   }

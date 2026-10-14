@@ -1,4 +1,4 @@
-// run_command 端到端（M5.5 S5，决策 048）：真实装配根 + CLI 审批问答版。
+// run_command 端到端（M5.5 S5，决策 048）：真实装配根 + 按脚本作答的审批（终端界面同一个审批 handler，approval-fixtures.ts）。
 // prompt 模式下 exec 每次都问，面板显示完整命令；[a] 创建精确命令放权，同一条命令再来免审
 // （human:grant），参数不同重新问；执行证据随工具结果的 details 记进会话存储。tester 角色只能跑 commands.json 为它登记的命令。
 import assert from "node:assert/strict";
@@ -7,13 +7,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { onTestFinished, test } from "vitest";
-import { createCliApprovalHandler } from "../cli/approval-ui.ts";
 import { loadStoreSession } from "../persistence/session-view.ts";
 import { loadSettings } from "../persistence/settings.ts";
 import { createFakeStreamFn } from "../pi-runtime/fixtures.ts";
 import { newSessionId } from "../state/ids.ts";
 import { type StoreMessage, toolResultMark } from "../state/session-judge.ts";
 import type { ExecEvidence } from "../tools/run-command.ts";
+import { REASON_PROMPT, scriptedApprovalHandler } from "../tui/approval-fixtures.ts";
 import { buildRuntime } from "./runtime.ts";
 
 // 用户级设置指到的空临时目录：这个测试结束后删掉
@@ -79,10 +79,10 @@ test("run_command：exec 每次都问且显示完整命令；[a] 精确命令放
       provider: "fake-provider",
       modelId: "fake-model-1",
       createApprovalHandler: (grants) =>
-        createCliApprovalHandler(
+        scriptedApprovalHandler(
           async (prompt) => {
             prompts.push(prompt);
-            if (prompt.startsWith("拒绝理由")) {
+            if (prompt === REASON_PROMPT) {
               return "不跑 b";
             }
             asked += 1;
@@ -107,9 +107,9 @@ test("run_command：exec 每次都问且显示完整命令；[a] 精确命令放
 
     // 两次人工审批：第一次的 A 与换参数的 B；同一条 A 免审
     assert.equal(asked, 2);
-    assert.ok(prompts[0]?.includes("[a] 本会话允许这条命令（精确匹配）"), prompts[0]);
+    assert.ok(prompts[0]?.includes("[a] allow this exact command for this session"), prompts[0]);
     assert.ok(screen.includes(`"command": ${JSON.stringify(COMMAND_A)}`), screen);
-    assert.ok(screen.includes(`仅限命令 ${COMMAND_A}`), screen);
+    assert.ok(screen.includes(`✓ allowed for this session: run_command ${COMMAND_A}`), screen);
     assert.deepEqual(
       executions.map((record) => record.decision?.approvedBy),
       ["human", "human:grant", "human"]

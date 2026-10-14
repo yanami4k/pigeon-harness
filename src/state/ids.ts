@@ -68,7 +68,9 @@ function defineIdKind<Brand>(prefix: string) {
     },
     check(value: string): Brand {
       if (typeof value !== "string" || !pattern.test(value)) {
-        throw new Error(`非法标识：期望 "${prefix}" + 26 位 ULID，收到 ${JSON.stringify(value)}`);
+        throw new Error(
+          `invalid ID: expected "${prefix}" + 26-char ULID, got ${JSON.stringify(value)}`
+        );
       }
       return value as Brand;
     },

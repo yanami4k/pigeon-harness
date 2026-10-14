@@ -132,10 +132,12 @@ export function recordDecision(
   decision: ToolExecutionDecision
 ): ToolExecution {
   if (exec.state !== "approval") {
-    throw new ToolExecutionTransitionError(`只能在 approval 状态记录决定，当前为 ${exec.state}`);
+    throw new ToolExecutionTransitionError(
+      `a decision can only be recorded in approval state, not ${exec.state}`
+    );
   }
   if (exec.decision !== undefined) {
-    throw new ToolExecutionTransitionError("决定已记录，不可改判");
+    throw new ToolExecutionTransitionError("decision already recorded and can't be changed");
   }
   return { ...exec, decision };
 }
@@ -147,15 +149,17 @@ export function advanceToolExecution(
   at: number
 ): ToolExecution {
   if (!TRANSITIONS[exec.state].includes(next)) {
-    throw new ToolExecutionTransitionError(`非法迁移：${exec.state} → ${next}`);
+    throw new ToolExecutionTransitionError(`invalid transition: ${exec.state} -> ${next}`);
   }
   if (exec.state === "approval") {
     const outcome = exec.decision?.outcome;
     if (next === "dispatch" && outcome !== "approved") {
-      throw new ToolExecutionTransitionError("未经批准的决定不能进入 dispatch");
+      throw new ToolExecutionTransitionError("an unapproved execution can't enter dispatch");
     }
     if (next === "settled" && outcome !== "rejected") {
-      throw new ToolExecutionTransitionError("只有被拒绝的执行才能从 approval 直接 settled");
+      throw new ToolExecutionTransitionError(
+        "only a rejected execution can go from approval straight to settled"
+      );
     }
   }
   const stamp = STATE_TIMESTAMPS[next as keyof typeof STATE_TIMESTAMPS];

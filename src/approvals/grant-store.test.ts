@@ -87,7 +87,7 @@ test("会话 grant：撤销立即停匹配并交落盘口写授权撤销；未�
     store.revoke(grant.grantId);
     assert.equal(store.match("edit_file", { path: "a.ts" }), null, "撤销立即生效");
     assert.equal(events.filter((event) => "revokedAt" in event).length, 1);
-    assert.throws(() => store.revoke(grant.grantId), /不存在/);
+    assert.throws(() => store.revoke(grant.grantId), /grant not found/);
 
     // 冷恢复种子（决策 3b）：从会话存储还原的 grant 直接生效，无需重写授权条目
     const restored: ActiveGrant = {

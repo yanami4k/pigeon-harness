@@ -183,7 +183,9 @@ test("pigeon run：未确认的项目规则开跑前报错并列出；--trust-co
     }),
     (error: unknown) =>
       error instanceof ConfigNotConfirmedError &&
-      /\[项目共享\] 放行规则 [0-9a-f]{12}：.*"tool":"run_command"/.test(error.message) &&
+      /\[project settings\] permission rule [0-9a-f]{12}: .*"tool":"run_command"/.test(
+        error.message
+      ) &&
       /--trust-config/.test(error.message)
   );
   const once = await openSessionSettings(root, {
@@ -219,15 +221,15 @@ test("/reload：新出现的项目规则随其他条目列出；确认前与 ski
     commands: { commands: { t: "npm test" } },
   });
   const listed = (await reload([])).join("\n");
-  assert.match(listed, /\[项目共享\] 放行规则 [0-9a-f]{12}：.*"tool":"run_command"/);
-  assert.match(listed, /命令短名 t：npm test/);
+  assert.match(listed, /\[project settings\] permission rule [0-9a-f]{12}: .*"tool":"run_command"/);
+  assert.match(listed, /command t: npm test/);
   assert.deepEqual(configGrantRulesOf(settings), [], "确认之前不变");
   await reload(["skip"]);
   assert.deepEqual(configGrantRulesOf(settings), [], "不确认即不生效");
   assert.equal((await runOnce(root, home, settings)).asked, 1, "命令照常请示");
   await reload([]);
   const confirmed = (await reload(["confirm"])).join("\n");
-  assert.match(confirmed, /改了 .*permissions/);
+  assert.match(confirmed, /settings reloaded: .*permissions/);
   assert.equal(configGrantRulesOf(settings).length, 1);
   assert.equal((await runOnce(root, home, settings)).approvedBy, "policy:config");
   assert.deepEqual(pendingTrustEntries(settings, home), [], "确认即记下指纹");
@@ -253,7 +255,7 @@ test("settings.local.json 被 git 跟踪：其中的放行规则列入确认，�
   const pending = pendingTrustEntries(await loadable(root, home), home);
   assert.equal(pending.length, 1, JSON.stringify(pending.map((e) => [e.kind, e.origin])));
   assert.equal(pending[0]?.kind, "permission");
-  assert.match(pending[0]?.origin ?? "", /个人/);
+  assert.match(pending[0]?.origin ?? "", /project local settings/);
   // 无人值守遇未确认即报错退出（--trust-config 才放行本次）
   await assert.rejects(
     openSessionSettings(root, {

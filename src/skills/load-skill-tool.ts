@@ -178,7 +178,7 @@ async function loadPromptSkill(
 export function loadSkillRegistration(catalog: SkillCatalog): ToolRegistration {
   return {
     name: LOAD_SKILL_TOOL,
-    description: "按名读取 Skill 目录里登记的 Skill 及其资源文件",
+    description: "load a registered Skill and its resource files by name",
     parameters: LoadSkillParamsSchema,
     tier: "read",
     pathConfinement: { kind: "roots", roots: catalog.roots },

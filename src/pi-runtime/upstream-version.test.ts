@@ -25,5 +25,5 @@ test("版本不一致或读不出版本：逐包给出明确告警", () => {
   );
   assert.equal(probe.warnings.length, 2);
   assert.ok(probe.warnings.some((line) => line.includes("pi-ai") && line.includes("0.85.0")));
-  assert.ok(probe.warnings.some((line) => line.includes("pi-tui") && line.includes("读不出")));
+  assert.ok(probe.warnings.some((line) => line.includes("pi-tui") && line.includes("can't read")));
 });

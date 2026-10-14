@@ -151,12 +151,12 @@ export function acquireExclusiveLock(path: string, detail: string): () => void {
       continue;
     }
     if (current !== "malformed" && holderAlive(current)) {
-      throw new ExclusiveLockError(`${detail}（持有进程 pid ${current.pid}，锁文件 ${path}）`);
+      throw new ExclusiveLockError(`${detail} (held by pid ${current.pid}, lock file ${path})`);
     }
     // 残留锁：持有进程已死、已不是记下的那个进程（重启或 pid 被复用），或内容畸形
     rmSync(path, { force: true });
   }
-  throw new ExclusiveLockError(`取锁争用，多次重试仍未取得：${path}`);
+  throw new ExclusiveLockError(`couldn't acquire lock ${path} after several retries`);
 }
 
 // 只删自己那一把：被别人接管之后重复释放不误删

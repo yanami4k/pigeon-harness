@@ -3,7 +3,7 @@
 //   - /grants 渲染会话 grant + 固化规则（createdAt/命中次数/作用域/出处，口径同
 //     application/grants.ts 的 listGrants），含空列表文案；
 //   - /revoke <id> 后 store 状态（立即停免审）；/grants save <id> 写 .pigeon/settings.local.json 的 permissions 一节；
-//   - 未知命令与命令失败（语法/语义错误）如实呈现（同 REPL 口径）；
+//   - 未知命令与命令失败（语法/语义错误）如实呈现；
 //   - busy 期间斜杠命令同样被拒绝（决策 027 语义不开旁路）；
 //   - 命令层只有一份：TUI 只换 write 投影，治理语义零新增（决策 030）。
 import assert from "node:assert/strict";
@@ -124,12 +124,9 @@ test("/grants 空列表：如实说明无生效项（文案同 listGrants 口径
     await settle();
     const flat = screenFlat(term);
     assert.ok(flat.includes("> /grants"), `命令回显\n${flat}`);
-    assert.ok(flat.includes("会话放权（0）："), flat);
-    assert.ok(flat.includes("固化规则（0，三层设置的 permissions 一节）："), flat);
-    assert.ok(
-      flat.includes("（无——审批提示可用 [a]/[d] 创建会话放权，/grants save <id> 升格固化）"),
-      `空列表文案\n${flat}`
-    );
+    assert.ok(flat.includes("session grants (0):"), flat);
+    assert.ok(flat.includes("saved rules (0):"), flat);
+    assert.ok(flat.includes("(none)"), `空列表文案\n${flat}`);
   } finally {
     shell.stop();
     cleanup();
@@ -150,16 +147,18 @@ test("/grants 列出会话 grant（createdAt/命中/作用域/首调）与固化
     term.input("\r");
     await settle();
     const flat = screenFlat(term);
-    assert.ok(flat.includes("会话放权（1）："), flat);
+    // 折行点空格会被词界折行吃掉（testing.ts squashSpaces 注释），按去空格比对
+    const has = (text: string): boolean => squashSpaces(flat).includes(squashSpaces(text));
+    assert.ok(has("session grants (1):"), flat);
     assert.ok(flat.includes(grant.grantId), flat);
-    assert.ok(flat.includes("仅限目录 src"), `作用域\n${flat}`);
-    assert.ok(flat.includes("创建 20"), `createdAt 时间列\n${flat}`);
-    assert.ok(flat.includes("命中 0 次"), `命中计数\n${flat}`);
-    assert.ok(flat.includes("首调 tc-1"), `首调摘要\n${flat}`);
-    assert.ok(flat.includes("固化规则（1，三层设置的 permissions 一节）："), flat);
-    assert.ok(flat.includes("config#0 ｜ read_file ｜ 工具级（不限目录）"), `固化规则行\n${flat}`);
-    assert.ok(flat.includes("升格 2023-11-14 22:13"), `升格时间\n${flat}`);
-    assert.ok(flat.includes("出处 会话"), `出处\n${flat}`);
+    assert.ok(has("path src"), `作用域\n${flat}`);
+    assert.ok(has("created 20"), `createdAt 时间列\n${flat}`);
+    assert.ok(has("0 hits"), `命中计数\n${flat}`);
+    assert.ok(has("first call tc-1"), `首调摘要\n${flat}`);
+    assert.ok(has("saved rules (1):"), flat);
+    assert.ok(has("config#0 | read_file | all paths"), `固化规则行\n${flat}`);
+    assert.ok(has("saved 2023-11-14 22:13"), `升格时间\n${flat}`);
+    assert.ok(has("from session"), `出处\n${flat}`);
   } finally {
     shell.stop();
     cleanup();
@@ -185,8 +184,8 @@ test("/revoke <id>：store 立即移除（停免审），回显同 cli 措辞；
     assert.equal(rules[0]?.promotedFrom.grantId, grant.grantId);
     assert.equal(rules[0]?.promotedFrom.sessionId, SESSION_ID);
     assert.ok(
-      screenFlat(term).includes(
-        `已升格 ${grant.grantId} → .pigeon/settings.local.json 的 permissions 一节`
+      squashSpaces(screenFlat(term)).includes(
+        squashSpaces(`saved ${grant.grantId} → .pigeon/settings.local.json`)
       )
     );
 
@@ -196,14 +195,14 @@ test("/revoke <id>：store 立即移除（停免审），回显同 cli 措辞；
     await settle();
     assert.equal(store.list().length, 0, "revoke 后 store 应立即移除");
     const flat = screenFlat(term);
-    assert.ok(flat.includes(`已撤销会话放权 ${grant.grantId}：立即生效`), flat);
+    assert.ok(flat.includes(`revoked ${grant.grantId}`), flat);
   } finally {
     shell.stop();
     cleanup();
   }
 });
 
-test("未知命令与命令失败如实呈现（同 REPL 口径）；可用命令按本会话从命令表生成（决策 286）", async () => {
+test("未知命令与命令失败如实呈现；未知命令只报命令词，不列可用命令（决策 286）", async () => {
   const { shell, term, cleanup } = makeView();
   try {
     shell.start();
@@ -211,20 +210,14 @@ test("未知命令与命令失败如实呈现（同 REPL 口径）；可用命�
     term.input("/blah");
     term.input("\r");
     await settle();
-    // 折行点空格会被词界折行吃掉（testing.ts squashSpaces 注释），按去空格比对
-    assert.ok(
-      squashSpaces(screenFlat(term)).includes(
-        squashSpaces(
-          "未知命令：/blah（可用 /quit、/compact [重点]、/grants、/revoke <id>、/grants save <id>）"
-        )
-      )
-    );
+    assert.ok(screenFlat(term).includes("unknown command: /blah"), screenText(term));
+    assert.ok(!screenFlat(term).includes("/compact"), "不列可用命令");
 
     // 语义错误：格式合法但不存在的 grant id
     term.input("/revoke grant_01J5Z7K8W9ABCDEFGHJKMNPR99");
     term.input("\r");
     await settle();
-    assert.ok(screenFlat(term).includes("命令失败：grant 不存在或已撤销"));
+    assert.ok(screenFlat(term).includes("command failed: grant not found or revoked"));
   } finally {
     shell.stop();
     cleanup();
@@ -245,13 +238,13 @@ test("运行中 /grants 只读放行；/revoke 与 /grants save 被拒并说明�
     term.input("/grants");
     term.input("\r");
     await settle();
-    assert.ok(screenFlat(term).includes("会话放权（0）："), "只读命令运行中照常执行");
+    assert.ok(screenFlat(term).includes("session grants (0):"), "只读命令运行中照常执行");
 
     term.input("/grants save grant_01J5Z7K8W9ABCDEFGHJKMNPR99");
     term.input("\r");
     await settle();
     assert.ok(
-      squashSpaces(screenFlat(term)).includes(squashSpaces("运行中不能用 /grants save：")),
+      squashSpaces(screenFlat(term)).includes(squashSpaces("can't use /grants save while running")),
       screenText(term)
     );
     term.input("\x03"); // 清掉留在输入框里的命令
@@ -259,12 +252,10 @@ test("运行中 /grants 只读放行；/revoke 与 /grants save 被拒并说明�
     term.input("\r");
     await settle();
     assert.ok(
-      squashSpaces(screenFlat(term)).includes(
-        squashSpaces("运行中不能用 /revoke：它会改动主会话状态")
-      ),
+      squashSpaces(screenFlat(term)).includes(squashSpaces("can't use /revoke while running")),
       screenText(term)
     );
-    assert.ok(!screenFlat(term).includes("命令失败"), "被拒的命令不得执行");
+    assert.ok(!screenFlat(term).includes("command failed"), "被拒的命令不得执行");
     assert.equal(store.list().length, 0);
     assert.deepEqual(runtime.runs, ["任务一"], "命令不排队、不当作任务提交");
 
@@ -272,7 +263,10 @@ test("运行中 /grants 只读放行；/revoke 与 /grants save 被拒并说明�
     await settle();
     term.input("\r"); // 留在输入框里的 /revoke 结束后回车执行
     await settle();
-    assert.ok(screenFlat(term).includes("命令失败：grant 不存在或已撤销"), "run 结束后可再提交");
+    assert.ok(
+      screenFlat(term).includes("command failed: grant not found or revoked"),
+      "run 结束后可再提交"
+    );
   } finally {
     shell.stop();
     cleanup();

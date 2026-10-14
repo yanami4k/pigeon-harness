@@ -14,6 +14,8 @@ import {
   migrationBackupLocation,
   userMigrationBackupLocation,
 } from "../persistence/migration-backup.ts";
+import { projectSharesUserPigeonDir } from "../persistence/pigeon-layers.ts";
+import { ensureStateDirOf } from "../persistence/settings.ts";
 import { sha256Hex } from "../state/hashing.ts";
 import {
   projectMemoryLockPathOf,
@@ -21,7 +23,7 @@ import {
   userMemoryLockPathOf,
   userMemoryPathOf,
 } from "../state/paths.ts";
-import { MEMORY_DISPLAY_PATHS, type MemoryLayer } from "./learned.ts";
+import { MEMORY_DISPLAY_PATHS, MEMORY_LAYERS, type MemoryLayer } from "./learned.ts";
 
 // 等锁的上限与间隔
 const LOCK_WAIT_MS = 10_000;
@@ -40,7 +42,18 @@ export interface MemoryLocation {
 export const MEMORY_BACKUP_NAME = path.join("state", "memory.md");
 
 // 记忆锁被占时报错里的说法
-const MEMORY_LOCK_DETAIL = "学到的记忆正被另一处写入";
+const MEMORY_LOCK_DETAIL = "memory is being written by another process";
+
+// 主目录下启动时项目的 .pigeon 就是用户级的 ~/.pigeon，项目级记忆与用户级是同一个文件：只有用户级这一层可用——不重复推送、
+// 不把两层的编号混进一个文件（混了两层都判格式不对、拒绝写入），也不让"只对本项目"的条目随用户级推给所有项目
+export function availableMemoryLayers(input: {
+  governanceRoot: string;
+  homeDir?: string;
+}): readonly MemoryLayer[] {
+  return projectSharesUserPigeonDir(input.governanceRoot, input.homeDir ?? homedir())
+    ? ["user"]
+    : MEMORY_LAYERS;
+}
 
 export function memoryLocation(
   layer: MemoryLayer,
@@ -82,6 +95,8 @@ export function readMemoryFile(file: string): MemoryFileRead {
 }
 
 export function writeMemoryFile(file: string, text: string): void {
+  // 决策 444：项目级记忆是程序状态——第一次写时建目录、确保全局忽略规则（用户级不在项目里，不动）
+  ensureStateDirOf(file);
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileAtomic(file, text);
 }
@@ -130,7 +145,7 @@ export async function withMemoryLock<T>(
   let contended = false;
   for (;;) {
     if (wait.signal?.aborted === true) {
-      throw new MemoryLockAbortedError("等锁途中已取消");
+      throw new MemoryLockAbortedError("cancelled while waiting for the memory lock");
     }
     let release: (() => void) | undefined;
     try {

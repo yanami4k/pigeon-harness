@@ -19,7 +19,6 @@ import {
   resolveSandboxLimits,
   SANDBOX_DEFAULT_PIDS_LIMIT,
   sandboxLimitArgs,
-  sandboxLimitsSummary,
 } from "./sandbox.ts";
 import { type FakeSandboxDocker, fakeSandboxDocker } from "./sandbox-docker-fixtures.ts";
 
@@ -142,7 +141,7 @@ test("开沙箱：docker info 读不到内存总量时不设内存上限，开�
     assert.equal(args.includes("--memory"), false, args.join(" "));
     assert.equal(valueAfter(args, "--pids-limit"), "4096");
     assert.ok(
-      logs.some((line) => line.includes("本次沙箱不设内存上限")),
+      logs.some((line) => line.includes("without a memory limit")),
       logs.join("\n")
     );
   } finally {
@@ -169,9 +168,9 @@ test("开沙箱：执行端按生效的内存上限判定超限，提示经 noti
       oomCounterFiles: [counter],
     });
     try {
-      assert.equal(
-        sandboxLimitsSummary(sandbox.limits),
-        "内存上限 8 GiB、进程数上限 4096、CPU 不限"
+      assert.deepEqual(
+        [sandbox.limits.memoryBytes, sandbox.limits.pids, sandbox.limits.cpus],
+        [8 * 1024 ** 3, 4096, 0]
       );
       const result = await sandbox.host.exec(
         {

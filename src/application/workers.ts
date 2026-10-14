@@ -25,7 +25,7 @@ import type {
   WorkerStartPointProvider,
 } from "../orchestration/workers.ts";
 import { WorkerOrchestrator } from "../orchestration/workers.ts";
-import { workerStartRefFor } from "../orchestration/worktree.ts";
+import { branchTailFor, workerStartRefFor } from "../orchestration/worktree.ts";
 import { loadStoreSession } from "../persistence/session-view.ts";
 import type { BeforeCompaction, CompactionConfigInput } from "../pi-runtime/compaction.ts";
 import { type PruneSeed, pruneSeedFromEntries } from "../pi-runtime/context-prune.ts";
@@ -60,11 +60,13 @@ import {
 import type { UntrackedLimits } from "../state/snapshot-config.ts";
 import { structuredResultOf } from "../state/structured-result.ts";
 import type { EditMode } from "../tools/edit-mode.ts";
+import type { ToolPolicyLike } from "../tools/policy.ts";
 import type { WorkspaceHost } from "../tools/workspace-host.ts";
 import { settleBackgroundJobs } from "./background-jobs.ts";
 import type { SessionHooks } from "./hooks.ts";
 import { loopGuardWatcher } from "./loop-guard.ts";
 import { type McpSession, startMcpSession } from "./mcp.ts";
+import type { PeerSlot } from "./peer-tools.ts";
 import {
   buildRuntime,
   disposeRuntime,
@@ -156,6 +158,18 @@ const UNATTENDED_APPROVAL = async () => ({
 
 // 按会话装配编排器（M5.5 S4）：Actor 只拿动作面，不触达 orchestration 的构造细节。
 // 决策 303：没有审批通道（pigeon run）即无人值守——worker 需请示时不等，作为可恢复错误交回
+// 父会话的工具策略：清单取快照，审批模式现取
+function livePolicy(adapter: SessionWorkersDeps["bundle"]["adapter"]): ToolPolicyLike {
+  const policy = adapter.snapshot().tools.policy;
+  return {
+    allow: policy.allow,
+    deny: policy.deny,
+    get approvalMode() {
+      return adapter.approvalMode();
+    },
+  };
+}
+
 export function createSessionWorkers(deps: SessionWorkersDeps): WorkerOrchestrator {
   const settings = deps.settings;
   const holder: { current?: WorkerOrchestrator } = {};
@@ -166,7 +180,8 @@ export function createSessionWorkers(deps: SessionWorkersDeps): WorkerOrchestrat
       sessionId: deps.bundle.adapter.sessionId,
       ...(deps.parentSessionId !== undefined ? { parentSessionId: deps.parentSessionId } : {}),
     },
-    parentPolicy: deps.bundle.adapter.snapshot().tools.policy,
+    // 决策 469：派出时按父会话当前的审批模式（会话中途切换过的取切换后的）
+    parentPolicy: livePolicy(deps.bundle.adapter),
     // worker 派出与收尾写进父会话的会话存储
     parentLog: childFamilySink(deps.bundle.sessionStore),
     approvals: deps.approvals ?? UNATTENDED_APPROVAL,
@@ -210,8 +225,9 @@ export function workerStartPoint(
   workspaceRoot: string,
   limits?: UntrackedLimits
 ): WorkerStartPointProvider {
-  return ({ name, from }) => {
-    const ref = workerStartRefFor(name);
+  return ({ sessionId, name, from }) => {
+    // 决策 447：引用与分支同名（带会话号后 8 位），并行的同名 worker 不撞
+    const ref = workerStartRefFor(branchTailFor(sessionId, name));
     // 决策 299：派出方是 worker 时拍它的工作树（与主仓库同一个对象库，引用共用）
     const snap = snapshotWorkdir({
       repoRoot: from ?? workspaceRoot,
@@ -334,6 +350,8 @@ interface RuntimeSurface {
   scriptOrchestration?: ScriptSlot;
   // 决策 294 B1：任务清单（只有 headless 主会话会给）
   taskList?: boolean;
+  // 决策 450：会话间通信的工具槽（headless 主会话开了收件口时给）
+  peers?: PeerSlot;
   // 决策 302：worker 改自己工作树内的文件默认放行（只有 worker 会给）
   ownWorkspaceWrites?: boolean;
   // 决策 287–291：联网工具的配置
@@ -583,7 +601,7 @@ function restoreWorkerSession(request: WorkerRuntimeRequest): {
   const sessionsDir = sessionsDirOf(request.governanceRoot);
   const loaded = loadStoreSession(sessionsDir, request.sessionId);
   if (loaded === undefined) {
-    throw new Error(`找不到 worker 会话 ${request.sessionId} 的会话文件，无法续做`);
+    throw new Error(`can't resume worker: session file for ${request.sessionId} not found`);
   }
   const { messages, interrupted } = restoreSessionContext(loaded.main);
   const start = loaded.view.runs.at(-1)?.start;
@@ -636,6 +654,8 @@ export interface DetachedRuntimeRequest {
   scriptOrchestration?: ScriptSlot;
   // 决策 294 B1：任务清单
   taskList?: boolean;
+  // 决策 450：会话间通信的工具槽（pigeon run 开了收件口时给）
+  peers?: PeerSlot;
   // 决策 287–291：联网工具的配置
   webTools?: WebToolsConfig;
   // M8（决策 087）：本次尝试的预算冻结进注入快照
@@ -710,6 +730,7 @@ function openRuntimeSurface(surface: RuntimeSurface): WorkerRuntimeHandle {
       ? { scriptOrchestration: surface.scriptOrchestration }
       : {}),
     ...(surface.taskList === true ? { taskList: true } : {}),
+    ...(surface.peers !== undefined ? { peers: surface.peers } : {}),
     ...(surface.ownWorkspaceWrites === true ? { ownWorkspaceWrites: true } : {}),
     ...(surface.webTools !== undefined ? { webTools: surface.webTools } : {}),
     ...(surface.budget !== undefined ? { budget: surface.budget } : {}),

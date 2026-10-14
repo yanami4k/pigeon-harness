@@ -134,8 +134,8 @@ test("replay 报告（真实运行）：运行头终态与分类，时间线按�
     const lines = output.split("\n");
     assert.equal(
       lines[0],
-      `回放 Run ${shortId(runId)} ｜ 会话 ${shortId(sessionId)} ｜ 条目 ${run.items.length} 条 ｜ ` +
-        "终态：结束方式 completed，stopReason=stop ｜ 分类：正常"
+      `replay run ${shortId(runId)} | session ${shortId(sessionId)} | ${run.items.length} entries | ` +
+        "end: ended completed, stopReason=stop | class: ok"
     );
     const timeline = lines.filter((line) => TIMELINE.test(line));
     assert.equal(timeline.length, run.items.length, "每个条目恰好在时间线出现一次");
@@ -145,29 +145,27 @@ test("replay 报告（真实运行）：运行头终态与分类，时间线按�
       ...Array.from({ length: 8 }, () => "message"),
       "pigeon.run-end",
     ]);
-    assert.ok(timeline[0]?.includes("Run 启动快照 ｜ 模型 fake-provider/fake-model-1"), output);
+    assert.ok(timeline[0]?.includes("run start | model fake-provider/fake-model-1"), output);
     const [first, second, third] = run.messages;
     assert.ok(
-      timeline[1]?.endsWith(`｜ 消息 ${first?.entryId}：run 内第 1 条（user）`),
+      timeline[1]?.endsWith(`| message ${first?.entryId}: run entry 1 (user)`),
       timeline[1]
     );
     assert.ok(
       timeline[2]?.endsWith(
-        `｜ 消息 ${second?.entryId}：run 内第 2 条（assistant） ｜ stopReason=toolUse ｜ 工具调用 read_file（tc-1-1）参数 {"path":"a.ts"}`
+        `| message ${second?.entryId}: run entry 2 (assistant) | stopReason=toolUse | tool call read_file (tc-1-1) args {"path":"a.ts"}`
       ),
       timeline[2]
     );
     assert.ok(
       timeline[3]?.endsWith(
-        `｜ 消息 ${third?.entryId}：run 内第 3 条（toolResult） ｜ 工具结果 read_file（tc-1-1）成功`
+        `| message ${third?.entryId}: run entry 3 (toolResult) | tool result read_file (tc-1-1) ok`
       ),
       timeline[3]
     );
-    assert.ok(timeline[7]?.endsWith("工具结果 edit_file（tc-3-1）失败"), timeline[7]);
+    assert.ok(timeline[7]?.endsWith("tool result edit_file (tc-3-1) error"), timeline[7]);
     assert.ok(
-      timeline
-        .at(-1)
-        ?.endsWith("｜ Run 收尾 ｜ 结束方式 completed ｜ 新增消息 8 条 ｜ stopReason=stop"),
+      timeline.at(-1)?.endsWith("| run end | ended completed | 8 new messages | stopReason=stop"),
       timeline.at(-1)
     );
     for (const retired of ["Receipt", "意图落账", "待对账", "entry 映射"]) {
@@ -197,32 +195,32 @@ test("replay 报告：七种自定义条目原位呈现（快照、验证、work
     const detail = (kind: string) =>
       timeline
         .filter((line) => line.split(" ")[1] === kind)
-        .map((line) => line.split(" ｜ ").slice(1).join(" ｜ "));
+        .map((line) => line.split(" | ").slice(1).join(" | "));
     assert.deepEqual(detail("pigeon.checkpoint"), [
-      `工作区快照 ${"a".repeat(12)} ｜ 工具调用 tc-1`,
+      `checkpoint ${"a".repeat(12)} | tool call tc-1`,
     ]);
     assert.deepEqual(detail("pigeon.grant"), [
-      `放权创建 ${shortId(grantId)} ｜ edit_file，仅限目录 src/ ｜ 首调 tc-grant`,
-      `放权撤销 ${shortId(grantId)}`,
+      `grant created ${shortId(grantId)} | edit_file, path src/ | first call tc-grant`,
+      `grant revoked ${shortId(grantId)}`,
     ]);
     assert.deepEqual(detail("pigeon.worker"), [
-      `派出 worker impl-1（implementer）｜ 会话 ${shortId(childId)} ｜ 分支 impl-1 ｜ 工具 read_file、edit_file ｜ 审批模式 yolo ｜ 上限 20 轮 / 600 秒`,
-      `worker 收尾 impl-1 ｜ 会话 ${shortId(childId)} ｜ completed ｜ 3 轮 ｜ 改动 0 个文件`,
+      `worker spawned impl-1 (implementer) | session ${shortId(childId)} | branch impl-1 | tools read_file, edit_file | approval mode yolo | limits 20 turns / 600s`,
+      `worker settled impl-1 | session ${shortId(childId)} | completed | 3 turns | 0 files changed`,
     ]);
     assert.deepEqual(detail("pigeon.run-end"), [
-      "Run 收尾 ｜ 结束方式 wall-clock-limit ｜ 新增消息 3 条 ｜ stopReason=aborted",
+      "run end | ended wall-clock-limit | 3 new messages | stopReason=aborted",
     ]);
     assert.deepEqual(detail("pigeon.verification"), [
-      `尝试验证 ｜ 会话 ${shortId(sessionId)} Run ${shortId(runId)} ｜ 通过 ｜ 退出码 0 ｜ 命令 npm test ｜ 10 毫秒`,
+      `verification | session ${shortId(sessionId)} run ${shortId(runId)} | pass | exit 0 | command npm test | 10 ms`,
     ]);
     assert.equal(detail("pigeon.fork").length, 1);
     assert.match(
       detail("pigeon.fork")[0] ?? "",
-      new RegExp(`^分叉 ｜ 分叉点 Run ${shortId(runId)} 第 2 条 ｜ 分支会话 `)
+      new RegExp(`^fork \\| at run ${shortId(runId)} entry 2 \\| branch session `)
     );
     assert.match(
       output.split("\n")[0] ?? "",
-      /终态：结束方式 wall-clock-limit，stopReason=aborted ｜ 分类：取消/
+      /end: ended wall-clock-limit, stopReason=aborted \| class: cancelled/
     );
   }));
 
@@ -235,8 +233,8 @@ test("replay 报告：有开始无收尾的 Run 标注「记录到此中断」+ 
     session.assistant({ toolCalls: [{ name: "edit_file" }] });
     const { sessionId } = await session.close();
     const output = runReplayCommand({ root, runId, sessionId });
-    assert.match(output.split("\n")[0] ?? "", /终态：Run 收尾缺失 ｜ 分类：未知$/);
-    assert.ok(output.endsWith("记录到此中断（崩溃可能）：本 Run 无收尾条目\n"), output);
+    assert.match(output.split("\n")[0] ?? "", /end: no run end \| class: unknown$/);
+    assert.ok(output.endsWith("record ends here (possible crash): no run end entry\n"), output);
   }));
 
 test("replay 命令只读：正被写入（末行撕裂）的会话照常回放，会话文件字节、目录清单与工作区均不变", () =>
@@ -268,20 +266,20 @@ test("replay 命令：未知 Run/会话响亮失败并列出可选项；--sessio
       () => runReplayCommand({ root, runId, sessionId: newSessionId() }),
       (error: unknown) => {
         assert.ok(error instanceof Error);
-        assert.ok(error.message.includes("会话不存在"));
+        assert.ok(error.message.includes("session not found"));
         assert.ok(error.message.includes(sessionId), "必须列出已有会话帮助定位");
         return true;
       }
     );
     assert.throws(
       () => runReplayCommand({ root, runId: newRunId(), sessionId }),
-      new RegExp(`该会话无 Run .*。已有 Run：${runId}`)
+      new RegExp(`run not found in this session: .*; runs: ${runId}`)
     );
     assert.throws(
       () => runReplayCommand({ root, runId: newRunId() }),
-      new RegExp(`Run 不存在：.*。已有 Run：${runId}（会话 ${sessionId}）`)
+      new RegExp(`run not found: .*; runs: ${runId} \\(session ${sessionId}\\)`)
     );
-    assert.ok(runReplayCommand({ root, runId }).includes("回放 Run"), "跨会话扫描定位并渲染");
+    assert.ok(runReplayCommand({ root, runId }).includes("replay run"), "跨会话扫描定位并渲染");
 
     const other = createFixtureSession({ sessionsDir });
     other.startRun({ runId, task: "同号" });
@@ -290,12 +288,12 @@ test("replay 命令：未知 Run/会话响亮失败并列出可选项；--sessio
       () => runReplayCommand({ root, runId }),
       (error: unknown) => {
         assert.ok(error instanceof Error);
-        assert.ok(error.message.includes("多个会话"), "跨会话歧义必须响亮失败");
+        assert.ok(error.message.includes("more than one session"), "跨会话歧义必须响亮失败");
         assert.ok(error.message.includes("--session"), "必须提示消歧手段");
         return true;
       }
     );
-    assert.ok(runReplayCommand({ root, runId, sessionId: otherId }).includes("回放 Run"));
+    assert.ok(runReplayCommand({ root, runId, sessionId: otherId }).includes("replay run"));
   }));
 
 test("replay 子进程端到端：无 streamFn 也能回放（分流在模型接入检查之前）", () =>
@@ -312,7 +310,7 @@ test("replay 子进程端到端：无 streamFn 也能回放（分流在模型接
       timeout: 30_000,
     });
     assert.equal(ok.status, 0, `回放应成功退出：${ok.stderr}`);
-    assert.ok(ok.stdout.includes("回放 Run"), "子进程输出时间线报告");
+    assert.ok(ok.stdout.includes("replay run"), "子进程输出时间线报告");
     assert.ok(ok.stdout.includes(shortId(sessionId)), "报告含会话短哈希");
 
     const missing = spawnSync(process.execPath, [cliEntry, "replay", newRunId(), "--root", root], {
@@ -322,6 +320,6 @@ test("replay 子进程端到端：无 streamFn 也能回放（分流在模型接
       timeout: 30_000,
     });
     assert.notEqual(missing.status, 0, "未知 Run 必须失败退出");
-    assert.ok(missing.stderr.includes("Run 不存在"));
+    assert.ok(missing.stderr.includes("run not found"));
     assert.ok(missing.stderr.includes(runId), "报错列出已有 Run 帮助定位");
   }));

@@ -2,6 +2,7 @@
 // 由终端界面的编排面板取代（同一排版在 tui/worker-panel.ts）。纯函数，输出纯字符串（tui 投影到消息区与状态栏）；编排动作本身在 orchestration。
 import type { WorkerOutcome, WorkerStartPoint, WorkerStatus } from "../orchestration/workers.ts";
 import { skippedFilesText } from "../state/snapshot-config.ts";
+import { plural } from "./format.ts";
 
 export type {
   SpawnRequest,
@@ -19,19 +20,19 @@ export { previousRunWorkerText, resumeApprovalText } from "../orchestration/work
 // 续接后找回的之前运行的 worker 在状态里的标注（worker_status 与 /workers 共用）
 export function previousRunNote(status: Pick<WorkerStatus, "previousRun">): string {
   return status.previousRun === "settled"
-    ? "（来自之前的运行）"
+    ? " (from a previous run)"
     : status.previousRun === "interrupted"
-      ? "（来自之前的运行，随进程退出而中断，不可取用）"
+      ? " (from a previous run, interrupted)"
       : "";
 }
 
 export class WorkerCommandError extends Error {}
 
 export const SPAWN_USAGE =
-  '用法：/spawn <角色> [--name <名> | --attempts <N>] "<任务>"（角色：explorer / implementer / tester；--attempts 并行派发同一任务的 N 个尝试）';
+  'usage: /spawn <explorer|implementer|tester> [--name <name> | --attempts <N>] "<task>"';
 
 // 决策 279：/take <worker 名> 把已收尾 worker 自己的改动叠进工作目录
-export const TAKE_USAGE = "用法：/take <worker 名>";
+export const TAKE_USAGE = "usage: /take <worker|session>";
 
 // raw = 去掉 "/spawn" 之后的原文；任务可带英文或中文引号，也可不带
 export function parseSpawnCommand(raw: string): {
@@ -61,7 +62,7 @@ export function parseSpawnCommand(raw: string): {
     if (attemptsMatch !== null) {
       const value = Number(attemptsMatch[1]);
       if (!Number.isInteger(value) || value < 2) {
-        throw new WorkerCommandError(`--attempts 需要不小于 2 的整数（${SPAWN_USAGE}）`);
+        throw new WorkerCommandError(`--attempts needs an integer >= 2 (${SPAWN_USAGE})`);
       }
       attempts = value;
       rest = rest.slice(attemptsMatch[0].length);
@@ -70,7 +71,7 @@ export function parseSpawnCommand(raw: string): {
     break;
   }
   if (attempts !== undefined && name !== undefined) {
-    throw new WorkerCommandError(`--attempts 派出多个尝试，不能共用 --name（${SPAWN_USAGE}）`);
+    throw new WorkerCommandError(`--attempts can't be combined with --name (${SPAWN_USAGE})`);
   }
   let task = rest.trim();
   const quoted =
@@ -90,18 +91,18 @@ export function parseSpawnCommand(raw: string): {
 }
 
 const STATE_LABEL: Record<string, string> = {
-  queued: "排队中",
-  running: "进行中",
-  completed: "完成",
-  failed: "失败",
-  aborted: "中止",
-  cancelled: "已取消",
-  "turn-limit": "达到轮次上限",
-  "wall-clock-limit": "达到墙钟上限",
-  "token-limit": "达到 token 上限",
-  "spawn-failed": "派出失败",
+  queued: "queued",
+  running: "running",
+  completed: "completed",
+  failed: "failed",
+  aborted: "aborted",
+  cancelled: "cancelled",
+  "turn-limit": "turn limit",
+  "wall-clock-limit": "time limit",
+  "token-limit": "token limit",
+  "spawn-failed": "spawn failed",
   // 决策 298
-  stalled: "卡住",
+  stalled: "stalled",
 };
 
 export function workerStateLabel(state: string): string {
@@ -111,62 +112,63 @@ export function workerStateLabel(state: string): string {
 // 收尾摘要：结构化结果的人读投影；合并由人用 git 完成，Pigeon 不自动合并
 export function renderWorkerOutcome(outcome: WorkerOutcome): string {
   const lines = [
-    `== worker ${outcome.name}（${outcome.role}）收尾：${workerStateLabel(outcome.status)} ｜ ` +
-      `${outcome.turns} 轮 ｜ 会话 ${outcome.sessionId} ==`,
+    `== worker ${outcome.name} (${outcome.role}) finished: ${workerStateLabel(outcome.status)} | ` +
+      `${plural(outcome.turns, "turn")} | session ${outcome.sessionId} ==`,
   ];
   if (outcome.error !== undefined) {
-    lines.push(`  原因：${outcome.error}`);
+    lines.push(`  reason: ${outcome.error}`);
   }
   const result = outcome.result;
   if (result !== undefined) {
     const files = result.changedFiles ?? [];
     lines.push(
       result.branch !== undefined
-        ? `  分支 ${result.branch} ｜ 改动 ${files.length} 个文件${files.length > 0 ? `：${files.join("、")}` : ""}`
-        : "  只读审阅（无工作区、无改动）"
+        ? `  branch ${result.branch} | ${plural(files.length, "file")} changed${files.length > 0 ? `: ${files.join(", ")}` : ""}`
+        : "  read-only, no changes"
     );
     if (result.summary !== "") {
-      lines.push(
-        `  自述：${result.summary}${result.summaryTruncated ? "（已截断，全文见 worker 会话）" : ""}`
-      );
+      lines.push(`  summary: ${result.summary}${result.summaryTruncated ? " (truncated)" : ""}`);
     }
   }
-  lines.push(
-    outcome.workspace.kind === "git-worktree"
-      ? `  工作树 ${outcome.workspace.path}：改动未提交，审阅与合并由人用 git 完成（trace ${outcome.sessionId} 查看证据链）`
-      : outcome.workspace.kind === "shared"
-        ? // 决策 377：只读的 explorer 不建工作树
-          `  不建工作树：只读了 ${outcome.workspace.path}，不产生文件改动（trace ${outcome.sessionId} 查看证据链）`
-        : `  无工作区：只读审阅不产生文件改动（trace ${outcome.sessionId} 查看证据链）`
-  );
+  // 只留事实：工作树在哪、没有改动时已删（决策 448）；只读的 explorer 不建工作树（决策 377）
+  if (outcome.worktreeRemoved === "unchanged") {
+    lines.push("  no changes; worktree and branch removed");
+  } else if (outcome.workspace.kind === "git-worktree") {
+    lines.push(`  worktree ${outcome.workspace.path}`);
+  } else if (outcome.workspace.kind === "shared") {
+    lines.push(`  read-only ${outcome.workspace.path}`);
+  }
   // 决策 381：worker 新建却因过大不会进交回的树的文件
   if (result?.skippedFiles !== undefined && result.skippedFiles.length > 0) {
     lines.push(
-      `  没收进交回的大文件（${result.skippedFiles.length}，/take 不会叠入）：${skippedFilesText(result.skippedFiles)}`
+      `  large files skipped (${result.skippedFiles.length}): ${skippedFilesText(result.skippedFiles)}`
     );
   }
   // 决策 279：起点快照与只取其自身改动的取用方式（与 spawn_worker 返回的那一行同一口径，取用入口为 /take）
-  if (outcome.start !== undefined && outcome.workspace.kind === "git-worktree") {
-    lines.push(`  ${workerStartLine(outcome.start, `用 /take ${outcome.name}`)}`);
+  if (
+    outcome.start !== undefined &&
+    outcome.workspace.kind === "git-worktree" &&
+    outcome.worktreeRemoved === undefined
+  ) {
+    lines.push(`  ${workerStartLine(outcome.start)}`);
   }
   return lines.join("\n");
 }
 
-// 决策 279：worker 起点与取用方式的一行——快照起点写明带入了几个未提交的文件，HEAD 起点写明派出时没有未提交的文件；
-// 取用方式由调用方给（agent 见 take_worker 工具，人见 /take）
-export function workerStartLine(start: WorkerStartPoint, takeHint: string): string {
+// 决策 279：worker 起点的一行——快照起点写明带入了几个未提交的文件，HEAD 起点写明派出时没有未提交的文件
+export function workerStartLine(start: WorkerStartPoint): string {
   const commit = start.commit.slice(0, 12);
   const origin = start.snapshot
-    ? `起点：快照 ${commit}（含派出时 ${start.files.length} 个未提交的文件）`
-    : `起点：提交 ${commit}（派出时没有未提交的文件）`;
-  return `${origin}；要把它的改动叠进你的工作目录，${takeHint}。`;
+    ? `base: snapshot ${commit} (${plural(start.files.length, "uncommitted file")})`
+    : `base: commit ${commit} (no uncommitted files)`;
+  return origin;
 }
 
 // /cancel 的目标：按 worker 名或会话 id 定位
 export function resolveWorkerRef(workers: readonly WorkerStatus[], ref: string): WorkerStatus {
   const found = workers.find((worker) => worker.name === ref || worker.sessionId === ref);
   if (found === undefined) {
-    throw new WorkerCommandError(`未知 worker：${ref}（用 /workers 查看）`);
+    throw new WorkerCommandError(`unknown worker: ${ref}`);
   }
   return found;
 }
@@ -177,9 +179,9 @@ export function renderAttemptGroupOutcome(result: {
   outcomes: ReadonlyArray<{ sessionId: string; name: string; status: string }>;
 }): string {
   return [
-    `== 并行尝试收尾 ｜ 任务标识 ${result.taskKey} ==`,
+    `== parallel attempts finished | task ${result.taskKey} ==`,
     ...result.outcomes.map(
-      (outcome) => `  会话 ${outcome.sessionId} ｜ ${outcome.name} ｜ ${outcome.status}`
+      (outcome) => `  session ${outcome.sessionId} | ${outcome.name} | ${outcome.status}`
     ),
   ].join("\n");
 }

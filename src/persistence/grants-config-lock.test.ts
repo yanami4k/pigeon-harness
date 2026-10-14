@@ -64,7 +64,7 @@ test("放权配置：异常路径同样放锁——重复升格被拒之后锁�
   const dir = root();
   try {
     appendGrantConfigRule(dir, rule("g1"));
-    assert.throws(() => appendGrantConfigRule(dir, rule("g1")), /已升格/);
+    assert.throws(() => appendGrantConfigRule(dir, rule("g1")), /already saved as config#/);
     assert.doesNotThrow(() => appendGrantConfigRule(dir, rule("g2")), "上一次的锁要已经放掉");
   } finally {
     rmSync(dir, { recursive: true, force: true });

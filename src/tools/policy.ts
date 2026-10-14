@@ -55,7 +55,7 @@ export function evaluateToolPolicy(
   context: { outsideWorkspaceRead?: boolean } = {}
 ): PolicyDecision {
   const registration = registry.get(toolName);
-  // 决策 428：拒绝理由逐字交给模型，用英文；放行与要人批准的理由只留在判定结果里、不外显，仍为中文
+  // 决策 428：拒绝理由逐字交给模型，用完整英文句；放行与要人批准的理由只留在判定结果里、不外显，写短
   if (registration === undefined) {
     return { kind: "deny", reason: `Unregistered tool (fail-closed): ${toolName}` };
   }
@@ -68,37 +68,37 @@ export function evaluateToolPolicy(
   if (grant !== undefined) {
     const origin =
       grant.source === "session-grant"
-        ? `会话放权 ${grant.refId}`
-        : `固化规则 ${grant.refId}（设置的 permissions 一节）`;
+        ? `session grant ${grant.refId}`
+        : `saved rule ${grant.refId} (permissions section)`;
     return {
       kind: "auto-allow",
-      reason: `${origin} 命中：${toolName} 免审放行（账本记 ${
+      reason: `${origin} matched: ${toolName} auto-allowed (recorded as ${
         grant.source === "session-grant" ? "human:grant" : "policy:config"
-      }，回指出处）`,
+      })`,
       grant,
     };
   }
   if (registration.approvalFree === true) {
     return {
       kind: "auto-allow",
-      reason: `免审批的写档工具自动放行：${toolName}`,
+      reason: `approval-free write tool auto-allowed: ${toolName}`,
       approvalFree: true,
     };
   }
   if (policy.approvalMode === "yolo") {
     return {
       kind: "auto-allow",
-      reason: `yolo 模式事先批发授权：${toolName}（账本记 approvedBy=policy:yolo）`,
+      reason: `yolo mode pre-approves: ${toolName} (recorded as approvedBy=policy:yolo)`,
     };
   }
   if (registration.tier === "read" && context.outsideWorkspaceRead !== true) {
-    return { kind: "auto-allow", reason: `只读工具自动放行：${toolName}` };
+    return { kind: "auto-allow", reason: `read-only tool auto-allowed: ${toolName}` };
   }
   if (registration.tier === "read") {
-    return { kind: "prompt", reason: `读工作区以外的文件必须人工批准：${toolName}` };
+    return { kind: "prompt", reason: `reading outside the workspace needs approval: ${toolName}` };
   }
   return {
     kind: "prompt",
-    reason: `${registration.tier} 层工具必须人工批准：${toolName}`,
+    reason: `${registration.tier} tool needs approval: ${toolName}`,
   };
 }

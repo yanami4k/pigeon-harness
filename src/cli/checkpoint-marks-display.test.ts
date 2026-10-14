@@ -40,10 +40,10 @@ test("trace 与 replay：失败的、拍摄中断的快照各显示一行，拍�
     const { sessionId } = await s.close();
 
     const trace = runTraceCommand({ root, sessionId });
-    const traceLines = trace.split("\n").filter((line) => line.includes("代码快照："));
+    const traceLines = trace.split("\n").filter((line) => line.includes("checkpoint: "));
     assert.equal(traceLines.length, 2, trace);
-    assert.match(traceLines[0] ?? "", /没有拍成.*快照等待超时/);
-    assert.match(traceLines[1] ?? "", /拍摄中断/);
+    assert.match(traceLines[0] ?? "", /snapshot failed.*快照等待超时/);
+    assert.match(traceLines[1] ?? "", /snapshot interrupted/);
     // 各挂在自己的工具调用下
     assert.ok(trace.indexOf(failed) < trace.indexOf(traceLines[0] ?? ""), trace);
     assert.ok(trace.indexOf(crashed) < trace.indexOf(traceLines[1] ?? ""), trace);
@@ -53,8 +53,8 @@ test("trace 与 replay：失败的、拍摄中断的快照各显示一行，拍�
       .split("\n")
       .filter((line) => line.includes("pigeon.checkpoint-mark"));
     assert.equal(replayLines.length, 2, replay);
-    assert.match(replayLines[0] ?? "", new RegExp(`没有拍成.*${failed}`));
-    assert.match(replayLines[1] ?? "", new RegExp(`拍摄中断.*${crashed}`));
+    assert.match(replayLines[0] ?? "", new RegExp(`snapshot failed.*${failed}`));
+    assert.match(replayLines[1] ?? "", new RegExp(`snapshot interrupted.*${crashed}`));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

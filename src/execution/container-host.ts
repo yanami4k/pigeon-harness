@@ -1621,7 +1621,9 @@ export async function startWorkspaceContainer(options: StartContainerOptions): P
     options.timeoutMs ?? 300_000
   );
   if (result.exitCode !== 0) {
-    throw new ContainerHostError(`容器起不来（${options.image}）：${result.stderr.trim()}`);
+    throw new ContainerHostError(
+      `starting the container failed (${options.image}): ${result.stderr.trim()}`
+    );
   }
 }
 
@@ -1633,7 +1635,7 @@ export async function removeWorkspaceContainer(
   forgetContainerProbe(docker, name);
   const result = await dockerOnce(docker, ["rm", "-f", name], 120_000);
   if (result.exitCode !== 0 && !/No such container/i.test(result.stderr)) {
-    throw new ContainerHostError(`容器移除失败（${name}）：${result.stderr.trim()}`);
+    throw new ContainerHostError(`removing container ${name} failed: ${result.stderr.trim()}`);
   }
 }
 
@@ -1648,7 +1650,7 @@ export async function listContainersByLabel(
     DEFAULT_HELPER_TIMEOUT_MS
   );
   if (result.exitCode !== 0) {
-    throw new ContainerHostError(`列出容器失败：${result.stderr.trim()}`);
+    throw new ContainerHostError(`listing containers failed: ${result.stderr.trim()}`);
   }
   return result.stdout
     .toString("utf8")

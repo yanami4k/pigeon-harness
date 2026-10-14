@@ -6,7 +6,7 @@ import { describeMcpStartup } from "./mcp.ts";
 
 test("MCP 启动提示：启动问题原样列出，注解与配置冲突逐项警告，无冲突无问题时为空", () => {
   const notes = describeMcpStartup({
-    problems: ["MCP server fs 启动失败：spawn ENOENT（本会话不暴露其工具）"],
+    problems: ["starting MCP server fs failed: spawn ENOENT"],
     summary: () => ({
       mcpTools: [
         {
@@ -39,9 +39,9 @@ test("MCP 启动提示：启动问题原样列出，注解与配置冲突逐项�
     }),
   });
   assert.deepEqual(notes, [
-    "MCP server fs 启动失败：spawn ENOENT（本会话不暴露其工具）",
-    "MCP 注解与配置冲突：mcp__fx__echo 声明只读，配置 write，按 write 执行",
-    "MCP 注解与配置冲突：mcp__fx__peek 声明 destructive，配置 read，按 write 执行",
+    "starting MCP server fs failed: spawn ENOENT",
+    "MCP annotation conflicts with settings: mcp__fx__echo declares read-only, set to write, using write",
+    "MCP annotation conflicts with settings: mcp__fx__peek declares destructive, set to read, using write",
   ]);
   assert.deepEqual(
     describeMcpStartup({ problems: [], summary: () => ({ mcpTools: [], mcpServers: [] }) }),

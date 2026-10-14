@@ -1,6 +1,6 @@
 // 记忆工具 update_memory（决策 217、328、329、331、332）：在项目级或用户级新增、按编号替换、按编号删除学到的记忆，
 // 只写不读（两层记忆已在开工状态块的「记忆」一节里）。说明、参数说明与各情形的返回文字为记忆文字 v5（MEMORY_TEXT_VERSION）。
-// - 只给有人对话的入口（终端界面主会话含沙箱会话、--line 命令行对话）；pigeon run、worker 与跑批器只推送、不注册（331）。
+// - 只给有人对话的入口（终端界面主会话含沙箱会话）；pigeon run、worker 与跑批器只推送、不注册（331）。
 // - 写入不审批（331），写入后经 onWritten 交给入口在消息区显示一行（记下的内容与层级）。
 // - agent 只写内容；编号、日期、来源（入口的英文短名）与会话编号由工具补在行尾（332、431）。内容完全相同即不新增。
 // - 决策 431：锁内现读时遇到旧格式的记忆文件，先一次性迁移（备份、改写）再写；迁移出错即照常抛出，不在没有备份时覆盖旧文件。
@@ -19,7 +19,6 @@ import {
   localDate,
   MEMORY_DISPLAY_PATHS,
   MEMORY_FILE_HEADERS,
-  MEMORY_LAYER_LABELS,
   MEMORY_LAYER_PREFIX,
   MEMORY_LAYERS,
   type MemoryEntry,
@@ -30,6 +29,7 @@ import {
   usedChars,
 } from "./learned.ts";
 import {
+  availableMemoryLayers,
   type MemoryLocation,
   memoryLocation,
   readMemoryMaxId,
@@ -41,11 +41,11 @@ import { migrateMemoryFileLocked } from "./memory-migration.ts";
 
 export const UPDATE_MEMORY_TOOL = "update_memory";
 
-// 写入的来源（哪个入口；沙箱会话按它所在的入口记）：以英文短名补在每条的尾巴里（决策 431）
-export type MemorySource = "tui" | "line";
+// 写入的来源（哪个入口；沙箱会话按它所在的入口记）：以英文短名补在每条的尾巴里（决策 431）。决策 461：命令行对话去掉之后
+// 只剩终端界面；旧条目尾巴里的 cli 照旧能读
+export type MemorySource = "tui";
 export const MEMORY_SOURCE_LABELS: Readonly<Record<MemorySource, string>> = {
   tui: "tui",
-  line: "cli",
 };
 
 // 工具说明（记忆文字 v5；决策 383 加的"新增前去重"与"纠正过时条目"两句不升 MEMORY_TEXT_VERSION：跑批不注册
@@ -119,6 +119,9 @@ export const UPDATE_MEMORY_TEXTS = {
   missingId: (layer: string, id: string, ids: string) =>
     `The ${layer} memory has no ${id}; existing entry IDs: ${ids}.`,
   missingContent: "add and replace need content: one sentence stating what to remember.",
+  // 主目录下启动：项目级记忆与用户级是同一个文件，不单独提供
+  projectIsUser:
+    "Project memory is not available here: Pigeon is running in the home directory, where it would be the same file as user memory. Use user memory only for facts that apply to every project.",
   missingLayer:
     "layer is required: project (this project only) or user (all projects); if you are unsure, ask the user first.",
   broken: (path: string, line: number, layer: MemoryLayer) =>
@@ -172,12 +175,6 @@ export interface MemoryWriteNotice {
   content: string;
 }
 
-export function memoryWriteNoticeLine(notice: MemoryWriteNotice): string {
-  const verb =
-    notice.action === "add" ? "已记下" : notice.action === "replace" ? "已改写" : "已删除";
-  return `[记忆] ${verb}（${MEMORY_LAYER_LABELS[notice.layer]} ${notice.id}）：${notice.content}`;
-}
-
 export interface UpdateMemoryDetails {
   action: UpdateMemoryParams["action"];
   layer?: MemoryLayer;
@@ -194,7 +191,8 @@ export interface UpdateMemoryDetails {
     | "missing-content"
     | "missing-layer"
     | "broken"
-    | "busy";
+    | "busy"
+    | "project-is-user";
 }
 
 export interface UpdateMemoryOptions {
@@ -245,10 +243,17 @@ export async function applyMemoryUpdate(
       rejected: "missing-content",
     });
   }
-  const location: MemoryLocation = memoryLocation(layer, {
+  const where = {
     governanceRoot: options.governanceRoot,
     ...(options.homeDir !== undefined ? { homeDir: options.homeDir } : {}),
-  });
+  };
+  if (!availableMemoryLayers(where).includes(layer)) {
+    return reply(UPDATE_MEMORY_TEXTS.projectIsUser, {
+      written: false,
+      rejected: "project-is-user",
+    });
+  }
+  const location: MemoryLocation = memoryLocation(layer, where);
   const origin = {
     date: localDate((options.now ?? (() => new Date()))()),
     source: MEMORY_SOURCE_LABELS[options.source],
@@ -400,13 +405,13 @@ export function updateMemoryRegistration(input: {
 }): ToolRegistration {
   return {
     name: UPDATE_MEMORY_TOOL,
-    description: `新增、替换或删除学到的记忆（${MEMORY_DISPLAY_PATHS.project}、${MEMORY_DISPLAY_PATHS.user}）`,
+    description: `add, replace or delete learned memory (${MEMORY_DISPLAY_PATHS.project}, ${MEMORY_DISPLAY_PATHS.user})`,
     parameters: UpdateMemoryParamsSchema,
     tier: "write",
     approvalFree: true,
     pathConfinement: {
       kind: "roots",
-      roots: MEMORY_LAYERS.map((layer) => memoryLocation(layer, input).file),
+      roots: [...new Set(MEMORY_LAYERS.map((layer) => memoryLocation(layer, input).file))],
     },
     executionMode: "sequential",
   };

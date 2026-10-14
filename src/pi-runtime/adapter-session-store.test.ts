@@ -458,6 +458,6 @@ test("续跑：restoreMessages 以还原的消息作为对话上下文接着跑�
     adapter.transcript().map((message) => message.role),
     ["user", "assistant"]
   );
-  assert.throws(() => adapter.restoreMessages([]), /之前还原/);
+  assert.throws(() => adapter.restoreMessages([]), /restored before the first Run/);
   await adapter.dispose();
 });

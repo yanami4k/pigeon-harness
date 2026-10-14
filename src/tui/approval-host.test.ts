@@ -17,8 +17,8 @@ const request: ApprovalRequest = {
 
 test("审批块：网站行 + 以后都允许访问该网站；不提供 [d]", () => {
   const text = approvalBlockText(request);
-  assert.match(text, /工具：web_fetch\n网站：docs\.example\n参数：/);
-  assert.match(text, /\[a\] 以后都允许访问 docs\.example$/);
+  assert.match(text, /tool: web_fetch\nsite: docs\.example\nargs:/);
+  assert.match(text, /\[a\] allow docs\.example for this session$/);
   assert.doesNotMatch(text, /\[d\]/);
 });
 
@@ -39,11 +39,28 @@ test("[a] 建按网站的放权，结果行点名网站；[y] 只批准一次", 
     store.list().map((grant) => [grant.tool, grant.host]),
     [["web_fetch", "docs.example"]]
   );
-  assert.match(
-    notes.join("\n"),
-    /已创建会话放权 grant_[0-9A-Z]+（web_fetch，仅限网站 docs\.example）/
-  );
+  assert.equal(notes.join("\n"), "✓ allowed for this session: web_fetch docs.example");
   key = "y";
   assert.deepEqual(await handler(request), { approved: true });
   assert.equal(store.list().length, 1);
+});
+
+// 自 cli/approval-ui.test.ts 移来（决策 461）：放权条目写盘失败 = 放权不生效
+test("授权建立条目写盘失败 = grant 不生效（fail-closed：免审授权必须留证后才存在）", async () => {
+  const store = new SessionGrantStore({
+    workspaceRoot: "/nonexistent",
+    sink: {
+      appendGrantCreated: () => {
+        throw new Error("磁盘故障");
+      },
+      appendGrantRevoked: () => {},
+    },
+  });
+  const face: TuiApprovalFace = {
+    askApproval: async () => ({ key: "a" }),
+    noteApproval: () => {},
+  };
+  const handler = createTuiApprovalHandler(store, () => face);
+  await assert.rejects(() => handler(request), /磁盘故障/);
+  assert.equal(store.list().length, 0, "未落盘的 grant 不得生效");
 });

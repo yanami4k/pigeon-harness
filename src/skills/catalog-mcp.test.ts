@@ -82,7 +82,7 @@ test("MCP prompts 进 Skill Catalog：名称、简介、来源标 server；哈�
     );
     assert.ok(
       catalog.problems.some(
-        (problem) => problem.includes("mcp:fx/deploy") && problem.includes("冲突")
+        (problem) => problem.includes("mcp:fx/deploy") && problem.includes("same name as")
       ),
       JSON.stringify(catalog.problems)
     );

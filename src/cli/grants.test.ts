@@ -58,7 +58,7 @@ test("/grants save：写入配置规则，出处结构化记下会话、grant �
     assert.equal(rules[0]?.promotedFrom.grantId, grant.grantId);
     assert.equal(rules[0]?.promotedFrom.sessionId, SESSION);
     assert.equal(rules[0]?.promotedFrom.firstCall.toolCallId, "toolu_01ABC");
-    assert.ok(outputs.join("").includes(`已升格 ${grant.grantId}`));
+    assert.ok(outputs.join("").includes(`saved ${grant.grantId}`));
   } finally {
     cleanup();
   }
@@ -77,7 +77,7 @@ test("/grants save 重复升格：响亮报错指出已存在的 config#N，配�
       (error: unknown) => {
         assert.ok(error instanceof Error);
         assert.ok(error.message.includes("config#0"), error.message);
-        assert.ok(error.message.includes("已升格"), error.message);
+        assert.ok(error.message.includes("already saved"), error.message);
         return true;
       }
     );
@@ -107,10 +107,7 @@ test("/revoke config#N：移除配置规则并报告其出处 grant；其余规�
     assert.equal(before?.refId, second.grantId);
 
     assert.equal(runGrantCommand(["revoke", "config#0"], ctx), true);
-    assert.ok(
-      outputs.join("").includes("已移除固化规则 config#0（edit_file，出处 grant"),
-      outputs.join("")
-    );
+    assert.ok(outputs.join("").includes("removed config#0 (edit_file)"), outputs.join(""));
 
     // 移除后：原第二条前移为 config#0，但回指逐字不变（P2-1 根因修复）
     const rules = loadGrantConfig(root);
@@ -126,7 +123,7 @@ test("/revoke config#N：移除配置规则并报告其出处 grant；其余规�
 test("/revoke config#N 越界：响亮报错", () => {
   const { ctx, cleanup } = makeContext();
   try {
-    assert.throws(() => runGrantCommand(["revoke", "config#3"], ctx), /固化规则不存在/);
+    assert.throws(() => runGrantCommand(["revoke", "config#3"], ctx), /no saved rule/);
   } finally {
     cleanup();
   }

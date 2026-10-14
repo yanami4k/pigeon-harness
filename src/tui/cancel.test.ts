@@ -1,10 +1,10 @@
 // M2 S5：取消入口与错误/终止原因展示的离屏测试（同一 Mock Terminal + 虚拟屏幕路径）。
 // 断言面：
 //   - 运行中 Esc 触发 interrupt 且只一次（中断飞行中重复 Esc 不 double-abort、不悬挂）；
-//   - 取消后终态行渲染：stopReason=aborted + 四分类「取消」徽章（措辞与 cli trace 同口径）；
+//   - 取消后收尾行（决策 452）："interrupted · 用时"，不写失败分类；
 //   - 模态键控优先（决策 029/031，S5 裁决 032）：审批面板挂起期间 Esc 吞掉，不取消 Run；
-//   - 四分类徽章五档渲染（取消/治理熔断/业务失败/基础设施错误/未知）+ errorMessage +
-//     syntheticFailure 标注；
+//   - 收尾行各档（决策 452）：done / interrupted / stopped / stopped: output limit / error 带原因 / ended，
+//     用时从人发出消息算到工作结束；
 //   - listenerErrors 增量警告（D2 可见化的 TUI 投影，措辞与增量报数口径同 cli repl）；
 //   - 集成：真实 PiRuntimeAdapter 取消链路不悬挂（Esc → interrupt 固定姿势 → 终态 aborted）。
 // abort → waitForIdle 姿势本身的单元断言在 pi-runtime 层（adapter.test.ts「流式中途 abort」），
@@ -103,7 +103,7 @@ function makeShell(width: number, height: number) {
 
 // ---------- 测试 ----------
 
-test("取消键：运行中 Esc 触发 interrupt 且只一次；取消后终态行带 stopReason=aborted 与「取消」徽章", async () => {
+test("取消键：运行中 Esc 触发 interrupt 且只一次；取消后收尾行写 interrupted，不写分类", async () => {
   const { shell, runtime, term, logDir } = makeShell(80, 24);
   runtime.autoResolve = false; // run 挂起，制造「运行中」窗口
   runtime.autoInterrupt = false; // interrupt 挂起，制造「中断飞行中」窗口
@@ -119,29 +119,29 @@ test("取消键：运行中 Esc 触发 interrupt 且只一次；取消后终态�
     term.input("\r");
     await settle();
     assert.deepEqual(runtime.runs, ["长任务"]);
-    assert.ok(screenText(term).includes("state: running"), "运行中状态行应可见");
+    assert.ok(screenText(term).includes("running"), "运行中状态行写 running");
 
     // Esc（裸 "\x1b"）：触发 interrupt，消息区留取消痕迹，状态行进 cancelling
     term.input("\x1b");
     assert.equal(runtime.interruptCalls, 1, "Esc 必须触发一次 interrupt()");
     await settle();
-    assert.ok(screenText(term).includes("[cancel]"), "取消请求必须在消息区留可见痕迹");
-    assert.ok(screenText(term).includes("state: cancelling"), "中断等待期间状态行应可见");
+    // 状态行写 cancelling 即是痕迹，消息区不另写一行
+    assert.ok(!screenText(term).includes("[cancel]"), "消息区不写取消那一行");
+    assert.ok(screenText(term).includes("cancelling"), "中断等待期间状态行写 cancelling");
 
     // 中断飞行中重复 Esc：不再触发（不 double-abort、不悬挂）
     term.input("\x1b");
     term.input("\x1b");
     assert.equal(runtime.interruptCalls, 1, "中断飞行中重复 Esc 不得再次 interrupt()");
 
-    // 中断与 run 先后收尾：终态行 = stopReason=aborted + 四分类「取消」徽章（trace 同口径）
+    // 中断与 run 先后收尾：收尾行 = interrupted · 用时（决策 452：不写分类与 stopReason）
     runtime.finishInterrupt();
     runtime.finishRun();
     await settle();
     const text = screenText(term);
-    assert.ok(text.includes("== run: aborted"), "取消后应渲染 aborted 终态行");
-    assert.ok(text.includes("stop: aborted"), "终态行应带 stopReason=aborted");
-    assert.ok(text.includes("分类：取消"), "终态行应带四分类「取消」徽章");
-    assert.ok(text.includes("state: idle"), "run 收尾后状态行应回 idle");
+    assert.match(text, /interrupted · \d+s/, "取消后应落 interrupted 收尾行");
+    assert.doesNotMatch(text, /分类|== run/, "不再有终态摘要与分类");
+    assert.ok(!text.includes("running") && !text.includes("cancelling"), "run 收尾后状态行不写字");
   } finally {
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });
@@ -168,7 +168,7 @@ test("模态键控优先：审批面板挂起期间 Esc 吞掉不取消 Run；�
     // 审批面板挂起（Run 阻塞在 beforeToolCall 的人工决议上）
     const panel = shell.askApproval(request);
     await settle();
-    assert.ok(screenText(term).includes("state: approval"), "面板期间状态行应可见");
+    assert.ok(screenText(term).includes("╭"), "审批区（圆角框）挂着");
 
     // Esc 与面板非决议键同待遇：吞掉——此时 interrupt 的 waitForIdle 会吊在挂起
     // Promise 上直到人按键，「取消」名不副实；模态先决议再 Esc 是唯一次序（裁决 032）
@@ -192,33 +192,34 @@ test("模态键控优先：审批面板挂起期间 Esc 吞掉不取消 Run；�
   }
 });
 
-test("四分类徽章五档渲染：取消/治理熔断/业务失败/基础设施错误/未知 + errorMessage + syntheticFailure 标注", async () => {
+test("收尾行各档（决策 452）：正常 done、人打断 interrupted、熔断 stopped、截断 stopped: output limit、出错带原因、未知 ended；不写分类", async () => {
   const { shell, runtime, term, logDir } = makeShell(100, 30);
   try {
     shell.start();
     await settle();
 
-    const cases: Array<{ result: FakeRuntime["nextResult"]; expect: string[] }> = [
+    const cases: Array<{ result: FakeRuntime["nextResult"]; expect: RegExp }> = [
+      { result: {}, expect: /done · \d+s/ },
       {
         result: {
           status: "aborted",
           stopReason: "aborted",
           failure: { category: "cancelled", breaker: false },
         },
-        expect: ["== run: aborted", "stop: aborted", "分类：取消"],
+        expect: /interrupted · \d+s/,
       },
       {
-        // 治理熔断是取消的子类（D7：与用户取消必须一眼可分）
+        // 治理熔断：与人打断一眼可分
         result: {
           status: "aborted",
           stopReason: "aborted",
           failure: { category: "cancelled", breaker: true },
         },
-        expect: ["分类：治理熔断"],
+        expect: /stopped · \d+s/,
       },
       {
         result: { status: "failed", stopReason: "length", failure: { category: "business" } },
-        expect: ["== run: failed", "stop: length", "分类：业务失败"],
+        expect: /stopped: output limit · \d+s/,
       },
       {
         result: {
@@ -228,12 +229,11 @@ test("四分类徽章五档渲染：取消/治理熔断/业务失败/基础设�
           errorMessage: "provider boom",
           failure: { category: "infrastructure" },
         },
-        expect: ["分类：基础设施错误", "(synthetic failure)", "error: provider boom"],
+        expect: /error · \d+s · provider boom/,
       },
       {
-        // 未知默认桶：无 stopReason 时终态行不带 stop 段
         result: { status: "unknown", stopReason: undefined, failure: { category: "unknown" } },
-        expect: ["== run: unknown", "分类：未知"],
+        expect: /ended · \d+s/,
       },
     ];
     for (const [index, item] of cases.entries()) {
@@ -241,19 +241,73 @@ test("四分类徽章五档渲染：取消/治理熔断/业务失败/基础设�
       term.input(`任务${index}`);
       term.input("\r");
       await settle();
-      for (const expected of item.expect) {
-        assert.ok(
-          screenText(term).includes(expected),
-          `第 ${index + 1} 档终态行应包含「${expected}」，实际：\n${screenText(term)}`
-        );
-      }
+      assert.match(screenText(term), item.expect, `第 ${index + 1} 档`);
     }
-    // 未知档：无 stopReason → 同行不得出现 stop 段
-    const unknownLine = term.screen.contentLines().find((line) => line.includes("== run: unknown"));
-    assert.ok(
-      unknownLine !== undefined && !unknownLine.includes("stop:"),
-      "无 stopReason 不带 stop 段"
-    );
+    assert.doesNotMatch(screenText(term), /分类|== run|-- turn/);
+  } finally {
+    shell.stop();
+    rmSync(logDir, { recursive: true, force: true });
+  }
+});
+
+test("收尾行的用时是整次工作：从人发出消息算到真正空闲（决策 452）", async () => {
+  const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-cancel-"));
+  const term = new MockTerminal(100, 30);
+  const runtime = new FakeRuntime();
+  runtime.autoResolve = false;
+  let clock = 1_000_000;
+  const shell = new PigeonTuiShell({
+    terminal: term,
+    runtime,
+    sessionId: SESSION_ID,
+    logDir,
+    now: () => clock,
+  });
+  try {
+    shell.start();
+    await settle();
+    term.input("长任务");
+    term.input("\r");
+    await settle();
+    clock += 83_000;
+    runtime.finishRun();
+    await settle();
+    assert.match(screenText(term), /done · 1m 23s/);
+  } finally {
+    shell.stop();
+    rmSync(logDir, { recursive: true, force: true });
+  }
+});
+
+test("打转检测叫停：收尾行写 stopped: looping（与回看历史同一写法），不写 interrupted（决策 452）", async () => {
+  const { shell, runtime, term, logDir } = makeShell(100, 30);
+  runtime.autoResolve = false;
+  runtime.nextResult = {
+    status: "aborted",
+    stopReason: "aborted",
+    failure: { category: "cancelled", breaker: false },
+  };
+  try {
+    shell.start();
+    await settle();
+    term.input("打转的任务");
+    term.input("\r");
+    await settle();
+    shell.stopForLoop("[loop] 检测到打转，已叫停");
+    await settle();
+    runtime.finishRun();
+    await settle();
+    assert.match(screenText(term), /stopped: looping · \d+s/);
+    assert.doesNotMatch(screenText(term), /interrupted/);
+    // 下一次工作不带上次的叫停原因：人按 Esc 打断写 interrupted
+    term.input("下一件");
+    term.input("\r");
+    await settle();
+    term.input("\x1b");
+    await settle();
+    runtime.finishRun();
+    await settle();
+    assert.match(screenText(term), /interrupted · \d+s/);
   } finally {
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });
@@ -261,7 +315,7 @@ test("四分类徽章五档渲染：取消/治理熔断/业务失败/基础设�
 });
 
 test("listenerErrors 增量警告：启动即查 + run 收尾复查；同批故障不重复刷屏，新故障以累计数提醒", async () => {
-  const { shell, runtime, term, logDir } = makeShell(80, 24);
+  const { shell, runtime, term, logDir } = makeShell(80, 60);
   runtime.errors.push(new Error("模拟磁盘故障"));
   try {
     shell.start();
@@ -269,9 +323,9 @@ test("listenerErrors 增量警告：启动即查 + run 收尾复查；同批故�
     const warnings = (): string[] =>
       screenText(term)
         .split("\n")
-        .filter((line) => line.includes("证据链不完整"));
+        .filter((line) => line.includes("failed to write"));
     assert.deepEqual(warnings().length, 1, "启动即查一次：已有故障应立即警告");
-    assert.ok(warnings()[0]?.includes("1 条"), "警告措辞与 repl 同口径（累计条数）");
+    assert.ok(warnings()[0]?.includes("1 session record failed"), "警告措辞（累计条数）");
 
     // 同批故障：run 收尾后不再重复警告
     term.input("任务一");
@@ -285,7 +339,7 @@ test("listenerErrors 增量警告：启动即查 + run 收尾复查；同批故�
     term.input("\r");
     await settle();
     assert.deepEqual(warnings().length, 2, "新故障应再次警告");
-    assert.ok(warnings()[1]?.includes("3 条"), "再警告报累计条数");
+    assert.ok(warnings()[1]?.includes("3 session records failed"), "再警告报累计条数");
   } finally {
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });
@@ -346,11 +400,8 @@ test("集成：真实 Adapter 取消链路不悬挂——Esc 触发 interrupt，
     await runEnded.promise;
     await settle();
     const text = screenText(term);
-    assert.ok(text.includes("[cancel]"), "取消请求应留可见痕迹");
-    assert.ok(text.includes("== run: aborted"), "取消后应渲染 aborted 终态行");
-    assert.ok(text.includes("stop: aborted"), "终态行应带 stopReason=aborted");
-    assert.ok(text.includes("分类：取消"), "终态行应带「取消」徽章");
-    assert.ok(text.includes("state: idle"), "run 收尾后状态行应回 idle");
+    assert.match(text, /interrupted · \d+s/, "取消后应落 interrupted 收尾行");
+    assert.ok(!text.includes("cancelling"), "run 收尾后状态行不再写 cancelling");
     assert.equal(adapter.isRunning(), false, "interrupt 固定姿势收尾后不得悬挂");
     assert.equal(streamFn.calls.length, 1, "取消不得引发重试/二次调用");
   } finally {

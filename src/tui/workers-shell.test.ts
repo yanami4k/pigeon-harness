@@ -118,7 +118,6 @@ test("TUI worker 命令：派出回显与状态行、清单、运行中拒绝恢
     assert.deepEqual(workers.spawned, [{ role: "implementer", task: "修复 a.ts", name: "fix-a" }]);
     const workerId = workers.entries[0]?.sessionId;
     assert.ok(workerId !== undefined);
-    assert.ok(screenFlat(term).includes("已派出 worker fix-a（implementer）"), screenFlat(term));
     assert.match(screenFlat(term), /fix-a\s+running\s+\S+\s+2t\s+\$0\s+starting/);
 
     await submit(term, "/workers");
@@ -129,15 +128,11 @@ test("TUI worker 命令：派出回显与状态行、清单、运行中拒绝恢
     );
 
     await submit(term, `/resume ${newSessionId()}`);
-    assert.ok(screenFlat(term).includes("有 worker 仍在运行"), screenFlat(term));
+    assert.ok(screenFlat(term).includes("workers are running"), screenFlat(term));
     assert.equal(rebinds, 0);
 
     await submit(term, "/cancel fix-a");
     assert.deepEqual(workers.cancelled, [workerId]);
-    assert.ok(
-      screenFlat(term).includes("[cancel] worker fix-a interrupt requested"),
-      screenFlat(term)
-    );
 
     workers.finish({
       sessionId: workerId,
@@ -157,14 +152,14 @@ test("TUI worker 命令：派出回显与状态行、清单、运行中拒绝恢
     await new Promise((resolve) => setTimeout(resolve, 60));
     await settle();
     assert.ok(
-      screenFlat(term).includes("== worker fix-a（implementer）收尾：已取消"),
+      screenFlat(term).includes("== worker fix-a (implementer) finished: cancelled"),
       screenFlat(term)
     );
-    assert.ok(screenFlat(term).includes("改动 1 个文件：a.ts"), screenFlat(term));
+    assert.ok(screenFlat(term).includes("1 file changed: a.ts"), screenFlat(term));
     assert.match(screenFlat(term), /fix-a\s+cancelled\s+/);
 
     await submit(term, "/cancel fix-a");
-    assert.ok(screenFlat(term).includes("已收尾（已取消），无需取消"), screenFlat(term));
+    assert.ok(screenFlat(term).includes("already finished (cancelled)"), screenFlat(term));
 
     // 决策 279：/take <名> 取用已收尾 worker 的改动，结果落消息区；没给名字提示用法
     await submit(term, "/take fix-a");
@@ -174,16 +169,18 @@ test("TUI worker 命令：派出回显与状态行、清单、运行中拒绝恢
       screenFlat(term)
     );
     await submit(term, "/take");
-    assert.ok(screenFlat(term).includes("用法：/take <worker 名>"), screenFlat(term));
+    assert.ok(screenFlat(term).includes("usage: /take <worker|session>"), screenFlat(term));
 
     await submit(term, "/nope");
-    assert.ok(
-      screenFlat(term).includes('/spawn <角色> "<任务>"、/cancel <worker>、/workers'),
-      screenFlat(term)
-    );
+    assert.ok(screenFlat(term).includes("unknown command: /nope"), screenFlat(term));
 
     await submit(term, "/spawn");
-    assert.ok(screenFlat(term).includes("命令失败：用法：/spawn"), screenFlat(term));
+    // 用法错误原样写出，不再叠一层 "command failed:"
+    const spawnUsage = screenFlat(term);
+    assert.ok(
+      spawnUsage.includes("usage: /spawn") && !spawnUsage.includes("command failed: usage"),
+      spawnUsage
+    );
   } finally {
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });

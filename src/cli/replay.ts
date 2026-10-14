@@ -9,6 +9,7 @@ import {
   continuationLine,
   evalVerdictLabel,
   failureBadge,
+  plural,
   pruneLine,
   repetitionLine,
   requestRetryLine,
@@ -55,6 +56,8 @@ const ITEM_TYPE: Record<ViewItem["kind"], string> = {
   prune: "pigeon.prune",
   "background-job": "pigeon.background-job",
   "request-retry": "pigeon.request-retry",
+  "approval-mode": "pigeon.approval-mode",
+  "git-head": "pigeon.git-head",
 };
 
 // 单条条目的关键字段摘要（各类型的要点，通俗措辞）
@@ -62,103 +65,103 @@ function itemDetail(item: ViewItem): string {
   switch (item.kind) {
     case "run-start": {
       const data = item.data;
-      const tools = data.advertisedTools.length > 0 ? data.advertisedTools.join("、") : "无";
+      const tools = data.advertisedTools.length > 0 ? data.advertisedTools.join(", ") : "none";
       const hash = createHash("sha256").update(data.systemPrompt).digest("hex");
       return (
-        `Run 启动快照 ｜ 模型 ${data.model.provider}/${data.model.id} ｜ ` +
-        `审批模式 ${data.policy.approvalMode} ｜ 工具 ${tools} ｜ ` +
-        `Memory ${data.memory.length} 个 ｜ Skill ${data.skills.length} 个 ｜ ` +
+        `run start | model ${data.model.provider}/${data.model.id} | ` +
+        `approval mode ${data.policy.approvalMode} | tools ${tools} | ` +
+        `memory ${data.memory.length} | skills ${data.skills.length} | ` +
         `system prompt ${hash.slice(0, 12)}`
       );
     }
     case "message": {
       const message = item.message;
-      let detail = `消息 ${message.entryId}：run 内第 ${message.runSeq} 条（${message.role}）`;
+      let detail = `message ${message.entryId}: run entry ${message.runSeq} (${message.role})`;
       if (message.role === "assistant") {
-        detail += ` ｜ stopReason=${message.stopReason ?? "无"}`;
+        detail += ` | stopReason=${message.stopReason ?? "none"}`;
         if (isSyntheticFailure(message)) {
-          detail += "（上游合成失败消息）";
+          detail += " (synthetic upstream failure)";
         }
         if (message.errorMessage !== undefined) {
-          detail += ` ｜ ${message.errorMessage}`;
+          detail += ` | ${message.errorMessage}`;
         }
         for (const block of message.blocks) {
           if (block.type === "toolCall") {
-            detail += ` ｜ 工具调用 ${block.name}（${block.id}）参数 ${summarizeArgs(block.arguments)}`;
+            detail += ` | tool call ${block.name} (${block.id}) args ${summarizeArgs(block.arguments)}`;
           }
         }
       } else if (message.role === "toolResult") {
         detail +=
-          ` ｜ 工具结果 ${message.toolName ?? "?"}（${message.toolCallId ?? "?"}）` +
-          `${message.isError === true ? "失败" : "成功"}`;
+          ` | tool result ${message.toolName ?? "?"} (${message.toolCallId ?? "?"}) ` +
+          `${message.isError === true ? "error" : "ok"}`;
       }
       return detail;
     }
     case "run-end": {
       const data = item.data;
-      let detail = `Run 收尾 ｜ 结束方式 ${data.ending} ｜ 新增消息 ${data.messageCount} 条`;
+      let detail = `run end | ended ${data.ending} | ${plural(data.messageCount, "new message")}`;
       if (data.stopReason !== undefined) {
-        detail += ` ｜ stopReason=${data.stopReason}`;
+        detail += ` | stopReason=${data.stopReason}`;
       }
       if (data.errorMessage !== undefined) {
-        detail += ` ｜ ${data.errorMessage}`;
+        detail += ` | ${data.errorMessage}`;
       }
       return detail;
     }
     case "verification": {
       const data = item.data;
       return (
-        `尝试验证 ｜ 会话 ${shortId(data.target.sessionId)} Run ${shortId(data.target.runId)} ｜ ` +
-        `${evalVerdictLabel(data.verdict)} ｜ 退出码 ${data.exitCode ?? "无"}${data.timedOut ? "（超时）" : ""} ｜ ` +
-        `命令 ${data.command.join(" ")} ｜ ${data.durationMs} 毫秒`
+        `verification | session ${shortId(data.target.sessionId)} run ${shortId(data.target.runId)} | ` +
+        `${evalVerdictLabel(data.verdict)} | exit ${data.exitCode ?? "none"}${data.timedOut ? " (timed out)" : ""} | ` +
+        `command ${data.command.join(" ")} | ${data.durationMs} ms`
       );
     }
     case "checkpoint":
-      return `工作区快照 ${item.data.commit.slice(0, 12)} ｜ 工具调用 ${item.data.toolCallId}`;
+      return `checkpoint ${item.data.commit.slice(0, 12)} | tool call ${item.data.toolCallId}`;
     case "checkpoint-mark":
-      return `${unfinishedCheckpointText(item.data)} ｜ 工具调用 ${item.data.toolCallId}`;
+      return `${unfinishedCheckpointText(item.data)} | tool call ${item.data.toolCallId}`;
     case "worker": {
       const data = item.data;
       if (data.event === "spawned") {
-        const tools = data.policy.allow.length > 0 ? data.policy.allow.join("、") : "无";
+        const tools = data.policy.allow.length > 0 ? data.policy.allow.join(", ") : "none";
         return (
-          `派出 worker ${data.name}（${data.role}）｜ 会话 ${shortId(data.childSessionId)} ｜ ` +
-          `${workerWorkspaceLabel(data.workspace)} ｜ ` +
-          `工具 ${tools} ｜ 审批模式 ${data.policy.approvalMode} ｜ ` +
-          `上限 ${data.limits.maxTurns} 轮 / ${Math.round(data.limits.wallClockMs / 1000)} 秒`
+          `worker spawned ${data.name} (${data.role}) | session ${shortId(data.childSessionId)} | ` +
+          `${workerWorkspaceLabel(data.workspace)} | ` +
+          `tools ${tools} | approval mode ${data.policy.approvalMode} | ` +
+          `limits ${plural(data.limits.maxTurns, "turn")} / ${Math.round(data.limits.wallClockMs / 1000)}s`
         );
       }
-      let detail = `worker 收尾 ${data.name} ｜ 会话 ${shortId(data.childSessionId)} ｜ ${data.status} ｜ ${data.turns} 轮`;
+      let detail = `worker settled ${data.name} | session ${shortId(data.childSessionId)} | ${data.status} | ${plural(data.turns, "turn")}`;
       if (data.error !== undefined) {
-        detail += ` ｜ 原因：${data.error}`;
+        detail += ` | reason: ${data.error}`;
       }
       if (data.result !== undefined) {
-        detail += ` ｜ 改动 ${(data.result.changedFiles ?? []).length} 个文件`;
+        detail += ` | ${plural((data.result.changedFiles ?? []).length, "file")} changed`;
       }
       return detail;
     }
     case "fork": {
       const data = item.data;
       return (
-        `分叉 ｜ 分叉点 Run ${shortId(data.forkPoint.runId)} 第 ${data.forkPoint.runSeq} 条 ｜ ` +
-        `分支会话 ${shortId(data.branchSessionId)} ｜ 快照 ${data.checkpoint.commit.slice(0, 12)} ｜ ` +
-        `${data.trigger === "manual" ? "手动" : "失败自动重试"}`
+        `fork | at run ${shortId(data.forkPoint.runId)} entry ${data.forkPoint.runSeq} | ` +
+        `branch session ${shortId(data.branchSessionId)} | checkpoint ${data.checkpoint.commit.slice(0, 12)} | ` +
+        `${data.trigger === "manual" ? "manual" : "auto retry after failure"}`
       );
     }
     case "grant": {
       const data = item.data;
       if (data.event === "revoked") {
-        return `放权撤销 ${shortId(data.grantId)}`;
+        return `grant revoked ${shortId(data.grantId)}`;
       }
-      const scope = data.pathPrefix !== undefined ? `，仅限目录 ${data.pathPrefix}` : "（工具级）";
-      return `放权创建 ${shortId(data.grantId)} ｜ ${data.tool}${scope} ｜ 首调 ${data.firstCall.toolCallId}`;
+      const scope = data.pathPrefix !== undefined ? `, path ${data.pathPrefix}` : " (all paths)";
+      return `grant created ${shortId(data.grantId)} | ${data.tool}${scope} | first call ${data.firstCall.toolCallId}`;
     }
     case "hook": {
       const data = item.data;
       return (
-        `钩子 ${data.event}${data.matcher !== undefined ? `（匹配 ${data.matcher}）` : ""} ｜ ${data.conclusion} ｜ ` +
-        `退出码 ${data.exitCode ?? "无"}${data.timedOut ? "（超时）" : ""} ｜ ${data.durationMs} 毫秒 ｜ ` +
-        `命令 ${data.command}`
+        `hook ${data.event}${data.matcher !== undefined ? ` (matcher ${data.matcher})` : ""} | ${data.conclusion} | ` +
+        `exit ${data.exitCode ?? "none"}${data.timedOut ? " (timed out)" : ""} | ${data.durationMs} ms | ` +
+        `command ${data.command}`
       );
     }
     case "continuation":
@@ -169,15 +172,23 @@ function itemDetail(item: ViewItem): string {
       return pruneLine(item.data);
     case "request-retry":
       return requestRetryLine(item.data);
+    // 决策 469：会话中途切换审批模式
+    // 决策 473：工作区的 git 分支
+    case "git-head":
+      return item.data.branch !== undefined
+        ? `branch ${item.data.branch}`
+        : `detached at ${item.data.commit ?? "?"}`;
+    case "approval-mode":
+      return `approval mode ${item.data.from === "yolo" ? "yolo" : "ask"} -> ${item.data.to === "yolo" ? "yolo" : "ask"}`;
     case "background-job": {
       // 决策 365：后台作业的启动与结束；决策 409：会话结束时保留
       const data = item.data;
       if (data.event === "kept") {
-        return `后台作业保留 ｜ ${data.jobId}${data.pid !== undefined ? ` ｜ 进程号 ${data.pid}` : ""}`;
+        return `background job kept | ${data.jobId}${data.pid !== undefined ? ` | pid ${data.pid}` : ""}`;
       }
       return data.event === "started"
-        ? `后台作业启动 ｜ ${data.jobId} ｜ 命令 ${data.command}${data.keep === true ? " ｜ 会话结束后保留" : ""}`
-        : `后台作业结束 ｜ ${data.jobId} ｜ ${data.state}${data.reason !== undefined ? `（${data.reason}）` : ""} ｜ 退出码 ${data.exitCode ?? "无"} ｜ 输出 ${data.outputBytes} 字节`;
+        ? `background job started | ${data.jobId} | command ${data.command}${data.keep === true ? " | kept after session" : ""}`
+        : `background job ended | ${data.jobId} | ${data.state}${data.reason !== undefined ? ` (${data.reason})` : ""} | exit ${data.exitCode ?? "none"} | output ${data.outputBytes} bytes`;
     }
   }
 }
@@ -195,29 +206,29 @@ export function renderRunReplay(
 ): string {
   const terminal =
     run.end === undefined
-      ? "Run 收尾缺失"
-      : `结束方式 ${run.end.ending}，stopReason=${run.end.stopReason ?? run.turns.at(-1)?.assistant.stopReason ?? "无（无助手消息）"}`;
+      ? "no run end"
+      : `ended ${run.end.ending}, stopReason=${run.end.stopReason ?? run.turns.at(-1)?.assistant.stopReason ?? "none (no assistant message)"}`;
   // 决策 350：拍摄标记只显示没拍成的（失败的、拍摄中断的各一行），拍成与文件没变的不占行
   const unfinished = unfinishedCheckpointMarks(run.items);
   const shown = run.items.filter(
     (item) => item.kind !== "checkpoint-mark" || unfinished.get(item.data.toolCallId) === item.data
   );
   const lines: string[] = [
-    `回放 Run ${shortId(run.runId)} ｜ 会话 ${shortId(view.sessionId)} ｜ ` +
-      `条目 ${shown.length} 条 ｜ 终态：${terminal} ｜ 分类：${failureBadge(run.failure)}`,
+    `replay run ${shortId(run.runId)} | session ${shortId(view.sessionId)} | ` +
+      `${plural(shown.length, "entry", "entries")} | end: ${terminal} | class: ${failureBadge(run.failure)}`,
     "",
   ];
   for (const item of shown) {
-    lines.push(`${timeOf(item.timestamp)} ${ITEM_TYPE[item.kind]} ｜ ${itemDetail(item)}`);
+    lines.push(`${timeOf(item.timestamp)} ${ITEM_TYPE[item.kind]} | ${itemDetail(item)}`);
     if (options.withContent === true && item.kind === "message") {
       for (const line of messageLines(item.message)) {
-        lines.push(`  正文：${line.text}`);
+        lines.push(`  content: ${line.text}`);
       }
     }
   }
   // 崩溃残留：通俗措辞标注，绝不假装记录完整
   if (run.end === undefined) {
-    lines.push("记录到此中断（崩溃可能）：本 Run 无收尾条目");
+    lines.push("record ends here (possible crash): no run end entry");
   }
   return `${lines.join("\n")}\n`;
 }
@@ -245,8 +256,8 @@ export function runReplayCommand(options: ReplayCommandOptions): string {
     if (run === undefined) {
       const known = view.runs.map((item) => item.runId);
       throw new Error(
-        `该会话无 Run ${options.runId}` +
-          (known.length > 0 ? `。已有 Run：${known.join("、")}` : "（该会话无任何 Run）")
+        `run not found in this session: ${options.runId}` +
+          (known.length > 0 ? `; runs: ${known.join(", ")}` : " (no runs in this session)")
       );
     }
     return renderRunReplay(view, run, renderOptions);
@@ -260,7 +271,7 @@ export function runReplayCommand(options: ReplayCommandOptions): string {
       continue;
     }
     for (const run of view.runs) {
-      knownRuns.push(`${run.runId}（会话 ${view.sessionId}）`);
+      knownRuns.push(`${run.runId} (session ${view.sessionId})`);
       if (run.runId === options.runId) {
         hits.push({ view, run });
       }
@@ -269,14 +280,14 @@ export function runReplayCommand(options: ReplayCommandOptions): string {
   const [hit] = hits;
   if (hit === undefined) {
     throw new Error(
-      `Run 不存在：${options.runId}` +
-        (knownRuns.length > 0 ? `。已有 Run：${knownRuns.join("、")}` : "（尚无会话记录）")
+      `run not found: ${options.runId}` +
+        (knownRuns.length > 0 ? `; runs: ${knownRuns.join(", ")}` : " (no sessions yet)")
     );
   }
   if (hits.length > 1) {
     throw new Error(
-      `Run ${options.runId} 出现在多个会话：${hits.map((item) => item.view.sessionId as string).join("、")}。` +
-        "请用 --session 指定会话消歧"
+      `run ${options.runId} is in more than one session: ${hits.map((item) => item.view.sessionId as string).join(", ")}; ` +
+        "pick one with --session"
     );
   }
   return renderRunReplay(hit.view, hit.run, renderOptions);

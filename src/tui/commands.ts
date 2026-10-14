@@ -1,9 +1,10 @@
 // 斜杠命令分发（决策 067 拆分自 shell.ts，零行为变化）：grant 命令层在 application/grants.ts
-//（决策 030）、会话列表在 application/session-list.ts、检索在 application/search.ts、恢复流程在
-// application/resume.ts——全部与 cli 同一份逻辑；语法/语义错误响亮呈现（同 REPL 口径），
+//（决策 030）、恢复流程在
+// application/resume.ts；语法/语义错误响亮呈现，
 // 未知命令如实说明。worker 与 resume 的具体动作由壳转交给对应视图模块。
-// 决策 286：未知命令列出的可用命令从命令表（command-table.ts）按当前会话生成，以后加命令不再漏。
+// 决策 286：命令的用法与运行中能不能用在命令表（command-table.ts）；未知命令只报命令词。
 import { compactFocusOf } from "../application/compaction-text.ts";
+import { failureLine } from "../application/format.ts";
 import { runGrantCommand } from "../application/grants.ts";
 import { MEMORY_COMMAND_USAGE, MEMORY_SAVE_WAITING_TEXT } from "../application/memory-command.ts";
 import {
@@ -12,18 +13,14 @@ import {
   SANDBOX_WORKERS_UNSUPPORTED,
 } from "../application/sandbox-session.ts";
 import { SCRIPT_COMMAND_TEXTS, type ScriptCommands } from "../application/script-commands.ts";
+import { scriptBudgetProblem } from "../application/script-naming.ts";
 import { commandInputText } from "../application/script-texts.ts";
-import { runSearchCommand } from "../application/search.ts";
-import { runSessionListCommand } from "../application/session-list.ts";
+import type { TuiWorktreesFace } from "../application/worktree-cleanup.ts";
 import type { SessionGrantStore } from "../approvals/grant-store.ts";
 import type { ConfigGrantRule } from "../state/grants.ts";
 import type { SessionId } from "../state/ids.ts";
 import type { LayeredGrantRule } from "../state/settings.ts";
-import {
-  type CommandAvailability,
-  unknownCommandText,
-  WORKER_SESSION_ONLY,
-} from "./command-table.ts";
+import { unknownCommandText, WORKER_SESSION_ONLY } from "./command-table.ts";
 import { renderHooksView, type TuiHooksFace } from "./hooks-view.ts";
 import type { TuiWorkersFace } from "./workers-view.ts";
 
@@ -54,13 +51,13 @@ export interface TuiGrantsContext {
 // 壳侧窄接口：命令分发需要的当前会话上下文与壳动作
 export interface CommandsHost {
   addSystem(line: string): void;
+  // 要醒目的一行（真正的报错），不弱化
+  addAlert(line: string): void;
   render(): void;
   requestExit(): void;
   sessionId(): SessionId;
   grants(): TuiGrantsContext | undefined;
   workers(): TuiWorkersFace | undefined;
-  sessionsRoot(): string | undefined;
-  searchRoot(): string | undefined;
   resumeConfigured(): boolean;
   // 决策 237：沙箱会话在场；缺省 = 不在沙箱里
   sandbox?(): CommandsSandboxFace | undefined;
@@ -86,28 +83,22 @@ export interface CommandsHost {
   memory?(): TuiMemoryFace | undefined;
   // 接管 Esc（审批挂起时除外），直到返回的函数被调用；缺省 = 不能接管
   captureEscape?(onEscape: () => void): () => void;
-}
-
-// 命令表判断可用性用的只读面
-export function commandAvailability(host: CommandsHost): CommandAvailability {
-  return {
-    sessionsRoot: () => host.sessionsRoot(),
-    searchRoot: () => host.searchRoot(),
-    resumeConfigured: () => host.resumeConfigured(),
-    hasGrants: () => host.grants() !== undefined,
-    inSandbox: () => host.sandbox?.() !== undefined,
-    tasks: () => host.tasks !== undefined,
-    reload: () => host.reloadCommand !== undefined,
-    hooks: () => host.hooksView?.() !== undefined,
-    scripts: () => host.scriptCommands?.() !== undefined,
-    memory: () => host.memory?.() !== undefined,
-    workers: () => {
-      const workers = host.workers();
-      return workers === undefined
-        ? undefined
-        : { fork: workers.fork !== undefined, take: workers.take !== undefined };
-    },
-  };
+  // 决策 448：/worktrees 的命令面（缺省 = /worktrees 不可用）
+  worktrees?(): TuiWorktreesFace | undefined;
+  // 决策 450、456：/rename 改当前会话的名字，返回落消息区的一行（改成了为 "renamed to <名字>"，不合规为报错）；缺省 = /rename 不可用
+  readonly renameSession?: ((name: string) => string) | undefined;
+  // 决策 442：/config（缺省 = 不可用）；参数为空即打开面板，"选项=值" 即直接改
+  readonly configCommand?: ((args: string) => void) | undefined;
+  // 决策 435：/rewind 打开消息树（缺省 = 不可用）
+  readonly rewindCommand?: (() => void) | undefined;
+  // 决策 443：/panel 打开会话面板（缺省 = 不可用）
+  readonly panelCommand?: (() => void) | undefined;
+  // 决策 443：/take <名字> 是会话面板里的会话时取回它工作树里的改动；不是即 undefined（照旧按 worker 处理）
+  takePooled?(name: string): Promise<string> | undefined;
+  // 决策 443：会话面板里有没有这个名字的会话（只查不取）
+  hasPooled?(name: string): boolean;
+  // 决策 458：当前会话的名字（/take 用到它时说明不用取回）
+  currentSessionName?(): string | undefined;
 }
 
 export function handleSlashCommand(host: CommandsHost, value: string): void {
@@ -123,40 +114,19 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
       host.requestExit();
       return;
     }
-    // S4：/sessions 会话列表——只读渲染，命令层与 cli 同一份（零新治理语义）
-    const sessionsRoot = host.sessionsRoot();
-    if (tokens[0] === "sessions" && sessionsRoot !== undefined) {
-      host.addSystem(runSessionListCommand({ root: sessionsRoot }).trimEnd());
-      host.render();
-      return;
-    }
-    // M5 S2（决策 038）：/search 内容级检索——命令层与 cli 同一份；异步扫描完成后落消息区
-    const searchRoot = host.searchRoot();
-    if (tokens[0] === "search" && searchRoot !== undefined) {
-      void runSearchCommand({ root: searchRoot, args: tokens.slice(1) }).then(
-        (text) => {
-          host.addSystem(text.trimEnd());
-          host.render();
-        },
-        (error: unknown) => {
-          host.addSystem(`命令失败：${error instanceof Error ? error.message : String(error)}`);
-          host.render();
-        }
-      );
-      return;
-    }
     // 决策 237、245：沙箱会话——/export 手动交回；分叉、worker 与 /resume 换绑不支持，说明原因
     const sandbox = host.sandbox?.();
     if (sandbox !== undefined) {
       if (tokens[0] === "export") {
-        host.addSystem("交回中：把沙箱里的改动提交成分支取回宿主仓库");
         void sandbox.exportChanges().then(
           (text) => {
             host.addSystem(text);
             host.render();
           },
           (error: unknown) => {
-            host.addSystem(`交回失败：${error instanceof Error ? error.message : String(error)}`);
+            host.addAlert(
+              `export failed: ${error instanceof Error ? error.message : String(error)}`
+            );
             host.render();
           }
         );
@@ -182,14 +152,13 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
     const workers = host.workers();
     // M7（决策 079）：/fork 手动分叉——分支在独立工作树里续跑，跑完回报
     if (workers?.fork !== undefined && tokens[0] === "fork") {
-      host.addSystem("分叉中：分支在独立工作树里续跑，完成后回报");
       void workers.fork(value.trim().slice("/fork".length)).then(
         (text) => {
           host.addSystem(text);
           host.render();
         },
         (error: unknown) => {
-          host.addSystem(`分叉失败：${error instanceof Error ? error.message : String(error)}`);
+          host.addAlert(failureLine("fork", error));
           host.render();
         }
       );
@@ -217,15 +186,52 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
       return;
     }
     // 决策 279：/take <worker 名> 把已收尾 worker 自己的改动叠进工作目录
+    // 决策 443：会话面板里的会话按名字取回；与 worker 同名时要写明"session:名字"或"worker:名字"（决策 475：不再认中文前缀）
+    if (tokens[0] === "take" && tokens[1] !== undefined) {
+      const raw = tokens[1];
+      const forced = /^session:/.test(raw) ? "pooled" : /^worker:/.test(raw) ? "worker" : undefined;
+      const name = forced !== undefined ? raw.slice(raw.indexOf(":") + 1) : raw;
+      const isWorker = workers?.status().some((status) => status.name === name) === true;
+      // 先判歧义：同名时什么都不做，要求写明
+      const isPooled = host.hasPooled?.(name) === true;
+      // 决策 458：当前会话也在会话面板里列着，但它的改动就在本工作区里，没有可取回的
+      if (
+        ((forced === "pooled" && !isPooled) || (forced === undefined && !isPooled && !isWorker)) &&
+        host.currentSessionName?.() === name
+      ) {
+        host.addSystem(`${name} is the current session; nothing to take`);
+        return;
+      }
+      if (forced === undefined && isPooled && isWorker) {
+        host.addSystem(
+          `a session and a worker are both named ${name}: /take session:${name} or /take worker:${name}`
+        );
+        return;
+      }
+      const pooled = forced === "worker" || !isPooled ? undefined : host.takePooled?.(name);
+      if (pooled !== undefined) {
+        void pooled.then((text) => {
+          host.addSystem(text);
+          host.render();
+        });
+        return;
+      }
+      if (forced === "pooled") {
+        host.addSystem(`no session named ${name} in the session panel`);
+        return;
+      }
+      if (workers !== undefined) {
+        host.takeCommand(workers, name);
+        return;
+      }
+    }
     if (workers !== undefined && tokens[0] === "take") {
       host.takeCommand(workers, tokens[1]);
       return;
     }
     // 决策 294 B1：/tasks 查看任务清单（完整的清单显示留给编排二段）
     if (tokens[0] === "tasks" && host.tasks !== undefined) {
-      host.addSystem(
-        host.tasks() ?? "任务清单没有开（设置 orchestration 一节的 taskList 为 false）。"
-      );
+      host.addSystem(host.tasks() ?? "task list is off");
       return;
     }
     // 决策 309、312、301：/orchestrate——发起即以人的输入提交（交给模型的文字带关键词，点名由程序判断）；续跑、停止、放弃由程序直接做
@@ -236,8 +242,10 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
         host.addSystem(text);
         host.render();
       };
-      const failed = (error: unknown) =>
-        done(`命令失败：${error instanceof Error ? error.message : String(error)}`);
+      const failed = (error: unknown) => {
+        host.addAlert(failureLine("command", error));
+        host.render();
+      };
       if (sub === "resume" || sub === "drop") {
         const runId = tokens[2];
         if (runId === undefined) {
@@ -256,6 +264,12 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
       const task = value.trim().slice("/orchestrate".length).trim();
       if (task === "" || host.submitInput === undefined) {
         host.addSystem(SCRIPT_COMMAND_TEXTS.usage);
+        return;
+      }
+      // 决策 475：额度只收 token，金额写法说明原因、不发起
+      const problem = scriptBudgetProblem(task);
+      if (problem !== undefined) {
+        host.addAlert(problem);
         return;
       }
       host.submitInput(commandInputText(task));
@@ -292,7 +306,7 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
               host.render();
             },
             (error: unknown) => {
-              host.addSystem(`命令失败：${error instanceof Error ? error.message : String(error)}`);
+              host.addAlert(failureLine("command", error));
               host.render();
             }
           )
@@ -300,6 +314,34 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
         return;
       }
       host.addSystem(MEMORY_COMMAND_USAGE);
+      return;
+    }
+    // 决策 448：/worktrees 列出、删除留下的 worker 工作树与分支（删除要再确认一次）
+    const worktrees = host.worktrees?.();
+    if (tokens[0] === "worktrees" && worktrees !== undefined) {
+      host.addSystem(worktrees.run(tokens.slice(1)));
+      return;
+    }
+    // 决策 443：/panel 打开会话面板
+    if (tokens[0] === "panel" && host.panelCommand !== undefined) {
+      host.panelCommand();
+      return;
+    }
+    // 决策 435：/rewind 打开消息树
+    if (tokens[0] === "rewind" && host.rewindCommand !== undefined) {
+      host.rewindCommand();
+      return;
+    }
+    // 决策 442：/config 打开设置面板；/config 选项=值 直接改
+    if (tokens[0] === "config" && host.configCommand !== undefined) {
+      host.configCommand(value.trim().slice("/config".length).trim());
+      return;
+    }
+    // 决策 450、456：/rename <名字> 改当前会话的名字：记进会话记录（续接后还在），本机会话名录跟着改（别的会话按它找到本会话）
+    if (tokens[0] === "rename" && host.renameSession !== undefined) {
+      const name = value.trim().slice("/rename".length).trim();
+      const reply = name === "" ? "usage: /rename <name>" : host.renameSession(name);
+      if (reply !== "") host.addSystem(reply);
       return;
     }
     // 决策 189：/compact [重点] 手动压缩（重点作为摘要的附加说明）
@@ -338,9 +380,9 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
         },
       });
     if (!handled) {
-      host.addSystem(unknownCommandText(value, commandAvailability(host)));
+      host.addSystem(unknownCommandText(value));
     }
   } catch (error) {
-    host.addSystem(`命令失败：${error instanceof Error ? error.message : String(error)}`);
+    host.addAlert(failureLine("command", error));
   }
 }

@@ -11,11 +11,13 @@ import type { FailureClass } from "./classification.ts";
 import { canonicalJson, sha256Hex } from "./hashing.ts";
 import type { RunId, SessionId } from "./ids.ts";
 import {
+  type ApprovalModeData,
   type BackgroundJobData,
   type CheckpointData,
   type CheckpointMarkData,
   type ContinuationData,
   type ForkData,
+  type GitHeadData,
   type GrantData,
   HEADER_METADATA_KEY,
   type HookRunData,
@@ -129,7 +131,11 @@ export type ViewItem =
   // 决策 365：后台作业的启动与结束
   | { kind: "background-job"; entryId: string; timestamp: number; data: BackgroundJobData }
   // 决策 420：模型请求的一次失败重试
-  | { kind: "request-retry"; entryId: string; timestamp: number; data: RequestRetryData };
+  | { kind: "request-retry"; entryId: string; timestamp: number; data: RequestRetryData }
+  // 决策 469：会话中途切换审批模式
+  | { kind: "approval-mode"; entryId: string; timestamp: number; data: ApprovalModeData }
+  // 决策 473：工作区的 git 分支（变了才记）
+  | { kind: "git-head"; entryId: string; timestamp: number; data: GitHeadData };
 
 // 一次工具调用：助手消息里的调用块与对应的工具结果消息（按工具调用号在同一 Run 内配对）
 export interface ViewToolCall {
@@ -190,6 +196,9 @@ export interface SessionView {
   toolOutcomes: StoreToolOutcome[];
   // 数据不合 schema、版本不认识而被跳过的自定义条目说明
   warnings: string[];
+  // 决策 456：会话文件里记的会话名（最新一条；没改过名为缺省）与文件头记的工作目录（读文件时补上）
+  name?: string;
+  cwd?: string;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -335,6 +344,8 @@ const CUSTOM_KINDS = {
   [SessionEntryType.Prune]: "prune",
   [SessionEntryType.BackgroundJob]: "background-job",
   [SessionEntryType.RequestRetry]: "request-retry",
+  [SessionEntryType.ApprovalMode]: "approval-mode",
+  [SessionEntryType.GitHead]: "git-head",
 } as const;
 
 // 自定义条目 → 时间线条目；不是 Pigeon 的条目返回 undefined，数据不合 schema 记告警
@@ -349,11 +360,11 @@ function toCustomItem(
   const type = customType as keyof typeof CUSTOM_KINDS;
   const data = entry.data;
   if (!isObject(data) || data.version !== SESSION_ENTRY_VERSION) {
-    warnings.push(`条目 ${entry.id}（${type}）的数据版本不认识，已跳过`);
+    warnings.push(`entry ${entry.id} (${type}) has an unknown data version; skipped`);
     return undefined;
   }
   if (!Value.Check(SESSION_ENTRY_SCHEMAS[type], data)) {
-    warnings.push(`条目 ${entry.id}（${type}）的数据不合 schema，已跳过`);
+    warnings.push(`entry ${entry.id} (${type}) does not match the schema; skipped`);
     return undefined;
   }
   return {
@@ -598,6 +609,8 @@ export function summarizeSessionView(view: SessionView): SessionViewSummary {
     failureClasses,
     totalTokens,
     totalCost,
+    ...(view.name !== undefined ? { name: view.name } : {}),
+    ...(view.cwd !== undefined ? { cwd: view.cwd } : {}),
     ...(view.worker !== undefined && view.parentSessionId !== undefined
       ? {
           worker: {
@@ -644,6 +657,6 @@ export function unfinishedCheckpointMarks(
 // 没拍成的快照的一行说明
 export function unfinishedCheckpointText(mark: CheckpointMarkData): string {
   return mark.state === "failed"
-    ? `快照没有拍成（${mark.reason ?? "原因未记"}），从这里分叉会明确报错`
-    : "快照拍摄中断（进程在拍完之前退出），从这里分叉会明确报错";
+    ? `snapshot failed (${mark.reason ?? "no reason recorded"}); can't fork from here`
+    : "snapshot interrupted; can't fork from here";
 }

@@ -86,16 +86,16 @@ export class ToolRegistry {
       const name =
         typeof candidate === "object" && candidate !== null && "name" in candidate
           ? String(candidate.name)
-          : "（无名）";
-      throw new ToolRegistryError(`畸形工具注册：${name}`);
+          : "(unnamed)";
+      throw new ToolRegistryError(`malformed tool registration: ${name}`);
     }
     if (!isObjectParameters(registration.parameters)) {
       throw new ToolRegistryError(
-        `工具 ${registration.name} 的 parameters 必须是对象 schema（typebox 对象或 type 为 object 的 JSON Schema）`
+        `tool ${registration.name}: parameters must be an object schema (typebox object or JSON Schema with type object)`
       );
     }
     if (this.#tools.has(registration.name)) {
-      throw new ToolRegistryError(`重复注册工具：${registration.name}`);
+      throw new ToolRegistryError(`duplicate tool registration: ${registration.name}`);
     }
     this.#tools.set(registration.name, registration);
   }

@@ -40,6 +40,6 @@ async function panelText(pathScoped: boolean): Promise<string> {
 test("沙箱会话（不能建目录放权）的审批面板不提供 [d]；能建的照旧提供", async () => {
   const sandboxed = await panelText(false);
   assert.doesNotMatch(sandboxed, /\[d\]/);
-  assert.match(sandboxed, /\[a\] 本会话允许$/m);
-  assert.match(await panelText(true), /\[d\] 本会话允许\(仅限当前调用所在目录\)/);
+  assert.match(sandboxed, /\[a\] allow for this session$/m);
+  assert.match(await panelText(true), /\[d\] allow for this session \(this directory\)/);
 });

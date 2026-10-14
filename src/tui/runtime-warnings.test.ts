@@ -87,11 +87,14 @@ test("会话存储告警：终端界面运行期间落消息区、只说一次�
     rmSync(root, { recursive: true, force: true });
   }
   const flat = screenFlat(term);
-  assert.ok(flat.includes("会话存储告警：新会话存储打开失败"), screenText(term));
-  assert.equal(flat.split("会话存储告警").length - 1, 1, "同一类只说一次");
+  assert.ok(
+    flat.includes("session store warning: opening the session file failed"),
+    screenText(term)
+  );
+  assert.equal(flat.split("session store warning").length - 1, 1, "同一类只说一次");
   assert.ok(flat.includes("二好"), "运行不受影响");
   assert.deepEqual(
-    stderr.lines.filter((line) => line.includes("告警")),
+    stderr.lines.filter((line) => line.includes("warning")),
     [],
     "运行期间告警不写标准错误输出"
   );
@@ -108,7 +111,6 @@ test("窗口缩放：变窄后全量重绘，内容仍在、行宽不越界，�
     runtime,
     sessionId,
     logDir,
-    model: "deepseek/deepseek-chat",
   });
   try {
     shell.start();
@@ -128,10 +130,7 @@ test("窗口缩放：变窄后全量重绘，内容仍在、行宽不越界，�
     term.resize(120, 30);
     await settle();
     assertWidthsWithin(term, 120);
-    assert.ok(
-      screenText(term).includes("deepseek/deepseek-chat | ctx 30% (60k/200k) | cost $0"),
-      "变宽后状态栏恢复全写"
-    );
+    assert.ok(screenText(term).includes("ctx 30% (60k/200k) · 0 tokens"), "变宽后状态栏恢复全写");
   } finally {
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });

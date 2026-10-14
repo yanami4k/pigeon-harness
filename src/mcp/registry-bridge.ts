@@ -200,13 +200,13 @@ export function bridgeMcpServer(input: { server: McpServerConfig; source: McpToo
     const name = mcpToolName(server.name, descriptor.name);
     if (name.length > MCP_TOOL_NAME_MAX) {
       problems.push(
-        `server ${server.name} 的工具 ${descriptor.name} 映射后的名字 ${name} 超出长度上限 ${MCP_TOOL_NAME_MAX}，已跳过`
+        `server ${server.name}: tool ${descriptor.name} maps to ${name}, longer than ${MCP_TOOL_NAME_MAX}; skipped`
       );
       continue;
     }
     if (taken.has(name)) {
       problems.push(
-        `server ${server.name} 的工具 ${descriptor.name} 归一后与已映射的工具重名：${name}，已跳过`
+        `server ${server.name}: tool ${descriptor.name} maps to ${name}, already taken; skipped`
       );
       continue;
     }

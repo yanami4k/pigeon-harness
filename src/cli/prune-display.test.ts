@@ -51,8 +51,9 @@ test("trace 与 replay：一次裁剪显示一行", async () => {
     ]) {
       const lines = output.split("\n");
       assert.equal(
-        lines.filter((line) => /上下文裁剪（按价格比）.*2 条.*50000 → 32000.*360000/.test(line))
-          .length,
+        lines.filter((line) =>
+          /context pruned \(price ratio\).*2 items.*50000 → 32000.*360000/.test(line)
+        ).length,
         1,
         output
       );

@@ -18,14 +18,10 @@ import { pigeonRel, userPigeonRel } from "../state/paths.ts";
 export type MemoryLayer = "project" | "user";
 export const MEMORY_LAYERS: readonly MemoryLayer[] = ["project", "user"];
 
-// 编号前缀与给人看的层名
+// 编号前缀
 export const MEMORY_LAYER_PREFIX: Readonly<Record<MemoryLayer, string>> = {
   project: "P",
   user: "U",
-};
-export const MEMORY_LAYER_LABELS: Readonly<Record<MemoryLayer, string>> = {
-  project: "项目级",
-  user: "用户级",
 };
 
 // 展示路径（推送段、工具说明与 /memory 里的写法）

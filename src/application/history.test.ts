@@ -1,4 +1,4 @@
-// M5 S2（决策 045）：历史投影——正文、thinking、工具行、轮次与 Run 标记按会话文件里的顺序交织；
+// M5 S2（决策 045）：历史投影——正文、thinking、工具行与 Run 收尾行（决策 452：没有轮次标记）按会话文件里的顺序交织；
 // toolResult 默认折叠；单条渲染上限；安全上限默认 500 行，超出折叠为一行提示。读新会话存储：
 // 分支会话只画自己的部分；出错的工具调用、上游合成失败与未收尾如实呈现；旧格式会话与不存在的会话各给一行提示。
 // TUI 的 /resume 与 cli 的 --with-content 共用本投影。
@@ -10,13 +10,24 @@ import { test } from "vitest";
 import { LEGACY_READER_HINT } from "../persistence/session-catalog.ts";
 import { newRunId, newSessionId } from "../state/ids.ts";
 import type { ViewMessage } from "../state/session-view.ts";
+import { JOB_NOTICE_PREFIX, LEGACY_JOB_NOTICE_PREFIX } from "./background-jobs.ts";
+import { PROGRAM_NOTE_PREFIX, worktreeContinueNotice } from "./enter-worktree-tool.ts";
 import {
   DEFAULT_HISTORY_LIMIT,
   type HistoryLine,
+  isProgramNotice,
   loadSessionHistory,
   messageLines,
+  userTextParts,
 } from "./history.ts";
 import { seedToolRun } from "./history-fixtures.ts";
+import type { NamedWorktree } from "./named-worktree.ts";
+import {
+  PEER_DELIVERY_NOTICE_PREFIX,
+  PEER_IDLE_NOTICE_PREFIX,
+  wrapPeerMessage,
+} from "./peer-messaging.ts";
+import { commandInputText } from "./script-texts.ts";
 import { createFixtureSession, forkFixture } from "./session-store-fixtures.ts";
 
 async function withRoot(run: (root: string, sessionsDir: string) => Promise<void>): Promise<void> {
@@ -28,9 +39,14 @@ async function withRoot(run: (root: string, sessionsDir: string) => Promise<void
   }
 }
 
-const pairs = (lines: HistoryLine[]) => lines.map((line) => [line.kind, line.text]);
+// 收尾行里的用时随跑测试的快慢变化，比对时换成 <t>
+const pairs = (lines: HistoryLine[]) =>
+  lines.map((line) => [
+    line.kind,
+    line.kind === "end" ? line.text.replace(/ · \d+(h \d+m|m \d+s|s)/, " · <t>") : line.text,
+  ]);
 
-test("时序交织：正文、thinking、轮次标记、工具行、折叠的 toolResult、Run 结束标记", () =>
+test("时序交织：正文、thinking、工具行、折叠的 toolResult、Run 收尾行（决策 452：没有轮次标记，收尾不写分类）", () =>
   withRoot(async (root, sessionsDir) => {
     const sessionId = newSessionId();
     await seedToolRun(sessionsDir, sessionId);
@@ -38,12 +54,10 @@ test("时序交织：正文、thinking、轮次标记、工具行、折叠的 to
       ["user", "> 把 beta 改成大写"],
       ["thinking", "~ 先确认锚点"],
       ["assistant", "我来改"],
-      ["marker", "-- turn: toolUse --"],
       ["tool", '$ edit_file {"path":"a.ts"} -> ok'],
-      ["toolResult", "[result] edit_file ok（7 字符，已折叠）"],
+      ["toolResult", "[result] edit_file ok (7 chars, collapsed)"],
       ["assistant", "改好了"],
-      ["marker", "-- turn: stop --"],
-      ["marker", "== run ended | 分类：正常 =="],
+      ["end", "done · <t>"],
     ]);
   }));
 
@@ -55,7 +69,7 @@ test("安全上限：默认 500 行；超出时最早部分折叠为一行提示
     const full = loadSessionHistory(root, sessionId);
     const folded = loadSessionHistory(root, sessionId, { limit: 3 });
     assert.equal(folded.length, 4);
-    assert.deepEqual(folded[0], { kind: "notice", text: "[更早 6 条未展开，/search 可查]" });
+    assert.deepEqual(folded[0], { kind: "notice", text: "[4 earlier lines not shown]" });
     assert.deepEqual(folded.slice(1), full.slice(-3));
   }));
 
@@ -65,11 +79,11 @@ test("单条渲染上限：超长正文折叠并标注已截断显示", () =>
     session.startRun({ task: "x".repeat(50) });
     const { sessionId } = await session.close();
     assert.deepEqual(pairs(loadSessionHistory(root, sessionId, { entryChars: 10 })), [
-      ["user", `> ${"x".repeat(10)}…（已截断显示，共 50 字符）`],
+      ["user", `> ${"x".repeat(10)}… (50 chars)`],
     ]);
   }));
 
-test("出错的工具调用、上游合成失败消息与撞上限收尾：工具行标 error，Run 标记带分类", () =>
+test("出错的工具调用与各种收尾：工具行标 error；收尾行说清怎么结束的（出错带原因、到上限、被打断、续跑后仍被截断），不写分类", () =>
   withRoot(async (root, sessionsDir) => {
     const session = createFixtureSession({ sessionsDir });
     session.startRun({ task: "改 a" });
@@ -80,21 +94,29 @@ test("出错的工具调用、上游合成失败消息与撞上限收尾：工�
       isError: true,
     });
     session.assistant({ text: "", stopReason: "error", errorMessage: "provider 故障" });
-    session.endRun({ ending: "error" });
+    session.endRun({ ending: "error", errorMessage: "503 provider 故障\n第二行不显示" });
     session.startRun({ task: "再试" });
     session.assistant({ text: "", stopReason: "aborted" });
     session.endRun({ ending: "turn-limit" });
+    session.startRun({ task: "第三次" });
+    session.assistant({ text: "", stopReason: "aborted" });
+    session.endRun({ ending: "aborted" });
+    session.startRun({ task: "写长文" });
+    session.assistant({ text: "很长", stopReason: "length" });
+    session.endRun({ ending: "completed" });
     const { sessionId } = await session.close();
     assert.deepEqual(pairs(loadSessionHistory(root, sessionId)), [
       ["user", "> 改 a"],
-      ["marker", "-- turn: toolUse --"],
       ["tool", '$ edit_file {"path":"a"} -> error'],
-      ["toolResult", "[result] edit_file error（5 字符，已折叠）"],
-      ["marker", "-- turn: error --"],
-      ["marker", "== run ended | 分类：基础设施错误 =="],
+      ["toolResult", "[result] edit_file error (5 chars, collapsed)"],
+      ["end", "error · <t> · 503 provider 故障"],
       ["user", "> 再试"],
-      ["marker", "-- turn: aborted --"],
-      ["marker", "== run ended | 分类：取消 =="],
+      ["end", "stopped: turn limit · <t>"],
+      ["user", "> 第三次"],
+      ["end", "interrupted · <t>"],
+      ["user", "> 写长文"],
+      ["assistant", "很长"],
+      ["end", "stopped: output limit · <t>"],
     ]);
   }));
 
@@ -113,10 +135,10 @@ test("分支会话只画自己的部分；未收尾的 Run 没有结束标记；
     const legacy = newSessionId();
     writeFileSync(join(sessionsDir, `${legacy}.jsonl`), "");
     assert.deepEqual(pairs(loadSessionHistory(root, legacy)), [
-      ["notice", `[旧格式会话（迁移之前创建），这里不显示历史；${LEGACY_READER_HINT}]`],
+      ["notice", `[old-format session; history not shown; ${LEGACY_READER_HINT}]`],
     ]);
     assert.deepEqual(pairs(loadSessionHistory(root, newSessionId())), [
-      ["notice", "[该会话在会话存储里没有记录，这里不显示历史]"],
+      ["notice", "[no record of this session in the session store; history not shown]"],
     ]);
   }));
 
@@ -144,3 +166,114 @@ test("回看历史：打转提醒与 worker 通知显示成系统行（同实时
     { kind: "user", text: "> Loop reminder: 继续" },
   ]);
 });
+
+test("回看历史：后台作业通知、跨会话消息与回告、[Pigeon] 附注显示成系统行；/orchestrate 发起的显示人敲的命令（↑ 召回取回的是命令）", () => {
+  const message = (text: string): ViewMessage => ({
+    entryId: "e",
+    runId: newRunId(),
+    runSeq: 1,
+    role: "user",
+    timestamp: 0,
+    blocks: [{ type: "text", text }],
+    raw: {},
+  });
+  const worktree = {
+    name: "wt",
+    repoRoot: "/repo",
+    path: "/repo/.pigeon/wt/wt",
+    branch: "pigeon-wt/wt",
+    baseLabel: "HEAD",
+    created: true,
+  } as NamedWorktree;
+  const peer = wrapPeerMessage(
+    { sessionId: "sess_peer", name: "api-fix", cwd: "/other", mode: "approving" },
+    "我这边改完了",
+    "0123456789abcdef"
+  );
+  for (const text of [
+    `${JOB_NOTICE_PREFIX}Job 1 exited with code 0: $ npm test`,
+    `${LEGACY_JOB_NOTICE_PREFIX}作业 1 已结束`,
+    peer,
+    `${PEER_IDLE_NOTICE_PREFIX}api-fix is now idle.`,
+    `${PEER_DELIVERY_NOTICE_PREFIX}The user of api-fix declined your message; it was not delivered.`,
+    worktreeContinueNotice(worktree, 2),
+  ]) {
+    assert.ok(isProgramNotice(text) || text.startsWith(PROGRAM_NOTE_PREFIX), text);
+    assert.deepEqual(messageLines(message(text)), [{ kind: "notice", text }]);
+  }
+  // /orchestrate 发起：交给模型的是英文的一句开头加任务，回看显示人敲的命令；旧会话里的两种开头照样认——决策 428 之前的
+  // 中文原文，与决策 475 之前嵌着中文关键词的英文句子（回退时放回输入框的同样是还原后的命令，同走 userTextParts）
+  assert.deepEqual(messageLines(message(commandInputText("给各模块补测试 budget 300k"))), [
+    { kind: "user", text: "> /orchestrate 给各模块补测试 budget 300k" },
+  ]);
+  assert.match(commandInputText("x"), /"script orchestration"\.\)\nx$/);
+  const legacyLeads = [
+    "（人用 /orchestrate 点名用脚本编排做这件事）\n",
+    '(The user started this with /orchestrate, asking for it to be done with script orchestration, "脚本编排".)\n',
+  ];
+  for (const lead of legacyLeads) {
+    assert.deepEqual(messageLines(message(`${lead}修 bug 额度 300k`)), [
+      { kind: "user", text: "> /orchestrate 修 bug 额度 300k" },
+    ]);
+    assert.deepEqual(userTextParts(`${lead}修 bug`), { notices: [], human: "/orchestrate 修 bug" });
+  }
+  // 随人的下一条输入前缀给模型的附注（没移进工作树的说明）：附注是系统行，人的话照旧带 > 前缀；人敲的是 /orchestrate 时同样还原
+  const note = `${PROGRAM_NOTE_PREFIX}The session did not move into the worktree /repo/.pigeon/wt/wt: the turn was interrupted.`;
+  assert.deepEqual(messageLines(message(`${note}\n\n接着改`)), [
+    { kind: "notice", text: note },
+    { kind: "user", text: "> 接着改" },
+  ]);
+  assert.deepEqual(messageLines(message(`${note}\n\n${note}\n\n${commandInputText("拆分")}`)), [
+    { kind: "notice", text: note },
+    { kind: "notice", text: note },
+    { kind: "user", text: "> /orchestrate 拆分" },
+  ]);
+  assert.deepEqual(userTextParts(commandInputText("多行\n任务")), {
+    notices: [],
+    human: "/orchestrate 多行\n任务",
+  });
+  // 只是提到这些说法的人话照旧算人说的
+  for (const text of [
+    "看看 [Pigeon] 的输出",
+    "(The user started this) 不是命令",
+    "Cross-session message",
+  ]) {
+    assert.deepEqual(messageLines(message(text)), [{ kind: "user", text: `> ${text}` }]);
+  }
+});
+
+test("决策 467：人在审批区答过的工具调用，回看历史在结果之前留一行结论（批准或拒绝）；按规则放行的不写", () =>
+  withRoot(async (root, sessionsDir) => {
+    const session = createFixtureSession({ sessionsDir });
+    session.startRun({ task: "改两处" });
+    session.toolTurn({
+      name: "edit_file",
+      args: { path: "a" },
+      result: "ok",
+      details: { pigeon: { gate: { outcome: "approved", approvedBy: "human" } } },
+    });
+    session.toolTurn({
+      name: "run_command",
+      args: { command: "rm x" },
+      result: "rejected",
+      isError: true,
+      details: { pigeon: { gate: { outcome: "rejected", approvedBy: "human" } } },
+    });
+    session.toolTurn({
+      name: "read_file",
+      args: { path: "b" },
+      result: "ok",
+      details: { pigeon: { gate: { outcome: "approved", approvedBy: "policy:grant" } } },
+    });
+    const { sessionId } = await session.close();
+    const lines = pairs(loadSessionHistory(root, sessionId)).filter(
+      ([kind]) => kind === "approval" || kind === "tool"
+    );
+    assert.deepEqual(lines, [
+      ["tool", '$ edit_file {"path":"a"} -> ok'],
+      ["approval", '✓ approved edit_file {"path":"a"}'],
+      ["tool", '$ run_command {"command":"rm x"} -> error'],
+      ["approval", '✗ rejected run_command {"command":"rm x"}'],
+      ["tool", '$ read_file {"path":"b"} -> ok'],
+    ]);
+  }));

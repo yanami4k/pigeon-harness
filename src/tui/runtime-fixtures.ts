@@ -93,6 +93,11 @@ export class ScriptedRuntime implements TuiRuntimeFace {
     for (const listener of this.listeners) listener(envelope);
   }
 
+  // 流式增量（正文或 thinking）
+  emitDelta(kind: StreamTextDelta["kind"], delta: string): void {
+    for (const listener of this.streamListeners) listener({ runId: this.runId, kind, delta });
+  }
+
   toolResult(notice: Omit<ToolResultNotice, "runId"> & { runId?: RunId }): void {
     const full: ToolResultNotice = { runId: this.runId, ...notice };
     for (const listener of this.toolListeners) listener(full);

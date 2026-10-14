@@ -117,11 +117,19 @@ test("决策 339 ⑦、384：三件工具的说明逐字冻结——能找到的
     [
       [
         SEARCH_SESSIONS_TOOL,
-        "检索本项目以前会话（按会话归并，BM25 打分，工具输出也在范围内）",
+        "search this project's past sessions (grouped by session, BM25 ranking, tool output included)",
         "read",
       ],
-      [READ_SESSION_ENTRY_TOOL, "按 entryId 读取以前会话的消息原文（有上限，可分页续读）", "read"],
-      [LIST_SESSIONS_TOOL, "列出本项目以前的会话（可按时间与改动过的文件筛选）", "read"],
+      [
+        READ_SESSION_ENTRY_TOOL,
+        "read a past session's message by entryId (capped, pageable)",
+        "read",
+      ],
+      [
+        LIST_SESSIONS_TOOL,
+        "list this project's past sessions (filter by time and changed files)",
+        "read",
+      ],
     ]
   );
 });

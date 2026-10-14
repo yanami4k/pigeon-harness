@@ -102,6 +102,10 @@ function staged(first: FakeStreamBehavior, then: FakeStreamBehavior): StreamFn {
       : opening(model, context, options)) as StreamFn;
 }
 
+// 决策 447：分支名里的会话号后 8 位随会话变，比对文字时去掉（分支名格式另在 worktree.test 与 workers-worktree-removal.test 核对）
+const BRANCH_SESSION = /pigeon\/[0-9a-z]{8}-/g;
+const withoutBranchSession = (text: string): string => text.replace(BRANCH_SESSION, "pigeon/");
+
 // 主会话里 spawn_worker 的工具结果文字
 function spawnResults(root: string, sessionId: string): string[] {
   const view = loadSessionView(join(root, ".pigeon", "state", "sessions"), sessionId);
@@ -113,7 +117,7 @@ function spawnResults(root: string, sessionId: string): string[] {
       const raw = call.result?.raw as
         | { content?: Array<{ type: string; text?: string }> }
         | undefined;
-      return (raw?.content ?? []).map((block) => block.text ?? "").join("");
+      return withoutBranchSession((raw?.content ?? []).map((block) => block.text ?? "").join(""));
     });
 }
 
@@ -134,6 +138,7 @@ function userTexts(root: string, sessionId: string): string[] {
       })
       // 决策 363：开工状态块不是输入
       .filter((text) => !isStatusText(text))
+      .map(withoutBranchSession)
   );
 }
 
@@ -444,7 +449,8 @@ test("给了总数上限：pigeon run 的一次运行是一整次交办，通知
   assert.equal(result.status, "completed");
   const results = spawnResults(root, result.sessionId);
   assert.deepEqual(results, [spawned("tester-1", "tester"), SPAWN_WORKER_TEXTS.spawnLimit(1)]);
-  // 决策 279：仓库干净时起点就是 HEAD，通知末行写明派出时没有未提交的文件与取用方式
+  // 决策 448：这个 worker 没有改任何文件，收尾即删工作树与分支，通知末行写明这一点、不再给起点与取用方式
+  //（起点一行的格式在 spawn-worker-tool.test 核对）
   const notice = userTexts(root, result.sessionId).find((text) =>
     text.includes("tester-1 (tester) completed")
   );
@@ -452,11 +458,9 @@ test("给了总数上限：pigeon run 的一次运行是一整次交办，通知
     withoutMarker(notice ?? "")
       .split("\n")
       .at(-1),
-    SPAWN_WORKER_TEXTS.start(
-      { commit: git(root, ["rev-parse", "HEAD"]), snapshot: false, files: [] },
-      "tester-1"
-    )
+    SPAWN_WORKER_TEXTS.removedUnchanged
   );
+  assert.equal(git(root, ["for-each-ref", "refs/heads/pigeon/"]), "");
 });
 
 test("多份尝试：各份在自己的工作树里改，全部结束后汇总一条通知交回各份的改动与摘要", async () => {
@@ -670,11 +674,18 @@ test("治理根与工作区根分开（--governance-root）：implementer 的工
   });
   assert.equal(result.status, "completed");
   assert.deepEqual(childStatuses(gov, result.sessionId), { fix: "completed", look: "completed" });
-  // 工作树在治理根下；起点快照的引用在建好工作树后从工作区仓库删掉
+  // 工作树建在治理根下（派出记录里的路径）；决策 448：改动经 take_worker 完整取回后工作树与分支已删。
+  // 起点快照的引用在建好工作树后从工作区仓库删掉
+  const loaded = loadSessionView(join(gov, ".pigeon", "state", "sessions"), result.sessionId);
+  const fixWorkspace = loaded?.children.find((child) => child.spawned.name === "fix")?.spawned
+    .workspace;
+  assert.ok(fixWorkspace?.kind === "git-worktree");
+  assert.ok(fixWorkspace.path.startsWith(worktreesDirOf(gov)), fixWorkspace.path);
   assert.equal(
     readdirSync(worktreesDirOf(gov)).filter((entry) => entry.endsWith("-fix")).length,
-    1
+    0
   );
+  assert.equal(git(root, ["branch", "--list", fixWorkspace.branch]), "");
   assert.equal(git(root, ["for-each-ref", "refs/pigeon/worker-start/"]), "");
   // explorer 读到的是工作区的文件；implementer 的改动经 take_worker 叠回工作区；工作区里没有程序状态
   assert.ok(explorerSaw.includes("alpha"), explorerSaw);

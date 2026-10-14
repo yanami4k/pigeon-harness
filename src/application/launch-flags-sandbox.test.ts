@@ -30,12 +30,12 @@ test("--sandbox-network off 断网；取值形状为档位名，非法取值报�
 });
 
 test("沙箱参数只配合 --sandbox 用；不接受沙箱的入口当未知参数", () => {
-  assert.throws(() => parse(["--sandbox-network", "off"]), /只配合 --sandbox/);
-  assert.throws(() => parse(["--sandbox-approval", "prompt"]), /只配合 --sandbox/);
-  assert.throws(() => parse(["--sandbox-from-head"]), /只配合 --sandbox/);
+  assert.throws(() => parse(["--sandbox-network", "off"]), /need --sandbox/);
+  assert.throws(() => parse(["--sandbox-approval", "prompt"]), /need --sandbox/);
+  assert.throws(() => parse(["--sandbox-from-head"]), /need --sandbox/);
   assert.throws(
     () => parseLaunchFlags(["--sandbox"], { usage: "u", env: {} }),
-    /未知参数：--sandbox/
+    /unknown option: --sandbox/
   );
 });
 

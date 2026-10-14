@@ -43,9 +43,13 @@ test("trace 与 replay：续跑与重复检测命中各显示一行", async () =
       runReplayCommand({ root, runId, sessionId }),
     ]) {
       const lines = output.split("\n");
-      assert.equal(lines.filter((line) => /续跑第 1 次：.*重复检测/.test(line)).length, 1);
       assert.equal(
-        lines.filter((line) => /重复检测命中：逐字周期.*7.*41.*已掐断/.test(line)).length,
+        lines.filter((line) => /continuation #1: .*repetition detection/.test(line)).length,
+        1
+      );
+      assert.equal(
+        lines.filter((line) => /repetition detected: exact cycle.*7.*41.*cut off/.test(line))
+          .length,
         1
       );
     }

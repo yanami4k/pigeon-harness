@@ -8,8 +8,8 @@
 // - 额度（300）：同时在跑的上限由编排器排队实现（人派的一并计算）；不设总数上限，给了 --worker-limit（或配置 maxWorkersPerRun）
 //   时一次运行里 agent 派的个数在这里计，满了按定稿文字拒绝；本次运行的总额度用完时拒绝再派（正在跑的由额度的持有方停掉）。
 // - worker 在后台跑，主 agent 这一轮结束、被中断都不影响它们；结果与工作树跨轮保留，可稍后收回（294 ⑤）。
-// - 注册范围（265–267）：只给终端界面与 pigeon run 的主会话注册（层数放开时另给未到底层的 worker，299）；命令行对话、沙箱会话与
-//   跑批器各条件都不注册。审批照现有规矩（266）：本工具只读档、不经审批，worker 各自的调用按 302、303 走。
+// - 注册范围（265–267）：只给终端界面与 pigeon run 的主会话注册（层数放开时另给未到底层的 worker，299）；沙箱会话与跑批器
+//   各条件都不注册（命令行对话已去掉，461）。审批照现有规矩（266）：本工具只读档、不经审批，worker 各自的调用按 302、303 走。
 // - 决策 360：可给工具清单（只能取主 agent 现有工具的子集，不给即按角色取预设）与各工具的作用范围（只能更窄）；
 //   校验在编排器派出时做（roles.ts），不合要求即不派、退还额度，按专门的文字回话。
 // - 决策 377：只读的 explorer 不建工作树、直接读派出方的工作区，派出与交回文字不提分支与改动文件（定稿原文）。
@@ -27,7 +27,6 @@ import type {
   WorkerOutcome,
   WorkerStartPoint,
 } from "../orchestration/workers.ts";
-import { worktreeBranchFor } from "../orchestration/worktree.ts";
 import type { SessionId } from "../state/ids.ts";
 import {
   DEFAULT_ORCHESTRATION_SETTINGS,
@@ -95,7 +94,7 @@ export function assertSpawnWorkerSettings(settings: SpawnWorkerSettings): void {
   };
   for (const [key, value] of Object.entries(checked)) {
     if (value !== undefined && (!Number.isInteger(value) || value < 1)) {
-      throw new Error(`派 worker 的上限需要正整数：${key}=${value}`);
+      throw new Error(`worker limit must be a positive integer: ${key}=${value}`);
     }
   }
 }
@@ -272,8 +271,11 @@ export const SPAWN_WORKER_TEXTS = {
     ` (summary truncated; the full text is in worker session ${sessionId})`,
   limitHit: (w: WorkerFacts, limit: WorkerLimit) =>
     `Worker ${w.name} (${w.role}) hit the ${limit} limit and did not finish. Branch: ${w.branch}. Files changed so far (${w.files.length}): ${fileList(w.files)}. Summary: ${w.summary}`,
-  failed: (w: Pick<WorkerFacts, "name" | "role" | "branch">, reason: string) =>
-    `Worker ${w.name} (${w.role}) failed: ${reason}. The branch ${w.branch} may have partial changes.`,
+  // 派出本身失败时还没有分支，不给 branch
+  failed: (w: Pick<WorkerFacts, "name" | "role"> & { branch?: string }, reason: string) =>
+    `Worker ${w.name} (${w.role}) failed: ${reason}.${
+      w.branch !== undefined ? ` The branch ${w.branch} may have partial changes.` : ""
+    }`,
   cancelled: (w: Pick<WorkerFacts, "name" | "role" | "branch">) =>
     `Worker ${w.name} (${w.role}) was cancelled. The branch ${w.branch} may have partial changes.`,
   // 决策 298：卡住
@@ -300,7 +302,10 @@ export const SPAWN_WORKER_TEXTS = {
   unknownRole: (role: string) =>
     `There is no role ${role}; choose from: ${WORKER_ROLES.join(", ")}.`,
   emptyTask: "task cannot be empty: state the goal, the relevant files, and the criteria for done.",
-  // 决策 279（271 修订）：另起一行写明起点快照与只取其自身改动的取用方式（人看的 /workers 用 workers-commands.ts 的中文一行）
+  // 决策 448：收尾时没有改动，工作树与分支已自动删掉（代替起点那一行）
+  removedUnchanged:
+    "It changed no files, so its worktree and branch were removed; there is nothing to take.",
+  // 决策 279（271 修订）：另起一行写明起点快照与只取其自身改动的取用方式（人看的 /workers 用 workers-commands.ts 的短一行）
   start: (start: WorkerStartPoint, name: string) => {
     const commit = start.commit.slice(0, 12);
     const origin = start.snapshot
@@ -543,10 +548,13 @@ function workerOutcomeTextBase(
     outcome.result?.summaryTruncated === true
       ? SPAWN_WORKER_TEXTS.truncated(outcome.sessionId)
       : "";
+  // 决策 448：收尾时没有改动、工作树已删的，不再提示取用
   const start =
-    (outcome.start !== undefined && outcome.workspace.kind === "git-worktree"
-      ? `\n${SPAWN_WORKER_TEXTS.start(outcome.start, outcome.name)}`
-      : "") + skippedFilesLine(outcome.result?.skippedFiles);
+    (outcome.worktreeRemoved === "unchanged"
+      ? `\n${SPAWN_WORKER_TEXTS.removedUnchanged}`
+      : outcome.start !== undefined && outcome.workspace.kind === "git-worktree"
+        ? `\n${SPAWN_WORKER_TEXTS.start(outcome.start, outcome.name)}`
+        : "") + skippedFilesLine(outcome.result?.skippedFiles);
   if (outcome.blocked !== undefined) {
     return (
       SPAWN_WORKER_TEXTS.awaitingApproval(
@@ -654,6 +662,7 @@ export function workerNoticeMarker(sessionId: string): string {
 }
 
 // 决策 428 之前的说法：旧会话里递出的通知末行是中文的
+// 旧会话里的中文原文，只用来认出旧记录
 export function legacyWorkerNoticeMarker(sessionId: string): string {
   return `（worker 会话 ${sessionId}）`;
 }
@@ -740,11 +749,7 @@ export function createSpawnWorkerTool(
       if (host === undefined) {
         return reply(
           SPAWN_WORKER_TEXTS.failed(
-            {
-              name: params.name ?? params.role,
-              role: params.role,
-              branch: worktreeBranchFor(params.name ?? params.role),
-            },
+            { name: params.name ?? params.role, role: params.role },
             "this session has no worker orchestrator set up"
           ),
           { sessionIds: [], rejected: "unbound" }
@@ -778,7 +783,7 @@ export function createSpawnWorkerTool(
         const name = params.name ?? params.role;
         return reply(
           SPAWN_WORKER_TEXTS.failed(
-            { name, role: params.role, branch: worktreeBranchFor(name) },
+            { name, role: params.role },
             error instanceof Error ? error.message : String(error)
           ),
           { sessionIds: [] }
@@ -793,7 +798,7 @@ export function createSpawnWorkerTool(
           ? SPAWN_WORKER_TEXTS.readOnly.spawned(who)
           : SPAWN_WORKER_TEXTS.spawned({
               ...who,
-              branch: status?.branch ?? worktreeBranchFor(name),
+              branch: status?.branch ?? "",
             }),
         { sessionIds: [id] }
       );
@@ -830,7 +835,7 @@ async function spawnAttempts(
       }
       return reply(
         SPAWN_WORKER_TEXTS.failed(
-          { name: params.role, role: params.role, branch: worktreeBranchFor(params.role) },
+          { name: params.role, role: params.role },
           error instanceof Error ? error.message : String(error)
         ),
         { sessionIds: [] }
@@ -873,7 +878,7 @@ async function spawnAttempts(
 export function spawnWorkerRegistration(): ToolRegistration {
   return {
     name: SPAWN_WORKER_TOOL,
-    description: "在后台派 worker 完成独立子任务，结束时通知",
+    description: "spawn a background worker for an independent subtask; notifies when done",
     parameters: SpawnWorkerParamsSchema,
     tier: "read",
     pathConfinement: { kind: "none" },

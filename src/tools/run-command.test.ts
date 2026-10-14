@@ -259,9 +259,9 @@ test("短名与角色允许清单：清单内短名与其展开命令放行，�
     );
 
     const preview = await tool.preview({ command: "hello" });
-    assert.ok(preview.includes(`命令：${hello}（短名 hello）`), preview);
+    assert.ok(preview.includes(`command: ${hello} (alias hello)`), preview);
     const refused = await tool.preview({ command: "other" });
-    assert.ok(refused.includes("不在本角色允许清单内"), refused);
+    assert.ok(refused.includes("not in this role's allow list"), refused);
   });
 });
 

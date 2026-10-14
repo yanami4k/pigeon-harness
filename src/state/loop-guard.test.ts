@@ -240,7 +240,7 @@ test("配置缺省：开着、5/10/20、豁免等 worker 与读后台作业的�
   });
   const bad = loopGuardSettings({ warnAt: 5 });
   assert.ok("problem" in bad);
-  assert.match(bad.problem, /递增/);
+  assert.match(bad.problem, /must increase/);
   const equal = loopGuardSettings({ remindAt: 3, warnAt: 8, stopAt: 8 });
   assert.ok("problem" in equal);
 });

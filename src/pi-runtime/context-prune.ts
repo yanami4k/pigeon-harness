@@ -172,6 +172,18 @@ export class ContextPruner {
     return this.#pruned.reduce((sum, entry) => (entry.seq >= seq ? sum + entry.tokens : sum), 0);
   }
 
+  // 决策 434：会话回退或切换分支后按目标分支重设起点（占位与上一个 Run 的签名）；本进程里的估算记录一并清掉
+  reseed(seed: PruneSeed | undefined): void {
+    this.#placeholders.clear();
+    for (const [toolCallId, placeholder] of seed?.placeholders ?? []) {
+      this.#placeholders.set(toolCallId, placeholder);
+    }
+    this.#signature = seed?.signature;
+    this.#changed = undefined;
+    this.#usageSeq.clear();
+    this.#pruned.length = 0;
+  }
+
   seed(): PruneSeed {
     return {
       placeholders: [...this.#placeholders],

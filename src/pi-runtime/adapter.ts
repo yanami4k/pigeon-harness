@@ -46,6 +46,7 @@
 //    上下文接着运行一次（那条出错消息不再发给模型，会话文件照实留着），没压成不重试、照原错误收尾，没压成的情形记进 Run 收尾
 //    条目。同一次超长只重试一次：重试的那次请求仍超长即照原错误收尾；重试之后来了正常回复，之后再超长算新的一次。400 且请求里有
 //    新加的图时先按 16 处理。没有配置压缩时不重试。
+
 import {
   type AfterToolCallContext,
   type AfterToolCallResult,
@@ -98,6 +99,7 @@ import { TOOL_RESULT_MARK_KEY, type ToolResultMark } from "../state/session-judg
 import { isStatusMessage, STATUS_MARKER, withoutStatusMarker } from "../state/status-text.ts";
 import type { ToolErrorKind, ToolExecution } from "../state/tool-execution.ts";
 import { classifyToolError } from "../tools/error-kind.ts";
+import type { ApprovalMode } from "../tools/policy.ts";
 import {
   type CompactionOutcome,
   type CompactionStore,
@@ -162,7 +164,8 @@ export function httpStatusOf(errorMessage: string | undefined): number | undefin
 }
 
 // 空回复重试仍空时的错误文本（Run 结果与收尾条目共用）
-export const EMPTY_REPLY_ERROR = "模型返回空回复（既无文字也无工具调用），重试一次仍为空回复";
+export const EMPTY_REPLY_ERROR =
+  "empty model reply (no text or tool calls), still empty after one retry";
 
 // 撞上限续跑的对象（决策 367）：因输出上限截断（含被流式重复检测掐断）且没有工具调用的回复
 export function isTruncatedWithoutTools(message: AssistantMessage): boolean {
@@ -217,6 +220,8 @@ export interface ToolResultNotice {
   // 结果里文本块的拼接（图片等非文本块不含）
   text: string;
   details: unknown;
+  // 决策 439：结果里的图片块（read_file 交给模型的图片），终端界面在消息区显示
+  images?: ReadonlyArray<{ data: string; mimeType: string }>;
 }
 
 // 整轮观察口的转发单位（决策 305）：一轮结束（上游 turn_end）时这一轮助手消息里的工具调用与它们的返回结果。
@@ -234,6 +239,8 @@ type RunStartedExtras = Pick<RunStartedPayload, "mcpTools" | "mcpServers" | "ski
 
 export interface PiRuntimeAdapterOptions {
   snapshot: InjectionSnapshot;
+  // 决策 469：当前的审批模式（会话中途可切换）；治理每次判定与每个 Run 开头的记录按它读。缺省 = 快照里的模式（不可切换）
+  approvalMode?: () => ApprovalMode;
   // 永远显式传入；测试注入假 streamFn，生产注入真实 provider 实现
   streamFn: StreamFn;
   // 真实部署时补充 api/baseUrl 等模型元数据；provider/id 属于模型身份，
@@ -285,6 +292,7 @@ export interface StatusChannel {
 
 export class PiRuntimeAdapter {
   readonly sessionId: SessionId;
+  #approvalModeOf: (() => ApprovalMode) | undefined;
   readonly #agent: Agent;
   readonly #snapshot: InjectionSnapshot;
   readonly #events: EventEnvelope[] = [];
@@ -326,6 +334,8 @@ export class PiRuntimeAdapter {
   readonly #toolResultListeners = new Set<(notice: ToolResultNotice) => void>();
   // 决策 350：工具执行前的等待口
   readonly #toolGates = new Set<() => Promise<void>>();
+  // 决策 436：Run 开始（开始条目已排进写入）的观察口
+  readonly #runStartListeners = new Set<(runId: RunId) => void>();
   // 决策 363：状态通道；压缩过之后的下一次要重发完整块；有工具结果的一轮把状态与通知留到轮间再入队
   readonly #status: StatusChannel | undefined;
   #statusCompacted = false;
@@ -363,7 +373,7 @@ export class PiRuntimeAdapter {
     // 否则 spread 会让实际 Agent 模型与 InjectionSnapshot 脱钩
     if (options.model !== undefined && ("provider" in options.model || "id" in options.model)) {
       throw new Error(
-        "options.model 不允许携带 provider/id：模型身份由 InjectionSnapshot 唯一提供"
+        "options.model must not carry provider/id: the model identity comes only from InjectionSnapshot"
       );
     }
     // 运行期校验 + 防御性拷贝 + 深冻结：此后快照不可变
@@ -385,6 +395,7 @@ export class PiRuntimeAdapter {
     // 模型重发"从未广告"工具名的幽灵循环由事件级熔断收口：tool_execution_end 照常到达事件层，
     // 治理实例的 settle 按工具名连续计数、达阈值 abort。
     const policy = this.#snapshot.tools.policy;
+    this.#approvalModeOf = options.approvalMode;
     const advertised = (options.tools ?? []).filter((tool) => policy.allow.includes(tool.name));
     // 包装 execute 捕获错误分类（M4 S2，D7）：上游把工具异常转成 isError 结果后只剩
     // 消息字符串，域/环境归类必须在抛出源头留证；preview/探针等可选能力随 spread 保留
@@ -398,8 +409,20 @@ export class PiRuntimeAdapter {
     );
     // 治理绑定宿主能力；广告工具未在注册表登记时在此构造期 fail-fast
     this.#toolHooks = options.toolHooks;
+    // 决策 469：交给治理的策略按当前模式读审批模式（快照本身冻结不变）
+    const live = options.approvalMode;
+    const governed =
+      live === undefined
+        ? policy
+        : {
+            allow: policy.allow,
+            deny: policy.deny,
+            get approvalMode(): ApprovalMode {
+              return live();
+            },
+          };
     this.#governance = options.governance({
-      policy,
+      policy: governed,
       tools,
       activeRunId: () => this.#activeRunId(),
       abort: () => this.#agent.abort(),
@@ -514,7 +537,7 @@ export class PiRuntimeAdapter {
   // 决策 297：空闲时被叫醒——只带待递的通知开一次 Run
   async runNotices(): Promise<RunResult> {
     if (this.#notices.length === 0) {
-      throw new Error("没有待递的通知");
+      throw new Error("no pending notices");
     }
     return this.#runWith((lead) => this.#agent.prompt([...lead, ...this.#takeNotices()]));
   }
@@ -543,10 +566,10 @@ export class PiRuntimeAdapter {
     this.#assertUsable();
     // 决策 2：run() 互斥——任何时刻最多一个待审批/执行中的 call
     if (this.#currentRunId !== null) {
-      throw new Error("已有进行中的 Run：run() 互斥（决策 2）");
+      throw new Error("a Run is already running");
     }
     if (this.#manualCompacting) {
-      throw new Error("手动压缩进行中，等它完成再启动 Run");
+      throw new Error("can't start a Run while compacting");
     }
     const runId = newRunId();
     this.#currentRunId = runId;
@@ -575,6 +598,13 @@ export class PiRuntimeAdapter {
       this.#listenerErrors.push(error);
     }
     this.#recordRunStart(runId, advertisedTools, extras);
+    for (const listener of this.#runStartListeners) {
+      try {
+        listener(runId);
+      } catch (error) {
+        this.#listenerErrors.push(error);
+      }
+    }
     // 决策 361：模型、工具集或系统提示与上一个 Run 不同，下一次请求之前一次裁光
     this.#prune?.observeRun({
       model: `${this.#snapshot.model.provider}/${this.#snapshot.model.id}`,
@@ -971,6 +1001,12 @@ export class PiRuntimeAdapter {
   }
 
   // 决策 350：登记工具执行前的等待口（审批之后、真正执行之前）；返回撤销函数
+  // 决策 436：订阅 Run 开始（开始条目已排进写入之后、第一次模型请求之前）；listener 抛异常只进 listenerErrors
+  subscribeRunStart(listener: (runId: RunId) => void): () => void {
+    this.#runStartListeners.add(listener);
+    return () => this.#runStartListeners.delete(listener);
+  }
+
   addToolGate(gate: () => Promise<void>): () => void {
     this.#toolGates.add(gate);
     return () => this.#toolGates.delete(gate);
@@ -1002,7 +1038,7 @@ export class PiRuntimeAdapter {
   async compact(customInstructions?: string): Promise<ManualCompactionOutcome> {
     this.#assertUsable();
     if (this.#currentRunId !== null || this.#manualCompacting) {
-      throw new Error("Run 进行中，不能手动压缩");
+      throw new Error("can't compact while a Run is running");
     }
     const compactor = this.#compactor;
     if (compactor === undefined) {
@@ -1042,6 +1078,11 @@ export class PiRuntimeAdapter {
   }
 
   // 冻结的注入快照
+  // 决策 469：当前的审批模式（会话中途切换过的取切换后的）
+  approvalMode(): ApprovalMode {
+    return this.#approvalModeOf?.() ?? this.#snapshot.tools.policy.approvalMode;
+  }
+
   snapshot(): InjectionSnapshot {
     return this.#snapshot;
   }
@@ -1058,9 +1099,20 @@ export class PiRuntimeAdapter {
   restoreMessages(messages: readonly AgentMessage[]): void {
     this.#assertUsable();
     if (this.#currentRunId !== null || this.#agent.state.messages.length > 0) {
-      throw new Error("只能在运行面跑任何 Run 之前还原对话上下文");
+      throw new Error("the conversation can only be restored before the first Run");
     }
     this.#agent.state.messages = structuredClone([...messages]);
+  }
+
+  // 决策 434：会话回退或切换分支——空闲时以目标分支还原出的消息换掉 Agent 的对话上下文（深拷贝）。
+  // 运行中或手动压缩中不可用；待递的通知留着，下一次 Run 照常带上（决策 438）
+  replaceMessages(messages: readonly AgentMessage[]): void {
+    this.#assertUsable();
+    if (this.#currentRunId !== null || this.#manualCompacting) {
+      throw new Error("can't replace the conversation while running");
+    }
+    this.#agent.state.messages = structuredClone([...messages]);
+    this.#statusCompacted = false;
   }
 
   // M7（决策 078）：本 Run 已分配的最后一个条目号（message_end 累计序号）；Run 之外为 0
@@ -1114,6 +1166,7 @@ export class PiRuntimeAdapter {
           .filter((text) => text !== "")
           .join("\n"),
         details: structuredClone(message.details),
+        ...imagesOf(message.content),
       });
     } catch (error) {
       this.#listenerErrors.push(error);
@@ -1544,7 +1597,7 @@ export class PiRuntimeAdapter {
     } catch (error) {
       return {
         block: true,
-        reason: `治理判定异常（fail-closed 阻断）：${error instanceof Error ? error.message : String(error)}`,
+        reason: `The governance check failed, so the call is blocked: ${error instanceof Error ? error.message : String(error)}`,
       };
     }
   }
@@ -1792,7 +1845,7 @@ export class PiRuntimeAdapter {
           policy: {
             allow: [...snapshot.tools.policy.allow],
             deny: [...snapshot.tools.policy.deny],
-            approvalMode: snapshot.tools.policy.approvalMode,
+            approvalMode: this.approvalMode(),
           },
           advertisedTools: [...advertisedTools],
           systemPrompt: snapshot.context.systemPrompt,
@@ -1876,7 +1929,7 @@ export class PiRuntimeAdapter {
       return {
         runId,
         status,
-        errorMessage: `钩子要求停止：${this.#hookStopReason}`,
+        errorMessage: `hook asked to stop: ${this.#hookStopReason}`,
         syntheticFailure: false,
         failure: null,
         advertisedTools,
@@ -1927,14 +1980,14 @@ export class PiRuntimeAdapter {
   #activeRunId(): RunId {
     const runId = this.#currentRunId;
     if (runId === null) {
-      throw new Error("审批闸需要活动 Run（hook/settled 联动只在 Run 窗口内发生）");
+      throw new Error("the approval gate needs an active Run");
     }
     return runId;
   }
 
   #assertUsable(): void {
     if (this.#disposed) {
-      throw new Error("PiRuntimeAdapter 已释放，不能再启动 Run");
+      throw new Error("PiRuntimeAdapter disposed; can't start a Run");
     }
   }
 }
@@ -1959,4 +2012,19 @@ function deepFreeze<T>(value: T): T {
     Object.freeze(value);
   }
   return value;
+}
+
+// 工具结果里的图片块（决策 439）
+function imagesOf(content: ReadonlyArray<{ type: string; data?: unknown; mimeType?: unknown }>): {
+  images?: Array<{ data: string; mimeType: string }>;
+} {
+  const images = content
+    .filter(
+      (block): block is { type: "image"; data: string; mimeType: string } =>
+        block.type === "image" &&
+        typeof block.data === "string" &&
+        typeof block.mimeType === "string"
+    )
+    .map((block) => ({ data: block.data, mimeType: block.mimeType }));
+  return images.length > 0 ? { images } : {};
 }

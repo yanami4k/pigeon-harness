@@ -54,7 +54,7 @@ export function loopGuardSettings(
   const stopAt = file?.stopAt ?? base.stopAt;
   if (!(remindAt < warnAt && warnAt < stopAt)) {
     return {
-      problem: `三个轮数须递增：remindAt ${remindAt}、warnAt ${warnAt}、stopAt ${stopAt}`,
+      problem: `turn counts must increase: remindAt ${remindAt}, warnAt ${warnAt}, stopAt ${stopAt}`,
     };
   }
   const exemptTools = [...new Set([...base.exemptTools, ...(file?.exemptTools ?? [])])];

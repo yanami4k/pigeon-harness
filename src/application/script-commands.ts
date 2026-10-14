@@ -1,21 +1,24 @@
-// 脚本编排的斜杠命令（决策 309、312、314、301）：/orchestrate <任务> [额度 …] 以人的输入点名发起（交给模型的文字带关键词，
-// 见 script-texts.ts 的 commandInputText，由壳按人的输入提交）；/orchestrate resume <运行号> [额度 …] 由程序直接续跑（沿用该次
-// 的脚本与快照，给了额度即换成它）；/orchestrate stop [运行号] 停止整个脚本（不给运行号即停在跑的全部）；/orchestrate drop
+// 脚本编排的斜杠命令（决策 309、312、314、301）：/orchestrate <任务> [budget 300k] 以人的输入点名发起（交给模型的文字带关键词，
+// 见 script-texts.ts 的 commandInputText，由壳按人的输入提交）；/orchestrate resume <运行号> [budget 300k] 由程序直接续跑（沿用
+// 该次的脚本与快照，给了额度即换成它）；/orchestrate stop [运行号] 停止整个脚本（不给运行号即停在跑的全部）；/orchestrate drop
 // <运行号> 放弃，删掉它的快照引用。终端界面与命令行共用这里的文字。
 import type { WorkerOrchestrator } from "../orchestration/workers.ts";
 import type { SessionId } from "../state/ids.ts";
-import { parseScriptBudget, SCRIPT_COMMAND } from "./script-naming.ts";
+import { parseScriptBudget, SCRIPT_COMMAND, scriptBudgetProblem } from "./script-naming.ts";
 import { ScriptBudgetError, type ScriptRuns } from "./script-runner.ts";
-import { ORCHESTRATE_TEXTS } from "./script-texts.ts";
 
-export const SCRIPT_COMMAND_USAGE = `/${SCRIPT_COMMAND} <任务> [额度 ¥5|$2|300k]`;
+// "budget" 是人输入里认的写法（script-naming.ts，决策 475：只收 token），照原样写进用法
+export const SCRIPT_COMMAND_USAGE = `/${SCRIPT_COMMAND} <task> [budget 300k]`;
 
 export const SCRIPT_COMMAND_TEXTS = {
-  usage: `用法：${SCRIPT_COMMAND_USAGE}；/${SCRIPT_COMMAND} resume <运行号> [额度 …]；/${SCRIPT_COMMAND} stop [运行号]；/${SCRIPT_COMMAND} drop <运行号>`,
-  stopped: (runIds: readonly string[]) =>
-    `已停止脚本 ${runIds.join("、")}：在跑的 worker 停下，结果照常交回。`,
-  noneRunning: "没有在跑的脚本。",
-  dropped: (runId: string) => `已放弃脚本 ${runId}，删掉了它的快照引用；之后不能再续跑。`,
+  usage: `usage: ${SCRIPT_COMMAND_USAGE} | /${SCRIPT_COMMAND} resume <run ID> [budget 300k] | /${SCRIPT_COMMAND} stop [run ID] | /${SCRIPT_COMMAND} drop <run ID>`,
+  stopped: (runIds: readonly string[]) => `stopped script ${runIds.join(", ")}`,
+  noneRunning: "no scripts running",
+  dropped: (runId: string) => `dropped script ${runId}`,
+  // 给人看的短句（给模型的整句在 script-texts.ts 的 ORCHESTRATE_TEXTS）
+  unknownRun: (runId: string) => `no script with run ID ${runId} in this session`,
+  stillRunning: (runId: string) => `script ${runId} is still running`,
+  resumed: (name: string, runId: string) => `resumed script ${name} (run ${runId})`,
 } as const;
 
 export interface ScriptCommands {
@@ -32,7 +35,7 @@ export function scriptCommands(
 ): ScriptCommands {
   const stop = async (runId?: string): Promise<string> => {
     const targets = runId !== undefined ? [runId] : runs.running();
-    if (runId !== undefined && !runs.has(runId)) return ORCHESTRATE_TEXTS.unknownRun(runId);
+    if (runId !== undefined && !runs.has(runId)) return SCRIPT_COMMAND_TEXTS.unknownRun(runId);
     const stopped: string[] = [];
     for (const id of targets) {
       if (await runs.stop(id)) stopped.push(id);
@@ -43,6 +46,8 @@ export function scriptCommands(
   };
   return {
     resume: async (runId, rest) => {
+      const problem = scriptBudgetProblem(rest);
+      if (problem !== undefined) return problem;
       const budget = parseScriptBudget(rest);
       let result: Awaited<ReturnType<ScriptRuns["resume"]>>;
       try {
@@ -51,9 +56,9 @@ export function scriptCommands(
         if (error instanceof ScriptBudgetError) return error.message;
         throw error;
       }
-      if (result === "unknown") return ORCHESTRATE_TEXTS.unknownRun(runId);
-      if (result === "running") return ORCHESTRATE_TEXTS.stillRunning(runId);
-      return ORCHESTRATE_TEXTS.resumed(runs.spec(runId)?.name ?? runId, runId);
+      if (result === "unknown") return SCRIPT_COMMAND_TEXTS.unknownRun(runId);
+      if (result === "running") return SCRIPT_COMMAND_TEXTS.stillRunning(runId);
+      return SCRIPT_COMMAND_TEXTS.resumed(runs.spec(runId)?.name ?? runId, runId);
     },
     stop,
     drop: (runId) => {
@@ -61,8 +66,8 @@ export function scriptCommands(
       return result === "dropped"
         ? SCRIPT_COMMAND_TEXTS.dropped(runId)
         : result === "running"
-          ? ORCHESTRATE_TEXTS.stillRunning(runId)
-          : ORCHESTRATE_TEXTS.unknownRun(runId);
+          ? SCRIPT_COMMAND_TEXTS.stillRunning(runId)
+          : SCRIPT_COMMAND_TEXTS.unknownRun(runId);
     },
     stopOfWorker: async (sessionId) => {
       const runId = orchestrator.status().find((status) => status.sessionId === sessionId)

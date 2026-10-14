@@ -4,57 +4,50 @@
 //   网页、文件、worker 回报与完成通知都不经这个入口，里面出现关键词不算。
 // - 点名只管到下一条人手输入：下一条没带关键词即收回。pigeon run 的任务描述算点名，整次运行（含回炉各轮）都算。
 // - 项目配置打开"由模型判断"后，工具常驻，不看点名。
-// - 额度：点名时可写"额度 ¥5"（人民币）、"额度 $2"（美元）或"额度 300k"（token，k 为千、m 为百万、万为一万）；
-//   项目配置可设缺省值；都不设即不限。
-export const SCRIPT_KEYWORD = "脚本编排";
+// - 额度（决策 475）：点名时可写 "budget 300k"（token，k 为千、m 为百万）；只收 token，金额写法（¥、$）与"万"不再收，写了即
+//   说明原因、不发起。项目配置可设缺省值；都不设即不限。
+import { scriptBudgetSettingProblem, scriptBudgetTokens } from "../state/orchestration-config.ts";
+
+// 人输入里认的点名关键词（用户的输入，大小写不论；决策 475 起是英文）
+export const SCRIPT_KEYWORD = "script orchestration";
+// 决策 475 之前的点名关键词：只用来认出旧会话里 /orchestrate 的包装（回看与回退时还原成人敲的命令），不再算点名
+export const LEGACY_SCRIPT_KEYWORD = "脚本编排";
 export const SCRIPT_COMMAND = "orchestrate";
 
+// 额度：决策 475 起只有 token；cny、usd 只出现在这之前记下的脚本运行里（续跑时照旧认）
 export interface ScriptBudget {
   unit: "cny" | "usd" | "tokens";
   amount: number;
 }
 
-const BUDGET_PATTERN = /额度\s*[:：]?\s*([¥￥$])?\s*(\d+(?:\.\d+)?)\s*([kKmM万])?/;
+const BUDGET_PATTERN = /\bbudget\s*:?\s*(\d+(?:\.\d+)?)\s*([kKmM])?(?![\w.$])/i;
+// 金额写法：budget ¥5、budget $2、budget 3万
+const MONEY_BUDGET_PATTERN = /\bbudget\s*:?\s*([¥￥$]|\d+(?:\.\d+)?\s*万)/i;
 
-// 从一段文字里取额度写法；没有即 undefined
+export const BUDGET_TOKENS_ONLY =
+  "budget takes tokens, like budget 300k or budget 2m (money amounts are not supported)";
+
+// 人写的额度用了金额写法时的说明；没有问题为 undefined
+export function scriptBudgetProblem(text: string): string | undefined {
+  return MONEY_BUDGET_PATTERN.test(text) ? BUDGET_TOKENS_ONLY : undefined;
+}
+
+// 从一段文字里取额度写法（budget 300k）；没有、或写的是金额（budget ¥5、budget 3万）即 undefined
 export function parseScriptBudget(text: string): ScriptBudget | undefined {
+  if (MONEY_BUDGET_PATTERN.test(text)) return undefined;
   const match = BUDGET_PATTERN.exec(text);
   if (match === null) return undefined;
-  const [, currency, digits = "0", suffix] = match;
-  const amount = Number(digits);
-  if (!Number.isFinite(amount) || amount <= 0) return undefined;
-  if (currency === "$") return { unit: "usd", amount };
-  if (currency === "¥" || currency === "￥") return { unit: "cny", amount };
-  const scale =
-    suffix === "k" || suffix === "K"
-      ? 1_000
-      : suffix === "m" || suffix === "M"
-        ? 1_000_000
-        : suffix === "万"
-          ? 10_000
-          : 1;
-  return { unit: "tokens", amount: Math.round(amount * scale) };
+  const tokens = scriptBudgetTokens(`${match[1]}${match[2] ?? ""}`);
+  return tokens !== undefined ? { unit: "tokens", amount: tokens } : undefined;
 }
 
-// 配置里的额度写法（"¥20"、"$5"、"2m"）
+// 配置里的缺省额度（"300k"、"2m"）；写法不对即响亮失败（开局的合并检查已先报过）
 export function parseBudgetSetting(text: string): ScriptBudget {
-  const budget = parseScriptBudget(`额度 ${text}`);
-  if (budget === undefined) {
-    throw new Error(`脚本编排的缺省额度写法不对：${text}（写成 ¥20、$5 或 2m）`);
+  const tokens = scriptBudgetTokens(text);
+  if (tokens === undefined) {
+    throw new Error(`invalid default script budget: ${scriptBudgetSettingProblem(text) ?? text}`);
   }
-  return budget;
-}
-
-export function budgetText(budget: ScriptBudget | undefined): string | undefined {
-  if (budget === undefined) return undefined;
-  switch (budget.unit) {
-    case "cny":
-      return `¥${budget.amount}`;
-    case "usd":
-      return `$${budget.amount}`;
-    default:
-      return `${budget.amount} token`;
-  }
+  return { unit: "tokens", amount: tokens };
 }
 
 export interface ScriptGateSettings {
@@ -88,16 +81,25 @@ export class ScriptGate {
     this.settings = settings;
   }
 
-  // 人的一条输入交给运行面之前调用（只在这一个入口调用）：带关键词即点名，否则收回
-  humanInput(text: string): void {
-    if (this.#sticky) return;
-    this.#named = text.includes(SCRIPT_KEYWORD) ? this.#namedFrom(text) : undefined;
+  // 人的一条输入交给运行面之前调用（只在这一个入口调用）：带关键词即点名，否则收回。决策 475：点名时额度写成了金额即不算点名
+  //（免得不限额地跑），返回给人看的说明；没有问题返回 undefined
+  humanInput(text: string): string | undefined {
+    if (this.#sticky) return undefined;
+    if (!text.toLowerCase().includes(SCRIPT_KEYWORD)) {
+      this.#named = undefined;
+      return undefined;
+    }
+    const problem = scriptBudgetProblem(text);
+    this.#named = problem === undefined ? this.#namedFrom(text) : undefined;
+    return problem;
   }
 
-  // pigeon run 的任务描述：算作点名，整次运行都算
-  runTask(text: string): void {
-    this.#named = this.#namedFrom(text);
+  // pigeon run 的任务描述：算作点名，整次运行都算；额度写成了金额即整次运行都不算点名，返回说明
+  runTask(text: string): string | undefined {
+    const problem = scriptBudgetProblem(text);
+    this.#named = problem === undefined ? this.#namedFrom(text) : undefined;
     this.#sticky = true;
+    return problem;
   }
 
   #namedFrom(text: string): { budget?: ScriptBudget } {

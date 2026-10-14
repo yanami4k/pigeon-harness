@@ -352,7 +352,7 @@ export function runCommandTexts(input: {
     none: "this session has no human approval channel, so commands not allowed by a permission rule are refused",
   }[input.approval];
   return {
-    registry: `在工作区根运行一条命令（普通命令直接执行，需要 shell 语义的经 ${shell} 执行）`,
+    registry: `run a command at the workspace root (plain commands directly, shell syntax through ${shell})`,
     prompt: `run_command runs plain commands directly; ${shellContains} run through ${shell}.`,
     approval: `run_command: ${promptApproval}; ${shellContains} ${promptShell}.`,
     tool: [
@@ -682,21 +682,21 @@ export function createRunCommandTool(
     async preview(params) {
       const inspection = inspectParams(params);
       const lines = [
-        `命令${inspection.needsShell ? "（经 shell）" : ""}：${inspection.command}` +
-          (inspection.alias !== undefined ? `（短名 ${inspection.alias}）` : ""),
+        `command${inspection.needsShell ? " (shell)" : ""}: ${inspection.command}` +
+          (inspection.alias !== undefined ? ` (alias ${inspection.alias})` : ""),
       ];
       if (inspection.mode === "direct") {
-        lines.push(`参数数组：${JSON.stringify(inspection.argv)}（不经 shell）`);
+        lines.push(`argv: ${JSON.stringify(inspection.argv)} (no shell)`);
       } else if (inspection.mode === "launcher") {
-        lines.push(`经 cmd.exe 启动器运行：${inspection.scriptPath}`);
+        lines.push(`runs via cmd.exe launcher: ${inspection.scriptPath}`);
       } else if (inspection.mode === "shell") {
-        lines.push(`需要经 shell 运行：${inspection.shellReason}`);
+        lines.push(`needs a shell: ${inspection.shellReason}`);
       } else {
-        lines.push(`无法执行：${inspection.error}`);
+        lines.push(`can't run: ${inspection.error}`);
       }
-      lines.push(`工作目录：${root}`);
+      lines.push(`cwd: ${root}`);
       if (!permitted(inspection.input, inspection.command)) {
-        lines.push("注意：该命令不在本角色允许清单内，批准后仍会被拒绝");
+        lines.push("not in this role's allow list; refused even if approved");
       }
       return lines.join("\n");
     },
@@ -998,7 +998,9 @@ export function planMcpLaunch(input: {
     return { mode: "direct", program: input.command, args, verbatim: false };
   }
   if (/["%]/.test(scriptPath)) {
-    throw new RunCommandError(`MCP 启动脚本路径含 cmd 无法安全表达的字符：${scriptPath}`);
+    throw new RunCommandError(
+      `MCP launcher script path has characters cmd can't quote safely: ${scriptPath}`
+    );
   }
   if (args.every((arg) => LAUNCHER_ARG_PATTERN.test(arg))) {
     return {
@@ -1011,7 +1013,7 @@ export function planMcpLaunch(input: {
   const quoted = args.map((arg) => {
     if (/["%\r\n]/.test(arg)) {
       throw new RunCommandError(
-        `MCP 启动参数含 cmd 无法安全表达的字符（引号、百分号或换行）：${arg}`
+        `MCP launcher argument has characters cmd can't quote safely (quote, percent or newline): ${arg}`
       );
     }
     return LAUNCHER_ARG_PATTERN.test(arg) ? arg : `"${arg}"`;

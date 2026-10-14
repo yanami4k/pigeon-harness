@@ -1,8 +1,7 @@
 // grant 斜杠命令层（M4 S6 决策 3 + D6；M2 S3 决策 030 从 cli/ 归位 application/）：
 // /grants 列表、/revoke <id> 撤销、/grants save <id> 升格（决策 325：写入项目个人设置 .pigeon/settings.local.json 的
-// permissions 一节；三层的放权规则并集生效，/grants 按层列出，/revoke config#N 只移除项目个人一层的规则）。cli REPL 与 tui 消息区两个
-// Actor 共用这同一份命令逻辑（025 的方向：共用逻辑住 Controller 层，Actor 互依别扭）；
-// 输出经注入的 write 回调投影到各自界面（REPL 终端 / TUI 消息区），命令层不关心落点。
+// permissions 一节；三层的放权规则并集生效，/grants 按层列出，/revoke config#N 只移除项目个人一层的规则）。命令逻辑住
+// Controller 层（025 的方向），终端界面只管呈现；输出经注入的 write 回调投影到终端界面的消息区，命令层不关心落点。
 // /grants 是 grant 的唯一展示入口（决策 3b：崩溃恢复不加特殊展示行，生效 grant 统一
 // 由本命令呈现）；升格与配置的正规写入方都是人的显式命令（约束 3：agent / 模型 /
 // 后台流程无写放权配置的代码路径）。
@@ -22,9 +21,9 @@ import {
 } from "../persistence/grants-config.ts";
 import type { ConfigGrantRule } from "../state/grants.ts";
 import { asGrantId, type GrantId, type SessionId } from "../state/ids.ts";
-import { LOCAL_SETTINGS_FILE, pigeonRel, SETTINGS_FILE, userPigeonRel } from "../state/paths.ts";
-import { type LayeredGrantRule, SETTINGS_LAYER_LABELS } from "../state/settings.ts";
-import { shortId, summarizeArgs } from "./format.ts";
+import { LOCAL_SETTINGS_FILE, pigeonRel } from "../state/paths.ts";
+import type { LayeredGrantRule } from "../state/settings.ts";
+import { plural, shortId, summarizeArgs } from "./format.ts";
 
 export interface GrantsCommandContext {
   // 治理根（项目个人设置所在；目录限定解析根）
@@ -53,12 +52,12 @@ function scopeWording(
   host?: string
 ): string {
   if (host !== undefined) {
-    return `仅限网站 ${host}`;
+    return `site ${host}`;
   }
   if (command !== undefined) {
-    return `仅限命令 ${command}${shell === true ? "（经 shell）" : ""}`;
+    return `command ${command}${shell === true ? " (via shell)" : ""}`;
   }
-  return pathPrefix === undefined ? "工具级（不限目录）" : `仅限目录 ${pathPrefix}`;
+  return pathPrefix === undefined ? "all paths" : `path ${pathPrefix}`;
 }
 
 // 放权作用域字段的原样携带（升格写配置用）
@@ -94,11 +93,11 @@ export function runGrantCommand(tokens: string[], ctx: GrantsCommandContext): bo
       promoteGrant(ctx, rest[1]);
       return true;
     }
-    throw new Error("用法：/grants ｜ /grants save <grantId>");
+    throw new Error("usage: /grants | /grants save <grantId>");
   }
   if (head === "revoke") {
     if (rest.length !== 1 || rest[0] === undefined) {
-      throw new Error("用法：/revoke <grantId 或 config#序号>");
+      throw new Error("usage: /revoke <grantId|config#N>");
     }
     revokeGrant(ctx, rest[0]);
     return true;
@@ -112,36 +111,30 @@ export function runGrantCommand(tokens: string[], ctx: GrantsCommandContext): bo
 function listGrants(ctx: GrantsCommandContext): void {
   const lines: string[] = [];
   const sessionGrants = ctx.store.list();
-  lines.push(`会话放权（${sessionGrants.length}）：`);
+  lines.push(`session grants (${sessionGrants.length}):`);
   for (const grant of sessionGrants) {
     lines.push(
-      `  ${grant.grantId} ｜ ${grant.tool} ｜ ${scopeWording(grant.pathPrefix, grant.command, grant.shell, grant.host)} ｜ ` +
-        `创建 ${formatTime(grant.createdAt)} ｜ 命中 ${grant.hitCount} 次 ｜ ` +
-        `首调 ${grant.firstCall.toolCallId}（${summarizeArgs(grant.firstCall.args)}）`
+      `  ${grant.grantId} | ${grant.tool} | ${scopeWording(grant.pathPrefix, grant.command, grant.shell, grant.host)} | ` +
+        `created ${formatTime(grant.createdAt)} | ${plural(grant.hitCount, "hit")} | ` +
+        `first call ${grant.firstCall.toolCallId} (${summarizeArgs(grant.firstCall.args)})`
     );
   }
   const layered =
     ctx.layeredRules ??
     ctx.configRules.map((rule, index) => ({ layer: "local" as const, index, rule }));
-  lines.push(`固化规则（${layered.length}，三层设置的 permissions 一节）：`);
+  lines.push(`saved rules (${layered.length}):`);
   for (const { layer, index, rule } of layered) {
     // 只有项目个人一层的规则可用 /revoke 移除；其余层写明出处，由人手工编辑
-    const label =
-      layer === "local" ? `config#${index}` : `${SETTINGS_LAYER_LABELS[layer]}#${index}`;
+    const label = layer === "local" ? `config#${index}` : `${layer}#${index}`;
     lines.push(
-      `  ${label} ｜ ${rule.tool} ｜ ${scopeWording(rule.pathPrefix, rule.command, rule.shell, rule.host)} ｜ ` +
-        `升格 ${formatTime(rule.promotedFrom.promotedAt)} ｜ ` +
-        `出处 会话 ${shortId(rule.promotedFrom.sessionId)} / grant ${shortId(rule.promotedFrom.grantId)} ｜ ` +
-        `首调 ${rule.promotedFrom.firstCall.toolCallId}`
-    );
-  }
-  if (layered.some((entry) => entry.layer !== "local")) {
-    lines.push(
-      `  （项目共享与用户级的规则不能用 /revoke 移除，请手工编辑 ${pigeonRel(SETTINGS_FILE)} 或 ${userPigeonRel(SETTINGS_FILE)}）`
+      `  ${label} | ${rule.tool} | ${scopeWording(rule.pathPrefix, rule.command, rule.shell, rule.host)} | ` +
+        `saved ${formatTime(rule.promotedFrom.promotedAt)} | ` +
+        `from session ${shortId(rule.promotedFrom.sessionId)} / grant ${shortId(rule.promotedFrom.grantId)} | ` +
+        `first call ${rule.promotedFrom.firstCall.toolCallId}`
     );
   }
   if (sessionGrants.length === 0 && layered.length === 0) {
-    lines.push("  （无——审批提示可用 [a]/[d] 创建会话放权，/grants save <id> 升格固化）");
+    lines.push("  (none)");
   }
   ctx.write(`${lines.join("\n")}\n`);
 }
@@ -154,17 +147,17 @@ function promoteGrant(ctx: GrantsCommandContext, id: string): void {
   try {
     grantId = asGrantId(id);
   } catch {
-    throw new Error(`升格对象必须是会话 grant（grant_ 前缀）：${id}`);
+    throw new Error(`not a session grant: ${id}`);
   }
   const grant = ctx.store.get(grantId);
   if (grant === undefined) {
-    throw new GrantNotFoundError(`grant 不存在或已撤销：${id}（用 /grants 查看生效列表）`);
+    throw new GrantNotFoundError(`grant not found or revoked: ${id}`);
   }
   // 查重读磁盘现状而非会话冻结的 configRules：本会话内已升格的也算
   const existingIndex = findPromotedRuleIndex(loadGrantConfig(ctx.root), grantId);
   if (existingIndex !== -1) {
     throw new GrantAlreadyPromotedError(
-      `grant ${grantId} 已升格为 config#${existingIndex}，不重复固化（用 /grants 查看）`
+      `grant ${grantId} already saved as config#${existingIndex}`
     );
   }
   const promotedAt = Date.now();
@@ -178,9 +171,7 @@ function promoteGrant(ctx: GrantsCommandContext, id: string): void {
       promotedAt,
     },
   });
-  ctx.write(
-    `已升格 ${grant.grantId} → ${pigeonRel(LOCAL_SETTINGS_FILE)} 的 permissions 一节（固化规则在下次会话启动或终端界面 /reload 之后生效，在此之前本会话按原规则求值）\n`
-  );
+  ctx.write(`saved ${grant.grantId} → ${pigeonRel(LOCAL_SETTINGS_FILE)}\n`);
 }
 
 // /revoke <id>：会话 grant 立即停免审（grant.revoked 事件留证）；配置规则从
@@ -188,18 +179,15 @@ function promoteGrant(ctx: GrantsCommandContext, id: string): void {
 function revokeGrant(ctx: GrantsCommandContext, id: string): void {
   if (id.startsWith("grant_")) {
     ctx.store.revoke(asGrantId(id));
-    ctx.write(`已撤销会话放权 ${id}：立即生效，后续调用重新弹人工审批\n`);
+    ctx.write(`revoked ${id}\n`);
     return;
   }
   const match = /^config#(\d+)$/.exec(id);
   if (match !== null) {
     const index = Number(match[1]);
     const removed = removeGrantConfigRule(ctx.root, index);
-    ctx.write(
-      `已移除固化规则 config#${match[1]}（${removed.tool}，出处 grant ${shortId(removed.promotedFrom.grantId)}）：` +
-        "在下次会话启动或终端界面 /reload 之前，本会话仍按原规则求值\n"
-    );
+    ctx.write(`removed config#${match[1]} (${removed.tool})\n`);
     return;
   }
-  throw new Error(`无法撤销：${id}（会话 grant 用 grant_ 前缀完整 id；配置规则用 config#序号）`);
+  throw new Error(`can't revoke ${id}: not a grant_ id or config#N`);
 }

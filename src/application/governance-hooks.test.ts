@@ -224,7 +224,7 @@ test("updatedInput 不合参数模式：当钩子出错处理——记异常、�
   // 放行照旧（钩子 allow 生效），但执行用原参数
   assert.deepEqual(verdict, { kind: "allow" });
   assert.equal(h.errors.length, 1);
-  assert.match(String(h.errors[0]), /updatedInput 不合 edit_file 的参数模式/);
+  assert.match(String(h.errors[0]), /updatedInput that doesn't match edit_file's parameters/);
   const records: ToolExecution[] = h.governance.toolExecutions();
   assert.deepEqual(records[0]?.rawArgs, { path: "a.ts" }, "账本留原参数");
 });

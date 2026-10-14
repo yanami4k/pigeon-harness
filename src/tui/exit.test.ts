@@ -1,9 +1,10 @@
 // M2 S5+：退出三层形态的离屏测试（裁决 033，omp 键位模型；同一 Mock Terminal + 虚拟屏幕路径）。
 // 断言面：
-//   - 单击 Ctrl+C（\x03，非模态）：清空输入缓冲 + 消息区留 [cleared] 提示行；清空不提交；
+//   - 单击 Ctrl+C（\x03，非模态）：清空输入缓冲 + 状态行临时显示退出提示（不写消息区；过了窗口或有别的输入即恢复，
+//     别的输入同时撤销布防）；清空不提交；
 //   - 双击 Ctrl+C（窗口内两次，任意模式含模态）：优雅退出——注入的 onExit 恰好一次，
 //     且 stop()（dispose 对称）先于 onExit；退出后重复按键不再触发；
-//   - 窗口过期：两次按键间隔超过窗口 = 两次单击（各自清缓冲留提示），不退出，第二次重新布防；
+//   - 窗口过期：两次按键间隔超过窗口 = 两次单击（各自清缓冲、显示提示），不退出，第二次重新布防；
 //   - 模态单击 Ctrl+C：不清缓冲、不留提示，但仍计退出布防第一次（窗口内第二次即退出）；
 //   - 退出时挂起审批 fail-closed：APPROVAL_CANCEL_CLOSED 逐字理由决议（stop() 既有路径，
 //     证据链不断），stop 先于退出回调；
@@ -20,6 +21,7 @@ import type { RunResult, StreamTextDelta } from "../pi-runtime/adapter.ts";
 import type { EventEnvelope } from "../state/events.ts";
 import { newRunId, newSessionId, type SessionId } from "../state/ids.ts";
 import { APPROVAL_CANCEL_CLOSED, type ApprovalPanelResult } from "./approval.ts";
+import { EXIT_HINT } from "./modal.ts";
 import { PigeonTuiShell, type TuiRuntimeFace } from "./shell.ts";
 import { MockTerminal, screenFlat, screenText, settle } from "./testing.ts";
 
@@ -86,7 +88,7 @@ function makeShell(options?: { exitWindowMs?: number }) {
   };
 }
 
-test("单击 Ctrl+C 清空输入缓冲并留 [cleared] 提示；清空不提交", async () => {
+test("单击 Ctrl+C 清空输入缓冲，状态行显示退出提示（不写消息区）；清空不提交", async () => {
   const { shell, term, runtime, cleanup } = makeShell();
   try {
     shell.start();
@@ -98,10 +100,9 @@ test("单击 Ctrl+C 清空输入缓冲并留 [cleared] 提示；清空不提交"
     term.input("\x03");
     await settle();
     const text = screenText(term);
-    assert.ok(
-      text.includes("[cleared] 输入已清空（再按一次 Ctrl+C 退出）"),
-      "单击必须留 [cleared] 提示行"
-    );
+    const lines = text.split("\n").filter((line) => line.includes(EXIT_HINT));
+    assert.equal(lines.length, 1, `单击必须在状态行显示退出提示，且只有一处\n${text}`);
+    assert.ok(!text.includes("[cleared]"), "消息区不再留 [cleared] 提示行");
     assert.ok(!screenFlat(term).includes("草稿内容"), "缓冲清空后输入行不得再显示草稿");
 
     // 清空不是提交：回车后不得有 run 发生
@@ -110,6 +111,36 @@ test("单击 Ctrl+C 清空输入缓冲并留 [cleared] 提示；清空不提交"
     assert.deepEqual(runtime.runs, [], "清空缓冲不得提交 run");
   } finally {
     shell.stop();
+    cleanup();
+  }
+});
+
+test("退出提示只在布防窗口内：过了窗口即恢复状态行；有别的输入即恢复并撤销布防", async () => {
+  const { shell, term, probe, cleanup } = makeShell({ exitWindowMs: 200 });
+  try {
+    shell.start();
+    await settle();
+    term.input("\x03");
+    await settle();
+    assert.ok(screenText(term).includes(EXIT_HINT), "布防后状态行显示退出提示");
+    await settle(300); // 超过 200ms 窗口
+    assert.ok(!screenText(term).includes(EXIT_HINT), "过了窗口状态行恢复");
+
+    term.input("\x03");
+    await settle();
+    assert.ok(screenText(term).includes(EXIT_HINT), "再次布防");
+    term.input("zq");
+    await settle();
+    assert.ok(!screenText(term).includes(EXIT_HINT), "别的输入之后状态行恢复");
+    assert.ok(screenFlat(term).includes("zq"), "这一下照常进输入框");
+    term.input("\x03");
+    await settle();
+    assert.equal(probe.exitCalls, 0, "别的输入撤销了布防：窗口内这一下只是单击");
+    assert.ok(screenText(term).includes(EXIT_HINT), "这一下重新布防");
+    term.input("\x03");
+    await settle();
+    assert.equal(probe.exitCalls, 1, "重新布防后窗口内第二下退出");
+  } finally {
     cleanup();
   }
 });
@@ -144,7 +175,7 @@ test("窗口过期：两次按键间隔超过窗口 = 两次单击，不退出�
     term.input("\x03");
     await settle();
     assert.equal(probe.exitCalls, 0, "窗口过期的两次按键不得触发退出");
-    assert.ok(screenText(term).includes("[cleared]"), "两次单击各自留提示行");
+    assert.ok(screenText(term).includes(EXIT_HINT), "第二次单击重新显示退出提示");
 
     // 第二次单击已重新布防：窗口内再来一次即退出
     term.input("\x03");
@@ -168,7 +199,7 @@ test("模态期间单击 Ctrl+C 不清缓冲不留提示，但仍计退出布防
     term.input("\x03");
     await settle();
     assert.equal(probe.exitCalls, 0, "模态单击不得退出");
-    assert.ok(!screenText(term).includes("[cleared]"), "模态单击不得留清缓冲提示");
+    assert.ok(!screenText(term).includes(EXIT_HINT), "模态单击不得显示退出提示");
     assert.ok(screenFlat(term).includes("面板前草稿"), "模态单击不得清输入缓冲");
 
     // 已布防：窗口内第二次 Ctrl+C（仍在模态）即优雅退出

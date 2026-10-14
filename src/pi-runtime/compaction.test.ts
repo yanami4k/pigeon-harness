@@ -141,13 +141,16 @@ describe("压缩配置", () => {
       keepRecentTokens: 5000,
       thresholdTokens: 30_000,
     });
-    assert.throws(() => resolveCompactionConfig({ thresholdTokens: 0 }), /触发点/);
-    assert.throws(() => resolveCompactionConfig({ keepRecentTokens: 1.5 }), /保留量/);
+    assert.throws(() => resolveCompactionConfig({ thresholdTokens: 0 }), /thresholdTokens/);
+    assert.throws(() => resolveCompactionConfig({ keepRecentTokens: 1.5 }), /keepRecentTokens/);
     assert.throws(
       () => resolveCompactionConfig({ contextWindow: 1000, reserveTokens: 1000 }),
-      /须大于预留量/
+      /must be greater than reserveTokens/
     );
-    assert.throws(() => resolveCompactionConfig({ thresholdTokens: 1_000_000 }), /须小于模型窗口/);
+    assert.throws(
+      () => resolveCompactionConfig({ thresholdTokens: 1_000_000 }),
+      /must be less than contextWindow/
+    );
   });
 
   test("窗口（决策 422）：模型元数据给了即用它，触发点随之为它减预留；显式给的优先；取不到用缺省", () => {
@@ -168,7 +171,7 @@ describe("压缩配置", () => {
     );
     assert.throws(
       () => resolveCompactionConfig({ thresholdTokens: 200_000 }, declared),
-      /须小于模型窗口（200000，来源 declared）/
+      /must be less than contextWindow \(200000, from declared\)/
     );
   });
 });
@@ -211,7 +214,7 @@ describe("摘要请求的模型适配", () => {
     assert.equal(reply.role, "assistant");
     assert.equal(streamFn.calls.length, 1);
     assert.equal(streamFn.calls[0]?.options?.maxTokens, 123);
-    assert.throws(() => models.getModels(), /只实现 completeSimple/);
+    assert.throws(() => models.getModels(), /only implements completeSimple/);
   });
 });
 

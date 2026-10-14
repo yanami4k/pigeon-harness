@@ -56,5 +56,5 @@ test.each([
     lines.map((line) => line.kind),
     ["notice"]
   );
-  assert.ok(lines[0]?.text.startsWith("续跑提示"));
+  assert.ok(lines[0]?.text.startsWith("continuation prompt"));
 });

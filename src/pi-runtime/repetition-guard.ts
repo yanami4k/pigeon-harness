@@ -336,7 +336,7 @@ async function relay(
         ...(last ?? emptyPartial()),
         content: last !== undefined ? structuredClone(last.content) : [],
         stopReason: "error",
-        errorMessage: `流式重复检测出错：${error instanceof Error ? error.message : String(error)}`,
+        errorMessage: `repetition guard failed: ${error instanceof Error ? error.message : String(error)}`,
         timestamp: Date.now(),
       },
     });

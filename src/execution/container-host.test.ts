@@ -317,7 +317,7 @@ describe.skipIf(skip ?? false)("容器执行端（真容器）", () => {
       await assert.rejects(host.resolveExisting(escaping), (error: unknown) => {
         assert.ok(error instanceof WorkspacePathError, `${escaping} 应被围栏拒绝`);
         assert.ok(!(error instanceof WorkspacePathNotFoundError), `${escaping} 不是「不存在」`);
-        assert.match(error.message, /路径越出工作区根/);
+        assert.match(error.message, /Path is outside the workspace root/);
         return true;
       });
     }
@@ -424,7 +424,10 @@ describe.skipIf(skip ?? false)("容器执行端（真容器）", () => {
       execOptions()
     );
     const pid = background.output.trim();
-    await assert.rejects(quick.readText(`${root}/stuck.fifo`), /辅助命令超过 1 秒，已在容器内终止/);
+    await assert.rejects(
+      quick.readText(`${root}/stuck.fifo`),
+      /A helper command ran longer than 1s and was terminated inside the container/
+    );
     const processes = await sh("ps");
     assert.doesNotMatch(
       processes.stdout,

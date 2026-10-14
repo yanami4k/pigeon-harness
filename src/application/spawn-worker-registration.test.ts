@@ -1,4 +1,4 @@
-// 派 worker 的注册范围（决策 264–267）：会话运行面上终端界面给了工具槽才注册，命令行对话不给槽不注册。
+// 派 worker 的注册范围（决策 264–267）：会话运行面上给了工具槽才注册，不给不注册。
 // 装配根与 pigeon run 的注册范围见 orchestration-wiring.test.ts；派出立即返回与可并行见 spawn-worker-tool.test.ts。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -27,7 +27,7 @@ function gitRoot(): string {
   return root;
 }
 
-test("会话运行面：终端界面给槽即注册并交回槽；命令行对话不给槽不注册", async () => {
+test("会话运行面：给槽即注册并交回槽；不给槽不注册", async () => {
   const root = gitRoot();
   const flags = { yolo: true, provider: "fake", modelId: "fake", persistThinking: true };
   const streamFn = createFakeStreamFn({ replies: [{ text: "好" }] });

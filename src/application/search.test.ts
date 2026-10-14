@@ -1,104 +1,56 @@
-// M5 S2（决策 038）：/search 命令层——cli 与 tui 共用，参数解析、命中排版、片段经
-// sanitizeTerminalText 净化（去净化变红）。会话数据写在新会话存储里。
+// 决策 466：/resume 列表的"打字即筛选"——按会话内容筛，只留列表里给的会话，按相关度排；只搜对话正文；片段经 036 净化、
+// 压成一行；空的筛选词不检索。会话数据写在新会话存储里。
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
-import { LEGACY_READER_HINT, loadSessionView } from "../persistence/session-catalog.ts";
-import { sessionCreatedAt } from "../state/session-summary.ts";
-import { runSearchCommand } from "./search.ts";
+import { createSessionFilter } from "./search.ts";
 import { createFixtureSession } from "./session-store-fixtures.ts";
-import { writeLegacySessionFile } from "./session-view-fixtures.ts";
 
 function withRoot(run: (root: string, sessionsDir: string) => Promise<void>): Promise<void> {
-  const root = mkdtempSync(join(tmpdir(), "pigeon-search-cmd-"));
+  const root = mkdtempSync(join(tmpdir(), "pigeon-session-filter-"));
   return run(root, join(root, ".pigeon", "state", "sessions")).finally(() =>
     rmSync(root, { recursive: true, force: true })
   );
 }
 
-test("/search 命中排版：按会话归并——会话行带命中条目数，命中带 run 内序号、角色、命中的关键词与片段；缺省连同工具输出，--conversation-only、--role 与 --limit 生效", () =>
+async function seed(sessionsDir: string, task: string, toolResult?: string): Promise<string> {
+  const session = createFixtureSession({ sessionsDir });
+  session.startRun({ task });
+  if (toolResult !== undefined) session.toolTurn({ name: "read_file", result: toolResult });
+  session.endRun();
+  const { sessionId } = await session.close();
+  return sessionId;
+}
+
+test("按内容筛：只留给定的会话、按相关度排，带一行命中片段；只搜对话正文；空词不检索", () =>
   withRoot(async (root, sessionsDir) => {
-    const session = createFixtureSession({ sessionsDir });
-    session.startRun({ task: "部署网关" });
-    session.toolTurn({ name: "read_file", result: "部署日志第一行" });
-    session.endRun();
-    const { sessionId } = await session.close();
-    const [user, , result] = loadSessionView(sessionsDir, sessionId)?.messages ?? [];
-
-    const time = (timestamp: number) =>
-      new Date(timestamp).toISOString().slice(0, 16).replace("T", " ");
-    const conversationOnly = await runSearchCommand({
-      root,
-      args: ["部署", "网关", "--conversation-only"],
-    });
-    assert.equal(
-      conversationOnly,
-      [
-        `命中 1 个会话（关键词：部署、网关；范围：仅对话正文）`,
-        `${time(sessionCreatedAt(sessionId))}  ${sessionId}  命中 1 条`,
-        `  第 1 条 user  ${user?.entryId}  命中：部署、网关`,
-        "  部署网关",
-        "",
-      ].join("\n")
+    const gateway = await seed(sessionsDir, "部署网关\n第二行 网关 网关");
+    const once = await seed(sessionsDir, "看一下网关");
+    const hidden = await seed(sessionsDir, "网关也在这里");
+    const toolOnly = await seed(sessionsDir, "读个文件", "网关配置");
+    const filter = createSessionFilter(root);
+    const among = new Set([gateway, once, toolOnly]);
+    const hits = await filter("网关", among);
+    assert.deepEqual(
+      hits.map((hit) => hit.sessionId),
+      [gateway, once],
+      "不在列表里的、只在工具输出里命中的都不列"
     );
-    const all = await runSearchCommand({ root, args: ["部署"] });
-    assert.equal(
-      all,
-      [
-        "命中 1 个会话（关键词：部署；范围：对话正文与工具输出）",
-        `${time(sessionCreatedAt(sessionId))}  ${sessionId}  命中 2 条`,
-        `  第 1 条 user  ${user?.entryId}  命中：部署`,
-        "  部署网关",
-        `  第 3 条 toolResult（read_file）  ${result?.entryId}  命中：部署`,
-        "  以前的工具输出，可能已过时",
-        "  部署日志第一行",
-        "",
-      ].join("\n")
-    );
-
-    const onlyResults = await runSearchCommand({ root, args: ["部署", "--role", "toolResult"] });
-    assert.match(onlyResults, /命中 1 个会话/);
-    assert.doesNotMatch(onlyResults, /第 1 条 user/);
-
-    // 旧版 --tool-output 已成未知选项（工具输出现在缺省在范围内），响亮报错
-    await assert.rejects(
-      runSearchCommand({ root, args: ["部署", "--tool-output"] }),
-      /未知选项：--tool-output/
-    );
+    assert.ok(!hits.some((hit) => hit.sessionId === hidden));
+    assert.ok(hits[0]?.snippet.includes("网关"));
+    assert.ok(!hits[0]?.snippet.includes("\n"), "片段压成一行");
+    assert.deepEqual(await filter("   ", among), []);
+    assert.deepEqual(await filter("没有的词", among), []);
   }));
 
-test("/search 末尾提示会话根下未列出的旧格式会话条数；没有旧格式文件时不出现", () =>
+test("片段净化：正文里的终端控制序列可见化，原始 ESC 与 BEL 不出这一层", () =>
   withRoot(async (root, sessionsDir) => {
-    const session = createFixtureSession({ sessionsDir });
-    session.startRun({ task: "部署网关" });
-    await session.close();
-    assert.doesNotMatch(await runSearchCommand({ root, args: ["部署"] }), /旧格式会话/);
-
-    writeLegacySessionFile(sessionsDir);
-    writeLegacySessionFile(sessionsDir);
-    const output = await runSearchCommand({ root, args: ["部署"] });
-    assert.match(output, /命中 1 条/);
-    assert.ok(
-      output.endsWith(`另有 2 个旧格式会话（迁移之前创建）未列出；${LEGACY_READER_HINT}\n`),
-      output
-    );
-  }));
-
-test("/search 无关键词给用法；未知角色响亮报错", () =>
-  withRoot(async (root) => {
-    assert.match(await runSearchCommand({ root, args: [] }), /用法：\/search/);
-    await assert.rejects(runSearchCommand({ root, args: ["x", "--role", "wizard"] }), /未知角色/);
-  }));
-
-test("/search 片段净化：正文里的终端控制序列可见化，原始 ESC 与 BEL 不出命令层（去净化变红）", () =>
-  withRoot(async (root, sessionsDir) => {
-    const session = createFixtureSession({ sessionsDir });
-    session.startRun({ task: "注入\x1b]52;c;ZXZpbA==\x07部署\x1b[2J" });
-    await session.close();
-    const output = await runSearchCommand({ root, args: ["部署"] });
-    assert.ok(output.includes("␛]52"), output);
-    assert.ok(!output.includes("\x1b"));
-    assert.ok(!output.includes("\x07"));
+    const id = await seed(sessionsDir, "注入\x1b]52;c;ZXZpbA==\x07部署\x1b[2J");
+    const [hit] = await createSessionFilter(root)("部署", new Set([id]));
+    assert.ok(hit !== undefined);
+    assert.ok(hit.snippet.includes("␛]52"), hit.snippet);
+    assert.ok(!hit.snippet.includes("\x1b"));
+    assert.ok(!hit.snippet.includes("\x07"));
   }));

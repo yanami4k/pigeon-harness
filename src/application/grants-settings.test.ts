@@ -88,7 +88,7 @@ test("/grants save 写入项目个人设置的 permissions 一节，下次会话
     sessionId: newSessionId(),
     write: (text) => lines.push(text),
   });
-  assert.match(lines.join(""), /\.pigeon\/settings\.local\.json 的 permissions 一节/);
+  assert.match(lines.join(""), /→ \.pigeon\/settings\.local\.json/);
   const onDisk = JSON.parse(readFileSync(projectLocalSettingsPath(root), "utf8"));
   assert.equal(onDisk.permissions.grants[0].promotedFrom.grantId, grant.grantId);
   // 下次会话：重新读设置快照，配置放权生效
@@ -137,12 +137,12 @@ test("/grants 按层列出三层的放权规则；/revoke config#N 只移除项�
   };
   runGrantCommand(["grants"], ctx);
   const listed = lines.join("");
-  assert.match(listed, /固化规则（4，三层设置的 permissions 一节）/);
-  assert.match(listed, /config#0 ｜ edit_file/);
-  assert.match(listed, /config#1 ｜ run_command/);
-  assert.match(listed, /项目共享#0 ｜ web_fetch/);
-  assert.match(listed, /用户级#0 ｜ read_file/);
-  assert.match(listed, /不能用 \/revoke 移除/);
+  assert.match(listed, /saved rules \(4\):/);
+  assert.match(listed, /config#0 \| edit_file/);
+  assert.match(listed, /config#1 \| run_command/);
+  assert.match(listed, /project#0 \| web_fetch/);
+  assert.match(listed, /user#0 \| read_file/);
+  assert.doesNotMatch(listed, /\/revoke/);
   runGrantCommand(["revoke", "config#1"], ctx);
   const after = loadSettings(root, { homeDir: home });
   assert.deepEqual(

@@ -9,6 +9,7 @@
 // 不逐个读文件首行；会话根下遗留的旧格式平铺文件（sess_*.jsonl 等）不在任何子目录里，不会被列举。
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync } from "node:fs";
 import { join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { SessionEntryType } from "../state/session-entries.ts";
 
 // pi v4 的七种条目类型与九种 record 类型（上游读盘白名单，pi-agent-core 0.84.4 jsonl/codec.js）
@@ -194,6 +195,56 @@ export function readSessionHeader(path: string): SessionHeaderView | undefined {
   }
 }
 
+// 钩子运行记录这一行（决策 432：不算会话内容）
+function isHookRecordLine(line: string): boolean {
+  try {
+    const value: unknown = JSON.parse(line);
+    return (
+      isObject(value) &&
+      value.kind === "entry" &&
+      value.type === "custom" &&
+      value.customType === SessionEntryType.Hook
+    );
+  } catch {
+    return false;
+  }
+}
+
+// 决策 432：文件头之后除钩子运行记录外还有没有条目——没有即从没开始过对话的会话（启动即建会话文件时留下的空会话）。
+// 逐块读到第一条这样的条目为止；读不出的行与写了一半的末行按有内容算（宁可多列）。打不开为 false。从不写文件
+export function sessionHasContent(path: string): boolean {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "r");
+    const chunk = Buffer.alloc(64 * 1024);
+    // 多字节字符可能跨块：按块解码，残字留到下一块
+    const decoder = new StringDecoder("utf8");
+    let position = 0;
+    let pending = "";
+    let headerSeen = false;
+    const contentLine = (line: string) => line.trim() !== "" && !isHookRecordLine(line);
+    for (;;) {
+      const read = readSync(fd, chunk, 0, chunk.length, position);
+      if (read === 0) break;
+      position += read;
+      const lines = (pending + decoder.write(chunk.subarray(0, read))).split("\n");
+      pending = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!headerSeen) {
+          headerSeen = true;
+          continue;
+        }
+        if (contentLine(line)) return true;
+      }
+    }
+    return headerSeen && contentLine(pending + decoder.end());
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
 // 读一个会话文件；没有合法文件头（空文件、文件头写了一半、版本不是 4）返回 undefined。从不写文件
 export function readSessionFile(path: string): SessionFileView | undefined {
   const content = readFileSync(path, "utf8");
@@ -220,19 +271,19 @@ export function readSessionFile(path: string): SessionFileView | undefined {
 
   for (let index = 1; index < lines.length; index++) {
     const lineNo = index + 1;
-    const skip = (reason: string) => warnings.push(`第 ${lineNo} 行${reason}，已跳过`);
+    const skip = (reason: string) => warnings.push(`line ${lineNo}: ${reason}; skipped`);
     let value: unknown;
     try {
       value = JSON.parse(lines[index] ?? "");
     } catch {
       // 不完整的末行：写者可能正在追加它，照 181 跳过、不告警
       if (index !== lines.length - 1) {
-        skip("不是合法 JSON");
+        skip("not valid JSON");
       }
       continue;
     }
     if (!isObject(value) || !Number.isSafeInteger(value.seq) || (value.seq as number) <= lastSeq) {
-      skip("缺少递增的 seq");
+      skip("missing increasing seq");
       continue;
     }
     const seq = value.seq as number;
@@ -241,7 +292,7 @@ export function readSessionFile(path: string): SessionFileView | undefined {
       const type = value.type;
       const id = value.id;
       if (typeof id !== "string" || typeof type !== "string") {
-        skip("的条目缺少 id 或类型");
+        skip("entry missing id or type");
         continue;
       }
       const parentId = resolve(typeof value.parentId === "string" ? value.parentId : null);
@@ -250,11 +301,11 @@ export function readSessionFile(path: string): SessionFileView | undefined {
         for (const [lane, leaf] of lanes) {
           if (leaf === id) lanes.set(lane, parentId);
         }
-        skip(`是不认识的条目类型 ${type}`);
+        skip(`unknown entry type ${type}`);
         continue;
       }
       if (usedIds.has(id)) {
-        skip(`的条目号 ${id} 重复`);
+        skip(`duplicate entry ID ${id}`);
         continue;
       }
       const { kind: _kind, lane, ...fields } = value;
@@ -267,7 +318,7 @@ export function readSessionFile(path: string): SessionFileView | undefined {
       }
     } else if (value.kind === "record") {
       if (typeof value.type !== "string" || !RECORD_TYPES.has(value.type)) {
-        skip(`是不认识的 record 类型 ${String(value.type)}`);
+        skip(`unknown record type ${String(value.type)}`);
         continue;
       }
       if (typeof value.id === "string") {
@@ -275,7 +326,7 @@ export function readSessionFile(path: string): SessionFileView | undefined {
       }
     } else if (value.kind === "lane") {
       if (typeof value.lane !== "string") {
-        skip("的通道变更缺少通道名");
+        skip("lane change missing lane name");
         continue;
       }
       lanes.set(value.lane, resolve(typeof value.leafId === "string" ? value.leafId : null));
@@ -289,10 +340,10 @@ export function readSessionFile(path: string): SessionFileView | undefined {
           labels.delete(value.targetId);
         }
       } else {
-        skip(`是不认识的事实种类 ${String(value.fact)}`);
+        skip(`unknown fact kind ${String(value.fact)}`);
       }
     } else {
-      skip(`是不认识的变更种类 ${String(value.kind)}`);
+      skip(`unknown change kind ${String(value.kind)}`);
     }
   }
   return {

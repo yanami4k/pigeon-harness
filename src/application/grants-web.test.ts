@@ -28,7 +28,7 @@ test("/grants 展示按网站放权；/grants save 升格带 host；/revoke 撤�
       write: (text: string) => lines.push(text),
     };
     assert.equal(runGrantCommand(["grants"], ctx), true);
-    assert.match(lines.join(""), /web_fetch ｜ 仅限网站 docs\.example ｜/);
+    assert.match(lines.join(""), /web_fetch \| site docs\.example \|/);
 
     assert.equal(runGrantCommand(["grants", "save", grant.grantId], ctx), true);
     const saved = loadGrantConfig(root);
@@ -42,8 +42,8 @@ test("/grants 展示按网站放权；/grants save 升格带 host；/revoke 撤�
     assert.equal(store.match("web_fetch", { url: "https://docs.example/b" }), null);
     lines.length = 0;
     runGrantCommand(["grants"], { ...ctx, configRules: saved });
-    assert.match(lines.join(""), /会话放权（0）/);
-    assert.match(lines.join(""), /config#0 ｜ web_fetch ｜ 仅限网站 docs\.example ｜/);
+    assert.match(lines.join(""), /session grants \(0\)/);
+    assert.match(lines.join(""), /config#0 \| web_fetch \| site docs\.example \|/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

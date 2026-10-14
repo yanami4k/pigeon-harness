@@ -171,12 +171,12 @@ test("没改动、未收尾、不存在、工作树已清理、没有起点：�
       takeWorkerChanges(f.host([f.status("completed", true)]), "fix-a").text,
       "Worker fix-a has no recorded start snapshot, so its changes cannot be taken."
     );
-    // 工作树已清理（日常使用里不自动清理；人用 git worktree remove 之后）
+    // 工作树已不在（人用 git worktree remove、/worktrees 删掉，或之前的运行里自动删的）：不知原因时列出可能
     writeFileSync(join(f.worktree, "b.txt"), "changed\n");
     git(f.main, "worktree", "remove", "--force", f.worktree);
     assert.equal(
       takeWorkerChanges(f.host([f.status("completed")]), "fix-a").text,
-      "The worktree of worker fix-a has been cleaned up, so its changes cannot be taken."
+      "The worktree of worker fix-a has been removed (it changed no files, its changes were already taken in full, or it was deleted by hand), so its changes cannot be taken."
     );
     assert.equal(readFileSync(join(f.main, "a.txt"), "utf8"), before);
     assert.equal(
@@ -198,7 +198,7 @@ test("工具形态：名字、定稿说明、参数说明、写档注册；未�
       "Only files the worker changed are written; files it did not touch are left alone. Nothing in your working directory is deleted or reverted. Files the worker deleted are not deleted automatically; they are only listed in the result, and you decide whether to delete them.",
       "Files that cannot be merged (you also changed the same spot) are not written and are listed as conflicts; the worker's branch and worktree are kept as they are, and you can see its changes to those files with: git -C <worktree path> diff <snapshot> -- <file>. Applying cannot be undone: review the returned summary and changed files before applying.",
       "Take the changes of several workers one at a time as needed, finishing one before taking the next; if a later one changed the same spot as an earlier one, it is listed as a conflict.",
-      "Returns three lists: files applied, files with conflicts that were not written, and files the worker deleted.",
+      "Returns three lists: files applied, files with conflicts that were not written, and files the worker deleted. When everything is applied (no conflicts, no files left behind, and the worker deleted no files), the worker's worktree and branch are removed.",
     ].join("\n")
   );
   const registration = takeWorkerRegistration();
@@ -208,7 +208,7 @@ test("工具形态：名字、定稿说明、参数说明、写档注册；未�
   assert.equal(
     (registration.parameters as { properties: { worker: { description: string } } }).properties
       .worker.description,
-    "The worker's name, as given in the result returned by spawn_worker (branch pigeon/<name>)"
+    "The worker's name, as given in the result returned by spawn_worker (its branch is pigeon/<session suffix>-<name>)"
   );
 
   const slot = new SpawnWorkerSlot();
@@ -296,7 +296,10 @@ test("派出后 refs/pigeon/ 下不留该 worker 的起点引用；gc 之后 tak
     const outcome = await orchestrator.awaitResult(id);
     assert.equal(outcome.start?.snapshot, true);
     const base = outcome.start?.commit ?? "";
-    assert.equal(git(main, "rev-parse", "pigeon/fix-a"), base, "worker 分支指向起点快照提交");
+    // 决策 447：分支带会话号后 8 位
+    const branch = (outcome.workspace as { branch: string }).branch;
+    assert.match(branch, /^pigeon\/[0-9a-z]{8}-fix-a$/);
+    assert.equal(git(main, "rev-parse", branch), base, "worker 分支指向起点快照提交");
     git(main, "gc", "-q", "--prune=now");
     assert.equal(git(main, "cat-file", "-t", base), "commit", "gc 之后快照提交仍在");
     const { text, details } = takeWorkerChanges({ orchestrator, workspaceRoot: main }, "fix-a");
@@ -448,6 +451,146 @@ test("决策 340：脚本整批收回含 .pigeon 下的路径时按受保护路�
       asked.map((request) => request.protectedPath),
       [".pigeon/settings.json"]
     );
+  } finally {
+    f.cleanup();
+  }
+});
+
+// 决策 448：完整取回（没有冲突、没有因过大留下的文件）之后经编排器删工作树与分支；有冲突的、取回失败的不删
+test("决策 448：完整取回后请编排器删工作树（taken），返回文字补一句；有冲突时不删；已知原因的工作树已删照实说明", () => {
+  const f = fixture();
+  try {
+    const calls: Array<[string, string]> = [];
+    const status = f.status("completed");
+    const host = {
+      orchestrator: {
+        status: () => [status],
+        discardWorkspace: (id: string, reason: string) => {
+          calls.push([id, reason]);
+          return true;
+        },
+      },
+      workspaceRoot: f.main,
+    };
+    writeFileSync(join(f.worktree, "b.txt"), "b1\nb2 worker\nb3\n");
+    const taken = takeWorkerChanges(host, "fix-a");
+    assert.deepEqual(calls, [[status.sessionId, "taken"]]);
+    assert.equal(taken.details.worktreeRemoved, true);
+    assert.ok(
+      taken.text.endsWith(
+        " Everything was taken, so the worktree and branch of worker fix-a were removed."
+      ),
+      taken.text
+    );
+
+    // 有冲突：不删
+    calls.length = 0;
+    writeFileSync(join(f.main, "a.txt"), "a1 main-later\na2\na3\n");
+    writeFileSync(join(f.worktree, "a.txt"), "a1 worker\na2\na3\n");
+    const conflicted = takeWorkerChanges(host, "fix-a");
+    assert.deepEqual(calls, []);
+    assert.equal(conflicted.details.worktreeRemoved, undefined);
+    assert.ok(!conflicted.text.includes("were removed"), conflicted.text);
+
+    // 编排器删不成（返回 false）：照常交回取回结果，不补那一句
+    const failing = {
+      ...host,
+      orchestrator: { status: () => [status], discardWorkspace: () => false },
+    };
+    rmSync(join(f.worktree, "a.txt"));
+    git(f.worktree, "checkout", "--", "a.txt");
+    writeFileSync(join(f.main, "a.txt"), "a1 main\na2\na3\n");
+    const kept = takeWorkerChanges(failing, "fix-a");
+    assert.ok(!kept.text.includes("were removed"), kept.text);
+
+    // 本进程删掉的：按原因说明
+    git(f.main, "worktree", "remove", "--force", f.worktree);
+    assert.equal(
+      takeWorkerChanges(f.host([{ ...status, worktreeRemoved: "unchanged" }]), "fix-a").text,
+      "Worker fix-a changed no files, so its worktree and branch were removed; there is nothing to take."
+    );
+    assert.equal(
+      takeWorkerChanges(f.host([{ ...status, worktreeRemoved: "taken" }]), "fix-a").text,
+      "The changes of worker fix-a were already taken in full, so its worktree and branch were removed; there is nothing more to take."
+    );
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("决策 448：真实编排器上 take_worker 完整取回后工作树与分支都不在了，再取说明已取回", async () => {
+  const main = realpathSync.native(mkdtempSync(join(tmpdir(), "pigeon-take-remove-")));
+  try {
+    git(main, "init", "-q", "-b", "main");
+    git(main, "config", "user.email", "pigeon@example.invalid");
+    git(main, "config", "user.name", "pigeon-test");
+    git(main, "config", "core.autocrlf", "false");
+    writeFileSync(join(main, ".gitignore"), ".pigeon/\n");
+    writeFileSync(join(main, "a.txt"), "a\n");
+    git(main, "add", ".");
+    git(main, "commit", "-q", "-m", "init");
+    const { gitWorktreeWorkspaces } = await import("../orchestration/workers.ts");
+    const orchestrator = new WorkerOrchestrator({
+      governanceRoot: main,
+      workspaceRoot: main,
+      session: { sessionId: newSessionId() },
+      parentPolicy: { allow: ["read_file", "edit_file"], deny: [], approvalMode: "prompt" },
+      parentLog: { appendChildSpawned: () => {}, appendChildSettled: () => {} },
+      createRuntime: (request) => ({
+        run: async () => {
+          if (request.workspace.kind === "git-worktree") {
+            writeFileSync(join(request.workspace.path, "a.txt"), "a worker\n");
+          }
+          return { status: "completed" as const };
+        },
+        interrupt: async () => {},
+        subscribe: () => () => {},
+        summary: () => "ok",
+        dispose: async () => {},
+      }),
+      approvals: async () => ({ approved: true }),
+      workspaces: gitWorktreeWorkspaces({ repoRoot: main, governanceRoot: main }),
+      startPoint: workerStartPoint(main),
+    });
+    const id = orchestrator.spawn({ role: "implementer", task: "改", name: "fix" });
+    const outcome = await orchestrator.awaitResult(id);
+    assert.equal(outcome.worktreeRemoved, undefined);
+    const workspace = outcome.workspace as { path: string; branch: string };
+    const first = takeWorkerChanges({ orchestrator, workspaceRoot: main }, "fix");
+    assert.equal(readFileSync(join(main, "a.txt"), "utf8"), "a worker\n");
+    assert.equal(first.details.worktreeRemoved, true, first.text);
+    assert.equal(existsSync(workspace.path), false);
+    assert.equal(git(main, "branch", "--list", workspace.branch), "");
+    assert.equal(
+      takeWorkerChanges({ orchestrator, workspaceRoot: main }, "fix").text,
+      TAKE_WORKER_TEXTS.worktreeGone("fix", "taken")
+    );
+  } finally {
+    rmSync(main, { recursive: true, force: true });
+  }
+});
+
+test("决策 448：worker 删了文件（删除不叠回、留给人定）不算完整取回，不删工作树", () => {
+  const f = fixture();
+  try {
+    const calls: string[] = [];
+    const status = f.status("completed");
+    const host = {
+      orchestrator: {
+        status: () => [status],
+        discardWorkspace: (_id: string, reason: string) => {
+          calls.push(reason);
+          return true;
+        },
+      },
+      workspaceRoot: f.main,
+    };
+    writeFileSync(join(f.worktree, "b.txt"), "b1\nb2 worker\nb3\n");
+    rmSync(join(f.worktree, "d.txt"));
+    const taken = takeWorkerChanges(host, "fix-a");
+    assert.deepEqual(taken.details.result?.deletedByWorker, ["d.txt"]);
+    assert.deepEqual(calls, []);
+    assert.equal(taken.details.worktreeRemoved, undefined);
   } finally {
     f.cleanup();
   }

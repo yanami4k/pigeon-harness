@@ -18,10 +18,13 @@ import type { LoopGuardSettings } from "../state/loop-guard-config.ts";
 import type { ThinkingLevel } from "../state/runtime-events.ts";
 import { emptySettingsSnapshot, mcpConfigOf, type SettingsSnapshot } from "../state/settings.ts";
 import type { WorkspaceHost } from "../tools/workspace-host.ts";
-import { previousJobsOf } from "./background-jobs.ts";
+import { previousJobsOfSession } from "./background-jobs.ts";
 import { attachCheckpoints, type CheckpointAttachment } from "./checkpoints.ts";
+import type { EnterWorktreeSlot } from "./enter-worktree-tool.ts";
 import { describeMcpStartup, type McpSession, noMcpSession, startMcpSession } from "./mcp.ts";
+import type { PeerSlot } from "./peer-tools.ts";
 import {
+  type ApprovalModeCell,
   buildRuntime,
   disposeRuntime,
   type LearnedMemoryConfig,
@@ -70,6 +73,10 @@ export function pushedMemoryRunOptions(flags: SessionRuntimeFlags): { pushedMemo
 export interface OpenSessionRuntimeRequest {
   // 治理根：.pigeon/（设置、程序状态、Skill）所在
   governanceRoot: string;
+  // 决策 469：审批模式单元（会话中途可切换；主会话重建运行面时传同一个）。缺省按 flags.yolo 新建
+  approvalModeCell?: ApprovalModeCell;
+  // 决策 436：发消息时也拍工作区快照（会话回退用；只有终端界面开）
+  turnSnapshots?: boolean;
   // 决策 325：本会话的设置快照（入口在会话开始时读一次并确认过会执行命令的条目；本会话内各处都从它取）。
   // 缺省为空快照（不读任何设置文件）；日常入口一律显式给出
   settings?: SettingsSnapshot;
@@ -80,6 +87,14 @@ export interface OpenSessionRuntimeRequest {
   createApprovalHandler?: RuntimeDeps["createApprovalHandler"];
   // 续跑既有会话：以会话里的生效 grant 为种子（决策 3b，静默继续有效），并还原对话上下文（决策 183）
   resume?: boolean;
+  // 决策 432：新开的会话等第一次真要落盘时才建会话文件（终端界面新开会话时给）
+  deferSessionFile?: boolean;
+  // 决策 445、446：主会话的工作区根（独立工作树）；缺省按会话推导（新会话即治理根）。worker 会话不受它影响
+  workspaceRoot?: string;
+  // 决策 446：enter_worktree 的工具槽（终端界面主会话给）；worker 会话与沙箱不注册
+  enterWorktree?: EnterWorktreeSlot;
+  // 决策 450：会话间通信的工具槽（开了收件口的入口给）；worker 会话与沙箱不注册
+  peers?: PeerSlot;
   // MCP 启动提示（启动问题与注解配置冲突）：cli 打 stdout、tui 打 stderr，由调用方决定
   onMcpNote?: (note: string) => void;
   // 缺省按治理根与作用域工作区根启动真实 MCP 会话；测试注入替身。reuse 为 /reload 时的旧 MCP 会话（沿用未变的连接）
@@ -99,7 +114,7 @@ export interface OpenSessionRuntimeRequest {
   workspaceHost?: WorkspaceHost;
   // 决策 354：入口给出的确知事实（沙箱档位、网络能否用），写进开工状态块的环境一节
   statusFacts?: StatusFacts;
-  // 决策 264–267：派 worker 的工具槽（终端界面给；命令行对话不给）。只给主会话注册：worker 会话（深度 1）与沙箱会话不注册
+  // 决策 264–267：派 worker 的工具槽（终端界面给）。只给主会话注册：worker 会话（深度 1）与沙箱会话不注册
   spawnWorker?: SpawnWorkerSlot;
   // 决策 309：提交编排脚本的工具槽（终端界面随派 worker 一并给）；只给主会话注册，worker 会话与沙箱会话不注册
   scriptOrchestration?: ScriptSlot;
@@ -107,7 +122,7 @@ export interface OpenSessionRuntimeRequest {
   taskList?: boolean;
   // 决策 287–291：联网工具的配置（在场即注册两件工具）；--sandbox-network off 时调用方不给
   webTools?: WebToolsConfig;
-  // 决策 331：写记忆的入口与写入后的提示（终端界面与 --line 给；推送记忆关着时不生效）
+  // 决策 331：写记忆的入口与写入后的提示（终端界面给；推送记忆关着时不生效）
   memoryWrite?: MemoryWriteConfig;
   // 决策 286：运行期告警的出口（会话存储、压缩前回调、工作区快照）；缺省写标准错误输出
   warn?: WarnSink;
@@ -131,15 +146,19 @@ export interface OpenedSessionRuntime {
 }
 
 // 续跑：等写者打开会话文件，读主分支还原上下文；悬空调用补的工具结果先写进会话，再连同还原的消息交给 Agent。
-// 会话文件打不开（会话存储故障）时报错：没有上下文的续跑不是续跑
+// 会话文件打不开（会话存储故障）时报错：没有上下文的续跑不是续跑。
+// 决策 432：会话文件推迟建、还没建（新会话还没对话时 /reload）——没有可还原的
 async function restoreContext(bundle: RuntimeBundle): Promise<{
   messages: number;
   interrupted: number;
 }> {
+  if (bundle.sessionStore.fileDeferred?.() === true) {
+    return { messages: 0, interrupted: 0 };
+  }
   const path = await bundle.sessionStore.filePath();
   const loaded = path !== undefined ? loadStoreSessionFile(path) : undefined;
   if (loaded === undefined) {
-    throw new Error("会话文件没有打开（会话存储告警已给出原因），无法还原对话上下文，续跑中止");
+    throw new Error("resume failed: session file not open");
   }
   const { messages, interrupted } = restoreSessionContext(loaded.main);
   for (const message of interrupted) {
@@ -156,8 +175,13 @@ export async function openSessionRuntime(
   request: OpenSessionRuntimeRequest
 ): Promise<OpenedSessionRuntime> {
   const settings = request.settings ?? emptySettingsSnapshot(request.governanceRoot);
-  // M5.5 S4（决策 040）：worker 会话回到它自己的工作树与委派策略；新建会话与主会话即治理根
-  const scope = sessionRuntimeScope(request.governanceRoot, request.sessionId);
+  // M5.5 S4（决策 040）：worker 会话回到它自己的工作树与委派策略；新建会话与主会话即治理根。
+  // 决策 445、446：主会话另给了工作区根（独立工作树）时用它；治理根照旧是主仓库
+  const derived = sessionRuntimeScope(request.governanceRoot, request.sessionId);
+  const scope =
+    request.workspaceRoot !== undefined && derived.worker === undefined
+      ? { ...derived, workspaceRoot: request.workspaceRoot }
+      : derived;
   const restoredGrants =
     request.resume === true
       ? restoreGrantSeed(request.governanceRoot, request.sessionId)
@@ -193,8 +217,11 @@ export async function openSessionRuntime(
   const recordedPromptModel = recordedStart?.modelInfo;
   // 决策 365：/reload 接着管旧运行面的后台作业；续跑时取会话记录里上一进程的作业（已丢失的与用过的作业号）
   const reloadJobs = request.reloadFrom?.jobs;
+  // 决策 438：作业号按全部分支编号（会话回退后旧分支上用过的号不再用）；丢失的作业只看主分支
   const previousJobs =
-    reloadJobs === undefined && recorded !== undefined ? previousJobsOf(recorded.main) : undefined;
+    reloadJobs === undefined && recorded !== undefined
+      ? previousJobsOfSession(recorded.main, recorded.file.entries)
+      : undefined;
   const statusSent =
     request.reloadFrom !== undefined
       ? request.reloadFrom.status.sent()
@@ -225,7 +252,11 @@ export async function openSessionRuntime(
       settings,
       ...(scope.toolPolicy !== undefined ? { toolPolicy: scope.toolPolicy } : {}),
       sessionId: request.sessionId,
+      ...(request.deferSessionFile === true ? { deferSessionFile: true } : {}),
       yolo: request.flags.yolo,
+      ...(request.approvalModeCell !== undefined
+        ? { approvalModeCell: request.approvalModeCell }
+        : {}),
       provider: request.flags.provider,
       modelId: request.flags.modelId,
       persistThinking: request.flags.persistThinking,
@@ -240,7 +271,7 @@ export async function openSessionRuntime(
       ...(request.flags.sessionSearch === false
         ? {
             sessionSearch: false,
-            sessionSearchOffReason: "使用者以 --no-session-search 关掉了会话检索",
+            sessionSearchOffReason: "--no-session-search",
           }
         : {}),
       ...(request.createApprovalHandler !== undefined
@@ -254,6 +285,17 @@ export async function openSessionRuntime(
         : {}),
       ...(spawnWorker !== undefined ? { spawnWorker } : {}),
       ...(scriptOrchestration !== undefined ? { scriptOrchestration } : {}),
+      // 决策 446：只给主会话（worker 会话与沙箱不注册）
+      ...(request.enterWorktree !== undefined &&
+      scope.parentSessionId === undefined &&
+      request.workspaceHost === undefined
+        ? { enterWorktree: request.enterWorktree }
+        : {}),
+      ...(request.peers !== undefined &&
+      scope.parentSessionId === undefined &&
+      request.workspaceHost === undefined
+        ? { peers: request.peers }
+        : {}),
       ...(request.taskList === true ? { taskList: true } : {}),
       ...(request.webTools !== undefined ? { webTools: request.webTools } : {}),
       ...(request.warn !== undefined ? { storeWarn: request.warn } : {}),
@@ -305,6 +347,7 @@ export async function openSessionRuntime(
             bundle,
             workspaceRoot: scope.workspaceRoot,
             ...(request.warn !== undefined ? { warn: request.warn } : {}),
+            ...(request.turnSnapshots === true ? { turnSnapshots: true } : {}),
           })
         : undefined;
     if (checkpoints !== undefined) {

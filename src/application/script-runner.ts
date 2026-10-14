@@ -25,10 +25,9 @@ import type { SessionId } from "../state/ids.ts";
 import { checkJsonSchema } from "../state/json-schema-check.ts";
 import type { ChildSettledStatus, WorkerRole } from "../state/session-payloads.ts";
 import type { ScriptKindRegistry } from "./script-approvals.ts";
-import { budgetText, type ScriptBudget } from "./script-naming.ts";
+import type { ScriptBudget } from "./script-naming.ts";
 import {
   logLine,
-  planLine,
   SCRIPT_BUDGET_NO_PRICE,
   SCRIPT_NOTICE_PREFIX,
   type ScriptEnding,
@@ -120,7 +119,9 @@ export interface ScriptRunnerDeps {
   orchestrator: Pick<
     WorkerOrchestrator,
     "spawn" | "awaitResult" | "cancel" | "resume" | "observe" | "status"
-  >;
+  > &
+    // 决策 448：收回之后清理工作树（替身可以不给，即不清理）
+    Partial<Pick<WorkerOrchestrator, "discardWorkspace">>;
   // 容器（Docker 不可用即抛错）
   launcher: () => Promise<ScriptLauncher>;
   // 拍本次脚本的主目录快照并挂上引用（不是 git 仓库即抛错）；读回与放弃
@@ -527,16 +528,6 @@ export class ScriptRuns implements ScriptKindRegistry {
     run.allowedKinds = new Set();
     run.exhausted = this.#overBudget(run);
     const post = this.#deps.announce();
-    const budget = budgetText(run.budget);
-    this.#deps.emit?.(
-      planLine({
-        name: run.spec.name,
-        runId: run.runId,
-        phases: run.spec.phases,
-        ...(Array.isArray(run.spec.args) ? { items: run.spec.args.length } : {}),
-        ...(budget !== undefined ? { budget } : {}),
-      })
-    );
     this.#deps.onChange?.();
     const finished = Promise.withResolvers<void>();
     run.done = finished.promise;
@@ -547,7 +538,7 @@ export class ScriptRuns implements ScriptKindRegistry {
           post(
             `${SCRIPT_NOTICE_PREFIX}Script ${run.spec.name} (run ${run.runId}) failed: ${
               error instanceof Error ? error.message : String(error)
-            }。`
+            }.`
           )
       )
       .finally(() => {
@@ -934,12 +925,16 @@ export class ScriptRuns implements ScriptKindRegistry {
     const applied: string[] = [];
     const conflicts: string[] = [];
     const deletedByWorker: string[] = [];
+    const taken = new Set<string>();
     for (const target of targets) {
       try {
         const result = this.#deps.overlay(target);
         applied.push(...result.applied);
         conflicts.push(...result.conflicts);
         deletedByWorker.push(...result.deletedByWorker);
+        if (result.conflicts.length === 0 && (result.skipped?.length ?? 0) === 0) {
+          taken.add(target.name);
+        }
       } catch (error) {
         conflicts.push(
           `${target.name} (taking it back failed: ${error instanceof Error ? error.message : String(error)})`
@@ -952,7 +947,24 @@ export class ScriptRuns implements ScriptKindRegistry {
     } catch {
       // 删引用失败不改变收回结果
     }
+    this.#cleanupWorktrees(run, taken);
     return { kind: "done", applied, conflicts, deletedByWorker };
+  }
+
+  // 决策 448：整次收回之后清理本次各调用的工作树——完整收回的、核对确实没有改动的删掉，其余（有冲突的、没列进收回清单而
+  // 有改动的、失败中断的）留着。删不成照常留着，不改变收回结果
+  #cleanupWorktrees(run: ScriptRun, taken: ReadonlySet<string>): void {
+    const discard = this.#deps.orchestrator.discardWorkspace?.bind(this.#deps.orchestrator);
+    if (discard === undefined) return;
+    for (const call of run.calls.values()) {
+      const record = call.record;
+      if (record === undefined || call.running) continue;
+      try {
+        discard(record.sessionId, taken.has(record.name) ? "taken" : "unchanged");
+      } catch {
+        // 编排器自己记故障，这里不挡
+      }
+    }
   }
 
   #summary(

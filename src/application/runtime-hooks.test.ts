@@ -143,7 +143,7 @@ test("混合批次里 PreToolUse continue:false：只发一次模型请求、后
   assert.deepEqual(asked, [], "停下后的调用不再请示");
   assert.equal(readFileSync(join(root, "c.ts"), "utf8"), "c.ts\n", "c.ts 未被改动");
   assert.equal(result.status, "aborted");
-  assert.match(result.errorMessage ?? "", /钩子要求停止：停-混合批/);
+  assert.match(result.errorMessage ?? "", /hook asked to stop: 停-混合批/);
 });
 
 test("钩子记录的 Run 归属：Run 外只有 Stop / StopFailure / SubagentStop / 自动压缩的 PostCompact 挂刚结束的 Run", async () => {

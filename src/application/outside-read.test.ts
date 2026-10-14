@@ -8,7 +8,6 @@ import { join } from "node:path";
 import { test } from "vitest";
 import { SessionGrantStore } from "../approvals/grant-store.ts";
 import type { ApprovalHandler, ApprovalRequest } from "../approvals/handler.ts";
-import { createCliApprovalHandler } from "../cli/approval-ui.ts";
 import { PiRuntimeAdapter } from "../pi-runtime/adapter.ts";
 import { createFakeStreamFn, type FakeReply } from "../pi-runtime/fixtures.ts";
 import { INJECTION_SNAPSHOT_VERSION, type InjectionSnapshot } from "../pi-runtime/snapshot.ts";
@@ -21,6 +20,7 @@ import {
 } from "../tools/read-file.ts";
 import { ToolRegistry } from "../tools/registry.ts";
 import { createReplaceEditTool, ReplaceEditParamsSchema } from "../tools/replace-edit.ts";
+import { REASON_PROMPT, scriptedApprovalHandler } from "../tui/approval-fixtures.ts";
 import { createToolGovernance, type ToolGovernanceOptions } from "./governance.ts";
 
 function layout() {
@@ -154,8 +154,8 @@ test("非放手模式：工作区内不问人；工作区外问人（请求带�
     const store = new SessionGrantStore({ workspaceRoot: ws });
     const answers = ["n", "d"];
     const requests: ApprovalRequest[] = [];
-    const cli = createCliApprovalHandler(
-      async (prompt) => (prompt.startsWith("拒绝理由") ? "" : (answers.shift() ?? "n")),
+    const cli = scriptedApprovalHandler(
+      async (prompt) => (prompt === REASON_PROMPT ? "" : (answers.shift() ?? "n")),
       () => {},
       { grants: store }
     );

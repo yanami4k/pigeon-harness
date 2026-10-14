@@ -135,13 +135,13 @@ test("空回复重试一次仍空：以空回复异常结束——终态失败�
   assert.equal(result.status, "failed");
   assert.equal(result.emptyReply, true);
   assert.deepEqual(result.failure, { category: "business" });
-  assert.match(result.errorMessage ?? "", /空回复/);
+  assert.match(result.errorMessage ?? "", /empty model reply/);
   assert.equal(count(h, "turn.completed"), 2);
   assert.equal(count(h, "run.ended"), 1);
   const end = runEnd(h);
   assert.equal(end?.ending, "empty-reply");
   assert.equal(end?.stopReason, "stop");
-  assert.match(end?.errorMessage ?? "", /空回复/);
+  assert.match(end?.errorMessage ?? "", /empty model reply/);
 });
 
 test("判空：思考块不算内容，只有空白的文字也算空；有工具调用、或以撞输出上限收尾的不算空回复", async () => {

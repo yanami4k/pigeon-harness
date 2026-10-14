@@ -63,14 +63,14 @@ test("trace Run 头列出 MCP 冲突、不可用 server 与清单变更", async 
     const trace = runTraceCommand({ root, sessionId });
     assert.ok(
       trace.includes(
-        "  MCP 工具集冲突：mcp__fx__echo（声明只读，配置 write，按 write）、mcp__fx__peek（声明 destructive，配置 read，按 write）"
+        "  MCP toolset conflicts: mcp__fx__echo (declares read-only, set to write, using write), mcp__fx__peek (declares destructive, set to read, using write)"
       ),
       trace
     );
-    assert.ok(!trace.includes("mcp__fx__look（"), trace);
-    assert.ok(trace.includes("  MCP server fx 不可用（重启 2 次：连接断开）"), trace);
+    assert.ok(!trace.includes("mcp__fx__look ("), trace);
+    assert.ok(trace.includes("  MCP server fx unavailable (2 restarts: 连接断开)"), trace);
     assert.ok(
-      trace.includes("  MCP server fx 发来工具清单变更通知 1 次（本会话不变，下个会话生效）"),
+      trace.includes("  MCP server fx sent 1 tools list change (applies next session)"),
       trace
     );
   } finally {

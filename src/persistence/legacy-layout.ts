@@ -1,7 +1,7 @@
 // 旧布局检查（决策 325）：并入 settings.json 的旧配置文件、.pigeon 根下旧位置的程序状态，以及已删除功能的遗留
 //（决策 330、331：复盘配置与补做复盘记录、旧学到的记忆新旧两处、旧人写说明 .pigeon/memory/、用户级旧偏好
 // ~/.pigeon/preferences.md；决策 322：验证门与 .pigeon/verify.json——迁移命令把它挪进备份目录并打印改写为
-// 收尾钩子的示例）。启动时（终端界面、pigeon run、--line、pigeon resume；worker 与沙箱会话随派出它的
+// 收尾钩子的示例）。启动时（终端界面、pigeon run；worker 与沙箱会话随派出它的
 // 会话）发现任一项即报错，提示运行 pigeon migrate-config，不自动迁移。
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
@@ -84,17 +84,15 @@ export function legacyLayoutMessage(items: readonly LegacyItem[]): string {
     .filter((item) => item.kind === "removed")
     .map((item) => (item.name.startsWith("~") ? item.name : pigeonRel(item.name)));
   return [
-    "发现旧的配置布局，Pigeon 不会自动迁移：",
+    "legacy config layout found; not migrated automatically:",
     ...(configs.length > 0
-      ? [`  旧配置文件：${configs.join("、")}（已并入三层 settings.json）`]
+      ? [`  legacy config files: ${configs.join(", ")} (now in settings.json)`]
       : []),
     ...(states.length > 0
-      ? [`  旧位置的程序状态：${states.join("、")}（已移到 ${pigeonRel("state")}/ 下）`]
+      ? [`  state in legacy locations: ${states.join(", ")} (now under ${pigeonRel("state")}/)`]
       : []),
-    ...(removed.length > 0
-      ? [`  已删除功能的遗留：${removed.join("、")}（迁移命令挪到备份目录或改名）`]
-      : []),
-    `请在项目根运行 ${MIGRATE_CONFIG_COMMAND} 完成迁移后再启动。`,
+    ...(removed.length > 0 ? [`  leftovers of removed features: ${removed.join(", ")}`] : []),
+    `run ${MIGRATE_CONFIG_COMMAND} in the project root first`,
   ].join("\n");
 }
 

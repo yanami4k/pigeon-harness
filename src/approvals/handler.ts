@@ -1,4 +1,4 @@
-// 人工审批接口（ROADMAP §M3 + 决策 3：CLI REPL 内联审批，切片 4 实现 CLI）。
+// 人工审批接口（ROADMAP §M3 + 决策 3；决策 461 起只有终端界面的审批面板）。
 // Adapter 的 beforeToolCall 审批闸在策略判定为 prompt 时调用注入的 ApprovalHandler；
 // 本文件只定义注入点，不含任何交互实现。
 //
@@ -24,6 +24,8 @@ export interface ApprovalRequest {
   // 面板据此区分来源；主会话自己的请求缺省
   readonly sessionId?: SessionId;
   readonly worker?: { readonly name: string; readonly role: string };
+  // 决策 443：会话面板派出的独立会话的审批汇到同一队列时在场（面板写明来源会话的名字）
+  readonly pooled?: { readonly name: string };
   // M5.5 S3（决策 040）：放权落点——[a]/[d] 创建的会话 grant 写进请求来源会话的存储。
   // worker 请求由其装配根挂上 worker 自己的存储（grant 只活在该 worker 会话内）；
   // 缺省 = 审批 handler 绑定的主会话存储
@@ -44,6 +46,8 @@ export interface ApprovalRequest {
   readonly protectedPath?: string;
   // 决策 355：读档工具要读工作区以外的文件时在场，为其真实路径（面板标明；[a]/[d] 照常建放权）
   readonly outsidePath?: string;
+  // 决策 450：别的会话发来、被扣住待放行的消息（不是工具调用）：面板只收 [y] 放行与 [n] 丢弃；有工具审批要上面板时它让位
+  readonly peerMessage?: { readonly from: string; readonly cwd: string; readonly text: string };
 }
 
 // 会话 grant 的创建面（SessionGrantStore 满足）
@@ -61,7 +65,7 @@ export interface GrantCreator {
   readonly pathScoped?: boolean;
 }
 
-// 这次审批提供不提供 [d]（cli 与 tui 共用）：调用带 path 参数、不是 exec 档、放权落点能建目录限定的放权
+// 这次审批提供不提供 [d]：调用带 path 参数、不是 exec 档、放权落点能建目录限定的放权
 export function offersDirectoryGrant(
   request: ApprovalRequest,
   grants: Pick<GrantCreator, "pathScoped"> | undefined
@@ -78,7 +82,7 @@ export interface ApprovalDecision {
   readonly approved: boolean;
   // 拒绝时必填更佳：理由逐字成为模型可见的 error toolResult
   readonly reason?: string;
-  // 理由来源（决策 066）：human = 人写（TUI [r]、CLI 输入了理由）；缺省时治理层按
+  // 理由来源（决策 066）：human = 人写（终端界面的 [r]）；缺省时治理层按
   // 有无理由推定（有理由 = 人写，无理由 = 系统兜底文案），记入决定记录供学习侧区分
   readonly reasonSource?: "human" | "system-default";
   // 决策 303（脚本部分）：人选了"本次脚本内同类都允许"——批准这一次，并放行同一脚本里之后的同类请求
@@ -88,7 +92,7 @@ export interface ApprovalDecision {
 export type ApprovalHandler = (request: ApprovalRequest) => Promise<ApprovalDecision>;
 
 // 调用的路径参数：grant 目录限定只认 args.path 字符串（与 tools/grants.ts 匹配口径一致）。
-// cli 与 tui 两个审批 Actor 共用（M2 S3：单一约定，不各造一份）
+// 终端界面的审批面板与放权匹配共用（M2 S3：单一约定，不各造一份）
 export function extractPathArg(args: unknown): string | undefined {
   if (typeof args !== "object" || args === null || !("path" in args)) {
     return undefined;
@@ -107,7 +111,7 @@ export function extractCommandArg(args: unknown): string | undefined {
 }
 
 // exec 审批面板的命令行（048 修订）：原样显示将执行的命令串，需 shell 时标明；非 exec 调用返回 undefined。
-// 终端控制序列由各 Actor 的输出边界统一净化（036）
+// 终端控制序列由终端界面的输出边界统一净化（036）
 export function execCommandLine(request: ApprovalRequest): string | undefined {
   if (request.tier !== "exec") {
     return undefined;
@@ -116,36 +120,36 @@ export function execCommandLine(request: ApprovalRequest): string | undefined {
   if (command === undefined) {
     return undefined;
   }
-  return `命令${request.needsShell === true ? "（经 shell）" : ""}：${command}`;
+  return `command${request.needsShell === true ? " (shell)" : ""}: ${command}`;
 }
 
-// 受保护路径一行（决策 326 ①，cli 与 tui 共用）；不是受保护路径返回 undefined
+// 受保护路径一行（决策 326 ①）；不是受保护路径返回 undefined
 export function protectedPathLine(request: ApprovalRequest): string | undefined {
   if (request.protectedPath === undefined) {
     return undefined;
   }
-  return `受保护路径：${request.protectedPath}（Pigeon 的配置与状态目录；须逐次批准，会话放权与配置放权都不适用）`;
+  return `protected path: ${request.protectedPath} (approve each time only)`;
 }
 
-// 工作区以外的读取一行（决策 355，cli 与 tui 共用）；不是工作区外读取返回 undefined
+// 工作区以外的读取一行（决策 355）；不是工作区外读取返回 undefined
 export function outsidePathLine(request: ApprovalRequest): string | undefined {
   if (request.outsidePath === undefined) {
     return undefined;
   }
-  return `工作区以外（只读）：${request.outsidePath}`;
+  return `outside workspace (read-only): ${request.outsidePath}`;
 }
 
-// exec 档 [a] 键的提示文案（cli 与 tui 共用）
+// exec 档 [a] 键的提示文案
 export function execGrantKeyLabel(request: ApprovalRequest): string {
   return request.needsShell === true
-    ? "[a] 本会话允许这条命令（精确匹配，经 shell）"
-    : "[a] 本会话允许这条命令（精确匹配）";
+    ? "[a] allow this exact command for this session (shell)"
+    : "[a] allow this exact command for this session";
 }
 
 // 放权作用域（M5.5 S5，决策 048 及其修订）：exec 档 [a]/[d] 都收窄为这条一模一样的命令串（精确匹配，§3.9
 // 第五条不动，没有目录限定），需 shell 的命令带 shell 标记；其余档 [a] 工具级、[d] 仅限当前调用所在目录
 // （决策 3a，无 path 退化为工具级；不提供 [d] 的会话同样退化为工具级，决策 253）。null = exec 调用定位不到命令串，
-// 不能创建放权。cli 与 tui 共用
+// 不能创建放权
 export function grantScopeFor(
   request: ApprovalRequest,
   key: "a" | "d",
@@ -168,22 +172,7 @@ export function grantScopeFor(
     : {};
 }
 
-// 放权提示里的作用域后缀（cli 与 tui 共用）
-export function commandScopeNote(scope: {
-  command?: string;
-  shell?: boolean;
-  host?: string;
-}): string {
-  if (scope.host !== undefined) {
-    return `，仅限网站 ${scope.host}`;
-  }
-  if (scope.command === undefined) {
-    return "";
-  }
-  return `，仅限命令 ${scope.command}${scope.shell === true ? "（经 shell）" : ""}`;
-}
-
-// 网络档 [a] 键的提示文案（cli 与 tui 共用，决策 290）：以后都允许访问这个网站
+// 网络档 [a] 键的提示文案（决策 290）：以后都允许访问这个网站
 export function hostGrantKeyLabel(request: ApprovalRequest): string {
-  return `[a] 以后都允许访问 ${request.host ?? ""}`;
+  return `[a] allow ${request.host ?? ""} for this session`;
 }

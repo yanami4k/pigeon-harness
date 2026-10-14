@@ -368,7 +368,7 @@ test("未广告的工具名：上游 not found 兜底，账本零记录；广告
           }),
           tools: [createEditFileTool(root)],
         }),
-      /未在注册表登记/
+      /advertised tool not registered/
     );
   } finally {
     cleanup();
@@ -388,7 +388,7 @@ test("run() 互斥：已有在途 Run 时第二个 run 直接抛错（决策 2�
   const first = adapter.run("你好");
   await turnStarted;
 
-  await assert.rejects(() => adapter.run("第二个"), /互斥/);
+  await assert.rejects(() => adapter.run("第二个"), /already running/);
 
   gate.open();
   const result = await first;
@@ -861,7 +861,7 @@ test("toolHooks.toolFinished：一个调用要求停止后，同批稍后收尾�
     assert.deepEqual(seen, ["a.ts"]);
     assert.equal(streamFn.calls.length, 1);
     assert.equal(result.status, "aborted");
-    assert.match(result.errorMessage ?? "", /钩子要求停止：停-并行/);
+    assert.match(result.errorMessage ?? "", /hook asked to stop: 停-并行/);
     await adapter.dispose();
   } finally {
     cleanup();

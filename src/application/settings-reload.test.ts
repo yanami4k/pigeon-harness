@@ -182,7 +182,7 @@ test("改放权后 /reload：下一轮即生效（写操作凭新放权免审）
     assert.equal(first.toolExecutions.at(-1)?.decision?.approvedBy, "human");
     write(projectLocalSettingsPath(root), { permissions: { grants: [GRANT] } });
     const lines = await s.reload([]);
-    assert.match(lines.join("\n"), /改了 permissions 节/);
+    assert.match(lines.join("\n"), /settings reloaded: .*permissions/);
     const second = await s.run("改二");
     assert.equal(second.toolExecutions.at(-1)?.decision?.approvedBy, "policy:config");
     assert.equal(s.asked.length, 1, "重读之后不再问人");
@@ -202,8 +202,8 @@ test("改命令短名后 /reload 须确认：skip 沿用原内容、原来没有
       orchestration: { maxConcurrent: 2 },
     });
     const listed = (await s.reload([])).join("\n");
-    assert.match(listed, /命令短名 mark：git tag b/);
-    assert.match(listed, /命令短名 fresh：npm test/);
+    assert.match(listed, /command mark: git tag b/);
+    assert.match(listed, /command fresh: npm test/);
     assert.match(listed, /\/reload confirm/);
     assert.deepEqual(
       commandsConfigOf(s.settings()).commands,
@@ -211,21 +211,21 @@ test("改命令短名后 /reload 须确认：skip 沿用原内容、原来没有
       "确认之前不变"
     );
     const skipped = (await s.reload(["skip"])).join("\n");
-    assert.match(skipped, /改了 orchestration 节/);
-    assert.match(skipped, /沿用原内容/);
+    assert.match(skipped, /settings reloaded: .*orchestration/);
+    assert.match(skipped, /unconfirmed, kept as before/);
     assert.deepEqual(commandsConfigOf(s.settings()).commands, { mark: "git tag a" });
     assert.equal(s.settings().merged.orchestration?.maxConcurrent, 2, "其余改动照常生效");
     // 再读一次并确认：记下指纹，新内容生效
     await s.reload([]);
     const confirmed = (await s.reload(["confirm"])).join("\n");
-    assert.match(confirmed, /改了 commands 节/);
+    assert.match(confirmed, /settings reloaded: .*commands/);
     assert.deepEqual(commandsConfigOf(s.settings()).commands, {
       mark: "git tag b",
       fresh: "npm test",
     });
     assert.deepEqual(pendingTrustEntries(s.settings(), home), [], "确认即记下指纹，下次启动不再问");
-    assert.deepEqual(await s.reload([]), ["设置没有变化"]);
-    assert.deepEqual(await s.reload(["confirm"]), ["没有待确认的重读；先输入 /reload"]);
+    assert.deepEqual(await s.reload([]), ["settings unchanged"]);
+    assert.deepEqual(await s.reload(["confirm"]), ["nothing pending to confirm"]);
   } finally {
     await s.dispose();
   }
@@ -264,9 +264,9 @@ test("MCP 定义变化后 /reload：只重启内容有变的服务——未变�
     write(projectSettingsPath(root), { mcp: { servers: { keep: { defaultTier: "read" } } } });
     await s.reload([]);
     const lines = (await s.reload(["confirm"])).join("\n");
-    assert.match(lines, /改了 mcp 节/);
-    assert.match(lines, /MCP 服务：重启 fx；停止 old；启动 add/);
-    assert.ok(!/重启 [^；]*keep/.test(lines), lines);
+    assert.match(lines, /settings reloaded: .*mcp/);
+    assert.match(lines, /MCP servers: restarted fx; stopped old; started add/);
+    assert.ok(!/restarted [^;]*keep/.test(lines), lines);
     assert.deepEqual(
       [...created].sort(),
       ["a.js", "b.js", "keep.js", "n.js", "o.js"],
@@ -366,19 +366,17 @@ test("有 worker 在跑等不能重载时如实拒绝；沙箱会话里 sandbox 
   write(projectSettingsPath(root), { sandbox: { image: "python:3.12" } });
   await reload([]);
   const lines = (await reload(["confirm"])).join("\n");
-  assert.match(lines, /pigeon resume sess_X --sandbox/);
+  assert.match(lines, /pigeon --sandbox --resume sess_X/);
   write(projectSettingsPath(root), { sandbox: { image: "python:3.12", memory: "4g" } });
   await reload([]);
   const limitLines = (await reload(["confirm"])).join("\n");
-  assert.match(limitLines, /改了 sandbox 节/);
+  assert.match(limitLines, /settings reloaded: .*sandbox/);
   assert.match(
     limitLines,
-    /沙箱配置已更新，退出后用 pigeon resume sess_X --sandbox 续跑才对本会话的容器生效/,
+    /sandbox settings changed; takes effect after: pigeon --sandbox --resume sess_X/,
     "只改上限也按 sandbox 一节有变化给出提示"
   );
-  assert.deepEqual(await reload(["what"]), [
-    "用法：/reload（重读设置）｜/reload confirm（确认列出的条目并生效）｜/reload skip（不确认，沿用原内容）",
-  ]);
+  assert.deepEqual(await reload(["what"]), ["usage: /reload | /reload confirm | /reload skip"]);
 });
 
 test("确认指纹在重建成功后才记下：重建失败保持未确认，/reload 再列出、可重试（复审 P2 回归）", async () => {
@@ -400,15 +398,15 @@ test("确认指纹在重建成功后才记下：重建失败保持未确认，/r
     homeDir: home,
   });
   const listed = (await reload([])).join("\n");
-  assert.match(listed, /命令短名 mark：git tag b/);
+  assert.match(listed, /command mark: git tag b/);
   await assert.rejects(reload(["confirm"]), /装配失败/);
   // 指纹未落盘、当前快照未换：再次 /reload 仍列出同一条目，可重试
   const relisted = (await reload([])).join("\n");
-  assert.match(relisted, /命令短名 mark：git tag b/);
+  assert.match(relisted, /command mark: git tag b/);
   const done = (await reload(["confirm"])).join("\n");
-  assert.match(done, /改了 commands 节/);
+  assert.match(done, /settings reloaded: .*commands/);
   assert.equal(attempts, 2);
-  assert.deepEqual(await reload([]), ["设置没有变化"]);
+  assert.deepEqual(await reload([]), ["settings unchanged"]);
 });
 test("--no-hooks 时 /reload 不把钩子带回来：重读出的新快照同样停用（复审 P2 回归）", () => {
   const root = temp("pigeon-reload-nohooks-");
@@ -450,7 +448,7 @@ test("新增钩子后 /reload：列为人确认，confirm 后新钩子随新快�
       hooks: { PreToolUse: [{ hooks: [{ type: "command", command: `node "${hookScript}"` }] }] },
     });
     const listed = (await s.reload([])).join("\n");
-    assert.match(listed, /钩子 .*PreToolUse/, listed);
+    assert.match(listed, /hook .*PreToolUse/, listed);
     await s.reload(["confirm"]);
     assert.equal(s.bundle().hooks?.list().length, 1, "新快照带上新钩子");
     await s.run("第二遍");
@@ -516,6 +514,6 @@ test("顶层钩子开关的变化 /reload 读得出：disableAllHooks 与 stopHo
     homeDir: home,
   });
   const lines = (await reload([])).join("\n");
-  assert.match(lines, /disableAllHooks、stopHookBlockCap|stopHookBlockCap、disableAllHooks/, lines);
+  assert.match(lines, /disableAllHooks, stopHookBlockCap|stopHookBlockCap, disableAllHooks/, lines);
   assert.equal(applied, 1, "有变化即重建");
 });

@@ -1,7 +1,7 @@
 // 推理档位的取法（决策 390；settings.json 的 thinking 一节）：缺省开思考——模型信息表明支持推理的模型缺省 high，
 // 不支持或不知道的缺省 off（不请求推理，上游也就不发思考参数，与之前一致）。
 // 优先级：启动参数 --thinking（worker 的角色覆盖、跑批显式给的同属这一层）> 设置 thinking.level > 按模型信息的缺省。
-// 各入口（终端界面、--line、pigeon run、pigeon resume、worker、跑批）都在装配运行面时经这里取一次，结果冻结进注入快照。
+// 各入口（终端界面、pigeon run、worker、跑批）都在装配运行面时经这里取一次，结果冻结进注入快照。
 // 纯 schema 与取值，无 IO。
 import { type Static, Type } from "typebox";
 import { type ThinkingLevel, ThinkingLevelSchema } from "./runtime-events.ts";

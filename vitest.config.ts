@@ -13,6 +13,8 @@ export default defineConfig({
     // 每个 worker 是独立的子进程；同一 worker 里的测试文件之间不隔离（实测：两档全部约 58 秒，隔离约 85 秒，
     // 多种并发与打乱文件顺序下都没有串扰）。怀疑串扰时用 PIGEON_TEST_ISOLATE=1 切回每个文件隔离复查
     pool: "forks",
+    // 决策 444：每个测试进程的 git 全局配置与 XDG 目录指到临时位置，测试不会写到真实用户的全局排除文件
+    setupFiles: ["./scripts/vitest-git-env.mjs"],
     isolate: process.env.PIGEON_TEST_ISOLATE === "1",
     // node:test 不限时；长用例（真容器）照旧由各自的 timeout 选项或外层把关
     testTimeout: 600_000,

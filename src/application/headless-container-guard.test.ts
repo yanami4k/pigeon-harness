@@ -30,7 +30,8 @@ test("容器执行端不与分支会话同用：装配前拒绝、不写账本�
     };
     await assert.rejects(
       runHeadless({ ...base, branchHeader: {} as BranchHeaderInput }),
-      (error: Error) => /容器工作区/.test(error.message) && /分支会话/.test(error.message)
+      (error: Error) =>
+        /container workspace/.test(error.message) && /branch sessions/.test(error.message)
     );
     assert.equal(
       existsSync(join(governance, ".pigeon", "state", "sessions")),

@@ -166,7 +166,7 @@ export function hooksSectionProblems(section: HooksSection): string[] {
           new RegExp(group.matcher);
         } catch (error) {
           problems.push(
-            `hooks.${event}：matcher 不是合法正则：${group.matcher}（${error instanceof Error ? error.message : String(error)}）`
+            `hooks.${event}: matcher is not a valid regex: ${group.matcher} (${error instanceof Error ? error.message : String(error)})`
           );
         }
       }

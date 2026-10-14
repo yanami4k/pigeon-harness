@@ -14,6 +14,7 @@ import {
   createCheckpointer,
   isGitWorkspace,
 } from "../orchestration/checkpoint.ts";
+import { infoAttributesDigest } from "../orchestration/rewind-restore.ts";
 import type { PiRuntimeAdapter, ToolResultNotice } from "../pi-runtime/adapter.ts";
 import type { RunId } from "../state/ids.ts";
 import type { CheckpointMarkState } from "../state/session-entries.ts";
@@ -22,7 +23,7 @@ import { type SettingsSnapshot, untrackedLimitsOfSettings } from "../state/setti
 import type { ToolRiskTier } from "../tools/registry.ts";
 import type { SessionHooks } from "./hooks.ts";
 import type { RuntimeBundle } from "./runtime.ts";
-import { checkpointEntry, checkpointMarkEntry } from "./session-store.ts";
+import { checkpointEntry, checkpointMarkEntry, turnSnapshotEntry } from "./session-store.ts";
 import { dedupedWarner, failureDetail, type WarnSink } from "./warnings.ts";
 
 // 等未完成快照的上限：git 卡住时会话不能永远挂住
@@ -46,7 +47,8 @@ export interface CheckpointHost {
   adapter: Pick<
     PiRuntimeAdapter,
     "sessionId" | "subscribe" | "subscribeToolResults" | "addToolGate" | "entrySeq"
-  >;
+  > &
+    Partial<Pick<PiRuntimeAdapter, "subscribeRunStart">>;
   toolTiers: ReadonlyMap<string, ToolRiskTier>;
   sessionStore: Pick<RuntimeBundle["sessionStore"], "append">;
   // 决策 365：拍摄时在跑的后台作业记进快照条目
@@ -101,6 +103,8 @@ export function attachCheckpoints(options: {
   waitMs?: number;
   // 缺省按工作区新建
   checkpointer?: Checkpointer;
+  // 决策 436：使用者发消息（Run 开始）时也在后台拍一份（会话回退据此区分 agent 的改动与手改）；只有终端界面开
+  turnSnapshots?: boolean;
 }): CheckpointAttachment | undefined {
   const { bundle, workspaceRoot } = options;
   if (options.checkpointer === undefined && !isGitWorkspace(workspaceRoot)) {
@@ -120,10 +124,7 @@ export function attachCheckpoints(options: {
   const warn = dedupedWarner(options.warn);
   const report = (error: unknown) => {
     errors.push(error);
-    warn(
-      error,
-      `工作区快照告警：${failureDetail(error)}（该时点的快照没有拍成，从这里分叉会明确报错，不退回更早的快照）`
-    );
+    warn(error, `workspace snapshot warning: ${failureDetail(error)}`);
   };
   const tierOf = (toolName: string) => bundle.toolTiers.get(toolName);
   const writeMark = (mark: Mark, state: CheckpointMarkState, reason?: string) =>
@@ -198,7 +199,7 @@ export function attachCheckpoints(options: {
         job.finished = true;
         job.controller.abort();
         const error = new CheckpointWaitTimeoutError(
-          `快照等待超时：超过 ${waitMs} 毫秒没有拍完，已中止`
+          `snapshot timed out after ${waitMs} ms; aborted`
         );
         if (job.mark !== undefined) {
           writeMark(job.mark, "failed", error.message);
@@ -262,9 +263,33 @@ export function attachCheckpoints(options: {
       mark
     );
   });
+  // 决策 436：发消息时的快照与第一次模型请求同时进行，第一个工具执行前（工具等待口）照常等它拍完；拍失败只告警、不写条目
+  const unsubscribeRunStart =
+    options.turnSnapshots === true
+      ? bundle.adapter.subscribeRunStart?.((runId) => {
+          start(
+            async (signal) => ({
+              snapshot: await checkpointer.snapshotNow(signal),
+              infoAttributes: infoAttributesDigest(workspaceRoot),
+            }),
+            ({ snapshot, infoAttributes }) => {
+              bundle.sessionStore.append(
+                turnSnapshotEntry(runId, {
+                  ...(infoAttributes !== undefined ? { infoAttributes } : {}),
+                  ref: snapshot.ref,
+                  commit: snapshot.commit,
+                  tree: snapshot.tree,
+                  ...(snapshot.skipped !== undefined ? { untrackedSkipped: snapshot.skipped } : {}),
+                })
+              );
+            }
+          );
+        })
+      : undefined;
   const removeGate = bundle.adapter.addToolGate(settle);
   const removeHookGate = bundle.hooks?.addGate(settle);
   const stop = () => {
+    unsubscribeRunStart?.();
     unsubscribe();
     unsubscribeResults();
     removeGate();

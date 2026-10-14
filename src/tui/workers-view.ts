@@ -50,6 +50,8 @@ export interface TuiWorkersFace {
 export interface WorkersViewHost {
   isStarted(): boolean;
   addSystem(line: string): void;
+  // 要醒目的一行（真正的报错），不弱化
+  addAlert(line: string): void;
   render(): void;
   // 决策 301：worker 状态刷新后（面板重绘、收尾的花费计入）与是否要定时刷新（有在跑的或还有在淡出期内的）
   workersRefreshed(workers: readonly WorkerStatus[]): void;
@@ -72,10 +74,9 @@ export function handleSpawnCommand(
   const request = parseSpawnCommand(raw);
   if (request.attempts !== undefined) {
     if (workers.spawnAttempts === undefined) {
-      host.addSystem("当前会话不支持并行同任务派发（worker 会话不能再派）");
+      host.addSystem("parallel attempts are not available in this session");
       return;
     }
-    host.addSystem(`并行派出 ${request.attempts} 个尝试（${request.role}）：${request.task}`);
     workers.spawnAttempts({ role: request.role, task: request.task, count: request.attempts }).then(
       (result) => {
         if (!host.isStarted()) return;
@@ -85,8 +86,8 @@ export function handleSpawnCommand(
       },
       (error: unknown) => {
         if (!host.isStarted()) return;
-        host.addSystem(
-          `并行尝试收尾异常：${error instanceof Error ? error.message : String(error)}`
+        host.addAlert(
+          `parallel attempts failed: ${error instanceof Error ? error.message : String(error)}`
         );
         host.render();
       }
@@ -95,14 +96,6 @@ export function handleSpawnCommand(
     return;
   }
   const sessionId = workers.spawn(request);
-  const spawned = workers.status().find((worker) => worker.sessionId === sessionId);
-  host.addSystem(
-    `已派出 worker ${spawned?.name ?? sessionId}（${request.role}）｜ 会话 ${sessionId} ｜ ` +
-      // 决策 377：只读的 explorer 不建工作树
-      (spawned?.workspace.kind === "shared"
-        ? `只读 ${spawned.workspace.path}，不建分支`
-        : `分支 ${spawned?.branch ?? "未知"}`)
-  );
   refreshWorkers(host);
   workers.awaitResult(sessionId).then(
     (outcome) => {
@@ -113,8 +106,8 @@ export function handleSpawnCommand(
     },
     (error: unknown) => {
       if (!host.isStarted()) return;
-      host.addSystem(
-        `worker ${sessionId} 收尾异常：${error instanceof Error ? error.message : String(error)}`
+      host.addAlert(
+        `worker ${sessionId} failed: ${error instanceof Error ? error.message : String(error)}`
       );
       refreshWorkers(host);
       host.render();
@@ -129,7 +122,7 @@ export function handleCancelCommand(
   ref: string | undefined
 ): void {
   if (ref === undefined) {
-    host.addSystem("用法：/cancel <worker 名或会话 id>");
+    host.addSystem("usage: /cancel <worker>");
     return;
   }
   const target = resolveWorkerRef(workers.status(), ref);
@@ -139,18 +132,17 @@ export function handleCancelCommand(
     return;
   }
   if (target.state !== "running") {
-    host.addSystem(`worker ${target.name} 已收尾（${workerStateLabel(target.state)}），无需取消`);
+    host.addSystem(`worker ${target.name} already finished (${workerStateLabel(target.state)})`);
     return;
   }
-  host.addSystem(`[cancel] worker ${target.name} interrupt requested`);
   workers.cancel(target.sessionId).then(
     () => {
       refreshWorkers(host);
       host.render();
     },
     (error: unknown) => {
-      host.addSystem(
-        `取消 worker ${target.name} 失败：${error instanceof Error ? error.message : String(error)}`
+      host.addAlert(
+        `cancelling worker ${target.name} failed: ${error instanceof Error ? error.message : String(error)}`
       );
       host.render();
     }
@@ -164,7 +156,7 @@ export function handleTakeCommand(
   name: string | undefined
 ): void {
   if (workers.take === undefined) {
-    host.addSystem("当前会话不支持取用 worker 的改动（worker 会话不能再派、也不取用）");
+    host.addSystem("/take is not available in this session");
     return;
   }
   if (name === undefined || name === "") {
@@ -179,8 +171,8 @@ export function handleTakeCommand(
     },
     (error: unknown) => {
       if (!host.isStarted()) return;
-      host.addSystem(
-        `取用 worker ${name} 的改动失败：${error instanceof Error ? error.message : String(error)}`
+      host.addAlert(
+        `taking worker ${name} failed: ${error instanceof Error ? error.message : String(error)}`
       );
       host.render();
     }
@@ -195,7 +187,7 @@ export function renderWorkersTable(
   now: number
 ): string {
   if (statuses.length === 0) {
-    return "本会话尚未派出 worker（用 /spawn 派出）";
+    return "no workers yet";
   }
   const columns = columnsOf(statuses);
   return [

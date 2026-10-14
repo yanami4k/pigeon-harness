@@ -8,12 +8,17 @@ import { type Terminal, visibleWidth } from "@earendil-works/pi-tui";
 const graphemeSegmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
 
 // 虚拟屏幕仿真器：buf[row] = [cellString, ...]；宽字符占两格，第二格为 ""（续格）
+// 决策 441：另仿备用屏（?1049h 进、?1049l 回主屏并恢复主屏内容）、自动换行开关（?7l 时写到行末即截断）与
+// 按参数定位的 CSI H（全屏逐行写 \x1b[{行};1H）
 export class VirtualScreen {
   private buf: string[][] = [];
   private row = 0;
   private col = 0;
   private top = 0;
   private pending = false; // 行末待换行（DECAWM pending wrap）
+  private autowrap = true;
+  // 在备用屏时保存的主屏
+  private saved: { buf: string[][]; row: number; col: number; top: number } | undefined;
 
   width: number;
   height: number;
@@ -21,6 +26,11 @@ export class VirtualScreen {
   constructor(width: number, height: number) {
     this.width = width;
     this.height = height;
+  }
+
+  // 当前在备用屏（全屏）里
+  get alternate(): boolean {
+    return this.saved !== undefined;
   }
 
   private scrollIfNeeded(): void {
@@ -44,6 +54,7 @@ export class VirtualScreen {
       }
       return;
     }
+    if (!this.autowrap && this.col + w > this.width) return;
     if (this.pending) {
       this.row++;
       this.col = 0;
@@ -63,7 +74,23 @@ export class VirtualScreen {
     this.col += w;
     if (this.col >= this.width) {
       this.col = this.width;
-      this.pending = true;
+      this.pending = this.autowrap;
+    }
+  }
+
+  private privateMode(params: string, on: boolean): void {
+    for (const mode of params.replace("?", "").split(";")) {
+      if (mode === "7") this.autowrap = on;
+      if (mode === "1049") {
+        if (on && this.saved === undefined) {
+          this.saved = { buf: this.buf, row: this.row, col: this.col, top: this.top };
+          this.clearAll();
+        } else if (!on && this.saved !== undefined) {
+          ({ buf: this.buf, row: this.row, col: this.col, top: this.top } = this.saved);
+          this.saved = undefined;
+          this.pending = false;
+        }
+      }
     }
   }
 
@@ -76,6 +103,10 @@ export class VirtualScreen {
   }
 
   private csi(params: string, final: string): void {
+    if (params.startsWith("?") && (final === "h" || final === "l")) {
+      this.privateMode(params, final === "h");
+      return;
+    }
     const n = params.length === 0 ? 1 : Number.parseInt(params.replace("?", ""), 10) || 1;
     this.pending = false;
     switch (final) {
@@ -94,10 +125,13 @@ export class VirtualScreen {
       case "G":
         this.col = Math.max(0, n - 1);
         break;
-      case "H":
-        this.row = 0;
-        this.col = 0;
+      case "H": {
+        // 无参数回左上角；有参数按"行;列"定位（相对视口顶）
+        const [r, c] = params.split(";").map((part) => Number.parseInt(part, 10) || 1);
+        this.row = this.top + Math.min(this.height, r ?? 1) - 1;
+        this.col = Math.min(this.width, c ?? 1) - 1;
         break;
+      }
       case "J":
         if (params === "2") this.clearAll(); // pi-tui 清屏路径总是 2J + H + 3J 连用
         break;
@@ -164,6 +198,13 @@ export class VirtualScreen {
       }
       i = end;
     }
+  }
+
+  // 退出全屏后主屏上留下的全部内容（退出时打印的对话）；不在全屏里时同 contentLines
+  mainLines(): string[] {
+    return this.saved === undefined
+      ? this.contentLines()
+      : this.saved.buf.map((row) => row.join("").trimEnd());
   }
 
   rowText(r: number): string {
@@ -243,7 +284,7 @@ export class MockTerminal implements Terminal {
 
   // 测试注入一段终端输入（经 TuiBase.handleTerminalInput → 输入监听器 → 聚焦组件）
   input(data: string): void {
-    assert.ok(this.onInput !== undefined, "tui 尚未 start");
+    assert.ok(this.onInput !== undefined, "tui not started");
     this.onInput(data);
   }
 }
@@ -254,6 +295,19 @@ export function settle(ms = 80): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
   setTimeout(resolve, ms);
   return promise;
+}
+
+// 写往终端的字节里 text 第一次出现处是否为暗色：它之前最近的一个样式序列是 454 的暗色（\x1b[2m）
+export function isDimmed(raw: string, text: string): boolean {
+  const at = raw.indexOf(text);
+  if (at < 0) return false;
+  const style = raw.lastIndexOf("\x1b[", at);
+  return style >= 0 && raw.startsWith("\x1b[2m", style);
+}
+
+// 去掉样式序列（只看文字与位置）
+export function withoutStyles(text: string): string {
+  return text.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g"), "");
 }
 
 export function screenText(term: MockTerminal): string {
@@ -279,6 +333,9 @@ export function squashSpaces(text: string): string {
 
 export function assertWidthsWithin(term: MockTerminal, width: number): void {
   for (const row of term.screen.contentLines()) {
-    assert.ok(visibleWidth(row) <= width, `行宽越界（${visibleWidth(row)} > ${width}）：${row}`);
+    assert.ok(
+      visibleWidth(row) <= width,
+      `line too wide (${visibleWidth(row)} > ${width}): ${row}`
+    );
   }
 }

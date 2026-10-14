@@ -179,8 +179,8 @@ test("决策 326 ③：项目里有未确认的会执行命令的配置——pig
     const streamFn = writeStreamFnModule(root, { replies: [{ text: "完成" }] });
     const refused = runCli(["run", "随便", "--root", root, "--stream-fn", streamFn, "--json"]);
     assert.notEqual(refused.status, 0);
-    assert.match(refused.stderr, /命令短名 test：npm test/);
-    assert.match(refused.stderr, /MCP 服务 fx：node fx\.js/);
+    assert.match(refused.stderr, /command test: npm test/);
+    assert.match(refused.stderr, /MCP server fx: node fx\.js/);
     assert.match(refused.stderr, /--trust-config/);
     assert.equal(existsSync(join(root, ".pigeon", "state", "sessions")), false, "没有开跑");
     // 放行只对本次：MCP 服务按配置启动（这里的 fx.js 不存在，启动失败只提示、不挡运行）
@@ -308,7 +308,7 @@ test("--governance-root：设置与程序状态锚到治理根——工作区自
       "--sandbox",
     ]);
     assert.notEqual(sandboxed.status, 0);
-    assert.match(sandboxed.stderr, /--governance-root 不与 --sandbox 同用/);
+    assert.match(sandboxed.stderr, /--governance-root can't be used with --sandbox/);
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(gov, { recursive: true, force: true });
@@ -331,7 +331,7 @@ test("决策 325：启动遇旧配置文件即报错并提示 pigeon migrate-con
     assert.ok(existsSync(join(root, ".pigeon", "orchestration.json")), "不自动迁移");
     const migrated = runCli(["migrate-config", "--root", root]);
     assert.equal(migrated.status, 0, migrated.stderr);
-    assert.match(migrated.stdout, /已迁移 \.pigeon\/orchestration\.json/);
+    assert.match(migrated.stdout, /migrated \.pigeon\/orchestration\.json/);
     const ran = runCli(["run", "随便", "--root", root, "--stream-fn", streamFn, "--json"]);
     assert.equal(ran.status, 0, ran.stderr);
   } finally {

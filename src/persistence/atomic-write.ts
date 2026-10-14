@@ -14,9 +14,15 @@ const defaultIo: AtomicWriteIo = {
   },
 };
 
-export function writeFileAtomic(path: string, data: string, io: AtomicWriteIo = defaultIo): void {
+// mode：临时文件的创建权限（缺省 0666 减 umask）；要只给本人的文件给 0o600
+export function writeFileAtomic(
+  path: string,
+  data: string,
+  io: AtomicWriteIo = defaultIo,
+  mode?: number
+): void {
   const tempPath = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  const fd = openSync(tempPath, "w");
+  const fd = mode !== undefined ? openSync(tempPath, "w", mode) : openSync(tempPath, "w");
   try {
     io.write(fd, data);
     fsyncSync(fd);

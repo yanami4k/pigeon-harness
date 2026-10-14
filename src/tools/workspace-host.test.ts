@@ -126,7 +126,7 @@ test("工具只调执行端接口：run_command 的平台、执行、文件变�
     args: ["-c", "git diff | head -5"],
     verbatim: false,
   });
-  assert.match(await tool.preview({ command: "ls" }), new RegExp(`工作目录：${FAKE_ROOT}`));
+  assert.match(await tool.preview({ command: "ls" }), new RegExp(`cwd: ${FAKE_ROOT}`));
 });
 
 test("本地执行端的路径解析：不存在抛「不存在」子类，越界抛普通围栏错误（二者可区分）", async () => {

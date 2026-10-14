@@ -27,6 +27,19 @@ export function sessionFileLockPath(filePath: string): string {
   return `${filePath}.lock`;
 }
 
+// 决策 448：会话文件此刻是否被一个仍在的进程打开着（列出留下的工作树时判断"在用"）；返回持有进程号，没有即 undefined。
+// 本进程持有的也算（本进程在跑的 worker）。锁文件读不了（权限等）按在用算，返回 -1
+export function sessionFileHolder(filePath: string): number | undefined {
+  let holder: LockHolder | "missing" | "malformed";
+  try {
+    holder = readHolder(sessionFileLockPath(filePath));
+  } catch {
+    return -1;
+  }
+  if (holder === "missing" || holder === "malformed") return undefined;
+  return holder.pid === process.pid || isProcessAlive(holder.pid) ? holder.pid : undefined;
+}
+
 // 取得会话文件的锁，返回幂等的释放函数
 export function acquireSessionFileLock(filePath: string): () => void {
   return acquireLockAt(sessionFileLockPath(filePath));
@@ -50,14 +63,13 @@ function acquireLockAt(lockPath: string): () => void {
     }
     if (holder !== "malformed" && holder.pid !== process.pid && isProcessAlive(holder.pid)) {
       throw new SessionLockedError(
-        `会话已被另一个进程打开（pid ${holder.pid}）：${lockPath}。` +
-          "关闭那个窗口后再恢复；确认该进程已不存在时可删除锁文件"
+        `session is open in another process (pid ${holder.pid}): ${lockPath}`
       );
     }
     // 残留锁：持有进程已死、内容畸形，或 pid 与本进程相同但本进程并未持有（pid 复用）
     rmSync(lockPath, { force: true });
   }
-  throw new SessionLockedError(`会话锁争用，多次重试仍未取得：${lockPath}`);
+  throw new SessionLockedError(`couldn't acquire session lock ${lockPath} after several retries`);
 }
 
 function releaser(lockPath: string): () => void {

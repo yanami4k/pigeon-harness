@@ -20,7 +20,7 @@ const LEGACY_SESSION_FILE = /^(sess_[0-9A-HJKMNP-TV-Z]{26})\.jsonl$/;
 
 // 读旧格式会话用的只读旧版代码（决策 211）
 export const LEGACY_READER_COMMIT = "455d88d";
-export const LEGACY_READER_HINT = `旧格式会话请用只读的旧版代码 ${LEGACY_READER_COMMIT} 读取`;
+export const LEGACY_READER_HINT = `readable with legacy code ${LEGACY_READER_COMMIT}`;
 
 // 会话的创建时间：Pigeon 会话号取 ULID 时间分量（与旧会话列表同一口径），其余取文件名里的创建时间
 export function sessionRefTime(file: SessionFileRef): number {
@@ -47,7 +47,35 @@ export function readSessionView(ref: Pick<SessionFileRef, "path">): SessionView 
     entries: branchEntries(file, file.lanes.get("main") ?? null),
   });
   view.warnings.unshift(...file.warnings);
+  // 决策 456：会话名与工作目录（会话名不属于任何分支，按整个文件的最新一条）
+  if (file.name !== undefined) view.name = file.name;
+  if (file.header.cwd !== "") view.cwd = file.header.cwd;
   return view;
+}
+
+// 决策 438：一个会话文件里每条分支的原生视图——主分支在前，其余按叶子写入先后（会话回退留下的分支、移出的截断回复）。
+// 各视图从根到各自的叶子，共有的前段在每个视图里都有，按条目号去重由调用方做
+export function readSessionBranchViews(ref: Pick<SessionFileRef, "path">): SessionView[] {
+  const file = readSessionFile(ref.path);
+  if (file === undefined) {
+    return [];
+  }
+  const main = file.lanes.get("main") ?? null;
+  const parents = new Set<string>();
+  for (const entry of file.entries) {
+    if (entry.parentId !== null) parents.add(entry.parentId);
+  }
+  const leaves = [
+    main,
+    ...file.entries
+      .filter((entry) => !parents.has(entry.id) && entry.id !== main)
+      .map((entry) => entry.id),
+  ];
+  return leaves.map((leaf) => {
+    const view = buildSessionView({ header: file.header, entries: branchEntries(file, leaf) });
+    view.warnings.unshift(...file.warnings);
+    return view;
+  });
 }
 
 // 按会话号读原生视图；新存储里没有该会话返回 undefined
@@ -81,6 +109,6 @@ export function hasLegacySessionFile(sessionsRoot: string, sessionId: string): b
 export function legacySessionsNote(sessionsRoot: string): string | undefined {
   const count = listLegacySessionIds(sessionsRoot).length;
   return count > 0
-    ? `另有 ${count} 个旧格式会话（迁移之前创建）未列出；${LEGACY_READER_HINT}`
+    ? `${count} old-format ${count === 1 ? "session" : "sessions"} not listed; ${LEGACY_READER_HINT}`
     : undefined;
 }

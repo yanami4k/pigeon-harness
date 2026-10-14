@@ -14,6 +14,7 @@
 // 297：每次运行结束后，等本次派出的 worker 全部结束、把完成通知当新的一轮处理完，这一步才往下走；
 // 释放运行面之前停掉仍在跑的 worker（撞上限、外部中止时），等其收尾记录写进本会话。执行端另一侧的工作区（容器）与分支会话不注册。
 // 任务清单（294 B1）：开着时给主 agent 注册两件清单工具
+
 import type { ScriptLauncher } from "../execution/script-sandbox.ts";
 import type { MemoryLayer } from "../memory/learned.ts";
 import type { WorkerOrchestrator } from "../orchestration/workers.ts";
@@ -50,6 +51,9 @@ import { compactionWarner } from "./compaction-text.ts";
 import { DEFAULT_MODEL_PLACEHOLDER } from "./launch-flags.ts";
 import { attachLoopGuard, type LoopStop } from "./loop-guard.ts";
 import type { McpSession } from "./mcp.ts";
+import type { PeerMessaging } from "./peer-messaging.ts";
+import { openPeerInbox } from "./peer-session.ts";
+import { PeerSlot } from "./peer-tools.ts";
 import type { LearnedMemoryConfig, RuntimeBundle } from "./runtime.ts";
 import { createSessionScripts, modelPricing } from "./script-host.ts";
 import { ScriptGate, scriptGateSettingsOf } from "./script-naming.ts";
@@ -128,6 +132,9 @@ export interface HeadlessRunOptions {
   homeDir?: string;
   persistThinking?: boolean;
   sessionId?: SessionId;
+  // 决策 450：开本机会话间通信的收件口（pigeon run 给；跑批器不给）。没有界面：扣住的消息到时限丢弃并回告发送方；
+  // 运行结束即关（扣着的回告没有送达）。homeDir、addressPrefix 供测试指到临时目录
+  peerInbox?: { homeDir?: string; addressPrefix?: string };
   // 决策 061：编辑模式，缺省见 tools/edit-mode.ts 的 DEFAULT_EDIT_MODE（现为 replace）
   editMode?: EditMode;
   // 决策 063、347：单轮输出上限（缺省不设，跟模型）
@@ -214,13 +221,19 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
   // 护栏（112 的延伸）：注入了执行端时 workspaceRoot 在宿主一侧、不是 agent 干活的工作区。分支会话
   // 要在它上面打 git 快照、到独立工作树里续跑——对容器里的工作区只会得到假结果，装配前一律拒绝
   if (options.workspaceHost !== undefined && options.branchHeader !== undefined) {
-    throw new Error(
-      "容器工作区暂不支持分支会话：分叉要在宿主的 git 工作区上打快照、到独立工作树里续跑，" +
-        "而容器工作区在执行端另一侧"
-    );
+    throw new Error("branch sessions are not supported in a container workspace");
   }
   const sessionId = options.sessionId ?? newSessionId();
   const startedAt = Date.now();
+  // 决策 450：会话间通信（宿主工作区、非分支会话、有设置快照才开）
+  const peerSlot =
+    options.peerInbox !== undefined &&
+    options.workspaceHost === undefined &&
+    options.branchHeader === undefined &&
+    options.settings !== undefined
+      ? new PeerSlot()
+      : undefined;
+  let peerMessaging: PeerMessaging | undefined;
   // 这一步的墙钟
   let deadline = options.wallClockMs !== undefined ? startedAt + options.wallClockMs : undefined;
   let timer: NodeJS.Timeout | undefined;
@@ -256,7 +269,13 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
           )
         )
       : undefined;
-  scriptSlot?.gate.runTask(options.task);
+  // 决策 475：任务描述里的额度写成了金额：整次运行不算点名，说明原因
+  const budgetProblem = scriptSlot?.gate.runTask(options.task);
+  if (budgetProblem !== undefined) {
+    (options.warn ?? ((line: string) => console.error(line)))(
+      `script orchestration not enabled: ${budgetProblem}`
+    );
+  }
   let scripts: ScriptRuns | undefined;
   let workers: WorkerOrchestrator | undefined;
   let spawnBudget: SpawnWorkerBudget | undefined;
@@ -299,6 +318,7 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
     ...(scriptSlot !== undefined ? { scriptOrchestration: scriptSlot } : {}),
     ...(options.taskList === true ? { taskList: true } : {}),
     ...(options.webTools !== undefined ? { webTools: options.webTools } : {}),
+    ...(peerSlot !== undefined ? { peers: peerSlot } : {}),
   };
   const handle = createDetachedRuntime({
     ...surface,
@@ -522,6 +542,32 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
     // 端口返回 unknown（编排层不依赖 application），此处收窄到 RuntimeBundle（生产者唯一：本层装配）
     const readyBundle = (await handle.ready?.()) as RuntimeBundle | undefined;
     const hooks = readyBundle?.hooks ?? liveBundle?.hooks;
+    // 决策 450：收件口——消息进本会话的通知队列（两次工具调用之间送入）；运行期间按忙登记
+    if (
+      peerSlot !== undefined &&
+      options.settings !== undefined &&
+      options.peerInbox !== undefined
+    ) {
+      peerMessaging = await openPeerInbox({
+        sessionId,
+        cwd: options.workspaceRoot,
+        // 决策 456：续跑的会话用它记过的名字
+        governanceRoot: options.governanceRoot,
+        yolo: options.yolo,
+        settings: options.settings,
+        deliver: (text) => liveBundle?.adapter.notify(text),
+        pendingCount: () => liveBundle?.adapter.pendingNotices() ?? 0,
+        ui: (line) => (options.warn ?? ((text: string) => console.error(text)))(line),
+        ...(options.peerInbox.homeDir !== undefined ? { homeDir: options.peerInbox.homeDir } : {}),
+        ...(options.peerInbox.addressPrefix !== undefined
+          ? { addressPrefix: options.peerInbox.addressPrefix }
+          : {}),
+      });
+      if (peerMessaging !== undefined) {
+        peerSlot.bind(peerMessaging);
+        peerMessaging.setBusy(true);
+      }
+    }
     // SessionStart：开局补上下文（以一条上下文消息进入，不改开局冻结的系统提示——上下文并进第一条输入）；
     // UserPromptSubmit：可拦下、可补上下文，不能改写
     let task = options.task;
@@ -537,14 +583,14 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
       });
       const contexts = [...startReport.additionalContext];
       if (startReport.continueFalse !== undefined) {
-        preRunStopped = startReport.continueFalse.stopReason ?? "钩子要求整个会话停止";
+        preRunStopped = startReport.continueFalse.stopReason ?? "hook stopped the session";
       } else {
         const promptReport = await hooks.runEvent("UserPromptSubmit", "", { prompt: options.task });
         contexts.push(...promptReport.additionalContext);
         if (promptReport.blocked !== undefined) {
           preRunBlocked = promptReport.blocked.reason;
         } else if (promptReport.continueFalse !== undefined) {
-          preRunStopped = promptReport.continueFalse.stopReason ?? "钩子要求整个会话停止";
+          preRunStopped = promptReport.continueFalse.stopReason ?? "hook stopped the session";
         }
       }
       if (contexts.length > 0) {
@@ -556,7 +602,7 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
     if (externallyAborted || preRunBlocked !== undefined || preRunStopped !== undefined) {
       status = "aborted";
       if (preRunBlocked !== undefined) {
-        errorMessage = `输入被钩子拦下：${preRunBlocked}`;
+        errorMessage = `input blocked by hook: ${preRunBlocked}`;
       } else if (preRunStopped !== undefined) {
         errorMessage = preRunStopped;
       }
@@ -671,6 +717,8 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
     if (liveBundle?.hooks !== undefined) {
       await liveBundle.hooks.runEvent("SessionEnd", "exit", { reason: "exit" });
     }
+    // 决策 450：关收件口（回告订了空闲通知的会话：已退出；扣着的消息：没有送达）
+    await peerMessaging?.close().catch(() => {});
     await handle.dispose();
   }
   const sessionsDir = sessionsDirOf(options.governanceRoot);

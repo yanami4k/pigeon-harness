@@ -56,6 +56,7 @@ export interface CacheRuleRow {
 }
 
 const RETRIEVED = "2026-10-03";
+// 出处引句是页面原文（中文页面即中文），复核脚本逐字比对，不翻译
 const src = (url: string, quote: string): CacheRuleSource => ({ url, retrieved: RETRIEVED, quote });
 
 const ANTHROPIC_URL = "https://platform.claude.com/docs/en/build-with-claude/prompt-caching";
@@ -87,7 +88,7 @@ const anthropicTiers = (read: number): Pick<CacheRule, "short" | "long"> => ({
     refreshOnHit: true,
     writeMultiplier: 1.25,
     readMultiplier: read,
-    enable: "自动缓存或 cache_control 断点（缺省 5 分钟）",
+    enable: "automatic caching or cache_control breakpoints (5 minutes by default)",
   },
   long: {
     seconds: 3600,
@@ -95,7 +96,7 @@ const anthropicTiers = (read: number): Pick<CacheRule, "short" | "long"> => ({
     refreshOnHit: true,
     writeMultiplier: 2,
     readMultiplier: read,
-    enable: 'cache_control 的 ttl 设为 "1h"',
+    enable: 'cache_control ttl set to "1h"',
   },
 });
 const ANTHROPIC_SOURCES: readonly CacheRuleSource[] = [
@@ -125,7 +126,7 @@ const openaiNewTier = (read: number): RetentionTier => ({
   writeMultiplier: 1.25,
   readMultiplier: read,
   enable:
-    "缺省即开（隐式断点在最新一条合格消息末尾）；prompt_cache_options 可改为只用显式断点，ttl 只有 30m",
+    "on by default (implicit breakpoint at the end of the latest eligible message); prompt_cache_options can switch to explicit breakpoints only; ttl is 30m only",
 });
 const OPENAI_NEW_SOURCES: readonly CacheRuleSource[] = [
   src(
@@ -148,7 +149,8 @@ const OPENAI_EXTENDED: RetentionTier = {
   refreshOnHit: "unknown",
   writeMultiplier: 1,
   readMultiplier: "unknown",
-  enable: 'prompt_cache_retention 设为 "24h"（支持的模型上非 ZDR 组织缺省即此档）',
+  enable:
+    'prompt_cache_retention set to "24h" (the default for non-ZDR organizations on supported models)',
 };
 const OPENAI_EXTENDED_SOURCE = src(
   OPENAI_URL,
@@ -170,8 +172,8 @@ const KIMI_SOURCES: readonly CacheRuleSource[] = [
   src(KIMI_URL, "缓存命中价格是缓存未命中价格的 1/10"),
 ];
 const KIMI_SHORT_ENABLE =
-  "缺省即开（Chat Completions、Responses 接口）；Anthropic 接口须带 cache_control 才写入，不带只读";
-const KIMI_LONG_ENABLE = "TTL 设为 1h";
+  "on by default (Chat Completions and Responses APIs); the Anthropic API writes only with cache_control, otherwise reads only";
+const KIMI_LONG_ENABLE = "TTL set to 1h";
 
 // Vertex 上 Gemini 的两档（2.5 及以后与 2.0 只差命中倍率）
 const vertexGeminiImplicit = (read: number | Unknown): RetentionTier => ({
@@ -180,7 +182,7 @@ const vertexGeminiImplicit = (read: number | Unknown): RetentionTier => ({
   refreshOnHit: "unknown",
   writeMultiplier: 1,
   readMultiplier: read,
-  enable: "隐式缓存：缺省开，无存储费",
+  enable: "implicit caching: on by default, no storage cost",
 });
 const vertexGeminiExplicit = (read: number): RetentionTier => ({
   seconds: 3600,
@@ -188,7 +190,8 @@ const vertexGeminiExplicit = (read: number): RetentionTier => ({
   refreshOnHit: false,
   writeMultiplier: 1,
   readMultiplier: read,
-  enable: "显式缓存：缺省 60 分钟、最短 1 分钟、无上限，按存储时长另收存储费",
+  enable:
+    "explicit caching: 60 minutes by default, at least 1 minute, no maximum, storage billed by duration",
 });
 const VERTEX_GEMINI_SOURCES: readonly CacheRuleSource[] = [
   src(VERTEX_GEMINI_URL, "There are no storage costs for implicit caching."),
@@ -219,7 +222,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
       ...anthropicTiers(0.1),
       minPrefixTokens: { min: 512, max: 4096 },
       sources: [...ANTHROPIC_SOURCES, ANTHROPIC_512],
-      note: "最小前缀按模型分 512、1024、2048、4096 四档；时长自写入或读取该条缓存的请求开始时算起",
+      note: "minimum prefix is 512, 1024, 2048 or 4096 depending on the model; the lifetime counts from the start of the request that wrote or read the entry",
     },
   },
   {
@@ -283,7 +286,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
         refreshOnHit: true,
         writeMultiplier: 1,
         readMultiplier: "unknown",
-        enable: "缺省即开（in_memory；ZDR 组织缺省即此档）",
+        enable: "on by default (in_memory; the default for ZDR organizations)",
       },
       long: OPENAI_EXTENDED,
       minPrefixTokens: "unknown",
@@ -295,7 +298,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
         OPENAI_EXTENDED_SOURCE,
         src(OPENAI_URL, "No additional cache-write charge"),
       ],
-      note: "GPT-5.5 之前的型号逐个列出；in_memory 无活动约 5–10 分钟、至多 1 小时；24h 档通常约 30 分钟、最长 24 小时；最小前缀随请求设置而变；读取倍率按模型不同。OpenAI 下没有兜底行，未列出的型号为未知",
+      note: "models before GPT-5.5 are listed one by one; in_memory lasts about 5-10 minutes of inactivity, at most 1 hour; the 24h tier typically about 30 minutes, at most 24 hours; minimum prefix varies with request settings; read multiplier varies by model. OpenAI has no fallback row, so unlisted models are unknown",
     },
   },
   {
@@ -304,10 +307,10 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
     modelPrefixes: ["gpt-5.5"],
     rule: {
       mode: "auto",
-      short: { ...OPENAI_EXTENDED, enable: '缺省即开，只有 "24h" 一档' },
+      short: { ...OPENAI_EXTENDED, enable: 'on by default, "24h" tier only' },
       minPrefixTokens: "unknown",
       sources: [OPENAI_EXTENDED_SOURCE, src(OPENAI_URL, "No additional cache-write charge")],
-      note: "GPT-5.5 与 5.5 Pro 只支持 24h 档：通常约 30 分钟、最长 24 小时",
+      note: "GPT-5.5 and 5.5 Pro support only the 24h tier: typically about 30 minutes, at most 24 hours",
     },
   },
   {
@@ -319,7 +322,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
       short: openaiNewTier(0.1),
       minPrefixTokens: { min: 1024, max: 1024 },
       sources: OPENAI_NEW_SOURCES,
-      note: "30 分钟自最近一次写入或复用算起，可能留得更久；1,024 只计可见的输入 token",
+      note: "30 minutes count from the most recent write or reuse and may last longer; the 1,024 counts visible input tokens only",
     },
   },
   {
@@ -350,7 +353,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
         refreshOnHit: "unknown",
         writeMultiplier: "unknown",
         readMultiplier: "unknown",
-        enable: "隐式缓存：2.5 及以后缺省开，不保证命中",
+        enable: "implicit caching: on by default for 2.5 and later, hits not guaranteed",
       },
       long: {
         seconds: 3600,
@@ -359,7 +362,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
         writeMultiplier: "unknown",
         readMultiplier: "unknown",
         enable:
-          "显式缓存（cachedContents，Beta，只限 generateContent）：ttl 可设、缺省 1 小时，按存储时长另收存储费",
+          "explicit caching (cachedContents, beta, generateContent only): ttl configurable, 1 hour by default, storage billed by duration",
       },
       minPrefixTokens: { min: 2048, max: 4096 },
       sources: [
@@ -374,7 +377,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
         src(GEMINI_EXPLICIT_URL, "If not set, the TTL defaults to 1 hour."),
         src(GEMINI_EXPLICIT_URL, "billed based on the TTL duration of cached token count."),
       ],
-      note: "缓存页只写命中按 reduced rate 计（价格表上多数约为输入价的 10%）；最小前缀 2.5 系 2048、3.x 4096，数字只在表格里",
+      note: "the caching page only says hits are billed at a reduced rate (mostly about 10% of input on the pricing table); minimum prefix 2048 for 2.5, 4096 for 3.x, numbers only in the tables",
     },
   },
   {
@@ -393,7 +396,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
           "Implicit caching provides a 90% discount on cached tokens compared to standard input tokens."
         ),
       ],
-      note: "最短 1 分钟与最小前缀（2.5 系 2048、3 系 4096）只在表格里",
+      note: "the 1-minute minimum and the minimum prefix (2048 for 2.5, 4096 for 3) are only in the tables",
     },
   },
   {
@@ -406,7 +409,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
       long: vertexGeminiExplicit(0.25),
       minPrefixTokens: { min: 2048, max: 2048 },
       sources: VERTEX_GEMINI_SOURCES,
-      note: "显式命中折扣 75%；隐式命中折扣未按型号写明；最短 1 分钟与最小前缀只在表格里",
+      note: "explicit hit discount 75%; implicit hit discount not stated per model; the 1-minute minimum and the minimum prefix are only in the tables",
     },
   },
   {
@@ -421,7 +424,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
         refreshOnHit: true,
         writeMultiplier: 1.25,
         readMultiplier: 0.1,
-        enable: "cache_control 断点（缺省 5 分钟）",
+        enable: "cache_control breakpoints (5 minutes by default)",
       },
       long: {
         seconds: 3600,
@@ -429,7 +432,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
         refreshOnHit: true,
         writeMultiplier: 2,
         readMultiplier: 0.1,
-        enable: "ttl 设为一小时（3.7 Sonnet、3.5 Sonnet、3 Opus 不支持）",
+        enable: "ttl set to one hour (not supported on 3.7 Sonnet, 3.5 Sonnet, 3 Opus)",
       },
       minPrefixTokens: "unknown",
       sources: [
@@ -451,7 +454,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
         ),
         src(VERTEX_CLAUDE_URL, "Cache read tokens are 90% cheaper than base input tokens."),
       ],
-      note: "页面未写最小前缀与自动缓存，其余行为指向 Anthropic 文档",
+      note: "the page does not state the minimum prefix or automatic caching; other behavior refers to the Anthropic docs",
     },
   },
   {
@@ -466,7 +469,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
         refreshOnHit: true,
         writeMultiplier: "unknown",
         readMultiplier: "unknown",
-        enable: "cachePoint 或 cache_control 断点（缺省 5 分钟）",
+        enable: "cachePoint or cache_control breakpoints (5 minutes by default)",
       },
       long: {
         seconds: 3600,
@@ -474,7 +477,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
         refreshOnHit: true,
         writeMultiplier: "unknown",
         readMultiplier: "unknown",
-        enable: 'ttl 设为 "1h"（3.7 Sonnet、3.5 Sonnet v2 不支持）',
+        enable: 'ttl set to "1h" (not supported on 3.7 Sonnet, 3.5 Sonnet v2)',
       },
       minPrefixTokens: { min: 512, max: 4096 },
       sources: [
@@ -494,7 +497,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
           "Depending on the model, tokens written to cache can be billed at a rate that is higher than the standard input token rate."
         ),
       ],
-      note: "写入与读取倍率见 Bedrock 价格页，本页未写；Opus 4.7 的最小前缀本页为 4096，Anthropic 文档为 2048",
+      note: "write and read multipliers are on the Bedrock pricing page, not this page; Opus 4.7 minimum prefix is 4096 here and 2048 in the Anthropic docs",
     },
   },
   {
@@ -508,7 +511,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
         refreshOnHit: "unknown",
         writeMultiplier: "unknown",
         readMultiplier: "unknown",
-        enable: "缺省即开，无需改代码",
+        enable: "on by default, no code changes needed",
       },
       minPrefixTokens: "unknown",
       sources: [
@@ -517,7 +520,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
         src(DEEPSEEK_URL, "缓存不再使用后会自动被清空，时间一般为几个小时到几天"),
         src(DEEPSEEK_PRICING_URL, "我们将根据模型输入和输出的总 token 数进行计量计费。"),
       ],
-      note: "原文清除时间“一般为几个小时到几天”，秒数取保守下限 1 小时；价格页只有输入（缓存命中）、输入（缓存未命中）与输出三项，未写写入费，写入倍率记未知；缓存前缀单元须完整匹配才命中",
+      note: 'the page says entries are cleared after "a few hours to a few days", so seconds take the conservative 1 hour; the pricing page lists only input (cache hit), input (cache miss) and output, no write fee, so the write multiplier is unknown; a cache prefix unit must match in full to hit',
     },
   },
   {
@@ -529,7 +532,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
       long: kimiTier(3600, "unknown", KIMI_LONG_ENABLE),
       minPrefixTokens: "unknown",
       sources: KIMI_SOURCES,
-      note: "缓存按块存储，不足一整块的部分不写入（块大小未写）",
+      note: "the cache is stored in blocks; a partial block is not written (block size not stated)",
     },
   },
   {
@@ -546,7 +549,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
         src(KIMI_URL, "唯一多付的成本是写入费贵 ¥20（¥40 vs ¥20）"),
         src(KIMI_PRICING_URL, "对于 K3 系列模型，缓存写入按 TTL（5min / 1h）单独计费"),
       ],
-      note: "K3 输入 ¥20、5 分钟档写入 ¥20、1 小时档写入 ¥40、命中 ¥2",
+      note: "K3: input ¥20, 5-minute write ¥20, 1-hour write ¥40, hit ¥2",
     },
   },
   {
@@ -559,7 +562,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
       long: kimiTier(3600, 1, KIMI_LONG_ENABLE),
       minPrefixTokens: "unknown",
       sources: KIMI_SOURCES,
-      note: "只列文档点名不支持 Cache Write 的 kimi-k2.7、kimi-k2.7-highspeed、kimi-k2.6（不另收写入费）",
+      note: "lists only kimi-k2.7, kimi-k2.7-highspeed and kimi-k2.6, which the docs name as not supporting Cache Write (no write fee)",
     },
   },
   {
@@ -580,7 +583,8 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
         refreshOnHit: true,
         writeMultiplier: 1.25,
         readMultiplier: 0.1,
-        enable: "显式缓存：cache_control 标记 ephemeral（与隐式互斥，单次请求至多 4 个标记）",
+        enable:
+          "explicit caching: cache_control marked ephemeral (exclusive with implicit, at most 4 marks per request)",
       },
       long: {
         seconds: "unknown",
@@ -588,7 +592,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
         refreshOnHit: "unknown",
         writeMultiplier: 1,
         readMultiplier: 0.2,
-        enable: "隐式缓存：缺省即开",
+        enable: "implicit caching: on by default",
       },
       minPrefixTokens: { min: 512, max: 1024 },
       sources: [
@@ -598,7 +602,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
         src(BAILIAN_URL, "之间的内容创建为新的缓存块，有效期为 5 分钟。"),
         src(BAILIAN_URL, "不确定，系统会定期清理长期未使用的缓存数据"),
       ],
-      note: "倍率原文带“通常”，有例外型号；最小前缀一般 1024，智谱部署的 GLM 与稀宇部署的 MiniMax 为 512",
+      note: 'the page says the multipliers apply "usually", with exceptions for some models; minimum prefix is usually 1024, 512 for GLM deployed by Zhipu and MiniMax deployed by MiniMax',
     },
   },
   {
@@ -612,7 +616,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
         refreshOnHit: "unknown",
         writeMultiplier: "unknown",
         readMultiplier: "unknown",
-        enable: "隐式缓存：缺省即开",
+        enable: "implicit caching: on by default",
       },
       minPrefixTokens: "unknown",
       sources: [
@@ -621,7 +625,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
         src(ZHIPU_URL, "按优惠价格计费（通常为标准价格的 50%）"),
         src(ZHIPU_PRICING_URL, "缓存存储当前限时免费。本页暂不展示免费期结束后的标准价格"),
       ],
-      note: "缓存页建议重复前缀 500 Token 以上，是建议值、不是下限，最小前缀记未知；命中价缓存页写通常 50%，价格表上约 22%–25%，两页不一致，命中倍率记未知；另有缓存存储费（目前限时免费）",
+      note: "the caching page recommends repeated prefixes over 500 tokens, a recommendation rather than a minimum, so the minimum prefix is unknown; the caching page says hits usually cost 50% while the pricing table shows about 22%-25%, so the hit multiplier is unknown; cache storage is billed separately (free for a limited time)",
     },
   },
   {
@@ -635,7 +639,8 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
         refreshOnHit: "unknown",
         writeMultiplier: "unknown",
         readMultiplier: "unknown",
-        enable: "缺省即开；带 x-grok-conv-id（Responses 接口为 prompt_cache_key）可提高命中",
+        enable:
+          "on by default; x-grok-conv-id (prompt_cache_key on the Responses API) improves hits",
       },
       minPrefixTokens: "unknown",
       sources: [
@@ -649,7 +654,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
         ),
         src(`${XAI_URL}/how-it-works`, "Prompt caching is not 100% guaranteed."),
       ],
-      note: "命中按 reduced rate 计，价格页按模型约为输入价的 15%–25%",
+      note: "hits are billed at a reduced rate, about 15%-25% of input by model on the pricing page",
     },
   },
   {
@@ -663,7 +668,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
         refreshOnHit: "unknown",
         writeMultiplier: "unknown",
         readMultiplier: 0.1,
-        enable: "请求带 prompt_cache_key（同一 key 提高命中，不保证命中）",
+        enable: "prompt_cache_key on the request (the same key improves hits, not guaranteed)",
       },
       minPrefixTokens: { min: 64, max: 64 },
       sources: [
@@ -678,7 +683,7 @@ export const CACHE_RULES: readonly CacheRuleRow[] = [
         src(MISTRAL_URL, "Cache blocks contain 64 tokens."),
         src(MISTRAL_URL, "Prompts with fewer than 64 prompt tokens do not have cache hits."),
       ],
-      note: "命中量为 64 token 的整数倍",
+      note: "cached tokens are a multiple of 64",
     },
   },
 ];

@@ -1,7 +1,9 @@
 // resume 与历史渲染（决策 067 拆分自 shell.ts）：/resume <sessionId> 的续跑流程在 application/resume.ts
-// （报告将还原的对话上下文与悬空的工具调用 → 换绑运行面，运行面装配时还原上下文，决策 183）；enterRepl 钩子 = 换绑运行面续跑
-//（同 sessionId 续写会话文件）。历史投影在 application/history.ts（与 cli --with-content 同一份）。
+// （报告将还原的对话上下文与悬空的工具调用 → 换绑运行面，运行面装配时还原上下文，决策 183）；续会话入口（enter）= 经 rebind
+// 工厂换绑运行面续跑（同 sessionId 续写会话文件）。历史投影在 application/history.ts（与 cli 的 trace / replay --with-content
+// 同一份）。
 // 换绑产物对本模块不透明（泛型）：壳持有运行面类型，本模块只把它原样交回壳的换绑动作。
+import { failureLine } from "../application/format.ts";
 import { loadSessionHistory } from "../application/history.ts";
 import { runResumeFlow } from "../application/resume.ts";
 import { asSessionId, type SessionId } from "../state/ids.ts";
@@ -26,6 +28,8 @@ export interface ResumeOptions<Binding> {
 export interface ResumeViewHost<Binding> {
   isStarted(): boolean;
   addSystem(line: string): void;
+  // 要醒目的一行（真正的报错），不弱化
+  addAlert(line: string): void;
   addHistoryLines(lines: ReturnType<typeof loadSessionHistory>): void;
   render(): void;
   updateStatus(): void;
@@ -35,6 +39,8 @@ export interface ResumeViewHost<Binding> {
   resumeOptions(): ResumeOptions<Binding> | undefined;
   historyLimit(): number | undefined;
   rebindSession(sessionId: SessionId, binding: Binding): void;
+  // 决策 443：会话面板里还开着的会话（不能 /resume 过去）
+  pooledSessionIds?(): ReadonlySet<string>;
 }
 
 export function handleResumeCommand<Binding>(
@@ -43,7 +49,7 @@ export function handleResumeCommand<Binding>(
 ): void {
   const resume = host.resumeOptions();
   if (resume === undefined) {
-    host.addSystem("本会话不支持 /resume");
+    host.addSystem("/resume is not available in this session");
     return;
   }
   // 不带会话号的 /resume 由壳弹出会话选择器（决策 286）；走到这里说明没有选择器可用，给用法（从命令表取）
@@ -53,13 +59,18 @@ export function handleResumeCommand<Binding>(
   }
   // 恢复当前会话会让两个写者写同一个会话文件——且语义上无意义（人就活在该会话里）：响亮拒绝
   if (arg === host.sessionId()) {
-    host.addSystem(`已在会话 ${arg} 中，无需恢复`);
+    host.addSystem(`already in session ${arg}`);
+    return;
+  }
+  // 决策 443：会话面板里还开着的会话有自己的运行面在写会话文件与工作树，换过去会有两个运行面写同一处
+  if (host.pooledSessionIds?.().has(arg) === true) {
+    host.addSystem(`session ${arg} is open in the session panel`);
     return;
   }
   // M5.5 S4（决策 040）：worker 的收尾记录写在当前会话文件里——有 worker 在跑时换绑会让它们
   // 写向已关闭的会话，响亮拒绝
   if (host.hasRunningWorkers()) {
-    host.addSystem("有 worker 仍在运行：先 /cancel 或等其收尾，再 /resume");
+    host.addSystem("workers are running; wait for them to finish or /cancel them");
     return;
   }
   host.setResuming(true);
@@ -68,7 +79,7 @@ export function handleResumeCommand<Binding>(
   const finish = (error?: unknown): void => {
     host.setResuming(false);
     if (error !== undefined) {
-      host.addSystem(`恢复失败：${error instanceof Error ? error.message : String(error)}`);
+      host.addAlert(failureLine("resume", error));
     }
     host.updateStatus();
     host.render();
@@ -81,8 +92,8 @@ export function handleResumeCommand<Binding>(
       host.render();
     },
     // 续跑：换绑运行面（grant 种子、上下文还原与新运行面的装配在壳外的
-    // rebind 工厂，同 cli resume 的 enterRepl 配方）；壳已停止则换绑无意义
-    enterRepl: async () => {
+    // rebind 工厂，续会话入口）；壳已停止则换绑无意义
+    enter: async () => {
       if (!host.isStarted()) return;
       const sessionId = asSessionId(arg);
       const binding = await resume.rebind(sessionId);
@@ -106,11 +117,12 @@ export function renderHistory<Binding>(
   try {
     const limit = host.historyLimit();
     const lines = loadSessionHistory(root, sessionId, limit !== undefined ? { limit } : {});
-    host.addSystem(`== 历史：会话 ${sessionId}（${lines.length} 行）==`);
     host.addHistoryLines(lines);
-    host.addSystem("== 历史结束，以下为续跑 ==");
+    host.addSystem("--- resumed ---");
   } catch (error) {
-    host.addSystem(`历史渲染失败：${error instanceof Error ? error.message : String(error)}`);
+    host.addAlert(
+      `rendering history failed: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
   host.render();
 }

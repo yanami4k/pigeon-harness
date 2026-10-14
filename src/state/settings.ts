@@ -28,6 +28,7 @@ import {
   mergeHookLayers,
   STOP_HOOK_BLOCK_CAP_KEY,
 } from "./hooks.ts";
+import { type KeybindingsSection, KeybindingsSectionSchema } from "./keybindings-config.ts";
 import {
   LoopGuardSectionSchema,
   type LoopGuardSettings,
@@ -35,6 +36,11 @@ import {
 } from "./loop-guard-config.ts";
 import { type DotMcpJson, type McpConfig, McpSectionSchema, mergeMcpConfig } from "./mcp-config.ts";
 import { type MemoryLimits, MemorySectionSchema, memoryLimits } from "./memory-config.ts";
+import {
+  layeredInbound,
+  type MessagingSection,
+  MessagingSectionSchema,
+} from "./messaging-config.ts";
 import { type ModelInfoSection, ModelInfoSectionSchema } from "./model-info.ts";
 import {
   type ModelRequestSection,
@@ -45,6 +51,7 @@ import {
   OrchestrationSectionSchema,
   type OrchestrationSettings,
   orchestrationSettings,
+  scriptBudgetSettingProblem,
 } from "./orchestration-config.ts";
 import { type ContextPruneSection, ContextPruneSectionSchema } from "./prune-config.ts";
 import {
@@ -85,16 +92,24 @@ import {
   ToolsSectionSchema,
 } from "./tools-config.ts";
 import { WEB_KEY_FIELDS, type WebSection, WebSectionSchema } from "./web-config.ts";
+import { type WorktreeSection, WorktreeSectionSchema } from "./worktree-config.ts";
 
 // 三层，按优先级从低到高
 export const SETTINGS_LAYERS = ["user", "project", "local"] as const;
 export type SettingsLayer = (typeof SETTINGS_LAYERS)[number];
 
 export const SETTINGS_LAYER_LABELS: Readonly<Record<SettingsLayer, string>> = {
-  user: "用户级",
-  project: "项目共享",
-  local: "项目个人",
+  user: "user settings",
+  project: "project settings",
+  local: "project local settings",
 };
+
+// 决策 470：终端界面的操作习惯——输入框为空时按两下 ← 打开会话面板（缺省开着）
+export const TuiSectionSchema = Type.Object(
+  { leftArrowOpensPanel: Type.Optional(Type.Boolean()) },
+  { additionalProperties: false }
+);
+export type TuiSection = Static<typeof TuiSectionSchema>;
 
 // 各节：节名 → schema（节名 camelCase）
 export const SETTINGS_SECTIONS = {
@@ -115,7 +130,11 @@ export const SETTINGS_SECTIONS = {
   snapshot: SnapshotSectionSchema,
   sessionSearch: SessionSearchSectionSchema,
   thinking: ThinkingSectionSchema,
+  worktree: WorktreeSectionSchema,
+  messaging: MessagingSectionSchema,
+  keybindings: KeybindingsSectionSchema,
   modelRequest: ModelRequestSectionSchema,
+  tui: TuiSectionSchema,
 } as const satisfies Record<string, TSchema>;
 export type SettingsSectionName = keyof typeof SETTINGS_SECTIONS;
 
@@ -145,7 +164,11 @@ export const SettingsFileSchema = Type.Object(
     snapshot: Type.Optional(SnapshotSectionSchema),
     sessionSearch: Type.Optional(SessionSearchSectionSchema),
     thinking: Type.Optional(ThinkingSectionSchema),
+    worktree: Type.Optional(WorktreeSectionSchema),
+    messaging: Type.Optional(MessagingSectionSchema),
+    keybindings: Type.Optional(KeybindingsSectionSchema),
     modelRequest: Type.Optional(ModelRequestSectionSchema),
+    tui: Type.Optional(TuiSectionSchema),
     [DISABLE_ALL_HOOKS_KEY]: Type.Optional(Type.Boolean()),
     [STOP_HOOK_BLOCK_CAP_KEY]: Type.Optional(Type.Integer({ minimum: 1 })),
     trustedDirectories: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
@@ -162,7 +185,7 @@ export interface SettingsSource {
 }
 
 export function describeSource(source: SettingsSource): string {
-  return `${source.file}（${SETTINGS_LAYER_LABELS[source.layer]}）`;
+  return `${source.file} (${SETTINGS_LAYER_LABELS[source.layer]})`;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -178,7 +201,7 @@ export function isTrustedDirectoryForm(dir: string): boolean {
 export function schemaProblems(schema: TSchema, value: unknown, prefix: string): string[] {
   return [...Value.Errors(schema, value)].map((failure) => {
     const where = "instancePath" in failure ? String(failure.instancePath) : "";
-    return `${prefix}${where === "" ? "/" : where}：${failure.message}`;
+    return `${prefix}${where === "" ? "/" : where}: ${failure.message}`;
   });
 }
 
@@ -189,7 +212,7 @@ export function validateSettingsLayer(
 ): { file: SettingsFile } | { problems: string[] } {
   const where = describeSource(source);
   if (!isPlainObject(raw)) {
-    return { problems: [`设置文件 ${where}：顶层须为对象`] };
+    return { problems: [`settings file ${where}: top level must be an object`] };
   }
   const problems: string[] = [];
   for (const key of Object.keys(raw)) {
@@ -199,14 +222,14 @@ export function validateSettingsLayer(
     if (key === TRUSTED_DIRECTORIES_KEY) {
       if (source.layer !== "user") {
         problems.push(
-          `设置文件 ${where}：${TRUSTED_DIRECTORIES_KEY} 只能写在用户级设置里（项目不能为自己免于确认）`
+          `settings file ${where}: ${TRUSTED_DIRECTORIES_KEY} is only allowed in user settings`
         );
       } else if (Array.isArray(raw[key])) {
         // 只接受绝对路径或 ~ 开头（展开为用户主目录）：相对路径随启动目录而变，免检范围不可预料
         for (const dir of raw[key] as unknown[]) {
           if (typeof dir === "string" && !isTrustedDirectoryForm(dir)) {
             problems.push(
-              `设置文件 ${where}：${TRUSTED_DIRECTORIES_KEY} 里的 ${dir} 不是绝对路径（只接受绝对路径或 ~ 开头）`
+              `settings file ${where}: ${TRUSTED_DIRECTORIES_KEY} entry ${dir} must be an absolute path or start with ~`
             );
           }
         }
@@ -215,14 +238,14 @@ export function validateSettingsLayer(
     }
     if (!Object.hasOwn(SETTINGS_SECTIONS, key)) {
       problems.push(
-        `设置文件 ${where}：未知键 ${key}（可用 ${[SCHEMA_KEY, ...Object.keys(SETTINGS_SECTIONS), TRUSTED_DIRECTORIES_KEY, DISABLE_ALL_HOOKS_KEY, STOP_HOOK_BLOCK_CAP_KEY].join("、")}）`
+        `settings file ${where}: unknown key ${key} (valid: ${[SCHEMA_KEY, ...Object.keys(SETTINGS_SECTIONS), TRUSTED_DIRECTORIES_KEY, DISABLE_ALL_HOOKS_KEY, STOP_HOOK_BLOCK_CAP_KEY].join(", ")})`
       );
       continue;
     }
     const section = raw[key];
     const schema = SETTINGS_SECTIONS[key as SettingsSectionName];
     if (!isPlainObject(section)) {
-      problems.push(`设置文件 ${where}：${key} 一节须为对象`);
+      problems.push(`settings file ${where}: ${key} must be an object`);
       continue;
     }
     // key 不进设置文件（先于未知键检查，给出应设的环境变量名）
@@ -233,11 +256,24 @@ export function validateSettingsLayer(
     if (key === "hooks") {
       problems.push(...hooksSectionProblems(section as HooksSection));
     }
-    const known = new Set(Object.keys(schema.properties as Record<string, unknown>));
+    // 决策 439：keybindings 的键是动作名（pigeon.* 或 pi-tui 的 tui.*），不是固定的几个；具体动作在终端界面开局时核对
+    if (key === "keybindings") {
+      for (const inner of Object.keys(section)) {
+        if (!/^(pigeon|tui)\.[A-Za-z0-9.]+$/.test(inner)) {
+          problems.push(
+            `settings file ${where}: keybindings key ${inner} is not an action name (like pigeon.toggleToolOutput or tui.editor.undo)`
+          );
+        }
+      }
+      continue;
+    }
+    const known = new Set(
+      Object.keys(("properties" in schema ? schema.properties : {}) as Record<string, unknown>)
+    );
     for (const inner of Object.keys(section)) {
       if (!known.has(inner)) {
         problems.push(
-          `设置文件 ${where}：${key} 一节里的未知键 ${inner}（可用 ${[...known].join("、")}）`
+          `settings file ${where}: unknown key ${inner} in ${key} (valid: ${[...known].join(", ")})`
         );
       }
     }
@@ -246,7 +282,7 @@ export function validateSettingsLayer(
     return { problems };
   }
   if (!Value.Check(SettingsFileSchema, raw)) {
-    return { problems: schemaProblems(SettingsFileSchema, raw, `设置文件 ${where}：`) };
+    return { problems: schemaProblems(SettingsFileSchema, raw, `settings file ${where}: `) };
   }
   return { file: raw as SettingsFile };
 }
@@ -260,7 +296,7 @@ function webKeyProblems(section: Record<string, unknown>, where: string): string
     const backendSection = search[backend];
     if (isPlainObject(backendSection) && Object.hasOwn(backendSection, "apiKey")) {
       problems.push(
-        `设置文件 ${where}：web.search.${backend}.apiKey 不能写在设置文件里——key 只从环境变量读，请设置 ${env} 并删掉这一项`
+        `settings file ${where}: web.search.${backend}.apiKey is not allowed in settings files; the key is read from ${env}`
       );
     }
   }
@@ -305,7 +341,13 @@ export interface MergedSettings {
   snapshot?: SnapshotSection;
   sessionSearch?: Static<typeof SessionSearchSectionSchema>;
   thinking?: ThinkingSection;
+  worktree?: WorktreeSection;
+  messaging?: MessagingSection;
+  keybindings?: KeybindingsSection;
+  // 决策 439：写了 keybindings 却不被采用的层（项目共享层、被 git 跟踪的 settings.local.json）
+  keybindingsIgnored?: SettingsLayer[];
   modelRequest?: ModelRequestSection;
+  tui?: TuiSection;
   trustedDirectories: string[];
   // 停用全部钩子（324）：三层按标量覆盖（高优先层说了算），缺省 false
   disableAllHooks: boolean;
@@ -328,7 +370,9 @@ export interface MergeResult {
 
 // 三层合并（层按优先级从低到高给）
 export function mergeSettingsLayers(
-  layers: ReadonlyArray<{ layer: SettingsLayer; file: SettingsFile }>
+  layers: ReadonlyArray<{ layer: SettingsLayer; file: SettingsFile }>,
+  // 决策 342：项目的 settings.local.json 被 git 跟踪（随仓库提交）时按共享层对待
+  options: { localLayerTracked?: boolean } = {}
 ): MergeResult {
   let merged: Record<string, unknown> = {};
   const grants: LayeredGrantRule[] = [];
@@ -363,6 +407,34 @@ export function mergeSettingsLayers(
   // 并集按优先级从高到低排列（项目个人在前）
   grants.sort((a, b) => SETTINGS_LAYERS.indexOf(b.layer) - SETTINGS_LAYERS.indexOf(a.layer));
   const user = layers.find((entry) => entry.layer === "user")?.file;
+  // 决策 450：收件规则只许个人层放宽，项目共享层只能收紧
+  const inbound = layeredInbound(
+    layers.map(({ layer, file }) => ({
+      layer: layer === "local" && options.localLayerTracked === true ? "project" : layer,
+      ...(file.messaging?.inbound !== undefined ? { inbound: file.messaging.inbound } : {}),
+    }))
+  );
+  // 决策 439：键位只认个人层（用户级、未被 git 跟踪的 settings.local.json）——仓库提交的设置不能改审批键；写了的层记下来提示
+  const personalKeys = layers.filter(
+    ({ layer }) => layer === "user" || (layer === "local" && options.localLayerTracked !== true)
+  );
+  const ignoredKeys = layers
+    .filter(({ file }) => file.keybindings !== undefined)
+    .filter((entry) => !personalKeys.includes(entry))
+    .map(({ layer }) => layer);
+  const keybindings: Record<string, string | string[]> = {};
+  for (const { file } of personalKeys) Object.assign(keybindings, file.keybindings ?? {});
+  const { keybindings: _mergedKeys, ...withoutKeys } = merged as { keybindings?: unknown };
+  merged = {
+    ...withoutKeys,
+    ...(Object.keys(keybindings).length > 0 ? { keybindings } : {}),
+    ...(ignoredKeys.length > 0 ? { keybindingsIgnored: ignoredKeys } : {}),
+  };
+  const mergedMessaging = merged.messaging as MessagingSection | undefined;
+  if (mergedMessaging !== undefined) {
+    const { inbound: _merged, ...rest } = mergedMessaging;
+    merged = { ...merged, messaging: { ...rest, ...(inbound !== undefined ? { inbound } : {}) } };
+  }
   return {
     merged: {
       ...(merged as Omit<
@@ -386,31 +458,36 @@ export function mergedSettingsProblems(merged: MergedSettings, dotMcp?: DotMcpJs
   const commands = merged.commands?.commands ?? {};
   for (const name of Object.keys(commands)) {
     if (!COMMAND_NAME_PATTERN.test(name)) {
-      problems.push(`commands：短名不合法：${name}`);
+      problems.push(`commands: invalid short name: ${name}`);
     }
   }
   for (const [role, names] of Object.entries(merged.commands?.roles ?? {})) {
     if (!Value.Check(WorkerRoleSchema, role)) {
-      problems.push(`commands：未知角色：${role}`);
+      problems.push(`commands: unknown role: ${role}`);
     }
     for (const name of names) {
       if (!Object.hasOwn(commands, name)) {
-        problems.push(`commands：角色 ${role} 引用了未登记的短名：${name}`);
+        problems.push(`commands: role ${role} references unknown short name: ${name}`);
       }
     }
   }
   const loop = loopGuardSettings(merged.loopGuard);
   if ("problem" in loop) {
-    problems.push(`loopGuard：${loop.problem}`);
+    problems.push(`loopGuard: ${loop.problem}`);
   }
   const repetition = repetitionGuardSettings(merged.repetitionGuard);
   if ("problem" in repetition) {
-    problems.push(`repetitionGuard：${repetition.problem}`);
+    problems.push(`repetitionGuard: ${repetition.problem}`);
   }
   for (const problem of sandboxConfigProblems(merged.sandbox ?? {})) {
-    problems.push(`sandbox：${problem}`);
+    problems.push(`sandbox: ${problem}`);
   }
-  problems.push(...mergeMcpConfig(dotMcp, merged.mcp).problems.map((p) => `mcp：${p}`));
+  // 决策 475：脚本的缺省额度只收 token
+  const scriptBudget = merged.orchestration?.script?.budget;
+  const budgetProblem =
+    scriptBudget !== undefined ? scriptBudgetSettingProblem(scriptBudget) : undefined;
+  if (budgetProblem !== undefined) problems.push(`orchestration: ${budgetProblem}`);
+  problems.push(...mergeMcpConfig(dotMcp, merged.mcp).problems.map((p) => `mcp: ${p}`));
   return problems;
 }
 
@@ -512,6 +589,21 @@ export function thinkingSectionOf(snapshot: SettingsSnapshot): ThinkingSection |
   return snapshot.merged.thinking;
 }
 
+// 决策 439：键位（合并后的 keybindings 一节；按动作名逐个覆盖）
+export function keybindingsSectionOf(snapshot: SettingsSnapshot): KeybindingsSection | undefined {
+  return snapshot.merged.keybindings;
+}
+
+// 决策 450：本机会话间通信（合并后的 messaging 一节）
+export function messagingSectionOf(snapshot: SettingsSnapshot): MessagingSection | undefined {
+  return snapshot.merged.messaging;
+}
+
+// 决策 445：独立工作树的起点档位（合并后的 worktree 一节；没写为 fresh）
+export function worktreeSectionOf(snapshot: SettingsSnapshot): WorktreeSection | undefined {
+  return snapshot.merged.worktree;
+}
+
 // 决策 420：模型请求的失败重试次数（modelRequest 一节，缺省 4）
 export function modelRequestMaxRetriesOf(snapshot: SettingsSnapshot): number {
   return modelRequestMaxRetries(snapshot.merged.modelRequest);
@@ -535,7 +627,7 @@ export function loopGuardSettingsOf(snapshot: SettingsSnapshot): LoopGuardSettin
   const resolved = loopGuardSettings(snapshot.merged.loopGuard);
   if ("problem" in resolved) {
     // 读取快照时已校验，到这里说明快照是手工拼的
-    throw new Error(`打转检测设置不对：${resolved.problem}`);
+    throw new Error(`invalid loopGuard settings: ${resolved.problem}`);
   }
   return resolved.settings;
 }
@@ -551,7 +643,7 @@ export function repetitionGuardOf(snapshot: SettingsSnapshot): RepetitionGuardSe
   const resolved = repetitionGuardSettings(snapshot.merged.repetitionGuard);
   if ("problem" in resolved) {
     // 读取快照时已校验，到这里说明快照是手工拼的
-    throw new Error(`流式重复检测设置不对：${resolved.problem}`);
+    throw new Error(`invalid repetitionGuard settings: ${resolved.problem}`);
   }
   return resolved.settings;
 }
@@ -572,7 +664,7 @@ export function sandboxConfigOf(snapshot: SettingsSnapshot): SandboxConfig {
 export function mcpConfigOf(snapshot: SettingsSnapshot): McpConfig {
   const { config, problems } = mergeMcpConfig(snapshot.dotMcp, snapshot.merged.mcp);
   if (problems.length > 0) {
-    throw new Error(`MCP 配置校验失败：${problems.join("；")}`);
+    throw new Error(`invalid MCP config: ${problems.join("; ")}`);
   }
   return config;
 }

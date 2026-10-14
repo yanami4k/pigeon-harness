@@ -5,9 +5,12 @@
 // 从会话存储读（决策 177 / 180）：worker 与分支会话的来历在会话文件头（metadata），委派策略在父会话的
 // worker 派出条目里；会话存储里没有这个会话的文件即按主会话处理（新会话尚未写出文件）。
 import { existsSync } from "node:fs";
+import { isAbsolute, relative } from "node:path";
+import type { StoredEntry } from "../persistence/session-reader.ts";
 import { loadStoreSession } from "../persistence/session-view.ts";
 import type { SessionId } from "../state/ids.ts";
-import { mapLegacyWorktreePath } from "../state/paths.ts";
+import { mapLegacyWorktreePath, namedWorktreesDirOf } from "../state/paths.ts";
+import { SessionEntryType } from "../state/session-entries.ts";
 import { storeWorkerSpawned } from "../state/session-judge.ts";
 import type { DelegatedPolicy, WorkerRole, WorkerWorkspace } from "../state/session-payloads.ts";
 import { sessionsDirOf } from "./workspace.ts";
@@ -32,23 +35,25 @@ export function sessionRuntimeScope(
   // M7（决策 077）：分支会话回到它自己的工作树（主会话形态，不是委派）
   const branch = view.metadata?.branch;
   if (branch !== undefined) {
-    return { workspaceRoot: existingWorktree(governanceRoot, "分支", branch.workspace) };
+    return { workspaceRoot: existingWorktree(governanceRoot, "branch", branch.workspace) };
   }
   const worker = view.metadata?.worker;
   const parentSessionId = view.parentSessionId;
   if (worker === undefined || parentSessionId === undefined) {
-    return { workspaceRoot: governanceRoot };
+    return {
+      workspaceRoot: mainSessionWorkspace(governanceRoot, loaded.file.header.cwd, loaded.main),
+    };
   }
   const parent = loadStoreSession(dir, parentSessionId);
   if (parent === undefined) {
     throw new Error(
-      `worker 会话 ${sessionId} 的父会话记录不存在：${parentSessionId}（无法还原委派策略，拒绝恢复）`
+      `parent session ${parentSessionId} of worker session ${sessionId} not found; can't resume`
     );
   }
   const spawned = storeWorkerSpawned(parent.view, sessionId);
   if (spawned === undefined) {
     throw new Error(
-      `父会话 ${parentSessionId} 没有派出 ${sessionId} 的记录（无法还原委派策略，拒绝恢复）`
+      `parent session ${parentSessionId} has no spawn record for ${sessionId}; can't resume`
     );
   }
   return scopeOf(governanceRoot, worker.workspace, {
@@ -56,6 +61,27 @@ export function sessionRuntimeScope(
     parentSessionId,
     worker: { name: worker.name, role: worker.role },
   });
+}
+
+// 决策 445、446：主会话开在独立工作树（.pigeon/worktrees/<名字>）里时，续接回到那里——主分支上最后一条 pigeon.worktree 条目
+//（enter_worktree 移进去的）优先，其次会话文件头记的工作目录（pigeon --worktree 开的）；工作树已不在即回到治理根（主检出），不报错
+function mainSessionWorkspace(
+  governanceRoot: string,
+  cwd: string,
+  entries: readonly StoredEntry[]
+): string {
+  const dir = namedWorktreesDirOf(governanceRoot);
+  const usable = (path: string): boolean => {
+    const rel = relative(dir, path);
+    return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel) && existsSync(path);
+  };
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry?.type !== "custom" || entry.customType !== SessionEntryType.Worktree) continue;
+    const path = (entry.data as { path?: unknown } | undefined)?.path;
+    if (typeof path === "string") return usable(path) ? path : governanceRoot;
+  }
+  return usable(cwd) ? cwd : governanceRoot;
 }
 
 // 决策 325：工作树移入 .pigeon/state/worktrees 之前的会话记着旧位置的绝对路径，按旧前缀到新前缀映射后再找
@@ -67,7 +93,7 @@ function existingWorktree(
   const located = mapLegacyWorktreePath(governanceRoot, workspace.path);
   if (!existsSync(located)) {
     throw new Error(
-      `${kind}工作树已不存在：${located}（分支 ${workspace.branch} 仍可用 git 查看）`
+      `${kind} worktree is gone: ${located} (branch ${workspace.branch} still exists)`
     );
   }
   return located;
@@ -85,9 +111,9 @@ function scopeOf(
   // 决策 377：只读的 explorer 回到它读的派出方工作区（主工作目录或派出方 worker 的工作树）
   if (workspace.kind === "shared") {
     if (!existsSync(workspace.path)) {
-      throw new Error(`explorer 读的工作区已不存在：${workspace.path}`);
+      throw new Error(`workspace read by explorer is gone: ${workspace.path}`);
     }
     return { workspaceRoot: workspace.path, ...delegated };
   }
-  return { workspaceRoot: existingWorktree(governanceRoot, "worker ", workspace), ...delegated };
+  return { workspaceRoot: existingWorktree(governanceRoot, "worker", workspace), ...delegated };
 }

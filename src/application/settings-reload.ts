@@ -4,7 +4,7 @@
 // - 新快照自下一轮起生效：此后派出的 worker、新开的脚本编排用新快照；运行面按新快照重建，MCP 只动有变化的服务（启动定义
 //   改了的重启、删掉的停止、新加的启动，结果行里分别列出；未变的沿用原连接），系统提示逐字节不变；人写的说明、推送的记忆、
 //   Skill 目录在开工状态块里，不靠重读设置，每个 Run 照常重读（决策 363）。正在跑的沙箱容器不重建，sandbox 一节有变化时另给一行提示。
-// - pigeon run 与 --line 不设重载。
+// - pigeon run 不设重载。
 // 本模块只算"读出什么、要问什么、改了哪些节"；问人与重建运行面在终端界面入口。
 import { homedir } from "node:os";
 import {
@@ -23,6 +23,10 @@ import { canonicalJson } from "../state/hashing.ts";
 import { mergeMcpConfig } from "../state/mcp-config.ts";
 import { SETTINGS_SECTIONS, type SettingsSnapshot, withHooksDisabled } from "../state/settings.ts";
 import { localSettingsTracked, pendingTrustEntries } from "./session-settings.ts";
+
+// 重读设置的结果行：终端界面按这两句认出"已重读""没有变化"（不另写进消息区）
+export const SETTINGS_RELOADED_PREFIX = "settings reloaded";
+export const SETTINGS_UNCHANGED = "settings unchanged";
 
 export interface SettingsReloadPlan {
   current: SettingsSnapshot;
@@ -58,7 +62,10 @@ export function planSettingsReload(
   options: { homeDir?: string; hooksDisabled?: boolean } = {}
 ): SettingsReloadPlan {
   const homeDir = options.homeDir ?? homedir();
-  const loaded = loadSettings(current.root, { homeDir });
+  const loaded = loadSettings(current.root, {
+    homeDir,
+    ...(localSettingsTracked(current.root) ? { localLayerTracked: true } : {}),
+  });
   const next = options.hooksDisabled === true ? withHooksDisabled(loaded) : loaded;
   const before = new Map(entriesOf(current).map((entry) => [trustKeyOf(entry), entry.fingerprint]));
   const changed = new Set(
@@ -124,28 +131,27 @@ export function applySettingsReload(
   const sandboxChanged = changedSections.includes("sandbox");
   const lines: string[] = [];
   if (changedSections.length === 0) {
-    lines.push("设置没有变化");
+    lines.push(SETTINGS_UNCHANGED);
   } else {
-    lines.push(`已重读设置，自下一轮起生效：改了 ${changedSections.join("、")} 节`);
+    lines.push(`${SETTINGS_RELOADED_PREFIX}: ${changedSections.join(", ")} changed`);
     const mcpParts = [
-      ...(mcp.restarted.length > 0 ? [`重启 ${mcp.restarted.join("、")}`] : []),
-      ...(mcp.stopped.length > 0 ? [`停止 ${mcp.stopped.join("、")}`] : []),
-      ...(mcp.started.length > 0 ? [`启动 ${mcp.started.join("、")}`] : []),
+      ...(mcp.restarted.length > 0 ? [`restarted ${mcp.restarted.join(", ")}`] : []),
+      ...(mcp.stopped.length > 0 ? [`stopped ${mcp.stopped.join(", ")}`] : []),
+      ...(mcp.started.length > 0 ? [`started ${mcp.started.join(", ")}`] : []),
     ];
     if (mcpParts.length > 0) {
-      lines.push(`MCP 服务：${mcpParts.join("；")}`);
+      lines.push(`MCP servers: ${mcpParts.join("; ")}`);
     }
   }
   if (plan.pending.length > 0 && choice === "skip") {
     lines.push(
-      `未确认的条目沿用原内容（原来没有的不启用）：${plan.pending.map((entry) => trustKeyOf(entry)).join("、")}`
+      `unconfirmed, kept as before: ${plan.pending.map((entry) => trustKeyOf(entry)).join(", ")}`
     );
   }
   return { snapshot, changedSections, mcp, sandboxChanged, lines };
 }
 
-export const RELOAD_USAGE =
-  "用法：/reload（重读设置）｜/reload confirm（确认列出的条目并生效）｜/reload skip（不确认，沿用原内容）";
+export const RELOAD_USAGE = "usage: /reload | /reload confirm | /reload skip";
 
 export interface SettingsReloaderDeps {
   // 当前快照
@@ -176,7 +182,7 @@ export function createSettingsReloader(
     let plan: SettingsReloadPlan;
     let choice: "trust" | "skip" = "skip";
     if (sub === "confirm" || sub === "skip") {
-      if (pending === undefined) return ["没有待确认的重读；先输入 /reload"];
+      if (pending === undefined) return ["nothing pending to confirm"];
       plan = pending;
       choice = sub === "confirm" ? "trust" : "skip";
     } else if (sub !== undefined) {
@@ -186,9 +192,9 @@ export function createSettingsReloader(
       if (plan.pending.length > 0) {
         pending = plan;
         return [
-          "以下会执行命令或放权的配置有变化（含首次出现），请确认：",
+          "changed settings that run commands or grant permissions:",
           ...plan.pending.map((entry) => `  ${describeTrustEntry(entry)}`),
-          "/reload confirm 全部确认并记下、随新设置生效 ｜ /reload skip 不确认，这些条目沿用原内容（原来没有的不启用）",
+          "/reload confirm to apply | /reload skip to skip",
         ];
       }
     }
@@ -206,7 +212,7 @@ export function createSettingsReloader(
       ...result.lines,
       ...(result.sandboxChanged && sandboxSession !== undefined
         ? [
-            `沙箱配置已更新，退出后用 pigeon resume ${sandboxSession} --sandbox 续跑才对本会话的容器生效`,
+            `sandbox settings changed; takes effect after: pigeon --sandbox --resume ${sandboxSession}`,
           ]
         : []),
     ];

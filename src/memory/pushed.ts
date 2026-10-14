@@ -1,13 +1,13 @@
 // 推送记忆段（决策 191、329、331、332、363）：读取两层学到的记忆，整份作开工状态块的「记忆」一节、不挑选；
 // 会话中记忆文件变了即以状态追加整节取代（装配根拼接与比对）。文字为记忆文字 v5（MEMORY_TEXT_VERSION）。
 // - 取向（329）：记使用者的偏好、纠正与代码之外的项目信息；代码现状以代码为准，人写的说明（AGENTS.md）优先。
-// - 可写入（331）：只有有人对话的入口（终端界面主会话含沙箱会话、--line）注册 update_memory，推送段随之带"被纠正时记下"的
+// - 可写入（331）：只有有人对话的入口（终端界面主会话，含沙箱会话）注册 update_memory，推送段随之带"被纠正时记下"的
 //   说明与交互版的冲突处理（问只这一次还是以后都这样、只在这个项目还是所有项目）；其余入口只推送，冲突处理为无人值守版。
 // - 两层都没有条目时：可写入的入口照样推送（让 agent 知道该记什么、记在哪一层）；只推送的入口不推这一段。
 // - 条目部分照原文放入：格式被人改坏时同样照原文推入（工具另行拒绝写入）。
 // - 清单（每层的文件哈希、字节数、条数、上限与文字版本）随 Run 开始条目落盘。
 // - 决策 431：读到旧格式的记忆文件即一次性迁移（见 memory-migration.ts），推送的一律是新格式；迁移没能落盘时这一次推内存里
-//   转换的新格式，清单的哈希与字节数随之按推送的原文算。迁移的结果与告警经 report 交给入口。
+//   转换的新格式，清单的哈希与字节数随之按推送的原文算。没能落盘的告警经 report 交给入口（迁移成功不告知，决策 460）。
 import type { MemoryLimits } from "../state/memory-config.ts";
 import {
   countChars,
@@ -18,7 +18,7 @@ import {
   type MemoryLayer,
   memoryFactsOfText,
 } from "./learned.ts";
-import { memoryLocation } from "./learned-store.ts";
+import { availableMemoryLayers, memoryLocation } from "./learned-store.ts";
 import { type MemoryMigrationReport, readMemoryLayer } from "./memory-migration.ts";
 
 // 冲突处理的两种填法（记忆文字 v5）：可写入（有人对话）/ 只推送（无人值守）
@@ -101,7 +101,14 @@ export function loadPushedMemory(input: {
   // 旧格式迁移的结果与告警（给人看的一行）；缺省写标准错误输出
   report?: MemoryMigrationReport;
 }): PushedMemory {
-  const layers = MEMORY_LAYERS.filter((layer) => (input.layers ?? MEMORY_LAYERS).includes(layer));
+  // 主目录下启动时只有用户级这一层（项目级与它是同一个文件）
+  const available = availableMemoryLayers({
+    governanceRoot: input.governanceRoot,
+    ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+  });
+  const layers = MEMORY_LAYERS.filter(
+    (layer) => (input.layers ?? MEMORY_LAYERS).includes(layer) && available.includes(layer)
+  );
   const manifests: PushedMemoryLayerManifest[] = [];
   const parts: string[] = [];
   let anyEntries = false;

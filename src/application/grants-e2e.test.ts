@@ -1,27 +1,24 @@
-// M4 S6 端到端验收：grant 生命周期走人机的真实 CLI 链路（fake streamFn 驱动真实
-// pi-agent-core Agent；stdin 剧本走真实 createAsker/runRepl；命令走真实 runGrantCommand）。
+// M4 S6 端到端验收：grant 生命周期的人机链路（fake streamFn 驱动真实 pi-agent-core Agent）。
+// 不经命令行对话：每个任务直接调 adapter.run；审批由按脚本作答的人答（scriptedApprovalHandler——与终端界面
+// 同一个审批 handler、同一份放权语义与结论行）；斜杠命令直接走真实 runGrantCommand。
 // 测试一（会话生命周期）：审批 [a] 建 grant → 第二次调用免审（approvedBy=human:grant）→
 //   /grants 列出 → /revoke 立即停免审（重新弹人工）；授权建立与撤销、各次调用的审批闸决定落进会话存储。
-// 测试二（升格 + 冷恢复）：/grants save 写 .pigeon/grants.json（promotedFrom 出处）→
+// 测试二（升格 + 冷恢复）：/grants save 写项目个人设置 .pigeon/settings.local.json（promotedFrom 出处）→
 //   模拟新进程：从会话文件还原生效的会话 grant（决策 3b 静默续命）→ 撤销后配置规则命中
 //   （approvedBy=policy:config）。
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Readable } from "node:stream";
 import { Type } from "typebox";
 import { test } from "vitest";
-import { createToolGovernance } from "../application/governance.ts";
-import { type GrantsCommandContext, runGrantCommand } from "../application/grants.ts";
-import { grantEventSink } from "../application/session-store.ts";
 import { SessionGrantStore } from "../approvals/grant-store.ts";
 import { loadGrantConfig } from "../persistence/grants-config.ts";
 import { acquireSessionFileLock } from "../persistence/session-lock.ts";
 import { locateSessionFile } from "../persistence/session-reader.ts";
 import { loadStoreSession } from "../persistence/session-view.ts";
-import { PiRuntimeAdapter } from "../pi-runtime/adapter.ts";
-import { createFakeStreamFn } from "../pi-runtime/fixtures.ts";
+import { PiRuntimeAdapter, type RunResult } from "../pi-runtime/adapter.ts";
+import { createFakeStreamFn, type FakeReply } from "../pi-runtime/fixtures.ts";
 import { openSessionStoreWriter, type SessionStoreWriter } from "../pi-runtime/session-store.ts";
 import { INJECTION_SNAPSHOT_VERSION } from "../pi-runtime/snapshot.ts";
 import type { ConfigGrantRule } from "../state/grants.ts";
@@ -31,8 +28,10 @@ import { createEditFileTool, type EditFileParams } from "../tools/edit-file.ts";
 import { lineTag, snapshotTag } from "../tools/hashline.ts";
 import { createReadFileTool } from "../tools/read-file.ts";
 import { ToolRegistry } from "../tools/registry.ts";
-import { createCliApprovalHandler } from "./approval-ui.ts";
-import { type AskFn, createAsker, runRepl } from "./repl.ts";
+import { REASON_PROMPT, scriptedApprovalHandler } from "../tui/approval-fixtures.ts";
+import { createToolGovernance } from "./governance.ts";
+import { type GrantsCommandContext, runGrantCommand } from "./grants.ts";
+import { grantEventSink } from "./session-store.ts";
 
 const SESSION_A = asSessionId("sess_01J5Z7K8W9ABCDEFGHJKMNPRAA");
 const SESSION_B = asSessionId("sess_01J5Z7K8W9ABCDEFGHJKMNPRBB");
@@ -42,6 +41,14 @@ function editCall(content: string, oldLine: string, newLine: string): EditFilePa
     path: "a.ts",
     snapshot: snapshotTag(content),
     edits: [{ op: "replace", anchor: `1#${lineTag(oldLine)}`, lines: [newLine] }],
+  };
+}
+
+// 模型的一条回复：带一次 edit_file 调用（单行替换）
+function editReply(text: string, content: string, oldLine: string, newLine: string): FakeReply {
+  return {
+    text,
+    toolCalls: [{ name: "edit_file", args: { ...editCall(content, oldLine, newLine) } }],
   };
 }
 
@@ -70,6 +77,14 @@ function gateSources(root: string, sessionId: SessionId): Array<string | undefin
   );
 }
 
+// 本次 Run 各工具调用的审批闸决定：[结论, 批准来源]
+function approvals(result: RunResult): Array<[string | undefined, string | undefined]> {
+  return result.toolExecutions.map((record) => [
+    record.decision?.outcome,
+    record.decision?.approvedBy,
+  ]);
+}
+
 function makeRegistry(): ToolRegistry {
   const registry = new ToolRegistry();
   registry.register({
@@ -93,24 +108,28 @@ function makeRegistry(): ToolRegistry {
 
 interface TestAdapter {
   adapter: PiRuntimeAdapter;
-  ask: AskFn;
-  close: () => void;
+  // 按脚本作答的人被问到的（审批块的按键提示行、拒绝理由提示），按顺序
+  prompts: string[];
+  // 审批块与答完的一行结论（终端界面里看到的）
+  screen: () => string;
 }
 
+// answers：按脚本作答的人依次给出的回答（按键或拒绝理由）；答完了还被问即按 n 单按拒绝
 function makeAdapter(
-  input: Readable,
-  outputs: string[],
   root: string,
-  replies: unknown[],
+  replies: FakeReply[],
   store: SessionGrantStore,
   configRules: readonly ConfigGrantRule[],
   sessionId: SessionId,
-  sessionStore: SessionStoreWriter
+  sessionStore: SessionStoreWriter,
+  answers: string[]
 ): TestAdapter {
-  const write = (text: string): void => {
-    outputs.push(text);
+  const prompts: string[] = [];
+  let screen = "";
+  const ask = async (prompt: string): Promise<string | null> => {
+    prompts.push(prompt);
+    return answers.shift() ?? null;
   };
-  const { ask, close } = createAsker(input, write);
   const adapter = new PiRuntimeAdapter({
     snapshot: {
       version: INJECTION_SNAPSHOT_VERSION,
@@ -124,10 +143,16 @@ function makeAdapter(
       skills: [],
       createdAt: 1700000000000,
     },
-    streamFn: createFakeStreamFn({ replies: replies as never }),
+    streamFn: createFakeStreamFn({ replies }),
     governance: createToolGovernance({
       registry: makeRegistry(),
-      approvalHandler: createCliApprovalHandler(ask, write, { grants: store }),
+      approvalHandler: scriptedApprovalHandler(
+        ask,
+        (text) => {
+          screen += text;
+        },
+        { grants: store }
+      ),
       sessionGrants: store,
       configGrants: configRules,
       workspaceRoot: root,
@@ -136,7 +161,7 @@ function makeAdapter(
     sessionId,
     sessionStore,
   });
-  return { adapter, ask, close };
+  return { adapter, prompts, screen: () => screen };
 }
 
 test("端到端（会话生命周期）：[a] 建 grant → human:grant 免审 → /grants → /revoke 立即停免审", async () => {
@@ -149,99 +174,90 @@ test("端到端（会话生命周期）：[a] 建 grant → human:grant 免审 �
       workspaceRoot: root,
       sink: grantEventSink(sessionStore),
     });
+    const commandOutput: string[] = [];
     const commands: GrantsCommandContext = {
       root,
       store,
       configRules: [],
       sessionId: SESSION_A,
-      write: () => {},
+      write: (t) => commandOutput.push(t),
     };
 
-    // REPL #1：任务一审批 [a] 建 grant；任务二免审；/grants 列出
-    const outputs1: string[] = [];
-    const input1 = Readable.from(["任务一\n", "a\n", "任务二\n", "/grants\n", ":quit\n"], {
-      objectMode: false,
-    });
-    const r1 = makeAdapter(
-      input1,
-      outputs1,
+    // 同一会话：任务一审批 [a] 建 grant；任务二免审；/grants 列出；/revoke 后任务三重新弹人工（剧本给 n + 逐字理由）
+    const r = makeAdapter(
       root,
       [
-        {
-          text: "改1",
-          toolCalls: [{ name: "edit_file", args: editCall("alpha\n", "alpha", "STEP1") }],
-        },
+        editReply("改1", "alpha\n", "alpha", "STEP1"),
         { text: "好" },
-        {
-          text: "改2",
-          toolCalls: [{ name: "edit_file", args: editCall("STEP1\n", "STEP1", "STEP2") }],
-        },
+        editReply("改2", "STEP1\n", "STEP1", "STEP2"),
         { text: "完成" },
-      ],
-      store,
-      [],
-      SESSION_A,
-      sessionStore
-    );
-    await runRepl({
-      adapter: r1.adapter,
-      ask: r1.ask,
-      write: (t) => outputs1.push(t),
-      grants: { ...commands, write: (t) => outputs1.push(t) },
-    });
-    r1.close();
-    await r1.adapter.dispose();
-
-    const terminal1 = outputs1.join("");
-    assert.ok(terminal1.includes("已创建会话放权"), terminal1);
-    assert.ok(terminal1.includes("[a] 本会话允许"), `四键提示在场\n${terminal1}`);
-    assert.ok(terminal1.includes("（human:grant）"), `第二次调用免记 human:grant\n${terminal1}`);
-    assert.equal(readFileSync(join(root, "a.ts"), "utf8"), "STEP2\n");
-    const grant = store.list()[0];
-    assert.ok(grant);
-    assert.ok(terminal1.includes(grant.grantId), "/grants 列出 grant id");
-    assert.ok(terminal1.includes("命中 1 次"), terminal1);
-
-    // /revoke：立即停免审——下一任务重新弹人工（剧本给 n + 逐字理由）
-    const outputs2: string[] = [];
-    assert.equal(
-      runGrantCommand(["revoke", grant.grantId], { ...commands, write: (t) => outputs2.push(t) }),
-      true
-    );
-    assert.ok(outputs2.join("").includes("已撤销"));
-    assert.equal(store.list().length, 0);
-
-    const input2 = Readable.from(["任务三\n", "n\n", "先别动这个文件\n", ":quit\n"], {
-      objectMode: false,
-    });
-    const r2 = makeAdapter(
-      input2,
-      outputs2,
-      root,
-      [
-        {
-          text: "改3",
-          toolCalls: [{ name: "edit_file", args: editCall("STEP2\n", "STEP2", "STEP3") }],
-        },
+        editReply("改3", "STEP2\n", "STEP2", "STEP3"),
         { text: "被拒绝了" },
       ],
       store,
       [],
       SESSION_A,
-      sessionStore
+      sessionStore,
+      ["a", "n", "先别动这个文件"]
     );
-    await runRepl({
-      adapter: r2.adapter,
-      ask: r2.ask,
-      write: (t) => outputs2.push(t),
-      grants: { ...commands, write: (t) => outputs2.push(t) },
-    });
-    r2.close();
-    await r2.adapter.dispose();
-    const terminal2 = outputs2.join("");
+
+    const run1 = await r.adapter.run("任务一");
+    assert.equal(run1.status, "completed");
+    assert.deepEqual(approvals(run1), [["approved", "human"]]);
+    assert.equal(r.prompts.length, 1);
     assert.ok(
-      terminal2.includes("（human）"),
-      `撤销后重新弹人工，批准来源回到 human\n${terminal2}`
+      r.prompts[0]?.includes("[a] allow for this session"),
+      `四键提示在场\n${r.prompts[0]}`
+    );
+    assert.ok(
+      r.screen().includes("✓ allowed for this session: edit_file"),
+      `[a] 建会话放权\n${r.screen()}`
+    );
+    const grant = store.list()[0];
+    assert.ok(grant);
+    assert.equal(grant.tool, "edit_file");
+
+    // 第二次调用免审：不再问人、不弹审批块，批准来源记 human:grant 并回指该 grant
+    const screenAfterRun1 = r.screen();
+    const run2 = await r.adapter.run("任务二");
+    assert.equal(run2.status, "completed");
+    assert.deepEqual(approvals(run2), [["approved", "human:grant"]]);
+    assert.deepEqual(run2.toolExecutions[0]?.decision?.grantRef, {
+      kind: "session-grant",
+      id: grant.grantId,
+    });
+    assert.equal(r.prompts.length, 1, "免审调用不问人");
+    assert.equal(r.screen(), screenAfterRun1, "免审调用不弹审批块");
+    assert.equal(readFileSync(join(root, "a.ts"), "utf8"), "STEP2\n");
+
+    // /grants 列出
+    assert.equal(runGrantCommand(["grants"], commands), true);
+    const listing = commandOutput.join("");
+    assert.ok(listing.includes(grant.grantId), `/grants 列出 grant id\n${listing}`);
+    assert.ok(listing.includes("1 hit"), listing);
+
+    // /revoke：立即停免审——同一会话的下一任务重新弹人工
+    commandOutput.length = 0;
+    assert.equal(runGrantCommand(["revoke", grant.grantId], commands), true);
+    assert.equal(commandOutput.join(""), `revoked ${grant.grantId}\n`);
+    assert.equal(store.list().length, 0);
+
+    const run3 = await r.adapter.run("任务三");
+    await r.adapter.dispose();
+    assert.equal(run3.status, "completed");
+    assert.deepEqual(
+      approvals(run3),
+      [["rejected", "human"]],
+      "撤销后重新弹人工，批准来源回到 human"
+    );
+    assert.equal(run3.toolExecutions[0]?.decision?.reason, "先别动这个文件");
+    assert.equal(run3.toolExecutions[0]?.decision?.reasonSource, "human");
+    assert.equal(r.prompts.length, 3, "撤销后重新问人（按键 + 拒绝理由）");
+    assert.ok(r.prompts[1]?.includes("[a] allow for this session"), r.prompts[1]);
+    assert.equal(r.prompts[2], REASON_PROMPT);
+    assert.ok(
+      r.screen().includes("✗ rejected edit_file: a.ts (先别动这个文件)"),
+      `拒绝结论带逐字理由\n${r.screen()}`
     );
     assert.equal(readFileSync(join(root, "a.ts"), "utf8"), "STEP2\n", "拒绝后副作用未发生");
 
@@ -288,49 +304,34 @@ test("端到端（升格 + 冷恢复）：/grants save 写配置 → 新进程�
       sink: grantEventSink(sessionStore),
     });
 
-    // REPL #1：审批 [a] 建 grant；第二次调用免审
-    const outputs1: string[] = [];
-    const input1 = Readable.from(["任务一\n", "a\n", "任务二\n", ":quit\n"], { objectMode: false });
+    // 第一个进程：审批 [a] 建 grant；第二次调用免审
     const r1 = makeAdapter(
-      input1,
-      outputs1,
       root,
       [
-        {
-          text: "改1",
-          toolCalls: [{ name: "edit_file", args: editCall("alpha\n", "alpha", "STEP1") }],
-        },
+        editReply("改1", "alpha\n", "alpha", "STEP1"),
         { text: "好" },
-        {
-          text: "改2",
-          toolCalls: [{ name: "edit_file", args: editCall("STEP1\n", "STEP1", "STEP2") }],
-        },
+        editReply("改2", "STEP1\n", "STEP1", "STEP2"),
         { text: "完成" },
       ],
       store,
       [],
       SESSION_B,
-      sessionStore
+      sessionStore,
+      ["a"]
     );
-    await runRepl({
-      adapter: r1.adapter,
-      ask: r1.ask,
-      write: (t) => outputs1.push(t),
-      grants: {
-        root,
-        store,
-        configRules: [],
-        sessionId: SESSION_B,
-        write: (t) => outputs1.push(t),
-      },
-    });
-    r1.close();
+    const run1 = await r1.adapter.run("任务一");
+    const run2 = await r1.adapter.run("任务二");
     await r1.adapter.dispose();
-    assert.ok(outputs1.join("").includes("（human:grant）"), "第二次调用免记 human:grant");
+    assert.equal(run1.status, "completed");
+    assert.equal(run2.status, "completed");
+    assert.deepEqual(approvals(run1), [["approved", "human"]]);
+    assert.deepEqual(approvals(run2), [["approved", "human:grant"]], "第二次调用免记 human:grant");
+    assert.equal(r1.prompts.length, 1, "只有第一次调用问人");
+    assert.ok(r1.screen().includes("✓ allowed for this session: edit_file"), r1.screen());
     const grant = store.list()[0];
     assert.ok(grant);
 
-    // /grants save：升格写 .pigeon/grants.json（promotedFrom 出处）
+    // /grants save：升格写项目个人设置 .pigeon/settings.local.json（promotedFrom 出处）
     const outputs2: string[] = [];
     const commands: GrantsCommandContext = {
       root,
@@ -340,6 +341,8 @@ test("端到端（升格 + 冷恢复）：/grants save 写配置 → 新进程�
       write: (t) => outputs2.push(t),
     };
     assert.equal(runGrantCommand(["grants", "save", grant.grantId], commands), true);
+    assert.equal(outputs2.join(""), `saved ${grant.grantId} → .pigeon/settings.local.json\n`);
+    assert.ok(existsSync(join(root, ".pigeon", "settings.local.json")));
     const configRules = loadGrantConfig(root);
     assert.equal(configRules.length, 1);
     assert.equal(configRules[0]?.tool, "edit_file");
@@ -363,42 +366,33 @@ test("端到端（升格 + 冷恢复）：/grants save 写配置 → 新进程�
       sink: grantEventSink(sessionStore),
       restored: restoredGrants,
     });
-    const outputs3: string[] = [];
-    const input3 = Readable.from(["任务三\n", ":quit\n"], { objectMode: false });
+    // 新进程里没人答也不该被问（答完了还被问即按 n 拒绝，下面的断言会抓到）
     const r3 = makeAdapter(
-      input3,
-      outputs3,
       root,
       [
-        {
-          text: "改3",
-          toolCalls: [{ name: "edit_file", args: editCall("STEP2\n", "STEP2", "STEP3") }],
-        },
+        editReply("改3", "STEP2\n", "STEP2", "STEP3"),
+        { text: "完成" },
+        editReply("改4", "STEP3\n", "STEP3", "STEP4"),
         { text: "完成" },
       ],
       freshStore,
       loadGrantConfig(root),
       SESSION_B,
-      sessionStore
+      sessionStore,
+      []
     );
-    await runRepl({
-      adapter: r3.adapter,
-      ask: r3.ask,
-      write: (t) => outputs3.push(t),
-      grants: {
-        root,
-        store: freshStore,
-        configRules: loadGrantConfig(root),
-        sessionId: SESSION_B,
-        write: (t) => outputs3.push(t),
-      },
-    });
-    r3.close();
-    await r3.adapter.dispose();
-    assert.ok(
-      outputs3.join("").includes("（human:grant）"),
+    const run3 = await r3.adapter.run("任务三");
+    assert.equal(run3.status, "completed");
+    assert.deepEqual(
+      approvals(run3),
+      [["approved", "human:grant"]],
       "冷恢复后会话 grant 继续免记 human:grant"
     );
+    assert.deepEqual(run3.toolExecutions[0]?.decision?.grantRef, {
+      kind: "session-grant",
+      id: grant.grantId,
+    });
+    assert.equal(r3.prompts.length, 0, "静默续命：不重复确认");
 
     // 撤销会话 grant（在续命的 freshStore 上撤）：配置规则接管，命中记 policy:config
     const outputs4: string[] = [];
@@ -406,45 +400,27 @@ test("端到端（升格 + 冷恢复）：/grants save 写配置 → 新进程�
       runGrantCommand(["revoke", grant.grantId], {
         root,
         store: freshStore,
-        configRules: [],
+        configRules: loadGrantConfig(root),
         sessionId: SESSION_B,
         write: (t) => outputs4.push(t),
       }),
       true
     );
+    assert.equal(outputs4.join(""), `revoked ${grant.grantId}\n`);
     assert.equal(freshStore.list().length, 0);
-    const input4 = Readable.from(["任务四\n", ":quit\n"], { objectMode: false });
-    const r4 = makeAdapter(
-      input4,
-      outputs4,
-      root,
-      [
-        {
-          text: "改4",
-          toolCalls: [{ name: "edit_file", args: editCall("STEP3\n", "STEP3", "STEP4") }],
-        },
-        { text: "完成" },
-      ],
-      freshStore,
-      loadGrantConfig(root),
-      SESSION_B,
-      sessionStore
+    const run4 = await r3.adapter.run("任务四");
+    await r3.adapter.dispose();
+    assert.equal(run4.status, "completed");
+    assert.deepEqual(
+      approvals(run4),
+      [["approved", "policy:config"]],
+      "固化规则命中记 policy:config"
     );
-    await runRepl({
-      adapter: r4.adapter,
-      ask: r4.ask,
-      write: (t) => outputs4.push(t),
-      grants: {
-        root,
-        store: freshStore,
-        configRules: loadGrantConfig(root),
-        sessionId: SESSION_B,
-        write: (t) => outputs4.push(t),
-      },
+    assert.deepEqual(run4.toolExecutions[0]?.decision?.grantRef, {
+      kind: "config-rule",
+      id: grant.grantId,
     });
-    r4.close();
-    await r4.adapter.dispose();
-    assert.ok(outputs4.join("").includes("（policy:config）"), "固化规则命中记 policy:config");
+    assert.equal(r3.prompts.length, 0, "固化规则命中不问人");
     assert.equal(readFileSync(join(root, "a.ts"), "utf8"), "STEP4\n");
     // 会话存储：四次调用的审批闸决定依次是人工、会话放权、冷恢复后的会话放权、配置规则；撤销后生效集为空
     await sessionStore.flush();

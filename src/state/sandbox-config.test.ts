@@ -59,7 +59,10 @@ test("资源上限字段：写法不对与未知键报错，指出文件与键�
   const tiny = mergeSettingsLayers([
     { layer: "project", file: { sandbox: { memory: "4m" } } as SettingsFile },
   ]);
-  assert.match(mergedSettingsProblems(tiny.merged).join("\n"), /sandbox：memory 至少 6m/);
+  assert.match(
+    mergedSettingsProblems(tiny.merged).join("\n"),
+    /sandbox: memory must be at least 6m/
+  );
   const fine = mergeSettingsLayers([
     { layer: "project", file: { sandbox: { memory: "6m" } } as SettingsFile },
   ]);

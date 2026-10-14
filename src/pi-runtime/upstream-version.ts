@@ -1,5 +1,6 @@
 // 上游版本探测（M7，ROADMAP §M7）：上游 pi-agent-core / pi-ai / pi-tui 锁定在已验证版本；会话树契约测试也只针对该版本的
-// v4 JSONL 格式。启动时读取实际安装的版本，与已验证版本不一致或读不出时返回明确的告警文本，由入口打印——不静默继续。
+// v4 JSONL 格式。读取实际安装的版本，与已验证版本不一致或读不出时返回告警文本。决策 460 起启动时不再打印（开发检查），
+// 保留作测试守门：上游升级而没有重新验证时测试即失败。
 // 版本号从包目录的 package.json 读取（包的 exports 不一定导出 package.json，按解析出的入口向上找）。
 // 打包产物（决策 351）里上游包已打进产物，用的是构建时的版本：取构建时写入的 __PIGEON_UPSTREAM_VERSIONS__（源码运行时没有这个名字）。
 import { existsSync, readFileSync } from "node:fs";
@@ -62,13 +63,13 @@ export function probeUpstreamVersions(
   const warnings = packages.flatMap((entry) => {
     if (entry.version === undefined) {
       return [
-        `上游版本告警：读不出 ${entry.name} 的版本，已验证版本为 ${VERIFIED_UPSTREAM_VERSION}（会话树格式与运行语义未经验证）`,
+        `upstream version warning: can't read the ${entry.name} version; verified with ${VERIFIED_UPSTREAM_VERSION}`,
       ];
     }
     return entry.version === VERIFIED_UPSTREAM_VERSION
       ? []
       : [
-          `上游版本告警：${entry.name} 实际为 ${entry.version}，已验证版本为 ${VERIFIED_UPSTREAM_VERSION}（会话树格式与运行语义未经验证）`,
+          `upstream version warning: ${entry.name} is ${entry.version}; verified with ${VERIFIED_UPSTREAM_VERSION}`,
         ];
   });
   return { packages, warnings };

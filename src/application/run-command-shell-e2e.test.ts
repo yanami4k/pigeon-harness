@@ -1,4 +1,4 @@
-// run_command shell 修订端到端（048 修订）：真实装配根 + CLI 审批问答版。
+// run_command shell 修订端到端（048 修订）：真实装配根 + 按脚本作答的审批（终端界面同一个审批 handler，approval-fixtures.ts）。
 // prompt 下需 shell 的命令经人确认后以 shell 执行，面板文案含"经 shell"并原样显示命令串；[a] 创建带 shell 标记的
 // 精确命令放权，同串再来免审、不同串再问；不带 shell 标记的固化规则不能免审需 shell 的命令；yolo 下直接执行；
 // 工具结果 details 里的执行证据标明经 shell。
@@ -7,13 +7,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { onTestFinished, test } from "vitest";
-import { createCliApprovalHandler } from "../cli/approval-ui.ts";
 import { loadStoreSession } from "../persistence/session-view.ts";
 import { loadSettings } from "../persistence/settings.ts";
 import { createFakeStreamFn } from "../pi-runtime/fixtures.ts";
 import { newGrantId, newSessionId } from "../state/ids.ts";
 import { type StoreMessage, toolResultMark } from "../state/session-judge.ts";
 import type { ExecEvidence } from "../tools/run-command.ts";
+import { REASON_PROMPT, scriptedApprovalHandler } from "../tui/approval-fixtures.ts";
 import { buildRuntime } from "./runtime.ts";
 
 // 用户级设置指到的空临时目录：这个测试结束后删掉
@@ -73,10 +73,10 @@ function makeRuntime(
     provider: "fake-provider",
     modelId: "fake-model-1",
     createApprovalHandler: (grants) =>
-      createCliApprovalHandler(
+      scriptedApprovalHandler(
         async (prompt) => {
           prompts.push(prompt);
-          if (prompt.startsWith("拒绝理由")) {
+          if (prompt === REASON_PROMPT) {
             return "不跑这条";
           }
           asked += 1;
@@ -122,9 +122,9 @@ test("shell 命令：prompt 下经确认以 shell 执行，面板含经 shell �
       await runtime.bundle.sessionStore.close();
     }
     assert.equal(runtime.asked(), 2);
-    assert.ok(runtime.screen().includes(`命令（经 shell）：${SHELL_1}`), runtime.screen());
-    assert.ok(runtime.prompts[0]?.includes("经 shell"), runtime.prompts[0]);
-    assert.ok(runtime.screen().includes(`命令（经 shell）：${SHELL_2}`), runtime.screen());
+    assert.ok(runtime.screen().includes(`command (shell): ${SHELL_1}`), runtime.screen());
+    assert.ok(runtime.prompts[0]?.includes("(shell)"), runtime.prompts[0]);
+    assert.ok(runtime.screen().includes(`command (shell): ${SHELL_2}`), runtime.screen());
     assert.deepEqual(
       executions.map((record) => record.decision?.approvedBy),
       ["human", "human:grant", "human"]

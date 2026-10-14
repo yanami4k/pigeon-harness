@@ -23,7 +23,6 @@ import {
   applyMemoryUpdate,
   createUpdateMemoryTool,
   type MemoryWriteNotice,
-  memoryWriteNoticeLine,
   UPDATE_MEMORY_DESCRIPTION,
   UPDATE_MEMORY_TEXTS,
   type UpdateMemoryParams,
@@ -185,14 +184,17 @@ test("新增、替换、删除：两层各写各的文件；工具补编号、�
     // 决策 382：删掉最大编号之后再新增，删掉的编号不再分配（已分配过的最大编号记在 .maxid 小文件里）
     const again = await fx.call({ action: "add", content: "另一条" });
     assert.equal(again.details.id, "P3");
-    assert.deepEqual(fx.notices.map(memoryWriteNoticeLine), [
-      "[记忆] 已记下（项目级 P1）：提交信息用英文祈使句",
-      "[记忆] 已记下（用户级 U1）：回复用中文",
-      "[记忆] 已记下（项目级 P2）：设计文档 在〔内部〕wiki",
-      "[记忆] 已改写（项目级 P1）：提交信息用英文",
-      "[记忆] 已删除（项目级 P2）：设计文档 在〔内部〕wiki",
-      "[记忆] 已记下（项目级 P3）：另一条",
-    ]);
+    assert.deepEqual(
+      fx.notices.map((notice) => `${notice.action} ${notice.layer} ${notice.id} ${notice.content}`),
+      [
+        "add project P1 提交信息用英文祈使句",
+        "add user U1 回复用中文",
+        "add project P2 设计文档 在〔内部〕wiki",
+        "replace project P1 提交信息用英文",
+        "remove project P2 设计文档 在〔内部〕wiki",
+        "add project P3 另一条",
+      ]
+    );
   }));
 
 test("新增被拒（328）：写明当前用量、该条字数与还差多少，提示写短或先合并、删除；附现有条目编号与各条字数", () =>
@@ -313,7 +315,7 @@ test("内容相同不新增；缺内容、缺层级、编号不存在或层前�
       {
         governanceRoot: fx.root,
         sessionId: SESSION,
-        source: "line",
+        source: "tui",
         limits: { project: 9, user: 9 },
       },
       { action: "add", content: "x" } as unknown as UpdateMemoryParams
@@ -408,25 +410,6 @@ test("内容本身以形如尾巴的文字结尾：工具照常补真尾巴，�
     ]);
     // 同样的内容再加一次：按内容判重
     assert.equal((await fx.call({ action: "add", content })).details.rejected, "duplicate");
-  }));
-
-test("来源取英文短名：命令行对话记为 cli", () =>
-  withFixture(async (fx) => {
-    await applyMemoryUpdate(
-      {
-        governanceRoot: fx.root,
-        homeDir: fx.home,
-        sessionId: SESSION,
-        source: "line",
-        limits: { project: 4000, user: 4000 },
-        now: () => TODAY,
-      },
-      { action: "add", layer: "user", content: "回复用中文" }
-    );
-    assert.equal(
-      fx.read("user"),
-      `${MEMORY_FILE_HEADERS.user}- [U1] 回复用中文 (recorded 2026-10-01 · cli · session ${SESSION})\n`
-    );
   }));
 
 // 决策 431 之前的旧格式

@@ -74,7 +74,7 @@ export async function prepareFork(request: ForkRequest): Promise<PreparedFork> {
   const sourceWorkspace = sessionRuntimeScope(governanceRoot, sourceSessionId).workspaceRoot;
   if (!isGitWorkspace(sourceWorkspace)) {
     throw new NotGitWorkspaceError(
-      `来源会话的工作区不是 git 工作区，不能分叉（不降级为只退对话）：${sourceWorkspace}`
+      `can't fork: source workspace is not a git workspace: ${sourceWorkspace}`
     );
   }
   // a. 读来源会话：未完成的快照先拍完，本进程写者再落盘
@@ -82,30 +82,32 @@ export async function prepareFork(request: ForkRequest): Promise<PreparedFork> {
   await request.sourceStore?.flush();
   const source = loadStoreSession(dir, sourceSessionId);
   if (source === undefined) {
-    throw new ForkError(`来源会话不存在：${sourceSessionId}`);
+    throw new ForkError(`source session not found: ${sourceSessionId}`);
   }
   const forkMessage = storeMessageAt(source.view, forkPoint);
   if (forkMessage === undefined) {
-    throw new ForkError(`来源会话里没有分叉点：${forkPoint.runId} 第 ${forkPoint.runSeq} 条`);
+    throw new ForkError(
+      `fork point not found in source session: ${forkPoint.runId} #${forkPoint.runSeq}`
+    );
   }
   const continueFromHistory = forkMessage.message.role !== "assistant";
   if (!continueFromHistory && (request.input === undefined || request.input.trim() === "")) {
-    throw new ForkError("分叉点是助手消息：续跑需要给出新的输入");
+    throw new ForkError("fork point is an assistant message; new input needed");
   }
   const branchSessionId = newSessionId();
   const resolved = storeCheckpointBefore(source.view, forkPoint);
   if (resolved?.unfinished !== undefined) {
     const mark = resolved.unfinished;
     throw new ForkError(
-      `分叉点 ${forkPoint.runId} 第 ${forkPoint.runSeq} 条对应的代码快照没有拍成（第 ${mark.runSeq} 条工具结果，` +
-        `${mark.state === "failed" ? `拍摄失败：${mark.reason ?? "原因未记"}` : "拍摄中断：进程在拍完之前退出"}），` +
-        "不能从这里分叉；不退回更早的快照"
+      `can't fork at ${forkPoint.runId} #${forkPoint.runSeq}: snapshot for tool result #${mark.runSeq} ` +
+        (mark.state === "failed"
+          ? `failed: ${mark.reason ?? "no reason recorded"}`
+          : "was interrupted")
     );
   }
   if (resolved?.baseMissing === true) {
     throw new ForkError(
-      `分叉点 ${forkPoint.runId} 第 ${forkPoint.runSeq} 条早于首次改动，而首次改动之前的工作区状态没有记下（基线没有拍成），` +
-        "不能从这里分叉；不拿改后的现状顶替"
+      `can't fork at ${forkPoint.runId} #${forkPoint.runSeq}: no baseline snapshot before the first change`
     );
   }
   const checkpointer =
@@ -150,9 +152,7 @@ export async function prepareFork(request: ForkRequest): Promise<PreparedFork> {
     onFault: storeFaultWarner(),
   });
   if (storeFork === undefined) {
-    throw new ForkError(
-      `来源会话 ${sourceSessionId} 的分叉条目没有写成（会话存储告警已给出原因），不分叉`
-    );
+    throw new ForkError(`writing the fork entry to session ${sourceSessionId} failed; not forked`);
   }
   try {
     // c. 独立工作树：从分叉点之前最近的快照开出
@@ -162,6 +162,8 @@ export async function prepareFork(request: ForkRequest): Promise<PreparedFork> {
       governanceRoot,
       sessionId: branchSessionId,
       name,
+      // 名字已带会话号后 8 位，分支照旧 pigeon/fork-<会话号后 8 位>（决策 447 只改 worker 的）
+      branch: `pigeon/${name}`,
       baseRef: checkpoint.commit,
     });
     const workspace: GitWorktreeWorkspace = {
@@ -185,7 +187,7 @@ export async function prepareFork(request: ForkRequest): Promise<PreparedFork> {
     const branch = branchPath !== undefined ? loadStoreSessionFile(branchPath) : undefined;
     if (branch === undefined) {
       throw new ForkError(
-        `分支会话文件没有建成（会话存储告警已给出原因），分叉续跑无从还原消息；工作树 ${worktree.path} 已建，可手动清理`
+        `creating the branch session file failed; worktree ${worktree.path} left in place`
       );
     }
     return {

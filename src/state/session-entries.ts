@@ -54,6 +54,12 @@ export const SessionEntryType = {
   Prune: "pigeon.prune",
   BackgroundJob: "pigeon.background-job",
   RequestRetry: "pigeon.request-retry",
+  Worktree: "pigeon.worktree",
+  TurnSnapshot: "pigeon.turn-snapshot",
+  Rewind: "pigeon.rewind",
+  RewindStep: "pigeon.rewind-step",
+  ApprovalMode: "pigeon.approval-mode",
+  GitHead: "pigeon.git-head",
 } as const;
 export type SessionEntryTypeName = (typeof SessionEntryType)[keyof typeof SessionEntryType];
 
@@ -537,6 +543,122 @@ export const RequestRetryDataSchema = Type.Object({
 });
 export type RequestRetryData = Static<typeof RequestRetryDataSchema>;
 
+// 决策 446：会话移进独立工作树（enter_worktree）。主分支上最后一条决定续接、/reload 时的工作区（目录还在才用）
+export const WorktreeDataSchema = Type.Object({
+  version: VERSION,
+  name: Type.String({ minLength: 1 }),
+  path: Type.String({ minLength: 1 }),
+  branch: Type.String({ minLength: 1 }),
+  base: Type.Optional(Type.String()),
+  baseLabel: Type.String(),
+  // 这次新建的（false = 打开已有的同名工作树）
+  created: Type.Boolean(),
+  enteredAt: Type.Integer({ minimum: 0 }),
+});
+export type WorktreeData = Static<typeof WorktreeDataSchema>;
+
+// 决策 436：使用者发消息时（Run 开始）在后台拍的工作区快照，以它为界区分 agent 的改动与两条消息之间的手改。
+// 不接入快照链（挂自己的 ref）；拍摄失败不写条目
+export const TurnSnapshotDataSchema = Type.Object({
+  version: VERSION,
+  runId: RunIdSchema,
+  // .git/info/attributes 当时内容的散列（"none" 为没有该文件）：会话回退据此判断属性在这段里变没变
+  infoAttributes: Type.Optional(Type.String({ minLength: 1 })),
+  ref: Type.String({ minLength: 1 }),
+  commit: GitObjectIdSchema,
+  tree: GitObjectIdSchema,
+  untrackedSkipped: Type.Optional(
+    Type.Array(
+      Type.Object({ path: Type.String({ minLength: 1 }), bytes: Type.Integer({ minimum: 0 }) })
+    )
+  ),
+});
+export type TurnSnapshotData = Static<typeof TurnSnapshotDataSchema>;
+
+// 决策 433–437：会话回退或切换分支。主分支改挂到 to（条目号；null 即会话开头）之后写在新位置上：from 是之前的叶子，
+// mode 是退了什么（只退代码时主分支不动，to 只记所选的点）；退代码时记还原前的现状快照与写回的结果（写了、删了、因手改
+// 保留、因护栏跳过的路径，相对仓库根）
+export const RewindModeSchema = Type.Union([
+  Type.Literal("both"),
+  Type.Literal("conversation"),
+  Type.Literal("code"),
+]);
+export type RewindMode = Static<typeof RewindModeSchema>;
+const NullableEntryId = Type.Union([Type.String({ minLength: 1 }), Type.Null()]);
+export const RewindDataSchema = Type.Object({
+  version: VERSION,
+  from: NullableEntryId,
+  to: NullableEntryId,
+  mode: RewindModeSchema,
+  before: Type.Optional(
+    Type.Object({ ref: Type.String({ minLength: 1 }), commit: GitObjectIdSchema })
+  ),
+  written: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+  removed: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+  kept: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+  skipped: Type.Optional(
+    Type.Array(Type.Object({ path: Type.String({ minLength: 1 }), reason: Type.String() }))
+  ),
+  // 被覆盖或删掉的文件的原样字节（不经行尾转换的对象）与规范化后的对象：切回时据此逐字节写回
+  saved: Type.Optional(
+    Type.Array(
+      Type.Object({
+        path: Type.String({ minLength: 1 }),
+        raw: GitObjectIdSchema,
+        normalized: GitObjectIdSchema,
+      })
+    )
+  ),
+  // 退代码时写回的目标快照（撤销时据此判断写回之后有没有被改过）
+  target: Type.Optional(GitObjectIdSchema),
+  // 删 agent 新建的文件后变空、一并删掉的目录
+  removedDirs: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+  // 写回中途出错：出错的文件与原因（之后的没有动，对话没有退）
+  failed: Type.Optional(Type.Object({ path: Type.String(), reason: Type.String() })),
+  // 撤销上一次退代码（写回那次之前的现状快照）；undoOf 为被撤销的那次的编号
+  undo: Type.Optional(Type.Literal(true)),
+  undoOf: Type.Optional(Type.String({ minLength: 1 })),
+  // 退代码的编号：动手之前先写一条 phase 为 intent 的（计划写的路径），逐个文件写 pigeon.rewind-step，做完再写没有 phase 的
+  rewindId: Type.Optional(Type.String({ minLength: 1 })),
+  phase: Type.Optional(Type.Literal("intent")),
+  planned: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+  // 退代码时的工作区根（撤销时工作区不同或已不在即不撤）
+  workspace: Type.Optional(Type.String({ minLength: 1 })),
+  rewoundAt: Type.Integer({ minimum: 0 }),
+});
+export type RewindData = Static<typeof RewindDataSchema>;
+
+// 退代码的一个文件的结果（写一个记一条，中途退出也有据可查、可撤销）：写了、删了、出错（可能已被截断）；动手前存下的原样字节
+export const RewindStepDataSchema = Type.Object({
+  version: VERSION,
+  rewindId: Type.String({ minLength: 1 }),
+  path: Type.String({ minLength: 1 }),
+  done: Type.Union([Type.Literal("written"), Type.Literal("removed"), Type.Literal("failed")]),
+  saved: Type.Optional(Type.Object({ raw: GitObjectIdSchema, normalized: GitObjectIdSchema })),
+  reason: Type.Optional(Type.String()),
+  // 出错之后这个文件当时的样子（规范化后的对象号；"absent" 为不存在）；读不到即缺省（不明）
+  observed: Type.Optional(Type.String({ minLength: 1 })),
+});
+export type RewindStepData = Static<typeof RewindStepDataSchema>;
+
+// 决策 469：会话中途切换审批模式（Shift+Tab）：从什么到什么、何时。续接时模式按启动参数定，不沿用这里最后的模式
+export const ApprovalModeDataSchema = Type.Object({
+  version: VERSION,
+  from: Type.Union([Type.Literal("prompt"), Type.Literal("yolo")]),
+  to: Type.Union([Type.Literal("prompt"), Type.Literal("yolo")]),
+  changedAt: Type.Integer({ minimum: 0 }),
+});
+export type ApprovalModeData = Static<typeof ApprovalModeDataSchema>;
+
+// 决策 473：工作区当前的 git 分支（分离头指针时为短提交号），变了才记一条；/resume 列表取会话最后记的那条。非 git 目录不记
+export const GitHeadDataSchema = Type.Object({
+  version: VERSION,
+  branch: Type.Optional(Type.String({ minLength: 1 })),
+  commit: Type.Optional(Type.String({ minLength: 1 })),
+  recordedAt: Type.Integer({ minimum: 0 }),
+});
+export type GitHeadData = Static<typeof GitHeadDataSchema>;
+
 // 一条待写的自定义条目：customType 与数据成对
 export type SessionCustomEntry =
   | { customType: typeof SessionEntryType.RunStart; data: RunStartData }
@@ -554,7 +676,13 @@ export type SessionCustomEntry =
   | { customType: typeof SessionEntryType.Status; data: StatusData }
   | { customType: typeof SessionEntryType.Prune; data: PruneData }
   | { customType: typeof SessionEntryType.BackgroundJob; data: BackgroundJobData }
-  | { customType: typeof SessionEntryType.RequestRetry; data: RequestRetryData };
+  | { customType: typeof SessionEntryType.RequestRetry; data: RequestRetryData }
+  | { customType: typeof SessionEntryType.Worktree; data: WorktreeData }
+  | { customType: typeof SessionEntryType.TurnSnapshot; data: TurnSnapshotData }
+  | { customType: typeof SessionEntryType.Rewind; data: RewindData }
+  | { customType: typeof SessionEntryType.RewindStep; data: RewindStepData }
+  | { customType: typeof SessionEntryType.ApprovalMode; data: ApprovalModeData }
+  | { customType: typeof SessionEntryType.GitHead; data: GitHeadData };
 
 // 各 customType 的数据 schema（读者校验用）
 export const SESSION_ENTRY_SCHEMAS = {
@@ -574,6 +702,12 @@ export const SESSION_ENTRY_SCHEMAS = {
   [SessionEntryType.Prune]: PruneDataSchema,
   [SessionEntryType.BackgroundJob]: BackgroundJobDataSchema,
   [SessionEntryType.RequestRetry]: RequestRetryDataSchema,
+  [SessionEntryType.Worktree]: WorktreeDataSchema,
+  [SessionEntryType.TurnSnapshot]: TurnSnapshotDataSchema,
+  [SessionEntryType.Rewind]: RewindDataSchema,
+  [SessionEntryType.RewindStep]: RewindStepDataSchema,
+  [SessionEntryType.ApprovalMode]: ApprovalModeDataSchema,
+  [SessionEntryType.GitHead]: GitHeadDataSchema,
 } as const;
 
 // 自定义条目的写入面：写者自身从不抛，写失败按内部故障处理（向标准错误输出去重告警），不中断运行。

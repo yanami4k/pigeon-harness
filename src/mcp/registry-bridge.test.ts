@@ -157,5 +157,5 @@ test("MCP 映射：归一后重名或超出长度上限的工具跳过并列出�
   );
   assert.equal(bridged.problems.length, 2);
   assert.match(bridged.problems[0] ?? "", /read_file/);
-  assert.match(bridged.problems[1] ?? "", /长度/);
+  assert.match(bridged.problems[1] ?? "", /longer than/);
 });

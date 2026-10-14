@@ -89,11 +89,17 @@ test("面板提示含 [r] 拒绝并说明；[r] 打开理由行，回车提交�
     await settle();
     const pending = handler(REQUEST);
     await settle();
-    assert.ok(screenFlat(term).includes("[r] 拒绝并说明"), `面板提示应含 [r]\n${screenText(term)}`);
+    assert.ok(
+      screenFlat(term).includes("[r] reject with reason"),
+      `面板提示应含 [r]\n${screenText(term)}`
+    );
 
     term.input("r");
     await settle();
-    assert.ok(screenText(term).includes("拒绝理由"), `[r] 应打开理由行\n${screenText(term)}`);
+    assert.ok(
+      screenText(term).includes("reason for rejecting"),
+      `[r] 应打开理由行（提示在状态行）\n${screenText(term)}`
+    );
 
     term.input("这个文件不该动");
     term.input("\r");
@@ -104,7 +110,10 @@ test("面板提示含 [r] 拒绝并说明；[r] 打开理由行，回车提交�
     });
     await settle();
     assert.equal(runtime.runs.length, 0, "理由行的回车不得当作任务提交");
-    assert.ok(screenText(term).includes("审批结果：人工拒绝"), screenText(term));
+    assert.ok(
+      screenFlat(term).includes("✗ rejected edit_file: src/a.ts (这个文件不该动)"),
+      screenText(term)
+    );
   } finally {
     shell.stop();
     cleanup();
@@ -123,8 +132,8 @@ test("理由行按 Esc 回到面板：不算拒绝，审批仍挂起，随后 [n
     term.input("\x1b");
     await settle();
     assert.ok(
-      screenText(term).includes("state: approval"),
-      `Esc 后仍在审批面板\n${screenText(term)}`
+      screenText(term).includes("[y] approve once"),
+      `Esc 后审批区仍挂着（按键行还在）\n${screenText(term)}`
     );
     let settled = false;
     void pending.then(() => {

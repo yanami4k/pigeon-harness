@@ -67,7 +67,7 @@ test("matcher 须是合法正则：非法即报问题，合法与缺省通过", 
     PreToolUse: [{ matcher: "[", hooks: [{ type: "command", command: "x" }] }],
   });
   assert.equal(problems.length, 1);
-  assert.match(problems[0] ?? "", /不是合法正则/);
+  assert.match(problems[0] ?? "", /is not a valid regex/);
 });
 
 test("一层展开：matcher 组与钩子都并进扁平清单，超时按秒换算", () => {

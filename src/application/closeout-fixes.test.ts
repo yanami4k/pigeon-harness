@@ -160,7 +160,7 @@ test("快照 ref 旧值守卫：同一会话的两个快照器实例写同号时
     const snapshot = await first.afterChange();
     assert.ok(snapshot !== undefined);
     writeFileSync(join(dir, "a.txt"), "two\n");
-    await assert.rejects(() => second.afterChange(), /拒绝覆盖/);
+    await assert.rejects(() => second.afterChange(), /not overwritten/);
     assert.equal(git(dir, ["rev-parse", snapshot.ref]).trim(), snapshot.commit, "先写的没被覆盖");
   } finally {
     // 关掉快照器：临时索引与忽略文件随之删除
@@ -178,7 +178,9 @@ test("去重告警器：同一类故障只说一次，不同类各说一次", ()
   warn(new Error("git add 失败：索引 A"), "第一类");
   warn(new Error("git add 失败：索引 B"), "第一类又一次");
   warn(new Error("write-tree 失败：索引 C"), "第二类");
-  assert.deepEqual(said, ["第一类", "第二类"]);
+  warn(new Error("git add failed: index D"), "third");
+  warn(new Error("git add failed: index E"), "third again");
+  assert.deepEqual(said, ["第一类", "第二类", "third"]);
 });
 
 test("快照器内部故障：向标准错误告警一次，文案说明后果；错误仍进内部清单，运行照常收尾", async () => {
@@ -215,11 +217,10 @@ test("快照器内部故障：向标准错误告警一次，文案说明后果�
       const errors = opened.checkpoints?.errors() ?? [];
       assert.equal(errors.length, 3, `故障次数对得上：${errors.map(String).join(" | ")}`);
       assert.ok(errors.every((error) => error instanceof CheckpointError));
-      const warnings = lines.filter((line) => line.startsWith("工作区快照告警："));
+      const warnings = lines.filter((line) => line.startsWith("workspace snapshot warning: "));
       assert.equal(warnings.length, 1, `同一类故障只告警一次：${warnings.join(" | ")}`);
-      // 后果：从这里分叉明确报错，不退回更早的快照
-      assert.match(warnings[0] ?? "", /明确报错/);
-      assert.match(warnings[0] ?? "", /不退回/);
+      // 告警只说故障本身（后果写在文档里）
+      assert.match(warnings[0] ?? "", /^workspace snapshot warning: git /);
       assert.equal(readFileSync(join(dir, "a.txt"), "utf8"), "two\n", "运行照常收尾");
     } finally {
       renameSync(parked, gitDir);

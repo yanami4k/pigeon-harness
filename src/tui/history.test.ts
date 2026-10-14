@@ -10,8 +10,9 @@ import type { RunResult, StreamTextDelta } from "../pi-runtime/adapter.ts";
 import { EVENT_ENVELOPE_VERSION, type EventEnvelope } from "../state/events.ts";
 import { newEntryId, newRunId, newSessionId, type RunId } from "../state/ids.ts";
 import { RuntimeEventKind } from "../state/runtime-events.ts";
+import { MessageFlow } from "./message-flow.ts";
 import { PigeonTuiShell, type TuiRuntimeFace } from "./shell.ts";
-import { MockTerminal, screenText, settle } from "./testing.ts";
+import { isDimmed, MockTerminal, screenText, settle } from "./testing.ts";
 
 class FakeRuntime implements TuiRuntimeFace {
   private readonly listeners = new Set<(event: EventEnvelope) => void>();
@@ -78,6 +79,8 @@ test("thinking 流式单独一段并视觉弱化（~ 前缀 + 暗色），正文
     term.input("想一想");
     term.input("\r");
     await settle();
+    // 只看模型内容到达之后写出的字节（进入全屏时的清屏属于渲染器自己）
+    term.writes.length = 0;
     runtime.emit(RuntimeEventKind.TurnStarted, {});
     runtime.emitDelta("thinking", "先看");
     runtime.emitDelta("thinking", "锚点\x1b[2J");
@@ -134,16 +137,29 @@ test("/resume 换绑后渲染全部历史：正文、thinking、工具行与折�
       "~ 先确认锚点",
       "我来改",
       '$ edit_file {"path":"a.ts"} -> ok',
-      "[result] edit_file ok（7 字符，已折叠）",
+      "[result] edit_file ok (7 chars, collapsed)",
       "改好了",
-      "== run ended | 分类：正常 ==",
+      "done · ",
     ]) {
       assert.ok(screen.includes(expected), `历史应包含「${expected}」：\n${screen}`);
     }
     const folded = await render(2);
-    assert.ok(folded.includes("[更早 7 条未展开，/search 可查]"), folded);
+    assert.ok(folded.includes("[5 earlier lines not shown]"), folded);
     assert.ok(!folded.includes("> 把 beta 改成大写"));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("验收修改：回看历史里的工具调用行与结果行用暗色；失败的调用行开头为红色 ✗，其余仍暗", () => {
+  const flow = new MessageFlow();
+  flow.addHistory([
+    { kind: "tool", text: '$ read_file {"path":"a"} -> ok' },
+    { kind: "tool", text: '$ edit_file {"path":"a"} -> error', failed: true },
+    { kind: "toolResult", text: "[result] edit_file error (5 chars, collapsed)" },
+  ]);
+  const raw = flow.view.render(80).join("\n");
+  assert.ok(isDimmed(raw, "$ read_file"), raw);
+  assert.ok(raw.includes('\x1b[22m\x1b[31m✗\x1b[39m\x1b[2m edit_file {"path":"a"} -> error'), raw);
+  assert.ok(isDimmed(raw, "[result] edit_file error"), raw);
 });

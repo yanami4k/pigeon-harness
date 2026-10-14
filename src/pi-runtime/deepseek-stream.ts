@@ -26,7 +26,7 @@ export function resolveDeepSeekBaseUrl(env: Record<string, string | undefined>):
   }
   if (protocol !== "http:" && protocol !== "https:") {
     throw new Error(
-      `环境变量 ${DEEPSEEK_BASE_URL_ENV} 须为 http 或 https 地址（Anthropic 兼容端点的根，请求拼 /v1/messages），现为：${redactUserinfo(raw)}`
+      `${DEEPSEEK_BASE_URL_ENV} must be an http or https URL, got: ${redactUserinfo(raw)}`
     );
   }
   return raw;
@@ -46,7 +46,7 @@ export function createDeepSeekStreamFn(
 ): StreamFn {
   const apiKey = env[DEEPSEEK_KEY_ENV];
   if (apiKey === undefined || apiKey === "") {
-    throw new Error(`缺少 ${DEEPSEEK_KEY_ENV} 环境变量：DeepSeek 模型接入的 key 从这里取`);
+    throw new Error(`${DEEPSEEK_KEY_ENV} is not set`);
   }
   const model = deepseekModel(resolveDeepSeekBaseUrl(env), DEEPSEEK_MODEL_ID);
   return (_model, context, options) => {

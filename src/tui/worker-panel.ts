@@ -13,8 +13,6 @@ import type { WorkerActivityTracker } from "./worker-activity.ts";
 export const PANEL_MAX_ROWS = 5;
 export const PANEL_FADE_MS = 30_000;
 
-export const PANEL_HINT = "  [up/down] select, [enter] open session, [x] stop, [esc] back";
-
 // 状态的一个 ASCII 词：298 的六种说法（done、failed、timeout、limit、cancelled、stalled）加 queued、running 与
 // 停在等审批（blocked，可补批续做）
 export function workerStateWord(status: WorkerStatus): string {
@@ -239,7 +237,6 @@ export class WorkerPanel implements Component {
     if (all.length > shown.length) {
       lines.push(clipToWidth(`   +${all.length - shown.length} more (/workers, ctrl+x)`, width));
     }
-    if (this.focusedState) lines.push(clipToWidth(` ${PANEL_HINT}`, width));
     return lines;
   }
 }

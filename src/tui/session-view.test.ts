@@ -1,13 +1,13 @@
 // M2 S4：TUI 会话列表（/sessions）与恢复入口（/resume）离屏测试（同一 Mock Terminal 路径）。
 // 断言面：
-//   - /sessions 渲染口径与 cli 一致（共享 application/session-list.ts 命令层）：安静行
+//   - 终端界面没有 /sessions：按未知命令处理（验收修改）
 //     （时间 + Run 数 + sessionId）；空目录如实说明；
 //   - /resume 全流程（账本重构 183）：续跑报告（还原的消息条数、未收尾的 Run、悬空的工具调用）渲染进消息区，
 //     与 cli 同口径 → 不再有人工对账菜单 → 同 sessionId 换绑运行面续跑（上下文还原在换绑工厂装配运行面时做）；
 //   - 旧格式会话（迁移之前创建，会话根下平铺的文件）明确报错、不换绑；
 //   - grant 种子：恢复后 /grants 渲染新会话存储里的生效授权（重启恢复证据）；
 //   - 会话不存在/空目录响亮报错，原运行面不受影响；当前会话拒绝重复恢复；
-//   - busy 期间 /sessions 与 /resume 不开旁路（027）。
+//   - busy 期间 /resume 不开旁路（027）。
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -151,27 +151,19 @@ function makeRebindTracker(binding?: (sessionId: SessionId) => TuiSessionBinding
 
 // ---------- 测试 ----------
 
-test("/sessions：安静行（时间 + Run 数 + sessionId），与 cli 同一命令层；空目录如实说明", async () => {
+test("验收修改：终端界面没有 /sessions（看会话、切会话用 /resume 的选择列表）：按未知命令处理", async () => {
   const { root, cleanup } = makeRoot();
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-log-"));
   try {
-    const sessionsDir = join(root, ".pigeon", "state", "sessions");
-    const seed = async (crashedRun: boolean): Promise<SessionId> => {
-      const session = createFixtureSession({ sessionsDir });
-      session.startRun({ task: "t" });
-      session.toolTurn({ name: crashedRun ? "read_file" : "edit_file" });
-      if (!crashedRun) session.endRun();
-      return (await session.close()).sessionId;
-    };
-    const healthy = await seed(false);
-    const crashed = { sessionId: await seed(true) };
     const term = new MockTerminal(90, 30);
+    const runtime = new FakeRuntime();
     const shell = new PigeonTuiShell({
       terminal: term,
-      runtime: new FakeRuntime(),
+      runtime,
       sessionId: SESSION_ID,
       logDir,
       sessions: { root },
+      resume: { root, rebind: makeRebindTracker().rebind },
     });
     try {
       shell.start();
@@ -179,41 +171,11 @@ test("/sessions：安静行（时间 + Run 数 + sessionId），与 cli 同一�
       term.input("/sessions");
       term.input("\r");
       await settle();
-      const text = screenText(term);
-      assert.ok(text.includes("> /sessions"), "命令应回显");
-      // 安静行：1 个 Run + 完整 sessionId（cli 同口径，共享命令层保证）
-      const healthyLine = text.split("\n").find((line) => line.includes(healthy));
-      assert.ok(healthyLine?.includes("1 个 Run"), `安静行应含 Run 数：${healthyLine}`);
-      const crashedLine = text.split("\n").find((line) => line.includes(crashed.sessionId));
-      assert.ok(crashedLine?.includes("1 个 Run"), `安静行应含 Run 数：${crashedLine}`);
-      assert.ok(!text.includes("待对账"), `新存储没有待对账突出行\n${text}`);
+      const text = screenFlat(term);
+      assert.ok(text.includes("unknown command: /sessions"), text);
+      assert.ok(!text.includes("no sessions"), text);
     } finally {
       shell.stop();
-    }
-
-    // 空目录：如实说明
-    const empty = makeRoot();
-    try {
-      const term2 = new MockTerminal(90, 30);
-      const shell2 = new PigeonTuiShell({
-        terminal: term2,
-        runtime: new FakeRuntime(),
-        sessionId: SESSION_ID,
-        logDir,
-        sessions: { root: empty.root },
-      });
-      try {
-        shell2.start();
-        await settle();
-        term2.input("/sessions");
-        term2.input("\r");
-        await settle();
-        assert.ok(screenText(term2).includes("尚无会话记录。"));
-      } finally {
-        shell2.stop();
-      }
-    } finally {
-      empty.cleanup();
     }
   } finally {
     cleanup();
@@ -229,7 +191,7 @@ test("/resume 全流程：报告将还原的上下文与悬空的工具调用 �
     const crashed = await writeStoreCrashedSession(sessionsDir, root, "edit_file");
     const tracker = makeRebindTracker();
     const oldRuntime = new FakeRuntime();
-    const term = new MockTerminal(90, 30);
+    const term = new MockTerminal(90, 60);
     const shell = new PigeonTuiShell({
       terminal: term,
       runtime: oldRuntime,
@@ -245,18 +207,18 @@ test("/resume 全流程：报告将还原的上下文与悬空的工具调用 �
       term.input("\r");
       await settle();
 
-      // 续跑报告渲染进消息区（cli 同口径措辞）：还原的消息条数、未收尾的 Run、悬空的工具调用
+      // 续跑报告只写悬空的工具调用（验收修改：还原条数与未收尾的 Run 不再写）
       const done = screenText(term);
-      assert.ok(done.includes("续跑：还原对话上下文 2 条消息"), done);
-      assert.ok(done.includes("1 个 Run 没有收尾记录"), done);
-      assert.ok(done.includes("1 个工具调用没有结果（edit_file）"), done);
+      assert.ok(!done.includes("续跑：还原对话上下文"), done);
+      assert.ok(!done.includes("没有收尾记录"), done);
+      assert.ok(done.includes("1 tool call interrupted, results unknown: edit_file"), done);
       assert.ok(!done.includes("请选择 [1/2/3]"), "不再有人工对账菜单");
 
       // 同 sessionId 换绑：rebind 收到目标会话；旧运行面退订；后续提交只走新运行面
       assert.deepEqual(tracker.rebinds, [crashed]);
       assert.equal(tracker.runtimes.length, 1);
       assert.equal(oldRuntime.listenerCount(), 0, "换绑后旧运行面必须退订");
-      assert.ok(done.includes(`session ${crashed}`), "chrome 应切到恢复会话");
+      assert.ok(!done.includes(`== ${crashed} ==`), "主视图不显示标题行（验收修改）");
       term.input("继续任务");
       term.input("\r");
       await settle();
@@ -294,10 +256,10 @@ test("/resume 旧格式会话：明确报错、不换绑，原运行面不受影
       term.input(`/resume ${legacy}`);
       term.input("\r");
       await settle();
-      const text = screenText(term);
-      // 屏幕按宽度折行，只核对不会跨行的短片段
-      assert.ok(text.includes("是旧格式会话"), text);
-      assert.ok(text.includes("不能续跑"), text);
+      const text = screenFlat(term);
+      // 报错本身已说清（can't …），不再叠一层 "resume failed:"
+      assert.ok(text.includes("can't resume") && !text.includes("resume failed:"), text);
+      assert.ok(text.includes("old-format session"), text);
       assert.deepEqual(tracker.rebinds, [], "失败不得换绑");
       term.input("还活着");
       term.input("\r");
@@ -349,7 +311,7 @@ test("/resume grant 种子：恢复后 /grants 渲染新会话存储里的生效
       term.input("\r");
       await settle();
       const text = screenText(term);
-      assert.ok(text.includes("会话放权（1）："), `生效授权应进入新治理上下文\n${text}`);
+      assert.ok(text.includes("session grants (1):"), `生效授权应进入新治理上下文\n${text}`);
       assert.ok(text.includes(grantId), text);
       assert.ok(text.includes("read_file"), text);
     } finally {
@@ -386,7 +348,7 @@ test("/resume 会话不存在与空目录响亮报错；原运行面不受影响
       term.input(`/resume ${SESSION_ID}`);
       term.input("\r");
       await settle();
-      assert.ok(screenText(term).includes("已在会话"), screenText(term));
+      assert.ok(screenText(term).includes("already in session"), screenText(term));
       assert.deepEqual(tracker.rebinds, []);
 
       // 会话不存在（格式合法的陌生 id）：响亮报错并列出已有会话
@@ -395,7 +357,7 @@ test("/resume 会话不存在与空目录响亮报错；原运行面不受影响
       term.input("\r");
       await settle();
       const missingText = screenText(term);
-      assert.ok(missingText.includes("会话不存在"), missingText);
+      assert.ok(missingText.includes("session not found"), missingText);
       assert.deepEqual(tracker.rebinds, [], "失败不得换绑");
 
       // 报错后原运行面不受影响：提交仍走旧 runtime，状态回 idle
@@ -403,7 +365,6 @@ test("/resume 会话不存在与空目录响亮报错；原运行面不受影响
       term.input("\r");
       await settle();
       assert.deepEqual(runtime.runs, ["还活着"]);
-      assert.ok(screenText(term).includes("state: idle"), screenText(term));
     } finally {
       shell.stop();
     }
@@ -426,7 +387,7 @@ test("/resume 会话不存在与空目录响亮报错；原运行面不受影响
         term2.input(`/resume ${`sess_${"Y".repeat(26)}`}`);
         term2.input("\r");
         await settle();
-        assert.ok(screenText(term2).includes("尚无会话记录"), screenText(term2));
+        assert.ok(screenText(term2).includes("session not found"), screenText(term2));
       } finally {
         shell2.stop();
       }
@@ -439,7 +400,7 @@ test("/resume 会话不存在与空目录响亮报错；原运行面不受影响
   }
 });
 
-test("运行中 /sessions 放行、/resume 被拒并说明原因；收尾后 /resume 直接换绑，不进菜单（决策 286）", async () => {
+test("运行中只读的 /tasks 放行、/resume 被拒并说明原因；收尾后 /resume 直接换绑，不进菜单（决策 286）", async () => {
   const { root, cleanup } = makeRoot();
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-log-"));
   try {
@@ -454,25 +415,26 @@ test("运行中 /sessions 放行、/resume 被拒并说明原因；收尾后 /re
       sessionId: SESSION_ID,
       logDir,
       sessions: { root },
+      tasks: () => undefined,
       resume: { root, rebind: tracker.rebind },
     });
     try {
       shell.start();
       await settle();
 
-      // 运行中：只读的 /sessions 照常渲染，换会话的 /resume 被拒并说明原因（决策 286）
+      // 运行中：只读的 /tasks 照常执行，换会话的 /resume 被拒并说明原因（决策 286）
       runtime.autoResolve = false;
       term.input("任务一");
       term.input("\r");
       await settle();
-      term.input("/sessions");
+      term.input("/tasks");
       term.input("\r");
       await settle();
-      assert.ok(screenText(term).includes("个 Run"), "运行中 /sessions 照常渲染会话列表");
+      assert.ok(screenFlat(term).includes("task list is off"), "运行中 /tasks 照常执行");
       term.input(`/resume ${crashed}`);
       term.input("\r");
       await settle();
-      assert.ok(screenFlat(term).includes("运行中不能用 /resume"), screenText(term));
+      assert.ok(screenFlat(term).includes("can't use /resume while running"), screenText(term));
       assert.deepEqual(tracker.rebinds, []);
       runtime.finishAll();
       runtime.autoResolve = true;

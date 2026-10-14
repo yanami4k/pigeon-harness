@@ -21,6 +21,8 @@ import {
 import type { RunId } from "../state/ids.ts";
 import {
   type CheckpointMarkState,
+  type RewindData,
+  type RewindStepData,
   SESSION_ENTRY_VERSION,
   type SessionCustomEntry,
   type SessionEntrySink,
@@ -45,8 +47,7 @@ export type StoreFaultHandler = (fault: SessionStoreFault) => void;
 // 新存储故障的告警器：同一类（同一动作）只报一次
 export function storeFaultWarner(sink?: WarnSink): StoreFaultHandler {
   const warn = dedupedWarner(sink);
-  return (fault) =>
-    warn(fault, `会话存储告警：${failureDetail(fault)}（会话记录缺这一条，运行不受影响）`);
+  return (fault) => warn(fault, `session store warning: ${failureDetail(fault)}`);
 }
 
 // worker 与分支会话的来历（新建会话文件时写进文件头）
@@ -105,12 +106,16 @@ export function openSessionStore(input: {
   onFault: StoreFaultHandler;
   // 思考是否持久化（045）：透传给写者
   persistThinking?: boolean;
+  // 决策 432：没有会话文件时推迟到第一次真要落盘才建（透传给写者）
+  deferCreate?: boolean;
+  // 决策 444：新建会话文件之前调用（透传给写者）
+  beforeCreate?: () => void;
 }): SessionStoreWriter {
   let existingPath: string | undefined;
   try {
     existingPath = locateSessionFile(input.sessionsDir, input.sessionId)?.path;
   } catch (error) {
-    input.onFault(new SessionStoreFault("定位会话文件", error));
+    input.onFault(new SessionStoreFault("locating the session file", error));
   }
   return openSessionStoreWriter({
     sessionsRoot: input.sessionsDir,
@@ -121,10 +126,55 @@ export function openSessionStore(input: {
     lock: acquireSessionFileLock,
     onFault: input.onFault,
     ...(input.persistThinking !== undefined ? { persistThinking: input.persistThinking } : {}),
+    ...(input.deferCreate === true ? { deferCreate: true } : {}),
+    ...(input.beforeCreate !== undefined ? { beforeCreate: input.beforeCreate } : {}),
   });
 }
 
 // ---- 写入输入 → 条目 ----
+
+// 决策 436：发消息时的工作区快照
+export function turnSnapshotEntry(
+  runId: RunId,
+  payload: {
+    ref: string;
+    commit: string;
+    tree: string;
+    untrackedSkipped?: Array<{ path: string; bytes: number }>;
+    infoAttributes?: string;
+  }
+): SessionCustomEntry {
+  return {
+    customType: SessionEntryType.TurnSnapshot,
+    data: {
+      version: SESSION_ENTRY_VERSION,
+      runId,
+      ...(payload.infoAttributes !== undefined ? { infoAttributes: payload.infoAttributes } : {}),
+      ref: payload.ref,
+      commit: payload.commit,
+      tree: payload.tree,
+      ...(payload.untrackedSkipped !== undefined && payload.untrackedSkipped.length > 0
+        ? { untrackedSkipped: payload.untrackedSkipped }
+        : {}),
+    },
+  };
+}
+
+// 决策 433–437：会话回退或切换分支
+export function rewindEntry(payload: Omit<RewindData, "version">): SessionCustomEntry {
+  return {
+    customType: SessionEntryType.Rewind,
+    data: { version: SESSION_ENTRY_VERSION, ...payload },
+  };
+}
+
+// 退代码的一个文件的结果
+export function rewindStepEntry(payload: Omit<RewindStepData, "version">): SessionCustomEntry {
+  return {
+    customType: SessionEntryType.RewindStep,
+    data: { version: SESSION_ENTRY_VERSION, ...payload },
+  };
+}
 
 export function checkpointEntry(
   runId: RunId,
@@ -333,7 +383,9 @@ export async function beginStoreFork(input: {
   if (store === undefined) {
     const located = locateSessionFile(input.sessionsDir, input.sourceSessionId);
     if (located === undefined) {
-      input.onFault(new SessionStoreFault("分叉", new Error("来源会话在会话存储里没有会话文件")));
+      input.onFault(
+        new SessionStoreFault("fork", new Error("source session has no file in the session store"))
+      );
       return undefined;
     }
     store = openSessionStoreWriter({
@@ -372,7 +424,7 @@ export async function beginStoreFork(input: {
       forkBranch: async ({ branchSessionId, cwd, branch }) => {
         try {
           if (forkEntryId === undefined) {
-            throw new Error("分叉点在来源会话里没有对应消息");
+            throw new Error("fork point has no matching message in the source session");
           }
           return await forkSessionFile({
             sessionsRoot: input.sessionsDir,
@@ -383,7 +435,7 @@ export async function beginStoreFork(input: {
             metadata: { version: SESSION_ENTRY_VERSION, branch: branchMetadata(branch) },
           });
         } catch (error) {
-          input.onFault(new SessionStoreFault("分叉", error));
+          input.onFault(new SessionStoreFault("fork", error));
           return undefined;
         } finally {
           await release();
@@ -392,7 +444,7 @@ export async function beginStoreFork(input: {
       release,
     };
   } catch (error) {
-    input.onFault(new SessionStoreFault("分叉", error));
+    input.onFault(new SessionStoreFault("fork", error));
     await release();
     return undefined;
   }

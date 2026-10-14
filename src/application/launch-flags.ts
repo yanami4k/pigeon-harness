@@ -79,7 +79,7 @@ export interface LaunchFlags {
   // 决策 237：--sandbox 及其参数；不开沙箱时缺省
   sandbox?: SandboxLaunch;
   // 决策 265–267：主 agent 派 worker——终端界面与 pigeon run 缺省开着，--no-spawn-workers 关掉（关掉即不注册 spawn_worker）；
-  // 沙箱会话与命令行对话不注册，不看这一项
+  // 沙箱会话不注册，不看这一项
   spawnWorkers: boolean;
   // 决策 268、300：--worker-concurrency <n> 同时在跑的 worker 上限（缺省取编排配置，配置缺省 8；人派的与 agent 派的一并计算）；
   // --worker-limit <n> 一次运行里 agent 最多派出的 worker 数（可选的上限，缺省不设）。与 --no-spawn-workers 同在能派 worker 的入口接受
@@ -107,7 +107,7 @@ export interface ParseLaunchFlagsOptions {
   pushedMemory?: boolean;
   // 是否接受 --no-session-search（决策 382；接受入口同 --no-pushed-memory）
   sessionSearch?: boolean;
-  // 是否接受 --sandbox 及其参数（终端界面、命令行对话与续跑、pigeon run）
+  // 是否接受 --sandbox 及其参数（终端界面、pigeon run）
   sandbox?: boolean;
   // 是否接受 --no-spawn-workers（能派 worker 的入口：终端界面与 pigeon run）
   spawnWorkers?: boolean;
@@ -153,13 +153,13 @@ export function parseLaunchFlags(argv: string[], options: ParseLaunchFlagsOption
     } else if (flag === "--sandbox-network" && options.sandbox === true) {
       const value = argv[++i];
       if (value === undefined || !(SANDBOX_NETWORKS as readonly string[]).includes(value)) {
-        throw new Error(`--sandbox-network 只接受 ${SANDBOX_NETWORKS.join("/")}（${usage}）`);
+        throw new Error(`--sandbox-network takes ${SANDBOX_NETWORKS.join("/")} (${usage})`);
       }
       sandboxNetwork = value as SandboxNetwork;
     } else if (flag === "--sandbox-approval" && options.sandbox === true) {
       const value = argv[++i];
       if (value === undefined || !(SANDBOX_APPROVALS as readonly string[]).includes(value)) {
-        throw new Error(`--sandbox-approval 只接受 ${SANDBOX_APPROVALS.join("/")}（${usage}）`);
+        throw new Error(`--sandbox-approval takes ${SANDBOX_APPROVALS.join("/")} (${usage})`);
       }
       sandboxApproval = value as SandboxApproval;
     } else if (flag === "--no-persist-thinking") {
@@ -172,7 +172,7 @@ export function parseLaunchFlags(argv: string[], options: ParseLaunchFlagsOption
     ) {
       const value = Number(argv[++i]);
       if (!Number.isInteger(value) || value < 1) {
-        throw new Error(`${flag} 需要正整数（${usage}）`);
+        throw new Error(`${flag} needs a positive integer (${usage})`);
       }
       if (flag === "--worker-concurrency") {
         flags.workerConcurrency = value;
@@ -186,25 +186,25 @@ export function parseLaunchFlags(argv: string[], options: ParseLaunchFlagsOption
     } else if (flag === "--thinking") {
       const value = argv[++i];
       if (value === undefined || !isThinkingLevel(value)) {
-        throw new Error(`--thinking 需要推理档位（${THINKING_LEVELS.join("/")}）（${usage}）`);
+        throw new Error(`--thinking takes ${THINKING_LEVELS.join("/")} (${usage})`);
       }
       flags.thinkingLevel = value;
     } else if (flag === "--max-output-tokens") {
       const value = Number(argv[++i]);
       if (!Number.isInteger(value) || value < 1) {
-        throw new Error(`--max-output-tokens 需要正整数（${usage}）`);
+        throw new Error(`--max-output-tokens needs a positive integer (${usage})`);
       }
       flags.maxOutputTokens = value;
     } else if (flag === "--history-limit" && options.historyLimit === true) {
       const value = Number(argv[++i]);
       if (!Number.isInteger(value) || value < 1) {
-        throw new Error(`--history-limit 需要正整数（${usage}）`);
+        throw new Error(`--history-limit needs a positive integer (${usage})`);
       }
       flags.historyLimit = value;
     } else if (flag !== undefined && COMPACTION_FLAGS[flag] !== undefined) {
       const value = Number(argv[++i]);
       if (!Number.isInteger(value) || value < 1) {
-        throw new Error(`${flag} 需要正整数（token 数）（${usage}）`);
+        throw new Error(`${flag} needs a positive token count (${usage})`);
       }
       flags.compaction = { ...flags.compaction, [COMPACTION_FLAGS[flag]]: value };
     } else if (flag === "--root") {
@@ -212,7 +212,7 @@ export function parseLaunchFlags(argv: string[], options: ParseLaunchFlagsOption
     } else if (flag === "--stream-fn") {
       const value = argv[++i];
       if (value === undefined) {
-        throw new Error(`--stream-fn 缺少取值（模块路径）（${usage}）`);
+        throw new Error(`--stream-fn needs a module path (${usage})`);
       }
       flags.streamFnSpec = value;
     } else if (flag === "--provider") {
@@ -220,7 +220,7 @@ export function parseLaunchFlags(argv: string[], options: ParseLaunchFlagsOption
     } else if (flag === "--model") {
       flags.modelId = argv[++i] ?? flags.modelId;
     } else {
-      throw new Error(`未知参数：${flag}（${usage}）`);
+      throw new Error(`unknown option: ${flag} (${usage})`);
     }
   }
   if (sandbox) {
@@ -233,7 +233,7 @@ export function parseLaunchFlags(argv: string[], options: ParseLaunchFlagsOption
     flags.yolo = flags.yolo || flags.sandbox.approval === "yolo";
   } else if (sandboxNetwork !== undefined || sandboxApproval !== undefined || sandboxFromHead) {
     throw new Error(
-      `--sandbox-network、--sandbox-approval 与 --sandbox-from-head 只配合 --sandbox 用（${usage}）`
+      `--sandbox-network, --sandbox-approval and --sandbox-from-head need --sandbox (${usage})`
     );
   }
   return flags;
@@ -249,17 +249,6 @@ export function webToolsEnabled(
   if (flags.noWeb) return false;
   if (web?.enabled === false) return false;
   return flags.sandbox?.network !== "off";
-}
-
-// 决策 379：本机（不在容器沙箱里）放手且联网工具开着时，启动提示一行风险（定稿原文）。终端界面落消息区，pigeon run 写标准错误输出
-export const LOCAL_RISK_NOTICE =
-  "提示：本机放手模式下命令以你的账户执行、不经审批，能读家目录里的凭据；联网工具开着，网页或外部内容里夹带的指令可能借此把数据发出去。要隔离请用 --sandbox。";
-
-export function localRiskNotice(
-  flags: Pick<LaunchFlags, "sandbox" | "yolo">,
-  webTools: boolean
-): string | undefined {
-  return flags.sandbox === undefined && flags.yolo && webTools ? LOCAL_RISK_NOTICE : undefined;
 }
 
 // 交给装配根的联网工具选项：给就按快照的 web 一节建出配置（配置畸形在此响亮失败），不给就不带 webTools。
@@ -291,10 +280,7 @@ export function orchestrationSettingsOf(
 // 模型接入必须显式配置：缺失时响亮失败（措辞与两个入口此前一致）
 export function resolveStreamFnSpec(flags: LaunchFlags, usage: string): string {
   if (flags.streamFnSpec === undefined || flags.streamFnSpec === "") {
-    throw new Error(
-      "未配置模型接入：请用 --stream-fn <模块路径> 或环境变量 PIGEON_STREAM_FN 指定一个默认导出 " +
-        `StreamFn 的模块（provider 密钥由该模块自行从环境变量读取）（${usage}）`
-    );
+    throw new Error(`no model configured: use --stream-fn <module> or PIGEON_STREAM_FN (${usage})`);
   }
   return flags.streamFnSpec;
 }

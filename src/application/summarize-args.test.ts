@@ -13,21 +13,21 @@ test("切点落在代理对中间：少取一个码元，结果是合法 UTF-16"
   // JSON：引号(0) + 158 个 a(1..158) + emoji(159..160) + 20 个 b + 引号，共 182
   const args = `${"a".repeat(158)}${EMOJI}${"b".repeat(20)}`;
   const summary = summarizeArgs(args);
-  assert.equal(summary, `"${"a".repeat(158)}…（共 182 字符）`);
+  assert.equal(summary, `"${"a".repeat(158)}… (182 chars)`);
   assert.ok(wellFormed(summary));
 });
 
 test("连续 emoji：前缀停在最后一个完整字符", () => {
   const args = EMOJI.repeat(100);
   const summary = summarizeArgs(args);
-  assert.equal(summary, `"${EMOJI.repeat(79)}…（共 202 字符）`);
+  assert.equal(summary, `"${EMOJI.repeat(79)}… (202 chars)`);
   assert.ok(wellFormed(summary));
 });
 
 test("代理对完整落在前 160 个码元内：照常截到 160", () => {
   const args = `${"a".repeat(157)}${EMOJI}${"b".repeat(20)}`;
   const summary = summarizeArgs(args);
-  assert.equal(summary, `"${"a".repeat(157)}${EMOJI}…（共 181 字符）`);
+  assert.equal(summary, `"${"a".repeat(157)}${EMOJI}… (181 chars)`);
   assert.ok(wellFormed(summary));
 });
 
@@ -40,12 +40,12 @@ test("不超过上限原样返回", () => {
 
 test("普通 ASCII 截断口径不变", () => {
   const args = "x".repeat(300);
-  assert.equal(summarizeArgs(args), `"${"x".repeat(159)}…（共 302 字符）`);
+  assert.equal(summarizeArgs(args), `"${"x".repeat(159)}… (302 chars)`);
 });
 
 test("不可序列化与 undefined 行为不变", () => {
   const circular: Record<string, unknown> = {};
   circular.self = circular;
-  assert.equal(summarizeArgs(circular), "<不可序列化参数>");
+  assert.equal(summarizeArgs(circular), "<unserializable arguments>");
   assert.equal(summarizeArgs(undefined), "undefined");
 });

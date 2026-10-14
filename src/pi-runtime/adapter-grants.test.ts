@@ -248,7 +248,7 @@ test("不变式③撤销立即停免审：/revoke 后同工具调用重新弹人
     assert.equal(run1.toolExecutions[0]?.decision?.approvedBy, "human:grant");
     assert.equal(approvals.length, 0);
 
-    // REPL 时段撤销（无活动 Run）：立即生效
+    // 两轮之间撤销（无活动 Run）：立即生效
     store.revoke(grant.grantId);
     assert.equal(store.match("edit_file", { path: "a.ts" }), null);
 

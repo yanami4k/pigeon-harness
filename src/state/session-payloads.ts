@@ -42,10 +42,10 @@ export type GitWorktreeWorkspace = Static<typeof GitWorktreeWorkspaceSchema>;
 // 证据链显示（trace、replay）里 worker 工作区的一段
 export function workerWorkspaceLabel(workspace: WorkerWorkspace): string {
   return workspace.kind === "git-worktree"
-    ? `分支 ${workspace.branch}`
+    ? `branch ${workspace.branch}`
     : workspace.kind === "shared"
-      ? "只读派出方工作区（不建工作树）"
-      : "无工作区";
+      ? "read-only parent workspace"
+      : "no workspace";
 }
 
 // worker 读写所在的目录：工作树或与派出方共用的工作区；无工作区（只剩旧会话）没有

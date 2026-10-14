@@ -132,9 +132,9 @@ test("合计 32 KiB 上限：跨过上限的那份只放入前面放得下的部
       ),
       loaded.section.slice(-200)
     );
-    // 给人的终端提示（中文）
-    const overflow = `合计超出 32 KiB 上限，已截断：AGENTS.md 只放入前 ${fit * 3} 字节；sub/AGENTS.md 未放入`;
-    assert.equal(loaded.notice, `[说明] AGENTS.md 等人写的说明${overflow}`);
+    // 给人的终端提示（短的一行）
+    const overflow = `over the 32 KiB limit; truncated: AGENTS.md: first ${fit * 3} bytes only; sub/AGENTS.md: not included`;
+    assert.equal(loaded.notice, `[instructions] AGENTS.md files ${overflow}`);
     assert.deepEqual(
       loaded.manifest.map((entry) => [entry.path, entry.truncated, entry.included]),
       [

@@ -1,11 +1,12 @@
 // 三层设置的读取与快照（决策 325）：三个文件按层读取合并、出错指出文件与层、读出的快照是会话开始那一刻的样子
-// （之后改文件不影响已读的快照）、项目根 .mcp.json 一并冻结；程序状态目录与 .pigeon/.gitignore 的建立；旧布局检查。
+// （之后改文件不影响已读的快照）、项目根 .mcp.json 一并冻结；程序状态目录的建立（不再写 .pigeon/.gitignore）；旧布局检查。
 // 用户级一律指到临时目录，不碰真实的家目录。
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
+import { orchestrationSettings } from "../state/orchestration-config.ts";
 import {
   projectLocalSettingsPath,
   projectPigeonGitignorePath,
@@ -73,17 +74,47 @@ test("出错响亮失败并指出文件与层：不是合法 JSON、未知键、
       () => loadSettings(root, { homeDir: home }),
       (error: unknown) =>
         error instanceof SettingsError &&
-        /\.pigeon\/settings\.json（项目共享）不是合法 JSON/.test(error.message)
+        /\.pigeon\/settings\.json \(project settings\) is not valid JSON/.test(error.message)
     );
     write(projectSettingsPath(root), {});
     write(userSettingsPath(home), { grants: [] });
     assert.throws(
       () => loadSettings(root, { homeDir: home }),
-      /~\/\.pigeon\/settings\.json（用户级）：未知键 grants/
+      /~\/\.pigeon\/settings\.json \(user settings\): unknown key grants/
     );
     write(userSettingsPath(home), {});
     write(projectLocalSettingsPath(root), { commands: { roles: { tester: ["nope"] } } });
-    assert.throws(() => loadSettings(root, { homeDir: home }), /引用了未登记的短名：nope/);
+    assert.throws(
+      () => loadSettings(root, { homeDir: home }),
+      /references unknown short name: nope/
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("脚本的缺省额度（决策 475）：orchestration.script.budget 只收 token；旧的金额写法开局即报错说明", () => {
+  const { root, home, cleanup } = dirs();
+  try {
+    write(projectSettingsPath(root), { orchestration: { script: { budget: "¥20" } } });
+    assert.throws(
+      () => loadSettings(root, { homeDir: home }),
+      (error: unknown) =>
+        error instanceof SettingsError &&
+        error.message ===
+          'merged settings invalid: orchestration: script.budget "¥20" is not a token count; write tokens like "300k" or "2m" (money amounts are no longer supported)'
+    );
+    write(userSettingsPath(home), { orchestration: { script: { budget: "$5" } } });
+    write(projectSettingsPath(root), {});
+    assert.throws(
+      () => loadSettings(root, { homeDir: home }),
+      /orchestration: script\.budget "\$5" is not a token count/
+    );
+    for (const budget of ["300k", "2m", "1.5M", "50000"]) {
+      write(userSettingsPath(home), { orchestration: { script: { budget } } });
+      const snapshot = loadSettings(root, { homeDir: home });
+      assert.equal(orchestrationSettings(snapshot.merged.orchestration).scriptBudget, budget);
+    }
   } finally {
     cleanup();
   }
@@ -110,25 +141,20 @@ test("快照冻结：读出之后改设置文件与 .mcp.json，已读的快照�
   }
 });
 
-test(".pigeon/.gitignore：第一次建状态目录时写入两行；已存在不改，缺行时提示一行", () => {
+// 决策 444：不再写 .pigeon/.gitignore（忽略规则改写全局 git 排除文件，见 global-ignore.test.ts）；已有的不动
+test("ensureProjectStateDir：建 .pigeon/state/，不写 .pigeon/.gitignore；已有的 .gitignore 原样不动", () => {
   const { root, home, cleanup } = dirs();
   try {
     void home;
     const notices: string[] = [];
     ensureProjectStateDir(root, (line) => notices.push(line));
-    assert.equal(
-      readFileSync(projectPigeonGitignorePath(root), "utf8"),
-      "state/\nsettings.local.json\n"
-    );
-    assert.equal(notices.length, 0);
-    // 已存在、缺一行：不改文件，提示一行
+    assert.ok(existsSync(projectStateDir(root)));
+    assert.equal(existsSync(projectPigeonGitignorePath(root)), false);
+    assert.deepEqual(notices, [], "不是 git 仓库：不写也不提示");
     rmSync(projectStateDir(root), { recursive: true });
     writeFileSync(projectPigeonGitignorePath(root), "state/\n");
-    const later: string[] = [];
-    ensureProjectStateDir(root, (line) => later.push(line));
+    ensureProjectStateDir(root);
     assert.equal(readFileSync(projectPigeonGitignorePath(root), "utf8"), "state/\n");
-    assert.equal(later.length, 1);
-    assert.match(later[0] ?? "", /缺 settings\.local\.json/);
   } finally {
     cleanup();
   }

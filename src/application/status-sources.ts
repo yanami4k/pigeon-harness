@@ -255,7 +255,7 @@ export function environmentText(input: {
     ...(input.facts?.network !== undefined ? [`Network: ${input.facts.network}`] : []),
     ...(input.facts?.skipped !== undefined && input.facts.skipped.length > 0
       ? [
-          `Files not brought in: ${skippedFilesText(input.facts.skipped, true)} (untracked and too large, so the starting snapshot left them out; they are not here)`,
+          `Files not brought in: ${skippedFilesText(input.facts.skipped)} (untracked and too large, so the starting snapshot left them out; they are not here)`,
         ]
       : []),
   ].join("\n");

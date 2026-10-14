@@ -7,7 +7,7 @@
 // - 执行位置（324）：本机会话在本机、沙箱会话在容器里（经执行端），单个钩子 host:true 的在宿主执行；
 // - 记录（324）：每次运行写进会话记录（pigeon.hook 条目：事件、命令、退出码、用时、结论、输出摘要），trace 显示；
 //   终端界面在拦下或出错时由 notice 显示一行提示；
-// - 入口范围（324）：终端界面、pigeon run、worker 与沙箱会话执行钩子；--line 不接钩子；实验跑批器不读使用者的
+// - 入口范围（324）：终端界面、pigeon run、worker 与沙箱会话执行钩子；实验跑批器不读使用者的
 //   用户级与项目级钩子（跑批器给空快照，自然不接）。
 
 import {
@@ -92,7 +92,8 @@ export interface SessionHooksOptions {
   // 会话存储写入面（缺省不记）
   sink?: { append(entry: SessionCustomEntry): void };
   // 审批档（钩子 JSON 的 permission_mode；复审 P2 补上）
-  permissionMode?: string;
+  // 决策 469：可在会话中途切换，给函数即每次触发时现取
+  permissionMode?: string | (() => string);
   // 记录里附的 Run（按事件与匹配对象定归属；会话级事件返回缺省）
   activeRunId?: (event: HookEventName, matcherTarget: string) => string | undefined;
   // 终端界面的一行提示（拦下或出错时调用；缺省静默）
@@ -168,10 +169,10 @@ export function interpretHookRun(
     // 钩子自身出错（拉不起来、超时、非 0 非 2）：不拦只提示
     record.conclusion = "error";
     record.reason = outcome.timedOut
-      ? `钩子超时（${outcome.durationMs} 毫秒）`
+      ? `hook timed out (${outcome.durationMs} ms)`
       : outcome.spawnError !== undefined
-        ? `钩子拉不起来：${outcome.spawnError.message}`
-        : `钩子以退出码 ${outcome.exitCode ?? "无"}结束${stderrText !== "" ? `：${stderrText}` : ""}`;
+        ? `starting hook failed: ${outcome.spawnError.message}`
+        : `hook exited with code ${outcome.exitCode ?? "none"}${stderrText !== "" ? `: ${stderrText}` : ""}`;
     return record;
   }
   const json = maybeJson(outcome.stdout);
@@ -330,7 +331,12 @@ export class SessionHooks {
           cwd,
           hook_event_name: event,
           ...(this.#options.permissionMode !== undefined
-            ? { permission_mode: this.#options.permissionMode }
+            ? {
+                permission_mode:
+                  typeof this.#options.permissionMode === "function"
+                    ? this.#options.permissionMode()
+                    : this.#options.permissionMode,
+              }
             : {}),
           ...fields,
         };
@@ -419,11 +425,13 @@ export class SessionHooks {
     const notice = this.#options.notice;
     if (notice === undefined) return;
     if (record.conclusion === "deny" || record.conclusion === "block") {
-      notice(`钩子拦下（${record.hook.event}）：${record.reason ?? record.hook.command}`);
+      notice(`hook blocked (${record.hook.event}): ${record.reason ?? record.hook.command}`);
     } else if (record.continueFalse === true) {
-      notice(`钩子要求停止（${record.hook.event}）：${record.stopReason ?? record.hook.command}`);
+      notice(
+        `hook asked to stop (${record.hook.event}): ${record.stopReason ?? record.hook.command}`
+      );
     } else if (record.conclusion === "error") {
-      notice(`钩子出错（${record.hook.event}）：${record.reason ?? record.hook.command}`);
+      notice(`hook error (${record.hook.event}): ${record.reason ?? record.hook.command}`);
     }
   }
 }

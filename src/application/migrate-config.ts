@@ -15,6 +15,7 @@
 //   ⑥ 退役的 verify.json（决策 322）：不并入设置——挪进备份目录，并打印把原验证命令改写为收尾（Stop）钩子的
 //      配置示例（分步配置按各步命令以 && 连接）。
 // 有锁被存活进程占用（会话正开着、worker 正在运行）或工作树被锁定时拒绝并说明。可重复执行：没有要做的事即如实说明。
+
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
@@ -30,13 +31,15 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { writeFileAtomic } from "../persistence/atomic-write.ts";
 import { lockHeldByLiveProcess } from "../persistence/exclusive-lock.ts";
+import { parseJsonText } from "../persistence/json-text.ts";
 import {
   migrationBackupConflict,
   migrationBackupLocation,
   moveToMigrationBackup,
   writeRedactedMigrationBackup,
 } from "../persistence/migration-backup.ts";
-import { ensurePigeonGitignore } from "../persistence/settings.ts";
+import { projectSharesUserPigeonDir } from "../persistence/pigeon-layers.ts";
+import { ensureLocalSettingsIgnored, ensureProjectStateDir } from "../persistence/settings.ts";
 import { canonicalJson } from "../state/hashing.ts";
 import {
   LEGACY_CONFIG_FILES,
@@ -60,7 +63,7 @@ import { type SettingsLayer, validateSettingsLayer } from "../state/settings.ts"
 import { WEB_KEY_FIELDS } from "../state/web-config.ts";
 import { hardenedGitArgs } from "../tools/git-hardening.ts";
 
-export const MIGRATE_CONFIG_USAGE = "用法：pigeon migrate-config [--root <项目根>]";
+export const MIGRATE_CONFIG_USAGE = "usage: pigeon migrate-config [--root <project root>]";
 
 export interface MigrationContext {
   root: string;
@@ -106,6 +109,13 @@ function targetLabelOf(layer: Exclude<SettingsLayer, "user">): string {
   return pigeonRel(layer === "local" ? LOCAL_SETTINGS_FILE : SETTINGS_FILE);
 }
 
+// 在主目录下运行：项目共享设置就是用户级设置（同一个文件），写进去的对所有项目生效
+const HOME_IS_USER_NOTE = " (in the home directory: user settings, applies to all projects)";
+
+function targetNoteOf(layer: Exclude<SettingsLayer, "user">, homeIsUser: boolean): string {
+  return layer === "project" && homeIsUser ? HOME_IS_USER_NOTE : "";
+}
+
 interface ConvertedConfig {
   file: string;
   section: string;
@@ -119,7 +129,7 @@ interface ConvertedConfig {
 
 // 备份里 key 的值换成的说明
 function removedKeyNote(env: string): string {
-  return `已移除，请改设环境变量 ${env}`;
+  return `removed; set ${env} instead`;
 }
 
 // 读一个旧文件并转成一节：去掉 version；web 去掉 key
@@ -127,23 +137,21 @@ function convertLegacyConfig(root: string, file: string, section: string): Conve
   const source = legacyConfigPath(root, file);
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(source, "utf8"));
+    raw = parseJsonText(readFileSync(source, "utf8"));
   } catch (error) {
     // web.json 可能含 key，解析报错会摘录原文片段：不打印细节
     const detail =
       section === "web"
-        ? "（文件里可能有 key，不打印解析细节）"
-        : `：${error instanceof Error ? error.message : String(error)}`;
-    throw new MigrationError(`${pigeonRel(file)} 不是合法 JSON，无法迁移${detail}`);
+        ? " (may contain a key; details not shown)"
+        : `: ${error instanceof Error ? error.message : String(error)}`;
+    throw new MigrationError(`${pigeonRel(file)} is not valid JSON${detail}`);
   }
   if (!isPlainObject(raw)) {
-    throw new MigrationError(`${pigeonRel(file)} 顶层须为对象，无法迁移`);
+    throw new MigrationError(`${pigeonRel(file)}: top level must be an object`);
   }
   const { version, ...content } = raw;
   if (version !== undefined && version !== 1) {
-    throw new MigrationError(
-      `${pigeonRel(file)} 的 version 不是 1（${String(version)}），无法迁移`
-    );
+    throw new MigrationError(`${pigeonRel(file)}: version is ${String(version)}, expected 1`);
   }
   const keyEnvs: string[] = [];
   let backupText: string | undefined;
@@ -179,14 +187,14 @@ function readTarget(file: string, label: string): Record<string, unknown> {
   if (!existsSync(file)) return {};
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(file, "utf8"));
+    raw = parseJsonText(readFileSync(file, "utf8"));
   } catch (error) {
     throw new MigrationError(
-      `${label} 不是合法 JSON，无法合并：${error instanceof Error ? error.message : String(error)}`
+      `${label} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`
     );
   }
   if (!isPlainObject(raw)) {
-    throw new MigrationError(`${label} 顶层须为对象，无法合并`);
+    throw new MigrationError(`${label}: top level must be an object`);
   }
   return raw;
 }
@@ -199,9 +207,11 @@ function plannedConfigs(
   converted: ConvertedConfig[];
   targets: Map<Exclude<SettingsLayer, "user">, Record<string, unknown>>;
   blockers: string[];
+  homeIsUser: boolean;
 } {
   const converted: ConvertedConfig[] = [];
   const blockers: string[] = [];
+  const homeIsUser = projectSharesUserPigeonDir(root, homeDir);
   for (const legacy of LEGACY_CONFIG_FILES) {
     if (!existsSync(legacyConfigPath(root, legacy.file))) continue;
     const occupied = migrationBackupConflict(root, legacy.file, homeDir);
@@ -231,36 +241,40 @@ function plannedConfigs(
     const existing = target[item.section];
     if (existing !== undefined && canonicalJson(existing) !== canonicalJson(item.content)) {
       blockers.push(
-        `${label} 已有 ${item.section} 一节且与 ${pigeonRel(item.file)} 的内容不同：不覆盖，请手工合并后再运行`
+        `${label} already has a ${item.section} section that differs from ${pigeonRel(item.file)}; not overwritten`
       );
       continue;
     }
     target[item.section] = item.content;
   }
   for (const [layer, target] of targets) {
-    const checked = validateSettingsLayer(target, { layer, file: targetLabelOf(layer) });
+    // 主目录下项目共享设置就是用户级设置：按用户级校验（用户级才能设的项不算错）
+    const checked = validateSettingsLayer(target, {
+      layer: layer === "project" && homeIsUser ? "user" : layer,
+      file: targetLabelOf(layer),
+    });
     if ("problems" in checked) {
-      blockers.push(...checked.problems.map((problem) => `迁移后的内容校验不过：${problem}`));
+      blockers.push(...checked.problems.map((problem) => `migrated settings invalid: ${problem}`));
     }
   }
-  return { converted, targets, blockers };
+  return { converted, targets, blockers, homeIsUser };
 }
 
 export const legacyConfigStep: MigrationStep = {
   id: "legacy-config",
-  title: "旧配置文件并入设置",
+  title: "merge legacy config into settings",
   plan(ctx) {
-    const { converted, blockers } = plannedConfigs(ctx.root, ctx.homeDir);
+    const { converted, blockers, homeIsUser } = plannedConfigs(ctx.root, ctx.homeDir);
     return {
       todo: converted.map(
         (item) =>
-          `${pigeonRel(item.file)} → ${targetLabelOf(item.layer)} 的 ${item.section} 一节（原文件挪进备份目录）`
+          `${pigeonRel(item.file)} → ${item.section} section of ${targetLabelOf(item.layer)}${targetNoteOf(item.layer, homeIsUser)}; original to backup`
       ),
       blockers,
     };
   },
   apply(ctx) {
-    const { converted, targets, blockers } = plannedConfigs(ctx.root, ctx.homeDir);
+    const { converted, targets, blockers, homeIsUser } = plannedConfigs(ctx.root, ctx.homeDir);
     if (blockers.length > 0) {
       throw new MigrationError(blockers.join("\n"));
     }
@@ -268,7 +282,7 @@ export const legacyConfigStep: MigrationStep = {
     for (const [layer, target] of targets) {
       const file = targetPathOf(ctx.root, layer);
       mkdirSync(path.dirname(file), { recursive: true });
-      if (layer === "local") ensurePigeonGitignore(ctx.root, (line) => lines.push(line));
+      if (layer === "local") ensureLocalSettingsIgnored(ctx.root, (line) => lines.push(line));
       writeFileAtomic(file, `${JSON.stringify(target, null, 2)}\n`);
     }
     for (const item of converted) {
@@ -279,11 +293,11 @@ export const legacyConfigStep: MigrationStep = {
           : moveToMigrationBackup(ctx.root, source, item.file, ctx.homeDir)
       );
       lines.push(
-        `已迁移 ${pigeonRel(item.file)} → ${targetLabelOf(item.layer)} 的 ${item.section} 一节；原文件已挪进备份目录` +
-          (item.backupText !== undefined ? "（备份里 key 的值已去掉）" : "")
+        `migrated ${pigeonRel(item.file)} → ${item.section} section of ${targetLabelOf(item.layer)}${targetNoteOf(item.layer, homeIsUser)}; original moved to backup` +
+          (item.backupText !== undefined ? " (key removed from backup)" : "")
       );
       for (const env of item.keyEnvs) {
-        lines.push(`  ${pigeonRel(item.file)} 里的 key 没有写入设置：请改设环境变量 ${env}`);
+        lines.push(`  key in ${pigeonRel(item.file)} not written to settings; set ${env} instead`);
       }
     }
     return lines;
@@ -311,7 +325,7 @@ function liveLocksUnder(target: string): string[] {
     if (current.endsWith(".lock")) {
       const holder = lockHeldByLiveProcess(current);
       if (holder !== undefined) {
-        found.push(`${current}（pid ${holder.pid}）`);
+        found.push(`${current} (pid ${holder.pid})`);
       }
     }
   };
@@ -323,7 +337,7 @@ const MOVED_STATE = LEGACY_STATE_ENTRIES.filter((entry) => entry.name !== "workt
 
 export const legacyStateStep: MigrationStep = {
   id: "legacy-state",
-  title: `旧位置的程序状态移入 ${pigeonRel(STATE_DIR)}`,
+  title: `move program state into ${pigeonRel(STATE_DIR)}`,
   plan(ctx) {
     const todo: string[] = [];
     const blockers: string[] = [];
@@ -333,14 +347,12 @@ export const legacyStateStep: MigrationStep = {
       const target = entry.target(ctx.root);
       if (existsSync(target)) {
         blockers.push(
-          `${pigeonRel(entry.name)} 与新位置 ${path.relative(ctx.root, target)} 都存在：不覆盖，请手工合并后再运行`
+          `both ${pigeonRel(entry.name)} and ${path.relative(ctx.root, target)} exist; not overwritten`
         );
         continue;
       }
       for (const lock of liveLocksUnder(source)) {
-        blockers.push(
-          `锁正被占用（有 Pigeon 会话或 worker 正在运行）：${lock}；请先结束它们再迁移`
-        );
+        blockers.push(`lock held by a running Pigeon session or worker: ${lock}`);
       }
       todo.push(`${pigeonRel(entry.name)} → ${path.relative(ctx.root, target)}`);
     }
@@ -353,9 +365,9 @@ export const legacyStateStep: MigrationStep = {
       if (!existsSync(source)) continue;
       const target = entry.target(ctx.root);
       mkdirSync(path.dirname(target), { recursive: true });
-      ensurePigeonGitignore(ctx.root, (line) => lines.push(line));
+      ensureProjectStateDir(ctx.root, (line) => lines.push(line));
       renameSync(source, target);
-      lines.push(`已移动 ${pigeonRel(entry.name)} → ${path.relative(ctx.root, target)}`);
+      lines.push(`moved ${pigeonRel(entry.name)} → ${path.relative(ctx.root, target)}`);
     }
     return lines;
   },
@@ -377,7 +389,7 @@ const OBSOLETE_MEMORY_ITEMS: readonly { source: string; backup: string }[] = [
 
 export const obsoleteMemoryStep: MigrationStep = {
   id: "obsolete-memory",
-  title: "已删除功能的遗留挪出仓库",
+  title: "move leftovers of removed features out of the repo",
   plan(ctx) {
     const todo: string[] = [];
     const blockers: string[] = [];
@@ -388,7 +400,7 @@ export const obsoleteMemoryStep: MigrationStep = {
         blockers.push(conflict);
         continue;
       }
-      todo.push(`${pigeonRel(item.source)} → 备份目录（${item.backup}）`);
+      todo.push(`${pigeonRel(item.source)} → backup (${item.backup})`);
     }
     return { todo, blockers };
   },
@@ -398,9 +410,9 @@ export const obsoleteMemoryStep: MigrationStep = {
       const source = legacyStatePath(ctx.root, item.source);
       if (!existsSync(source)) continue;
       ctx.backups.push(moveToMigrationBackup(ctx.root, source, item.backup, ctx.homeDir));
-      lines.push(`已挪走 ${pigeonRel(item.source)}（进备份目录 ${item.backup}）`);
+      lines.push(`moved ${pigeonRel(item.source)} to backup (${item.backup})`);
       if (item.source === "memory") {
-        lines.push("  把其中内容并入项目的 AGENTS.md");
+        lines.push("  merge its contents into the project's AGENTS.md");
       }
     }
     return lines;
@@ -411,7 +423,7 @@ export const obsoleteMemoryStep: MigrationStep = {
 
 export const userPreferencesStep: MigrationStep = {
   id: "user-preferences",
-  title: "用户级旧偏好改名为 AGENTS.md",
+  title: "rename user preferences to AGENTS.md",
   plan(ctx) {
     const source = userPreferencesPath(ctx.homeDir);
     if (!existsSync(source)) return { todo: [], blockers: [] };
@@ -419,7 +431,7 @@ export const userPreferencesStep: MigrationStep = {
     if (existsSync(target)) {
       return {
         todo: [],
-        blockers: [`${target} 已存在，不覆盖；请手工把 ${source} 的内容并入后再运行`],
+        blockers: [`${target} already exists; ${source} not renamed`],
       };
     }
     return { todo: [`${source} → ${target}`], blockers: [] };
@@ -429,7 +441,7 @@ export const userPreferencesStep: MigrationStep = {
     if (!existsSync(source)) return [];
     const target = userAgentsMdPath(ctx.homeDir);
     renameSync(source, target);
-    return [`已改名 ${source} → ${target}`];
+    return [`renamed ${source} → ${target}`];
   },
 };
 
@@ -480,7 +492,7 @@ function legacyWorktreeDirs(root: string): string[] {
 
 export const legacyWorktreesStep: MigrationStep = {
   id: "legacy-worktrees",
-  title: `worker 工作树移入 ${pigeonRel(STATE_DIR, "worktrees")}`,
+  title: `move worker worktrees into ${pigeonRel(STATE_DIR, "worktrees")}`,
   plan(ctx) {
     const legacyDir = legacyStatePath(ctx.root, "worktrees");
     if (!existsSync(legacyDir)) return { todo: [], blockers: [] };
@@ -490,16 +502,18 @@ export const legacyWorktreesStep: MigrationStep = {
     for (const dir of legacyWorktreeDirs(ctx.root)) {
       const target = path.join(worktreesDirOf(ctx.root), path.basename(dir));
       if (existsSync(target)) {
-        blockers.push(`工作树新位置已存在：${path.relative(ctx.root, target)}；不覆盖`);
+        blockers.push(
+          `worktree target exists: ${path.relative(ctx.root, target)}; not overwritten`
+        );
         continue;
       }
       const tree = known.get(realOrSelf(dir));
       if (tree?.locked === true) {
-        blockers.push(`工作树被锁定（git worktree lock）：${dir}；请先解锁或结束使用它的 worker`);
+        blockers.push(`worktree is locked (git worktree lock): ${dir}`);
         continue;
       }
       todo.push(
-        `${path.relative(ctx.root, dir)} → ${path.relative(ctx.root, target)}（${tree !== undefined ? "git worktree move" : "不是登记的工作树，直接挪目录"}）`
+        `${path.relative(ctx.root, dir)} → ${path.relative(ctx.root, target)} (${tree !== undefined ? "git worktree move" : "not a registered worktree; plain move"})`
       );
     }
     // worker 正在运行：它的会话锁在旧会话目录或新会话目录里
@@ -507,12 +521,10 @@ export const legacyWorktreesStep: MigrationStep = {
       ...liveLocksUnder(legacyStatePath(ctx.root, "sessions")),
       ...liveLocksUnder(sessionsDirOf(ctx.root)),
     ]) {
-      blockers.push(
-        `有 Pigeon 会话或 worker 正在运行（锁被占用：${lock}）；请先结束它们再迁移工作树`
-      );
+      blockers.push(`a Pigeon session or worker is running (lock held: ${lock})`);
     }
     if (todo.length === 0 && blockers.length === 0) {
-      todo.push(`删除空目录 ${pigeonRel("worktrees")}`);
+      todo.push(`remove empty directory ${pigeonRel("worktrees")}`);
     }
     return { todo, blockers };
   },
@@ -522,24 +534,24 @@ export const legacyWorktreesStep: MigrationStep = {
     for (const dir of legacyWorktreeDirs(ctx.root)) {
       const target = path.join(worktreesDirOf(ctx.root), path.basename(dir));
       mkdirSync(path.dirname(target), { recursive: true });
-      ensurePigeonGitignore(ctx.root, (line) => lines.push(line));
+      ensureProjectStateDir(ctx.root, (line) => lines.push(line));
       if (known.has(realOrSelf(dir))) {
         execFileSync("git", [...hardenedGitArgs(ctx.root), "worktree", "move", dir, target], {
           cwd: ctx.root,
           stdio: ["ignore", "pipe", "pipe"],
         });
         lines.push(
-          `已 git worktree move ${path.relative(ctx.root, dir)} → ${path.relative(ctx.root, target)}`
+          `moved ${path.relative(ctx.root, dir)} → ${path.relative(ctx.root, target)} (git worktree move)`
         );
       } else {
         renameSync(dir, target);
-        lines.push(`已移动 ${path.relative(ctx.root, dir)} → ${path.relative(ctx.root, target)}`);
+        lines.push(`moved ${path.relative(ctx.root, dir)} → ${path.relative(ctx.root, target)}`);
       }
     }
     const legacyDir = legacyStatePath(ctx.root, "worktrees");
     if (existsSync(legacyDir) && readdirSync(legacyDir).length === 0) {
       rmdirSync(legacyDir);
-      lines.push(`已删除空目录 ${pigeonRel("worktrees")}`);
+      lines.push(`removed empty directory ${pigeonRel("worktrees")}`);
     }
     return lines;
   },
@@ -556,7 +568,7 @@ function stopHookCommandOf(parsed: { command?: unknown; steps?: unknown }): stri
     const commands = parsed.steps.map((step: unknown) => {
       if (!isPlainObject(step) || typeof step.command !== "string" || step.command.trim() === "") {
         throw new MigrationError(
-          `${pigeonRel("verify.json")} 的 steps 里有缺 command 的步，无法拼出收尾钩子命令`
+          `${pigeonRel("verify.json")}: a step has no command; can't build the Stop hook command`
         );
       }
       return typeof step.cwd === "string" && step.cwd.trim() !== ""
@@ -566,30 +578,30 @@ function stopHookCommandOf(parsed: { command?: unknown; steps?: unknown }): stri
     return commands.join(" && ");
   }
   throw new MigrationError(
-    `${pigeonRel("verify.json")} 里既没有 command 也没有 steps，无法拼出收尾钩子命令`
+    `${pigeonRel("verify.json")} has neither command nor steps; can't build the Stop hook command`
   );
 }
 
 export const verifyJsonStep: MigrationStep = {
   id: "verify-json",
-  title: "退役的验证配置",
+  title: "retired verify config",
   plan(ctx) {
     const source = verifyConfigPathOf(ctx.root);
     if (!existsSync(source)) return { todo: [], blockers: [] };
     // 校验在 plan 阶段（复审 P2：先检查后执行——不合法即拦住，不走到 apply 才炸）
     let raw: unknown;
     try {
-      raw = JSON.parse(readFileSync(source, "utf8"));
+      raw = parseJsonText(readFileSync(source, "utf8"));
     } catch (error) {
       return {
         todo: [],
         blockers: [
-          `${pigeonRel("verify.json")} 不是合法 JSON：${error instanceof Error ? error.message : String(error)}`,
+          `${pigeonRel("verify.json")} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
         ],
       };
     }
     if (!isPlainObject(raw)) {
-      return { todo: [], blockers: [`${pigeonRel("verify.json")} 顶层须为对象`] };
+      return { todo: [], blockers: [`${pigeonRel("verify.json")}: top level must be an object`] };
     }
     try {
       stopHookCommandOf(raw);
@@ -601,7 +613,7 @@ export const verifyJsonStep: MigrationStep = {
     }
     return {
       todo: [
-        `${pigeonRel("verify.json")} → 挪进备份目录（验证门已删除，不并入设置），并打印改写为收尾钩子的示例`,
+        `${pigeonRel("verify.json")} → backup (not merged into settings); print a Stop hook example`,
       ],
       blockers: [],
     };
@@ -610,14 +622,14 @@ export const verifyJsonStep: MigrationStep = {
     const source = verifyConfigPathOf(ctx.root);
     let raw: unknown;
     try {
-      raw = JSON.parse(readFileSync(source, "utf8"));
+      raw = parseJsonText(readFileSync(source, "utf8"));
     } catch (error) {
       throw new MigrationError(
-        `${pigeonRel("verify.json")} 不是合法 JSON：${error instanceof Error ? error.message : String(error)}`
+        `${pigeonRel("verify.json")} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`
       );
     }
     if (!isPlainObject(raw)) {
-      throw new MigrationError(`${pigeonRel("verify.json")} 顶层须为对象`);
+      throw new MigrationError(`${pigeonRel("verify.json")}: top level must be an object`);
     }
     // 决策 324：收尾钩子以退出码 2 + stderr 拦下；普通命令失败时输出在 stdout、退出码非 2 拦不住——
     // 示例把输出导到 stderr、失败时以 2 退出（复审 P2：原样印出的 npm test 拦不住）
@@ -625,8 +637,8 @@ export const verifyJsonStep: MigrationStep = {
     const command = `( ${stopHookCommandOf(raw)} ) 1>&2 || exit 2`;
     ctx.backups.push(moveToMigrationBackup(ctx.root, source, "verify.json", ctx.homeDir));
     return [
-      `已挪走 ${pigeonRel("verify.json")}：验证门、回炉与失败自动分叉重试已删除，verify.json 不并入设置`,
-      `如需同等的收尾检查，把原来的验证命令配成收尾（Stop）钩子——在 ${pigeonRel("settings.json")} 里加：`,
+      `moved ${pigeonRel("verify.json")} to backup; not merged into settings (the verify gate was removed)`,
+      `equivalent Stop hook for ${pigeonRel("settings.json")}:`,
       `  "hooks": {`,
       `    "Stop": [`,
       `      { "hooks": [{ "type": "command", "command": ${JSON.stringify(command)} }] }`,
@@ -663,23 +675,24 @@ export function runMigrateConfig(
     plan.blockers.map((blocker) => `[${step.title}] ${blocker}`)
   );
   if (blockers.length > 0) {
-    throw new MigrationError(`迁移没有进行，以下问题须先处理：\n${blockers.join("\n")}`);
+    throw new MigrationError(`migration blocked:\n${blockers.join("\n")}`);
   }
   const pending = plans.filter(({ plan }) => plan.todo.length > 0);
   if (pending.length === 0) {
-    return { changed: false, lines: ["没有要迁移的内容：配置与程序状态已是新布局"] };
+    return { changed: false, lines: ["nothing to migrate"] };
   }
   const lines: string[] = [];
-  // 每次迁移都确保 .pigeon/.gitignore（程序状态与个人设置不被提交；只迁项目共享层的文件时也一样）
+  // 决策 444：每次迁移都确保程序状态与个人设置的忽略规则在全局 git 排除文件里（只迁项目共享层的文件时也一样）；
+  // 不再写 .pigeon/.gitignore
   if (existsSync(projectPigeonDir(root))) {
-    ensurePigeonGitignore(root, (line) => lines.push(line));
+    ensureLocalSettingsIgnored(root, (line) => lines.push(line));
   }
   for (const { step } of pending) {
-    lines.push(`${step.title}：`);
+    lines.push(`${step.title}:`);
     lines.push(...step.apply(ctx).map((line) => `  ${line}`));
   }
   if (ctx.backups.length > 0) {
-    lines.push(`迁移挪走的旧文件备份在 ${migrationBackupLocation(root, ctx.homeDir)}`);
+    lines.push(`backup of moved files: ${migrationBackupLocation(root, ctx.homeDir)}`);
   }
   return { changed: true, lines };
 }

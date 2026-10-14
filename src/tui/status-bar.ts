@@ -1,22 +1,28 @@
-// 状态栏（决策 286 第 2 项）：输入框下方一行（Claude Code 惯例；之后的编排面板也放输入框下方，与之同处，决策 301），
-// 显示模型、上下文用量百分比、本会话花费。纯 ASCII（spike 纪律：歧义宽字符不进 chrome）。
-// 窄终端按优先级截断、不折行：先把各段换成短写法，再依次去掉模型、花费，最后硬截到宽度。
-// 上下文用量优先级最高——它决定什么时候该 /compact。
-import { type Component, visibleWidth } from "@earendil-works/pi-tui";
+// 状态栏（决策 286 第 2 项；决策 468 起只留上下文用量与 token 数）：输入框下方一行（Claude Code 惯例；之后的编排面板也放
+// 输入框下方，与之同处，决策 301），写作 "ctx 23% (46k/200k) · 1.2M tokens"，窄时 "ctx 23% · 1.2M"，最后硬截到宽度；没有
+// 上下文窗口信息时只写 token 数。token 数是本会话的累计用量（每次请求的输入含缓存读写与输出之和，含本会话的 worker 与复盘），
+// 续接后接着累计。模型名在欢迎头里；花费不显示（只对按量计费的 key 有意义，价目也算不全）。上下文用量优先级最高——它决定
+// 什么时候该 /compact。
+import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { compactNumber } from "../application/format.ts";
 import type { CostTally } from "../application/session-cost.ts";
+import { secondary, warning } from "./style.ts";
 
 export interface StatusBarState {
-  model?: string;
+  // 决策 469：当前会话的审批模式（写在最前面：ask 暗色、yolo 醒目）；缺省不写
+  mode?: "prompt" | "yolo" | undefined;
   context?: { tokens: number; contextWindow: number } | undefined;
+  // 本会话累计的用量（记账在 application/session-cost.ts；这里只取其中的 token 数）
   cost: CostTally;
 }
 
-// 1234 → 1.2k；1234567 → 1.2M
-export function compactNumber(value: number): string {
-  if (value < 1000) return String(Math.round(value));
-  if (value < 1_000_000) return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0)}k`;
-  return `${(value / 1_000_000).toFixed(1)}M`;
+// 本会话累计的 token 数（有价格、按人民币价目计与没有价格的三部分之和）
+export function totalTokens(tally: CostTally): number {
+  return tally.pricedTokens + tally.cnyTokens + tally.unpricedTokens;
 }
+
+// 1234 → 1.2k；1234567 → 1.2M（决策 476：pigeon trace 与 session list 同一种写法，放在 application/format.ts）
+export { compactNumber } from "../application/format.ts";
 
 // 花费：回复自带价格的部分写 $，DeepSeek 按官方人民币价目计的部分写 ¥，没有价格的写 token 数并注明；三者并存时相加写出
 export function formatCost(tally: CostTally, short: boolean): string {
@@ -40,37 +46,34 @@ function contextSegment(context: StatusBarState["context"], short: boolean): str
     : `ctx ${percent}% (${compactNumber(context.tokens)}/${compactNumber(context.contextWindow)})`;
 }
 
-// 一行状态栏文本（不含左边距）；width 为可用宽度
-export function statusBarText(state: StatusBarState, width: number): string {
-  const build = (options: { short: boolean; model: boolean; cost: boolean }): string =>
-    [
-      options.model ? state.model : undefined,
-      contextSegment(state.context, options.short),
-      options.cost ? `cost ${formatCost(state.cost, options.short)}` : undefined,
-    ]
-      .filter((segment): segment is string => segment !== undefined && segment !== "")
-      .join(" | ");
-  const attempts = [
-    { short: false, model: true, cost: true },
-    { short: true, model: true, cost: true },
-    { short: true, model: false, cost: true },
-    { short: true, model: false, cost: false },
-  ];
-  for (const attempt of attempts) {
-    const text = build(attempt);
-    if (visibleWidth(text) <= width) return text;
-  }
-  return clipToWidth(build({ short: true, model: false, cost: false }), width);
+// 审批模式在状态栏里的写法
+function modeLabel(mode: StatusBarState["mode"]): string | undefined {
+  return mode === undefined ? undefined : mode === "yolo" ? "yolo" : "ask";
 }
 
-// 按显示宽度硬截（不补省略号、不带任何控制序列）；编排面板与树形视图同样用它
+// 一行状态栏文本（不含左边距）；width 为可用宽度
+export function statusBarText(state: StatusBarState, width: number): string {
+  const tokens = compactNumber(totalTokens(state.cost));
+  const build = (short: boolean): string =>
+    [
+      modeLabel(state.mode),
+      contextSegment(state.context, short),
+      short ? tokens : `${tokens} tokens`,
+    ]
+      .filter((segment): segment is string => segment !== undefined)
+      .join(" · ");
+  const full = build(false);
+  if (visibleWidth(full) <= width) return full;
+  return clipToWidth(build(true), width);
+}
+
+// 按显示宽度硬截（不补省略号、不补空格）；编排面板与树形视图同样用它。决策 439：改用 pi-tui 的 truncateToWidth
+//（逐字形累加再量宽度的旧写法在长串上是二次方开销）
 export function clipToWidth(text: string, width: number): string {
-  let out = "";
-  for (const { segment } of new Intl.Segmenter("en", { granularity: "grapheme" }).segment(text)) {
-    if (visibleWidth(out + segment) > width) break;
-    out += segment;
-  }
-  return out;
+  const out = truncateToWidth(text, Math.max(0, width), "");
+  // 截断时它在末尾补一个样式复位；原文本没有控制序列时去掉，保持"不带任何控制序列"
+  const reset = "\x1b[0m";
+  return !text.includes("\x1b") && out.endsWith(reset) ? out.slice(0, -reset.length) : out;
 }
 
 export class StatusBar implements Component {
@@ -90,9 +93,14 @@ export class StatusBar implements Component {
 
   invalidate(): void {}
 
-  // 与 Text 同样留 1 格左边距；恰好一行
+  // 与 Text 同样留 1 格左边距；恰好一行。决策 454：次要信息，弱化样式
   render(width: number): string[] {
     const text = statusBarText(this.state, Math.max(0, width - 2));
-    return [text === "" ? "" : ` ${text}`];
+    if (text === "") return [""];
+    // 决策 469：yolo 用醒目颜色，其余照旧暗色
+    if (this.state.mode === "yolo" && text.startsWith("yolo")) {
+      return [` ${warning("yolo")}${secondary(text.slice("yolo".length))}`];
+    }
+    return [` ${secondary(text)}`];
   }
 }

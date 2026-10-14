@@ -46,7 +46,7 @@ function markedCall(
 // 报告里某次工具调用名下的行（到下一个工具调用或下一轮为止）；调用号在整份报告里唯一（夹具按会话连续编号）
 function callBlock(output: string, toolCallId: string): string[] {
   const lines = output.split("\n");
-  const start = lines.findIndex((line) => line.startsWith(`    工具调用 ${toolCallId} `));
+  const start = lines.findIndex((line) => line.startsWith(`    tool call ${toolCallId} `));
   assert.ok(start !== -1, `缺少工具调用 ${toolCallId}\n${output}`);
   const block: string[] = [];
   for (const line of lines.slice(start + 1)) {
@@ -80,7 +80,7 @@ async function markedSession(sessionsDir: string, root: string) {
   ) => {
     // 审批行：措辞后括注批准来源原值（上游拦截没有审批闸决定，不括注）
     const approval =
-      mark.gate !== undefined ? `${want.approval}（${mark.gate.approvedBy}）` : want.approval;
+      mark.gate !== undefined ? `${want.approval} (${mark.gate.approvedBy})` : want.approval;
     expected.push({
       id: markedCall(s, name, mark, isError),
       ...want,
@@ -88,46 +88,46 @@ async function markedSession(sessionsDir: string, root: string) {
     });
   };
   add("read_file", { gate: { outcome: "approved", approvedBy: "policy:auto" } }, false, {
-    approval: "策略自动放行",
-    badge: "正常",
+    approval: "auto-allowed by policy",
+    badge: "ok",
   });
   add("edit_file", { gate: { outcome: "approved", approvedBy: "human:grant" } }, false, {
-    approval: "人工授权（会话 grant）",
-    badge: "正常",
+    approval: "session grant",
+    badge: "ok",
   });
   add("edit_file", { gate: { outcome: "approved", approvedBy: "policy:config" } }, false, {
-    approval: "策略放行（固化配置）",
-    badge: "正常",
+    approval: "saved rule",
+    badge: "ok",
   });
   add(
     "edit_file",
     { errorKind: "domain", gate: { outcome: "approved", approvedBy: "human" } },
     true,
-    { approval: "人工批准", errorKind: "域错误", badge: "业务失败" }
+    { approval: "approved by human", errorKind: "domain error", badge: "business failure" }
   );
   add(
     "run_command",
     { errorKind: "environment", gate: { outcome: "approved", approvedBy: "policy:yolo" } },
     true,
-    { approval: "yolo 批发授权", errorKind: "环境异常", badge: "基础设施错误" }
+    { approval: "yolo", errorKind: "environment error", badge: "infrastructure error" }
   );
   add("edit_file", { gate: { outcome: "rejected", approvedBy: "human" } }, true, {
-    approval: "人工拒绝",
-    badge: "正常",
+    approval: "rejected by human",
+    badge: "ok",
   });
   add("run_command", { gate: { outcome: "rejected", approvedBy: "policy:deny" } }, true, {
-    approval: "策略拒绝",
-    badge: "正常",
+    approval: "denied by policy",
+    badge: "ok",
   });
   // 上游拦截：审批闸没跑过，只有域错误归类
   add("ghost_tool", { errorKind: "domain" }, true, {
-    approval: "未经审批闸（上游拦截）",
-    errorKind: "域错误",
-    badge: "业务失败",
+    approval: "not gated (blocked upstream)",
+    errorKind: "domain error",
+    badge: "business failure",
   });
   add("edit_file", { gate: { outcome: "approved", approvedBy: "human" } }, true, {
-    approval: "人工批准",
-    badge: "未知",
+    approval: "approved by human",
+    badge: "unknown",
   });
   s.assistant({ text: "完成" });
   s.endRun();
@@ -141,21 +141,21 @@ test("trace 工具调用行：审批结果与出错归类照工具结果消息�
     const output = runTraceCommand({ root, sessionId });
     for (const want of expected) {
       const block = callBlock(output, want.id);
-      const approval = block.filter((line) => line.startsWith("审批："));
+      const approval = block.filter((line) => line.startsWith("approval: "));
       assert.deepEqual(
         approval,
-        want.approval !== undefined ? [`审批：${want.approval}`] : [],
+        want.approval !== undefined ? [`approval: ${want.approval}`] : [],
         `${want.id}\n${output}`
       );
-      const errorKind = block.filter((line) => line.startsWith("出错归类："));
+      const errorKind = block.filter((line) => line.startsWith("error kind: "));
       assert.deepEqual(
         errorKind,
-        want.errorKind !== undefined ? [`出错归类：${want.errorKind}`] : [],
+        want.errorKind !== undefined ? [`error kind: ${want.errorKind}`] : [],
         `${want.id}\n${output}`
       );
       assert.deepEqual(
-        block.filter((line) => line.startsWith("分类：")),
-        [`分类：${want.badge}`],
+        block.filter((line) => line.startsWith("class: ")),
+        [`class: ${want.badge}`],
         `${want.id}\n${output}`
       );
     }
@@ -165,21 +165,24 @@ test("trace 工具调用行：审批结果与出错归类照工具结果消息�
     const badges = new Set(
       output
         .split("\n")
-        .flatMap((line) => [...line.matchAll(/分类：([^｜\n]+)/g)].map((match) => match[1]?.trim()))
-        .filter((badge) => badge !== undefined && badge !== "正常")
+        .flatMap((line) => [...line.matchAll(/class: ([^|\n]+)/g)].map((match) => match[1]?.trim()))
+        .filter((badge) => badge !== undefined && badge !== "ok")
     );
     assert.deepEqual(
       [...badges].sort(),
       summary.failureClasses.map((category) => failureBadge({ category } as never)).sort()
     );
-    assert.deepEqual([...badges].sort(), ["业务失败", "基础设施错误", "未知"].sort());
+    assert.deepEqual(
+      [...badges].sort(),
+      ["business failure", "infrastructure error", "unknown"].sort()
+    );
     const view = loadSessionView(sessionsDir, sessionId);
     assert.ok(view !== undefined);
     // 逐个调用：trace 的分类行即 storeToolOutcomes 的结果
     for (const outcome of view.toolOutcomes) {
       assert.deepEqual(
-        callBlock(output, outcome.toolCallId).filter((line) => line.startsWith("分类：")),
-        [`分类：${failureBadge(outcome.failure)}`]
+        callBlock(output, outcome.toolCallId).filter((line) => line.startsWith("class: ")),
+        [`class: ${failureBadge(outcome.failure)}`]
       );
     }
   }));
@@ -207,20 +210,20 @@ test("trace 工具调用行：没有运行面标记的结果不显示审批与�
     const { sessionId } = await s.close();
     const output = runTraceCommand({ root, sessionId });
     const expected: Array<[string, string[]]> = [
-      [ok, ["分类：正常"]],
-      [denied, ["分类：正常"]],
-      [failed, ["分类：未知"]],
-      [aborted, ["分类：无（所在助手消息以出错或中止收尾，调用未执行）"]],
-      [dangling, ["分类：未知"]],
+      [ok, ["class: ok"]],
+      [denied, ["class: ok"]],
+      [failed, ["class: unknown"]],
+      [aborted, ["class: none (call not executed)"]],
+      [dangling, ["class: unknown"]],
     ];
     for (const [id, want] of expected) {
       const block = callBlock(output, id);
       assert.ok(
-        !block.some((line) => line.startsWith("审批：") || line.startsWith("出错归类：")),
+        !block.some((line) => line.startsWith("approval: ") || line.startsWith("error kind: ")),
         `${id}\n${output}`
       );
       assert.deepEqual(
-        block.filter((line) => line.startsWith("分类：")),
+        block.filter((line) => line.startsWith("class: ")),
         want,
         `${id}\n${output}`
       );

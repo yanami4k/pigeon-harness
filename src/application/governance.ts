@@ -156,7 +156,7 @@ class GovernedToolCalls implements ToolGovernance {
     // 广告了未在注册表登记的工具 = 配置错误，构造期 fail-fast
     for (const name of host.tools.keys()) {
       if (!this.#registry.has(name)) {
-        throw new Error(`广告的工具未在注册表登记：${name}`);
+        throw new Error(`advertised tool not registered: ${name}`);
       }
     }
   }
@@ -245,7 +245,7 @@ class GovernedToolCalls implements ToolGovernance {
       if (schema !== undefined && !Value.Check(schema, hookDecision.updatedInput)) {
         this.#host.reportError(
           new Error(
-            `PreToolUse 钩子给的 updatedInput 不合 ${toolName} 的参数模式，按钩子出错处理：用原参数`
+            `PreToolUse hook returned an updatedInput that doesn't match ${toolName}'s parameters; using the original arguments`
           )
         );
         const { updatedInput: _dropped, ...rest } = hookDecision;
@@ -352,13 +352,13 @@ class GovernedToolCalls implements ToolGovernance {
     ) {
       decision = {
         kind: "auto-allow",
-        reason: `worker 在自己的工作树内改文件，默认放行：${toolName}`,
+        reason: `worker writing in its own worktree: ${toolName}`,
       };
     }
     // 决策 324：钩子要人确认——跳过一切自动放行，直接进人工审批（无审批通道即 fail-closed，与 prompt 档同一口径）；
     // 只收紧不放行：deny 清单的拒绝是绝对的，ask 不覆盖
     if (hookDecision?.decision === "ask" && decision.kind !== "deny") {
-      decision = { kind: "prompt", reason: hookDecision.reason ?? "钩子要求人确认" };
+      decision = { kind: "prompt", reason: hookDecision.reason ?? "hook asked for approval" };
     }
 
     // deny 清单绝对 / 未注册 fail-closed：自动拒绝，不弹人工审批
@@ -437,7 +437,7 @@ class GovernedToolCalls implements ToolGovernance {
       record = recordDecision(record, {
         outcome: "rejected",
         approvedBy: "policy:deny",
-        reason: `${reason}（fail-closed）`,
+        reason: `${reason} (fail-closed)`,
         // 决策 066：策略兜底文案，非人写
         reasonSource: "system-default",
         decidedAt: Date.now(),
@@ -534,7 +534,7 @@ class GovernedToolCalls implements ToolGovernance {
     ) {
       try {
         const paths = (tool.inspectProtectedPaths as (args: unknown) => string[])(args);
-        return paths.length > 0 ? paths.join("、") : undefined;
+        return paths.length > 0 ? paths.join(", ") : undefined;
       } catch {
         return undefined;
       }
