@@ -206,8 +206,7 @@ export async function runHookCommandViaHost(
     // 客户端兜底兜住时执行端已标 timedOut
     timedOut:
       result.timedOut ||
-      (HOOK_TIMEOUT_EXIT_CODES.includes(result.exitCode ?? -1) &&
-        elapsed() >= seconds * 1000),
+      (HOOK_TIMEOUT_EXIT_CODES.includes(result.exitCode ?? -1) && elapsed() >= seconds * 1000),
     durationMs: elapsed(),
     stdout: result.stdout,
     stderr: result.stderr,
