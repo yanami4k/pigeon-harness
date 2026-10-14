@@ -102,6 +102,11 @@ test("决策 457：已删的节开局即报错，写明哪个文件、哪一节�
           "~/.pigeon/settings.json (user settings): messaging has been removed; delete this section"
         )
     );
+    write(userSettingsPath(home), { orchestration: { taskList: false } });
+    assert.throws(
+      () => loadSettings(root, { homeDir: home }),
+      /orchestration has been removed; delete this section \(taskList is now tools\.taskList\)/
+    );
   } finally {
     cleanup();
   }

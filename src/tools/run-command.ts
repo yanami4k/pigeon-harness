@@ -223,8 +223,6 @@ export interface CommandInspection {
   argv?: string[];
   // 启动器路径下解析到的 .cmd / .bat
   scriptPath?: string;
-  // 决策 360：只按 PATH 解析出的程序绝对路径（直接执行时启动它，参数数组仍是原样）
-  program?: string;
 }
 
 // 可选能力：只读检查、按调用授予 shell（治理层使用）
@@ -919,7 +917,7 @@ function spawnPlan(
       : { program: "/bin/sh", args: ["-c", inspection.command], verbatim: false };
   }
   const [first = "", ...args] = inspection.argv ?? [];
-  return { program: inspection.program ?? first, args, verbatim: false };
+  return { program: first, args, verbatim: false };
 }
 
 export interface McpLaunchPlan {

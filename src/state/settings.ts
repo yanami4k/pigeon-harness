@@ -227,7 +227,12 @@ export function validateSettingsLayer(
       continue;
     }
     if (REMOVED_SECTIONS.has(key)) {
-      problems.push(`settings file ${where}: ${key} has been removed; delete this section`);
+      // 决策 479：orchestration 一节里唯一留下的 taskList 搬到了 tools.taskList，写了的照搬过去
+      const moved =
+        key === "orchestration" && isPlainObject(raw[key]) && Object.hasOwn(raw[key], "taskList")
+          ? " (taskList is now tools.taskList)"
+          : "";
+      problems.push(`settings file ${where}: ${key} has been removed; delete this section${moved}`);
       continue;
     }
     if (!Object.hasOwn(SETTINGS_SECTIONS, key)) {

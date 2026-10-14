@@ -561,7 +561,7 @@ export class SessionJobs {
     const all = pool.running();
     if (all.length >= pool.total) {
       throw new BackgroundJobError(
-        `This run already has the maximum of ${jobsText(pool.total)} running (including workers' jobs); ` +
+        `This run already has the maximum of ${jobsText(pool.total)} running; ` +
           `the job was not started and is not queued. ${listRunning(all)} ` +
           "Use job_output to wait for this session's jobs to end, or job_kill to stop the ones you no longer need"
       );

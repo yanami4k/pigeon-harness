@@ -73,7 +73,7 @@ test("决策 339 ⑦、384：三件工具的说明逐字冻结——能找到的
   assert.equal(
     search.description,
     "Search the conversations in this project's earlier sessions (excluding the group of sessions the current session belongs to: " +
-      "the top-level session and the workers and forks it spawned at every level, the current session included). " +
+      "the top-level session and the sessions forked from it at every level, the current session included). " +
       SCOPE +
       " Earlier tool output (command output, contents of files that were read, and so on) is also searched: it may be out of date, so verify the current state before relying on it; " +
       "earlier tool calls were attempts at the time and do not represent the final result. To search only the conversation text (the user's words and the model's replies), pass conversationOnly: true. " +
@@ -99,7 +99,7 @@ test("决策 339 ⑦、384：三件工具的说明逐字冻结——能找到的
   assert.equal(
     list.description,
     "List this project's earlier sessions (excluding the group of sessions the current session belongs to: " +
-      "the top-level session and the workers and forks it spawned at every level, the current session included), newest first. " +
+      "the top-level session and the sessions forked from it at every level, the current session included), newest first. " +
       "Each shows the session ID, the start time (UTC), " +
       "the user's first message (truncated to 60 characters), and the files changed (writes by edit_file and file changes reported by run_command). " +
       "You can filter by start time (since, until; give YYYY-MM-DD or an ISO time; both ends inclusive) " +

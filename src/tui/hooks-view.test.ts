@@ -4,7 +4,7 @@
 //     disableAllHooks 开关；
 //   - SessionStart 补的上下文只前缀给下一条输入（且只一次）；
 //   - Stop 拦住即把理由作为新一轮输入接着跑，连续拦到上限（stopHookBlockCap）后不再跑；
-//   - Notification：审批面板出现记 permission_prompt，worker 的请示另记 worker_approval。
+//   - Notification：审批面板出现记 permission_prompt（面板会话的请示同样）。
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -299,7 +299,7 @@ test("决策 323：外部取消（Esc）后的这一轮不跑 Stop 钩子", asyn
   }
 });
 
-test("决策 323/324：审批面板出现记 permission_prompt；worker 的请示另记 worker_approval", async () => {
+test("决策 323/324、457：审批面板出现记 permission_prompt；面板会话的请示同样记 permission_prompt", async () => {
   const hooks = new FakeHooks();
   const { shell, term, logDir } = makeShell(hooks);
   const notificationTypes = (): string[] =>
@@ -318,14 +318,14 @@ test("决策 323/324：审批面板出现记 permission_prompt；worker 的请�
     term.input("y");
     await settle();
 
-    const workerRequest: ApprovalRequest = {
+    const pooledRequest: ApprovalRequest = {
       toolName: "edit_file",
       toolCallId: "tc-2",
       args: { path: "a.ts" },
       sessionId: newSessionId(),
       pooled: { name: "w1" },
     };
-    void askApprovalPanel(shell, workerRequest);
+    void askApprovalPanel(shell, pooledRequest);
     await settle();
     assert.deepEqual(notificationTypes(), ["permission_prompt", "permission_prompt"]);
     term.input("n");

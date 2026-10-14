@@ -70,16 +70,16 @@ test("工具：未绑定如实说明；建好后回调待移入（不在工具�
   assert.match(text, /End this turn now with a brief reply/);
   assert.deepEqual(entered, [{ path, uncommitted: 2 }]);
   assert.ok(existsSync(join(path, "a.txt")));
-  // 宿主说现在不能移（有 worker 在跑、本轮已有待移入）：拒绝、不建
+  // 宿主说现在不能移（本轮已有待移入等）：拒绝、不建
   slot.bind({
     governanceRoot: root,
     workspaceRoot: () => root,
     baseMode: () => "head",
-    blocked: () => "workers are still running or waiting for approval",
+    blocked: () => "another move is pending",
     onEntered: () => assert.fail("不该回调"),
   });
   const blocked = await tool.execute("c1b", { name: "later" });
-  assert.match(textOf(blocked), /^Not now: workers are still running/);
+  assert.match(textOf(blocked), /^Not now: another move is pending/);
   assert.equal(blocked.details.rejected, "blocked");
   assert.equal(existsSync(join(root, ".pigeon", "wt", "later")), false);
   // 已在工作树里：拒绝

@@ -65,7 +65,7 @@ test("模型名：只有启动参数的占位标签时省掉 powered by 半句�
   );
 });
 
-test("只读的 worker：不提跑命令、编辑与写文件，也不说别用 shell 的 cat 与 grep", () => {
+test("工具只有读与搜的：不提跑命令、编辑与写文件，也不说别用 shell 的 cat 与 grep", () => {
   const text = systemPromptBase(
     input({ offered: only("read_file", "grep", "glob"), backgroundJobs: false })
   );
@@ -84,7 +84,7 @@ test("只读的 worker：不提跑命令、编辑与写文件，也不说别用 
   assert.match(text, /Send independent reads and searches together in one reply\./);
 });
 
-test("能跑命令、能改不能写的 worker：只给它有的那几条", () => {
+test("能跑命令、能改不能写的：只给它有的那几条", () => {
   const text = systemPromptBase(
     input({ offered: only("read_file", "edit_file", "run_command", "grep"), backgroundJobs: true })
   );

@@ -1,4 +1,4 @@
-// 终端界面在沙箱会话里的斜杠命令（决策 237、245）：/export 手动交回；/fork、worker 命令与 /resume 换绑给出不支持的原因。
+// 终端界面在沙箱会话里的斜杠命令（决策 237、245）：/export 手动交回；/fork、/take 与 /resume 换绑给出不支持的原因。
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import {
@@ -30,7 +30,7 @@ function stubHost(sandbox: { exportChanges(): Promise<string> } | undefined) {
   return { host, lines, rendered: () => rendered };
 }
 
-test("沙箱会话：/fork、/spawn、/workers、/take、/resume 给出不支持的原因", () => {
+test("沙箱会话：/fork、/take、/resume 给出不支持的原因", () => {
   const { host, lines } = stubHost({ exportChanges: async () => "不该调用" });
   handleSlashCommand(host, "/fork 换个思路");
   handleSlashCommand(host, "/take fix-a");

@@ -39,7 +39,11 @@ export const PIGEON_KEYBINDINGS = {
     defaultKeys: "ctrl+o",
     description: "Expand or collapse tool output",
   },
-  "pigeon.tree": { defaultKeys: "ctrl+x", description: "Toggle the tree view" },
+  // 决策 457：树形视图已删，这个动作只剩会话面板里连按两下停下选中的会话（名字沿用，免得使用者写过的键位失效）
+  "pigeon.tree": {
+    defaultKeys: "ctrl+x",
+    description: "Stop the selected session in the session panel (press twice)",
+  },
   // 决策 470：输入框为空时连按两下打开会话面板（进入的面板会话里即回面板）
   "pigeon.openPanel": {
     defaultKeys: "left",

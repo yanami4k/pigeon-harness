@@ -272,6 +272,7 @@ export const modelInfo = {
 | `tools.runCommand.maxBackgroundJobsTotal` | 整次运行（同一进程里的各个会话）同时在跑的后台作业上限 | 8 |
 | `tools.runCommand.backgroundOutputMaxBytes` | 单个后台作业的输出文件上限，超出只留末尾 | 16777216（16 MiB） |
 | `tools.runCommand.backgroundCloseoutSeconds` | 无人值守收尾前等在跑作业的总时限（秒），每次运行各自计，计入运行的墙钟预算；0 为不等、直接停掉在跑的作业 | 600 |
+| `tools.taskList` | 任务清单两件工具（update_tasks、list_tasks）开不开（决策 294、479；原先在已删的 `orchestration` 一节） | true |
 
 run_command 的输出超过开头加末尾两段时，结果里留开头与末尾、中间注明省略的行数；完整输出存进会话自己的落盘目录 `.pigeon/state/outputs/<会话号>/`，结果给出虚拟路径 `pigeon://outputs/<会话号>/<编号>` 与总行数。read_file 认得这个前缀，直接从落盘目录读，不经执行端（沙箱会话同样如此）；虚拟路径只能是 `pigeon://outputs/` 加会话号加编号，会话只能是本会话或其分叉来源（别的会话的编号明确报错），指不到落盘目录以外。落盘目录在工作区的 `.pigeon/state` 里，任何一级被换成链接即拒绝读写；read_file 只认 Pigeon 自己写下的那份：每份写成时在会话落盘目录的 `index.json` 记下设备号、inode、大小与 sha256，读时逐项核对，落盘文件被改动、换成链接或硬链接都拒绝读取。落盘出错（如磁盘满）时照常给出开头与末尾，并注明全文未能保存，不留半截文件。虚拟路径的行号只按换行（`\n`）计，与结果里的总行数一致。落盘文件随会话保存。
 
@@ -500,6 +501,7 @@ config/secrets.json
 | `pigeon.cancel` | `escape` | 取消正在跑的这一轮；空闲且输入框为空时连按两下打开消息树（会话回退） |
 | `pigeon.exit` | `ctrl+c` | 清空输入；连按两下退出（有选区时为复制） |
 | `pigeon.toggleToolOutput` | `ctrl+o` | 展开或收起工具结果 |
+| `pigeon.tree` | `ctrl+x` | 会话面板里连按两下停下选中的会话（决策 457 起树形视图已删，名字沿用；主视图里不绑） |
 | `pigeon.toggleMode` | `shift+tab` | 在询问与放手两种审批模式之间切换（只对当前会话） |
 | `pigeon.resume.rename` | `ctrl+r` | 续接视图里给选中的会话就地改名 |
 | `pigeon.openPanel` | `left` | 输入框为空时连按两下打开会话面板（进入的面板会话里即回面板）；设置 `tui.leftArrowOpensPanel` 可关 |

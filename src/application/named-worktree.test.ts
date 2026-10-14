@@ -26,7 +26,7 @@ import {
   worktreeInUseByOthers,
 } from "../persistence/worktree-in-use.ts";
 import { newSessionId } from "../state/ids.ts";
-import { sessionsDirOf } from "../state/paths.ts";
+import { sessionsDirOf, worktreesDirOf } from "../state/paths.ts";
 import {
   assertWorktreeName,
   closeNamedWorktree,
@@ -364,6 +364,24 @@ test("续接开在独立工作树里的会话：工作区回到那个工作树�
   );
   assert.equal(sessionRuntimeScope(repo, sessionId).workspaceRoot, wt.path);
   removeNamedWorktree(wt);
+  assert.equal(sessionRuntimeScope(repo, sessionId).workspaceRoot, repo);
+});
+
+test("决策 477：续接旧会话里的 worker 会话（文件头记的工作目录在 .pigeon/state/worktrees 下）回到那个工作树；不在即回到主检出", () => {
+  const repo = plainRepo();
+  const path = join(worktreesDirOf(repo), "impl-1-abc123");
+  mkdirSync(path, { recursive: true });
+  const sessionId = newSessionId();
+  const dir = join(sessionsDirOf(repo), sessionDirectoryName(path));
+  mkdirSync(dir, { recursive: true });
+  const createdAt = Date.now();
+  writeFileSync(
+    join(dir, sessionFileName(createdAt, sessionId)),
+    `${JSON.stringify({ kind: "header", version: 4, id: sessionId, createdAt, cwd: path, parentSessionId: "sess_parent", metadata: { pigeon: { version: 1, worker: { name: "impl-1" } } } })}
+`
+  );
+  assert.equal(sessionRuntimeScope(repo, sessionId).workspaceRoot, path);
+  rmSync(path, { recursive: true, force: true });
   assert.equal(sessionRuntimeScope(repo, sessionId).workspaceRoot, repo);
 });
 

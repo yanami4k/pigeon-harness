@@ -2,7 +2,7 @@
 // 驱动的最小壳——消息区（每消息一个 Text）+ 底行输入区 + 纯 ASCII chrome（标题/状态栏）。
 //
 // 决策 067 拆分（零行为变化）：消息流在 message-flow.ts，审批面板与按键路由在 modal.ts，
-// 斜杠命令分发在 commands.ts，worker 命令与状态行在 workers-view.ts，resume / 历史 / 换绑在
+// 斜杠命令分发在 commands.ts，resume / 历史 / 换绑在
 // resume-view.ts；本文件保留布局、启停、提交与事件渲染，并重新导出原有公开符号（导入方不变）。
 // 运行中、恢复中、待审批、退出布防等状态一律由本壳持有，子模块经窄接口读写，不各自存一份。
 //
@@ -21,7 +21,7 @@
 //   （内容超高流入回卷，差分渲染器重写尾部）；包装声明意图，alt-screen 布局引擎下自动生效。
 // - 运行中输入（决策 286 第 4 项，取代决策 027 的 busy 拒绝）：运行中（含压缩、/resume 进行中）提交的输入进队列
 //   （input-queue.ts），空闲后逐条自动发出；Esc 中断时排队内容退回输入框，Alt+Up（Windows 下另认 Alt+Q）随时退回。
-//   斜杠命令不排队：只读类与 /cancel、/quit 运行中照常执行，改主会话状态或工作目录的命令拒绝并说明原因、输入留在
+//   斜杠命令不排队：只读类与 /quit 运行中照常执行，改主会话状态或工作目录的命令拒绝并说明原因、输入留在
 //   输入框（放行表在 command-table.ts）。
 // - 审批面板（S3，决策 029）、取消键（S5 裁决 032）与退出三层形态（S5+ 裁决 033）的交互语义见 modal.ts；
 //   壳停止时挂起的审批 fail-closed 按拒绝处理（理由逐字）。
@@ -34,15 +34,7 @@
 //   一行，如 "done · 1m 23s"，不写失败分类（措辞在 application/format.ts 的 workEndLine）；listenerErrors 非空时消息区
 //   增量警告（D2 可见化的 TUI 投影，措辞与增量报数口径同 cli repl：启动即查 + 每次 run 收尾复查）。
 // - dispose 对称：取消键的订阅与监听器一律进 disposers，在 start/stop 里成对出现。
-// - 决策 301（编排进度）：输入框下方、状态栏之下是编排面板（worker-panel.ts，取代原先输入框上方的 worker 状态行）；Ctrl+X 或
-//   /agents 切换整屏的树形视图（worker-tree.ts）；输入框为空时按 ↓ 进入面板选 worker。在面板与树形视图里回车进入 worker 的会话：
-//   消息区换成它的对话（历史取自会话记录，之后实时），输入作为消息发给它，/stop 停止、/approve 补批续做，Esc 回主会话。
-//   主会话在此期间照常运行（主会话的消息区在后台照常更新）；审批面板就地在当前视图弹出（写明来源），答完仍留在原处。
-//   已收尾的 worker 会话只读（停在等审批的可 /approve 补批续做）。
-// - 决策 304：树形视图分两种模式，Tab 切换——运行中（上面的编排树）与会话树（session-tree.ts，当前会话这一家）。会话树里
-//   Enter 查看（本次运行编排器里的 worker 进入其会话，其余只读看历史，Esc 回树），r 在此续接（主会话、分支、失败重试；
-//   走 /resume 同一流程）。
-//   面板、树形视图与状态栏的在跑 worker 花费同源（worker-activity.ts，编排器的只读观察口）。
+// - 决策 457：worker 的编排面板、整屏树形视图与 worker 会话视图已删除；消息树是会话回退自己的整屏视图（rewind）。
 import {
   type Component,
   type Editor,
@@ -1415,7 +1407,7 @@ export class PigeonTuiShell
     return this.view === "rewind";
   }
 
-  // 决策 435：打开消息树（双击 Esc、/rewind、会话树里 Tab）
+  // 决策 435：打开消息树（双击 Esc、/rewind）
   openRewind(): void {
     const rewind = this.options.rewind;
     if (rewind === undefined) return;

@@ -1,6 +1,6 @@
 // /config 设置视图的选项（决策 442；决策 465 起扩到全部简单配置项）：开关、枚举、数字与短字符串按组列出（模型、联网、上下文、
 // 工具、防打转与钩子、工作区、界面；键位另成一组，见 tui/keybindings.ts）。结构复杂的（mcp、hooks 配置本身、modelInfo、
-// commands）、权限类（permissions、trustedDirectories）、即将删除的（orchestration）、自由文本的地址与镜像不放。
+// commands）、权限类（permissions、trustedDirectories）、自由文本的地址与镜像不放。
 // 每项给出生效值、用户级写的值、缺省值，以及是否被项目设置（项目共享层 .pigeon/settings.json 或项目个人层
 // .pigeon/settings.local.json）覆盖——覆盖时改用户级不生效。改动只写用户级 ~/.pigeon/settings.json（保留文件里的其余内容；
 // 写前按设置的校验规则核对整份文件，再把三层合并起来核对跨字段的约束，过不了即不写），由调用方随后按 /reload 的重建当场生效。

@@ -1,11 +1,11 @@
 // 留下的工作树的列出与删除（决策 448）：终端界面的 /worktrees 与命令行的 pigeon worktrees list|clean 共用。
-// 列出四类：.pigeon/state/worktrees/ 下 git 登记的工作树（worker、/fork 的）、登记还在而目录已不在的、没有工作树的
-// pigeon/ 分支（以前留下的旧分支等）、该目录下 git 不认的残留目录。每项给所属会话（派出它的会话，读 worker 会话文件头）、
-// 是否在用、未取走的改动（worker 相对起点改过、内容又与主检出不同的文件数）与占用大小。
-// - 比较的基准一律是主检出（不是当前目录）；当前目录在 worker 工作树里时拒绝列出与删除。
+// 列出四类：.pigeon/state/worktrees/ 下 git 登记的工作树（/fork 的、以前 worker 留下的）、登记还在而目录已不在的、没有工作树的
+// pigeon/ 分支（以前留下的旧分支等）、该目录下 git 不认的残留目录。每项给所属会话（派出它的会话，读工作树里那个会话的文件头）、
+// 是否在用、未取走的改动（相对起点改过、内容又与主检出不同的文件数）与占用大小。
+// - 比较的基准一律是主检出（不是当前目录）；当前目录在这些工作树里时拒绝列出与删除。
 // - 起点取分支引用日志里最早的一条；取不到记为"不明"，按有改动对待。
-// - 在用：worker 会话正被一个仍在的进程打开；所属会话正被另一个仍在的进程打开；刚建、还没有 worker 会话记录（10 分钟内）；
-//   终端界面另给本进程里仍可能用到它的 worker（在跑、排队、等补批）。读锁出错也按在用算。
+// - 在用：工作树里那个会话正被一个仍在的进程打开；所属会话正被另一个仍在的进程打开；刚建、还没有会话记录（10 分钟内）；
+//   调用方另给本进程里仍在用它的会话（liveWorkers）。读锁出错也按在用算。
 // 删除缺省只删没有未取走改动的；点名或 --all 才删有改动的，并明说会丢。在用的一律不删。删之前重新核一遍：
 // 期间变成在用或改动有变化的剔除并说明。删除不跟随链接（worktree.ts 的 removeWorktree）。
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
@@ -63,11 +63,11 @@ export interface LeftoverWorktree {
 }
 
 export interface WorktreeScope {
-  // 当前工作目录（据它找主仓库；在 worker 工作树里时拒绝）
+  // 当前工作目录（据它找主仓库；在这些工作树里时拒绝）
   workspaceRoot: string;
   // 治理根（.pigeon 所在）；缺省主仓库根
   governanceRoot?: string;
-  // 终端界面：本进程里仍可能用到工作树的 worker 会话号（在跑、排队、等补批）
+  // 本进程里仍在用工作树的会话号（缺省没有）
   liveWorkers?: () => ReadonlySet<string>;
   // 测试用的时钟（判断"刚建"）
   now?: () => number;
@@ -184,7 +184,7 @@ function workerFacts(
     if (dir !== undefined) {
       try {
         const age = (scope.now?.() ?? Date.now()) - statSync(dir).mtimeMs;
-        if (age < FRESH_MS) return { inUseReason: "just created, no worker session yet" };
+        if (age < FRESH_MS) return { inUseReason: "just created, no session yet" };
       } catch {
         // 目录读不了：照常列
       }
@@ -195,7 +195,7 @@ function workerFacts(
   const owner = header?.parentSessionId;
   const facts: WorkerFacts = owner !== undefined ? { ownerSessionId: owner } : {};
   if (sessionFileHolder(file.path) !== undefined) {
-    return { ...facts, inUseReason: "worker running" };
+    return { ...facts, inUseReason: "session open" };
   }
   if (owner !== undefined) {
     const ownerFile = locateSessionFile(sessionsDir, owner);
@@ -215,7 +215,7 @@ function assertNotInWorkerWorktree(scope: WorktreeScope, governanceRoot: string)
   const stateDir = realOrResolved(worktreesDirOf(governanceRoot));
   if (isInside(stateDir, here) || samePath(stateDir, here)) {
     throw new WorktreeCleanupError(
-      "not available inside a worker worktree; run from the main checkout"
+      "not available inside a worktree under .pigeon/state/worktrees; run from the main checkout"
     );
   }
 }
@@ -385,7 +385,7 @@ function itemLine(item: LeftoverWorktree, index: number): string {
     ...(item.kind === "branch-only" || item.kind === "missing-dir"
       ? []
       : [formatBytes(item.bytes)]),
-    ...(item.inUse ? [`in use (${item.inUseReason ?? "worker running"})`] : []),
+    ...(item.inUse ? [`in use (${item.inUseReason ?? "session open"})`] : []),
   ];
   return `  ${parts.join("  ")}`;
 }
@@ -432,7 +432,7 @@ export function planClean(items: readonly LeftoverWorktree[], args: readonly str
     if (item === undefined) {
       refused.push(`${arg}: not found`);
     } else if (item.inUse) {
-      refused.push(`${arg}: in use (${item.inUseReason ?? "worker running"})`);
+      refused.push(`${arg}: in use (${item.inUseReason ?? "session open"})`);
     } else {
       picked.add(item);
     }
@@ -473,7 +473,7 @@ export function revalidatePlan(scope: WorktreeScope, plan: CleanPlan): CleanPlan
     if (now === undefined) {
       refused.push(`${item.name}: gone`);
     } else if (now.inUse) {
-      refused.push(`${item.name}: now in use (${now.inUseReason ?? "worker running"})`);
+      refused.push(`${item.name}: now in use (${now.inUseReason ?? "session open"})`);
     } else if (now.untaken !== item.untaken) {
       refused.push(`${item.name}: changed since listing (${untakenText(now)})`);
     } else {

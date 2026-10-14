@@ -1,5 +1,5 @@
 // 命令输出虚拟路径的可读来源（决策 356）：来源取自会话存储的文件头——分支的分支一路往上都认（续接的分支会话不靠调用方
-// 传入的来源）；worker 会话不认派出方；本会话的文件还没写出时用调用方给的来源。
+// 传入的来源）；旧会话格式的 worker 会话按父会话往上认（决策 477）；本会话的文件还没写出时用调用方给的来源。
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -154,7 +154,7 @@ test("列出：三类条目、所属会话、在用、未取走的改动、旧�
   assert.match(text, /dirty .*untaken changes: 1 file/);
   assert.match(text, /old \(old naming\)/);
   assert.match(text, /stale \(old naming\) {2}branch pigeon\/stale \(worktree gone\)/);
-  assert.match(text, /busy .*in use \(worker running\)/);
+  assert.match(text, /busy .*in use \(session open\)/);
 });
 
 test("挑选：缺省只挑没有可丢东西且不在用的；--all 挑全部不在用的；点名照挑；在用的、不认得的列为不删", () => {
@@ -174,7 +174,7 @@ test("挑选：缺省只挑没有可丢东西且不在用的；--all 挑全部�
   const index = items.findIndex((item) => item.name === "dirty") + 1;
   const named = planClean(items, [String(index), "busy", "nope"]);
   assert.deepEqual(names(named), ["dirty"]);
-  assert.deepEqual(named.refused, ["busy: in use (worker running)", "nope: not found"]);
+  assert.deepEqual(named.refused, ["busy: in use (session open)", "nope: not found"]);
 });
 
 test("终端界面 /worktrees：clean 先给清单并写明会丢的改动，confirm 才删；中间打别的 /worktrees 即作罢", () => {
@@ -303,11 +303,11 @@ test("确认之后、删之前重新核一遍：期间又改了文件的、变�
     );
     return true;
   });
-  assert.match(answered, /dirty: now in use \(worker running\)/);
+  assert.match(answered, /dirty: now in use \(session open\)/);
   assert.ok(existsSync(f.dirty.path));
 });
 
-test("在用的另几种：所属会话被另一个仍在的进程打开、刚建还没有 worker 会话记录、终端界面给的本进程里还在用的", () => {
+test("在用的另几种：所属会话被另一个仍在的进程打开、刚建还没有会话记录、调用方给的本进程里还在用的", () => {
   const repo = makeRepo();
   const owner = newSessionId();
   const workerId = newSessionId();
@@ -327,7 +327,7 @@ test("在用的另几种：所属会话被另一个仍在的进程打开、刚�
   const fresh = addWorktree({ repoRoot: repo, sessionId: newSessionId(), name: "fresh" });
   const items = listLeftoverWorktrees({ workspaceRoot: repo });
   assert.equal(byName(items, "owned").inUseReason, "owner session is open");
-  assert.equal(byName(items, "fresh").inUseReason, "just created, no worker session yet");
+  assert.equal(byName(items, "fresh").inUseReason, "just created, no session yet");
   assert.deepEqual(planClean(items, ["--all"]).remove, []);
   const live = listLeftoverWorktrees({
     workspaceRoot: repo,

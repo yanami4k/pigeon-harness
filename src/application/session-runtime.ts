@@ -264,9 +264,7 @@ export async function openSessionRuntime(
         ? { workspaceHost: request.workspaceHost, pathScopedGrants: false }
         : {}),
       // 决策 446：沙箱不注册
-      ...(request.enterWorktree !== undefined &&
-      scope.parentSessionId === undefined &&
-      request.workspaceHost === undefined
+      ...(request.enterWorktree !== undefined && request.workspaceHost === undefined
         ? { enterWorktree: request.enterWorktree }
         : {}),
       ...(request.taskList === true ? { taskList: true } : {}),
@@ -315,7 +313,7 @@ export async function openSessionRuntime(
     // M7（决策 078）：主会话在 git 工作区里打快照（写或命令确实改变文件后）
     // 执行端另一侧的工作区（沙箱）不在宿主上打快照
     const checkpoints =
-      scope.parentSessionId === undefined && request.workspaceHost === undefined
+      request.workspaceHost === undefined
         ? attachCheckpoints({
             bundle,
             workspaceRoot: scope.workspaceRoot,

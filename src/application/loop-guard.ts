@@ -97,20 +97,6 @@ export interface LoopGuardTarget {
   notify(text: string): unknown;
 }
 
-// 运行面句柄上可选的整轮观察口与通知 → 挂点；缺一即 undefined。按方法调用，保留句柄自己的 this
-export function loopGuardTargetOf(runtime: {
-  subscribeRounds?(listener: (round: TurnRoundNotice) => void): () => void;
-  notify?(text: string): unknown;
-}): LoopGuardTarget | undefined {
-  if (runtime.subscribeRounds === undefined || runtime.notify === undefined) {
-    return undefined;
-  }
-  return {
-    subscribeRounds: (listener) => runtime.subscribeRounds?.(listener) ?? (() => {}),
-    notify: (text) => runtime.notify?.(text),
-  };
-}
-
 // 把打转检测挂到运行面上：提醒经通知进下一轮；计到叫停轮数时调用 onStop（每次叫停只调一次；叫停后计数照常，
 // 调用方的中止使这次运行就此结束）。按 Run 计：换了 Run（人发了下一条、续跑）即从零开始。关掉时不挂、返回空的退订
 export function attachLoopGuard(

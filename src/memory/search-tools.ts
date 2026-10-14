@@ -220,7 +220,7 @@ export function createSearchSessionsTool(
     label: SEARCH_SESSIONS_TOOL,
     description:
       "Search the conversations in this project's earlier sessions (excluding the group of sessions the current session belongs to: " +
-      "the top-level session and the workers and forks it spawned at every level, the current session included). " +
+      "the top-level session and the sessions forked from it at every level, the current session included). " +
       SCOPE_GUIDANCE +
       " Earlier tool output (command output, contents of files that were read, and so on) is also searched: it may be out of date, so verify the current state before relying on it; " +
       "earlier tool calls were attempts at the time and do not represent the final result. To search only the conversation text (the user's words and the model's replies), pass conversationOnly: true. " +
@@ -358,7 +358,7 @@ export function createListSessionsTool(
     label: LIST_SESSIONS_TOOL,
     description:
       "List this project's earlier sessions (excluding the group of sessions the current session belongs to: " +
-      "the top-level session and the workers and forks it spawned at every level, the current session included), newest first. " +
+      "the top-level session and the sessions forked from it at every level, the current session included), newest first. " +
       "Each shows the session ID, the start time (UTC), " +
       `the user's first message (truncated to ${FIRST_USER_TEXT_CHARS} characters), and the files changed (writes by edit_file and file changes reported by run_command). ` +
       "You can filter by start time (since, until; give YYYY-MM-DD or an ISO time; both ends inclusive) " +

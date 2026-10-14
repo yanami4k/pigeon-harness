@@ -135,3 +135,19 @@
 
 - 本机：`tsc --noEmit`、`biome check`、`dependency-cruiser` 通过；改过的测试文件一起跑过，另按目录分批跑了快档全部目录。分批跑出的失败里，按旧行为断言的（worker 用量计入、worker 条目与来源链、旧配置迁移、豁免缺省、角色清单、命令放行表）都已改写；另有三条在本机失败：`checkpoints-async.test.ts` 的"保留修改时间的同长度覆盖"、`container-host.test.ts` 的假 docker 文件清单、`container-round-trips.test.ts` 的符号链接受保护路径——在基线 3dd0804 上同样失败，是本机（Windows）环境问题，与本块无关；`update-memory-tool.test.ts` 的两进程并发写一条偶发失败，单独重跑通过。
 - 全量测试与打包冒烟在服务器上跑。
+
+## 四、独立审查
+
+对提交 f52210a 另派审查（只读，在提交的快照上跑 tsc 与相关测试）。没有发现正确性问题：`detached-runtime.ts` 与原 `workers.ts` 里无人值守的那一份逐项一致（MCP 启动与失败时关闭、就绪前的订阅、收尾等后台作业、续跑、释放）；`headless-core.ts` 的收尾循环、`shell.ts` 的按键路由与回退视图、`main.ts` 在 /reload 与 /resume 换绑后的 /fork、沙箱里的 /fork 与 /take、设置里已删的节与节内的键、迁移命令的计划与执行同一份结论，都核对过；旧会话（带 `pigeon.worker` 条目与 worker 文件头）在 trace、replay、会话列表、续接列表、检索、回退里打开无错无告警；没有 CR 换行。
+
+两处有意的差别补记在这里：没有 MCP 时就绪前到来的中断现在让运行按中止交回（原来忽略；唯一这样调用的是已中止的信号，headless 本来就跳过）；`/take session:名字` 不再认前缀，按名字原样找（479）。
+
+指出的问题与处理（另一提交）：
+
+- 中：按会话号续接旧会话里的 worker 会话，会落到主检出里干活（原来回到它自己的工作树）。改为续接时文件头记的工作目录在 `.pigeon/state/worktrees/` 下且还在即回到那里，不在即回到治理根，与独立工作树里的会话同一规矩；`SessionRuntimeScope.parentSessionId` 已无人设，连同按它关掉快照与 enter_worktree 的两处判断删掉（分支会话本来就不设它，行为不变）。续接列表照旧不列这些会话，只有直接给会话号才会续接到。
+- 设置：`orchestration` 一节里写了 `taskList` 的，开局报错句末注明它已搬到 `tools.taskList`（478 补写节内键与这一注的写法）。
+- 文字：`pigeon.tree` 的说明改为会话面板里连按两下停下会话（名字沿用，免得写过键位的设置失效；文档的键位表补回这一行）；search_sessions 与 list_sessions 的说明、后台作业上限的报错、`/worktrees` 的在用原因与拒绝说明里去掉 worker。
+- 死代码：`CommandInspection.program`、`loopGuardTargetOf` 删掉。`RuntimeDeps.toolPolicy` 及其分支、`WorktreeScope.liveWorkers`、设置重读与 /config 的 `busy` 钩子、`LOOP_GUARD_TEXTS.agentReason` 留给下一块（子 agent 的工具范围、临时工作树在用、子 agent 在跑时挡住 /config 与 /reload、子 agent 打转叫停的原因）改用或删掉。几个失去外部调用方的导出（`NoticeTarget`、`DrainTarget` 等）不动。
+- 注释与测试名：`shell.ts` 文件头的编排面板与树形视图段落、`command-table.ts` 与 `shell.ts` 里的 `/cancel`、`task-list-tool.ts`、`config-options.ts`、`worktree-cleanup.ts`、`memory/session-search.ts`、`output-ancestors.test.ts` 里过时的说法改掉；`governance.ts` 文件头被连带删掉的说明补回；`hooks-view`、`sandbox-commands`、`system-prompt`、`enter-worktree-tool` 几个测试的名字与样例去掉 worker。
+- 文档：决策 324、433 标部分已改；路线图里派 worker、take_worker 两行标部分已改，编排界面一行标已退役；配置文档的 `tools` 表补 `tools.taskList` 一行。
+- 记下不改：`hasSessionHistory` 把续接的旧 worker 会话的父会话算作有历史，而检索时排除了它，检索工具可能注册了却搜不到东西，只在直接续接旧 worker 会话时出现。`pi-runtime/session-store.test.ts` 用 worker 文件头验写者原样写 metadata，下一块换成子 agent 的文件头。配置文档里 `SubagentStart`、`SubagentStop` 的触发时机下一块接上后才成立。
