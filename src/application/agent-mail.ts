@@ -64,8 +64,8 @@ export function neutralizeMarkers(text: string): string {
   return text
     .split("\n")
     .map((line) => {
-      const probe = line.normalize("NFKC").replace(/[​-‏⁠-⁩﻿­]/g, "");
-      return /<\s*<\s*<?\s*(BEGIN|END)\s*AGENT\s*[-‐-―−]?\s*MESSAGE/i.test(probe)
+      const probe = line.normalize("NFKC").replace(/[\u200b-\u200f\u2060-\u2069\ufeff\u00ad]/g, "");
+      return /<\s*<\s*<?\s*(BEGIN|END)\s*AGENT\s*[-\u2010-\u2015\u2212]?\s*MESSAGE/i.test(probe)
         ? `(escaped) ${line}`
         : line;
     })

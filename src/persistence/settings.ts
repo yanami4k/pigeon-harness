@@ -88,7 +88,7 @@ export function readSettingsLayer(location: SettingsLocation): SettingsFile | un
 export interface LoadSettingsOptions {
   // 用户主目录（缺省 os.homedir()；测试指到临时目录）
   homeDir?: string;
-  // 决策 342：项目的 settings.local.json 被 git 跟踪（按共享层对待；决策 450 的收件规则据此只许它收紧）
+  // 决策 342：项目的 settings.local.json 被 git 跟踪（按共享层对待：其中的键位不采用，决策 439）
   localLayerTracked?: boolean;
 }
 

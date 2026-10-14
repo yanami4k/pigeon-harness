@@ -93,7 +93,7 @@ test("清单：按组列出各项；结构复杂的、权限类、即将删除�
   }
   assert.ok(
     !ids.some((id) =>
-      /^(mcp|hooks|modelInfo|commands|permissions|trustedDirectories|orchestration|messaging|keybindings)\b|baseUrl|\.model$|sandbox\.(image|dockerfile|context|build)/.test(
+      /^(mcp|hooks|modelInfo|commands|permissions|trustedDirectories|orchestration|keybindings)\b|baseUrl|\.model$|sandbox\.(image|dockerfile|context|build)/.test(
         id
       )
     ),

@@ -67,3 +67,19 @@
 
 - 本机：`tsc --noEmit`、`biome check` 通过；分两批跑过受影响的测试（settings、agent-mail、history、rewind、session-name、session-list、rename-shell；approval 各测试、headless、headless-hooks、input-queue、config-options、session-* 各测试）。
 - 全量测试与打包冒烟在服务器上跑。
+
+## 五、独立审查
+
+对提交 5cf2edc 另派审查（只读，在提交的快照上跑 tsc、biome 与相关测试）。没有发现正确性问题：普通工具审批的行为不变（0.6 秒防误触与让位只在扣住的消息面板出现或被顶替时才有），会话名的两条规则与原来逐字节一致，`MailGate` 的检查顺序与阈值同原来（字数上限、清过期、去重、待读满、限流，成功才记），已删的节在三层都开局报错，写设置的几处走同一个校验；没有 CR 换行。
+
+两处有意的差别补记在这里：限流改为按发送方与收件方成对计、只计消息（原来回告与订阅也计）；只有空白的消息现在同样拒收（原来只拒空串）。
+
+指出的残留与处理（另一提交）：
+
+- `scripts/vitest-git-env.mjs` 还在给测试进程设 `PIGEON_PEER_ADDRESS_PREFIX`，注释还提会话名录：删掉。上文"环境变量已删除"至此才完全属实。
+- `shell.ts` 的 `inputIsEmpty()`（只给扣住消息的面板用）已无人调用：删掉；`shell.ts`、`commands.ts`、`persistence/settings.ts` 三处提 450 收件规则或名录的注释改掉。
+- `config-options.test.ts` 的排除清单里还列着 `messaging`：去掉。
+- 原 `peer-messaging.test.ts` 里会话名规则的几条字面值断言随文件删掉了：在 `session-name.test.ts` 补一例（合法与不合法的名字、40 字上限、缺省名的写法，含 Windows 路径与空格）。
+- `agent-mail.ts` 里零宽与连字符的字符类被写成了看不见的原字符：改回 `\u` 转义，行为不变。
+- 决策 450 的索引行两条"部分已改"并列，前一条已被后一条取代：合成一条。
+- 审查另提：478 说 `commands.roles` 之后也开局报错，而现在的检查只看顶层的节——下一块加 `commands.roles` 时一并支持节内的键。

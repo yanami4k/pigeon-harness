@@ -1919,12 +1919,7 @@ export class PigeonTuiShell
     this.drainQueue();
   }
 
-  // 决策 450：输入框为空（扣住的消息面板等它为空再弹）
-  inputIsEmpty(): boolean {
-    return this.input.getText().trim() === "";
-  }
-
-  // 决策 450、456：/rename（CommandsHost）
+  // 决策 456：/rename（CommandsHost）
   get renameSession(): ((name: string) => string) | undefined {
     return this.options.renameSession;
   }

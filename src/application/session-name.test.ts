@@ -16,6 +16,7 @@ import {
   sessionDisplayName,
   sessionNameOf,
   storedSessionName,
+  validSessionName,
 } from "./session-name.ts";
 
 function userMessage(text: string): AgentMessage {
@@ -125,6 +126,15 @@ test("改名记进会话文件：推迟建文件时不为改名建文件，随�
     await writer.close();
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("名字规则：字母、数字、下划线、连字符与点，最长 40；缺省名为目录名加会话号末 4 位（小写）", () => {
+  assert.equal(validSessionName("api-worker_2"), true);
+  assert.equal(validSessionName("v1.2"), true);
+  assert.equal(validSessionName("有 空格"), false);
+  assert.equal(validSessionName("a".repeat(41)), false);
+  assert.equal(defaultSessionName("/w/proj", "sess_01ABCDEFXYZ1"), "proj-xyz1");
+  assert.equal(defaultSessionName("C:\\work\\my app", "sess_01ABCDEF0001"), "my-app-0001");
 });
 
 test("显示名：记过的合规名字照用，否则缺省名（工作目录名加会话号末 4 位）", () => {
