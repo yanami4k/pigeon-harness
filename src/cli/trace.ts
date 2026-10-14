@@ -6,6 +6,7 @@
 import { createHash } from "node:crypto";
 import {
   approvalVerdict,
+  compactNumber,
   continuationLine,
   evalVerdictLabel,
   failureBadge,
@@ -266,12 +267,12 @@ function renderRun(
     if (isSyntheticFailure(assistant)) {
       turnHeader += " (synthetic upstream failure)";
     }
-    // M5 S5（决策 044）：本轮 token 与成本
+    // M5 S5（决策 044）：本轮 token；决策 476：不写金额，末尾是这一轮合计的 token 数（与状态栏同一个口径）
     const usage = assistant.usage;
     if (usage !== undefined) {
       turnHeader +=
         ` | tokens in ${usage.input} / out ${usage.output} / cache read ${usage.cacheRead} / ` +
-        `cache write ${usage.cacheWrite} | $${usage.cost.total.toFixed(4)}`;
+        `cache write ${usage.cacheWrite} | ${compactNumber(usage.totalTokens)} tokens`;
     }
     lines.push(turnHeader);
     for (const call of turn.toolCalls) {

@@ -1,5 +1,6 @@
-// M5 S5（决策 044）：usage 与快照摘要的投影——会话摘要算每会话总 token 与成本（会话列表呈现），
-// trace 的 Run 头显示 Run 开始摘要与模型请求次数（助手消息条数），每轮显示 usage。读新会话存储：用量取自助手消息。
+// M5 S5（决策 044）：usage 与快照摘要的投影——会话摘要算每会话总 token（会话列表呈现；决策 476：只写 token 数、不写金额，
+// 写法同状态栏），trace 的 Run 头显示 Run 开始摘要与模型请求次数（助手消息条数），每轮显示 usage 与这一轮合计的 token 数（不写
+// 金额）。会话摘要里的金额字段照旧算（不删字段）。读新会话存储：用量取自助手消息。
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -55,7 +56,8 @@ test("会话摘要合计 token 与成本并在会话列表呈现；trace Run 头
     assert.ok(Math.abs((summary?.totalCost ?? 0) - 0.0051) < 1e-9);
 
     const list = runSessionListCommand({ root });
-    assert.match(list, /500 tokens {2}\$0\.0051/);
+    assert.match(list, / {2}500 tokens$/m);
+    assert.doesNotMatch(list, /\$|¥/);
 
     const trace = runTraceCommand({ root, sessionId });
     const prompt = createHash("sha256").update("系统提示").digest("hex").slice(0, 12);
@@ -67,12 +69,13 @@ test("会话摘要合计 token 与成本并在会话列表呈现；trace Run 头
     );
     assert.match(
       trace,
-      /turn 1 .*tokens in 120 \/ out 30 \/ cache read 100 \/ cache write 0 \| \$0\.0031/
+      /turn 1 .*tokens in 120 \/ out 30 \/ cache read 100 \/ cache write 0 \| 250 tokens$/m
     );
     assert.match(
       trace,
-      /turn 2 .*tokens in 200 \/ out 50 \/ cache read 0 \/ cache write 0 \| \$0\.0020/
+      /turn 2 .*tokens in 200 \/ out 50 \/ cache read 0 \/ cache write 0 \| 250 tokens$/m
     );
+    assert.doesNotMatch(trace, /\$\d|¥/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

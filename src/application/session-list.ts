@@ -7,7 +7,7 @@ import { legacySessionsNote } from "../persistence/session-catalog.ts";
 import { listSessionSummaries } from "../persistence/session-list.ts";
 import { sessionsDirOf } from "../state/paths.ts";
 import type { SessionListFilters } from "../state/session-summary.ts";
-import { plural } from "./format.ts";
+import { compactNumber, plural } from "./format.ts";
 import { sessionDisplayName } from "./session-name.ts";
 
 export interface SessionListCommandOptions {
@@ -27,11 +27,8 @@ export function runSessionListCommand(options: SessionListCommandOptions): strin
   }
   for (const summary of summaries) {
     // 时间渲染：UTC（ISO 切片），跨时区确定——测试文本比对与 grep 友好
-    // M5 S5（决策 044）：有 usage 的会话追加总 token 与成本
-    const usage =
-      summary.totalTokens > 0
-        ? `  ${summary.totalTokens} tokens  $${summary.totalCost.toFixed(4)}`
-        : "";
+    // M5 S5（决策 044）：有 usage 的会话追加总 token；决策 476：不写金额，写法同状态栏
+    const usage = summary.totalTokens > 0 ? `  ${compactNumber(summary.totalTokens)} tokens` : "";
     // M5.5 S4（决策 040）：父子关系安静后缀
     const lineage =
       summary.worker !== undefined

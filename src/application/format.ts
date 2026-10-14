@@ -261,3 +261,10 @@ export function sanitizeTerminalText(text: string): string {
   }
   return out;
 }
+
+// 1234 → 1.2k；1234567 → 1.2M（状态栏、pigeon trace 与 pigeon session list 的 token 数同一种写法，决策 468、476）
+export function compactNumber(value: number): string {
+  if (value < 1000) return String(Math.round(value));
+  if (value < 1_000_000) return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0)}k`;
+  return `${(value / 1_000_000).toFixed(1)}M`;
+}

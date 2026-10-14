@@ -334,3 +334,9 @@
 - `tsc --noEmit`、biome、dependency-cruiser 干净。
 - 本机分批跑了全部测试（每批两个并行进程）：`src/tui` 54 个文件全部通过；`src/application` 126 个文件，失败 2 条；其余目录 172 个文件，失败 2 条。这 4 条都是本机已知失败（`checkpoints-async` 保留修改时间的同长度覆盖、`spawn-worker-headless` 撞上时间上限、`container-host` 与 `container-round-trips` 本机没有建符号链接的权限），与本批改动无关。
 - 整套一次跑与打包冒烟交给 pigeon-verify。
+
+## 十二、trace 与 session list 只写 token 数（决策 476）
+
+- `pigeon trace` 每轮那行末尾的金额换成这一轮合计的 token 数（回复用量的 totalTokens，与状态栏同一个口径）；`pigeon session list` 每行的会话合计去掉金额。写法同状态栏（1.2k、1.2M），缩写函数移到 `application/format.ts`，状态栏、trace 与 session list 共用。
+- 只改给人看的文字：会话摘要里的金额字段照旧算、不删；这两个命令没有机器输出；`pigeon run --json` 的结果不在这次范围。模型信息里给上下文裁剪算价格比的价格、树形视图与编排面板里的花费、脚本编排结束汇总里的花费都没动。
+- 验证：`tsc --noEmit`、biome、dependency-cruiser 干净；`src/tui`、`src/cli` 与 session list 的用例（70 个文件）全部通过；整套交给 pigeon-verify。

@@ -4,6 +4,7 @@
 // 续接后接着累计。模型名在欢迎头里；花费不显示（只对按量计费的 key 有意义，价目也算不全）。上下文用量优先级最高——它决定
 // 什么时候该 /compact。
 import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { compactNumber } from "../application/format.ts";
 import type { CostTally } from "../application/session-cost.ts";
 import { secondary, warning } from "./style.ts";
 
@@ -20,12 +21,8 @@ export function totalTokens(tally: CostTally): number {
   return tally.pricedTokens + tally.cnyTokens + tally.unpricedTokens;
 }
 
-// 1234 → 1.2k；1234567 → 1.2M
-export function compactNumber(value: number): string {
-  if (value < 1000) return String(Math.round(value));
-  if (value < 1_000_000) return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0)}k`;
-  return `${(value / 1_000_000).toFixed(1)}M`;
-}
+// 1234 → 1.2k；1234567 → 1.2M（决策 476：pigeon trace 与 session list 同一种写法，放在 application/format.ts）
+export { compactNumber } from "../application/format.ts";
 
 // 花费：回复自带价格的部分写 $，DeepSeek 按官方人民币价目计的部分写 ¥，没有价格的写 token 数并注明；三者并存时相加写出
 export function formatCost(tally: CostTally, short: boolean): string {
