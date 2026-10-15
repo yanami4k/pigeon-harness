@@ -1,5 +1,6 @@
-// 子 agent 面板在终端界面里（决策 482）：输入框下方列一层、输入框为空时 ↓ 进入、Enter 进入它的会话（打的字是使用者的话、
-// 斜杠命令不收）、Esc 回去、x 停下在跑的；有子 agent 在跑时 /exit 先问一句（y 退出，别的键取消）
+// 子 agent 面板在终端界面里（决策 482）：输入框下方列一层、输入框为空时 ↓ 进入、Enter 进入它的会话（打的字是使用者的话；
+// 决策 484：管整个程序的斜杠命令照用，作用于会话的不收）、Esc 回去、x 停下在跑的；有子 agent 在跑时 /exit 先问一句
+//（y 退出，别的键取消）
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -80,7 +81,7 @@ function makeShell() {
   return { shell, term, agents, sent, stopped, exits: () => exits };
 }
 
-test("面板在输入框下方；↓ 进入、Enter 进入子 agent 的会话，打的字发给它，斜杠命令不收；Esc 回主视图；x 停下在跑的", async () => {
+test("面板在输入框下方；↓ 进入、Enter 进入子 agent 的会话，打的字发给它，作用于会话的斜杠命令不收、管整个程序的照用；Esc 回主视图；x 停下在跑的", async () => {
   const { shell, term, sent, stopped } = makeShell();
   shell.start();
   await settle();
@@ -105,13 +106,23 @@ test("面板在输入框下方；↓ 进入、Enter 进入子 agent 的会话，
   term.input("\r");
   await settle();
   assert.deepEqual(sent, [["general-1", "check the tests"]]);
-  term.input("/config");
+  term.input("/compact");
   term.input("\r");
   await settle();
-  assert.match(screenText(term), /slash commands don't work in a sub-agent's session/);
+  assert.match(screenText(term), /not available in a sub-agent's session/);
+  term.input("\x15");
   term.input("\x1b");
   await settle();
   assert.equal(shell.currentView(), "main");
+  // 管整个程序的命令：回到主视图执行
+  term.input("\x1b[B");
+  term.input("\r");
+  await settle();
+  assert.equal(shell.currentView(), "agent");
+  term.input("/panel");
+  term.input("\r");
+  await settle();
+  assert.notEqual(shell.currentView(), "agent");
   shell.stop();
 });
 

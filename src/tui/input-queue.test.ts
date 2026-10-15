@@ -143,6 +143,8 @@ test("命令放行表：只读类与 /quit 运行中可用，其余逐条说明�
   const allowed = SLASH_COMMANDS.filter((spec) => spec.whileRunning.allow).map((spec) => spec.name);
   assert.deepEqual(allowed, [
     "quit",
+    // 决策 484：还在干活的当前会话退到面板接着跑
+    "resume",
     "grants",
     "tasks",
     "hooks",
@@ -159,7 +161,6 @@ test("命令放行表：只读类与 /quit 运行中可用，其余逐条说明�
   );
   assert.deepEqual(rejected, [
     "compact",
-    "resume",
     "revoke",
     "grants save",
     "fork",

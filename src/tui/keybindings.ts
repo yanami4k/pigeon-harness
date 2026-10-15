@@ -44,7 +44,7 @@ export const PIGEON_KEYBINDINGS = {
     defaultKeys: "ctrl+x",
     description: "Stop the selected session in the session panel (press twice)",
   },
-  // 决策 470：输入框为空时连按两下打开会话面板（进入的面板会话里即回面板）
+  // 决策 470：输入框为空时连按两下打开会话面板
   "pigeon.openPanel": {
     defaultKeys: "left",
     description: "Open the session panel (empty input; press twice)",

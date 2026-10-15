@@ -1,12 +1,16 @@
-// 会话面板的会话池（决策 443，进程内版）：派出的会话各开一个运行面（与主会话同一条装配路径），进自己的独立工作树（445、446：
+// 会话面板的会话池（决策 443，进程内版）：派出的会话各开一个运行面（与当前会话同一条装配路径），进自己的独立工作树（445、446：
 // 起点按设置的 worktree.baseRef，缺省远端默认分支，取远端在后台进行、不卡界面；名字为"面板里的名字-会话号末六位"；开着期间
-// 持有工作树的在用锁）。审批汇到主会话的同一队列并写明来源会话；与主会话一样挂打转检测、后台作业通知（空闲时叫醒）、
-// 会话级钩子（SessionStart、UserPromptSubmit、SessionEnd）与 MCP 提示。/take 完整取回之后起点前移到取回时的样子。
+// 持有工作树的在用锁）。与当前会话一样挂打转检测、后台作业通知（空闲时叫醒）、会话级钩子（SessionStart、UserPromptSubmit、
+// SessionEnd）与 MCP 提示。/take 完整取回之后起点前移到取回时的样子。
 // 决策 483：停下只停这一轮（排着的主 agent 审批撤回，子 agent 接着跑）；从面板去掉才释放运行面，工作树没有改动（或完整取回
 // 之后再没有改动）即删、有改动保留（不问）。决策 457、480：面板里的会话同样在通讯录里登记、能派子 agent（子 agent 的审批写明
 // 所属会话与子 agent 的路径）；会话去掉时它派出的子 agent 一并停下。
+// 决策 484（所有会话一样）：每个会话一个"会话核"（运行面、名字、审批模式、工作区与工作树、通讯录登记），当前会话与面板里的
+// 会话是同一种；进入面板里的会话即与当前会话换手。审批的来源标记、要叫醒时找谁、打转检测挂在哪，都按会话核此刻是不是当前
+// 会话走：当前会话的审批照直上审批区、叫醒交给壳；面板里的写明来源、卡片标等待回应、叫醒交给会话池。
 import { realpathSync } from "node:fs";
 import type { AgentTypeCatalog } from "../application/agent-types.ts";
+import type { EnterWorktreeSlot } from "../application/enter-worktree-tool.ts";
 import { summarizeArgs } from "../application/format.ts";
 import type { LaunchFlags } from "../application/launch-flags.ts";
 import { attachLoopGuard } from "../application/loop-guard.ts";
@@ -20,20 +24,22 @@ import {
   type ApprovalModeCell,
   disposeRuntime,
   type MemoryWriteConfig,
+  type RuntimeBundle,
 } from "../application/runtime.ts";
 import { validSessionName } from "../application/session-name.ts";
 import {
   advanceTakeBase,
   dropTakeBase,
   LocalSessionPool,
+  type PooledHooks,
   type PooledRuntime,
   takePooledChanges,
   unchangedSinceTake,
 } from "../application/session-pool.ts";
-import { openSessionRuntime } from "../application/session-runtime.ts";
+import { type OpenedSessionRuntime, openSessionRuntime } from "../application/session-runtime.ts";
 import { agentMessageEntry } from "../application/session-store.ts";
 import { createSubagentOpener } from "../application/subagent-runtime.ts";
-import type { AgentHub } from "../application/subagents.ts";
+import type { AgentHub, AgentToolsHost } from "../application/subagents.ts";
 import type { WarnSink } from "../application/warnings.ts";
 import type { WebToolsConfig } from "../application/web-tools.ts";
 import { isGitWorkspace } from "../application/worktree-cleanup.ts";
@@ -41,7 +47,7 @@ import type { SessionGrantStore } from "../approvals/grant-store.ts";
 import type { ApprovalHandler } from "../approvals/handler.ts";
 import { holdWorktreeInUse } from "../persistence/worktree-in-use.ts";
 import type { StreamFn } from "../pi-runtime/index.ts";
-import { newSessionId } from "../state/ids.ts";
+import { newSessionId, type SessionId } from "../state/ids.ts";
 import {
   agentLimitsOfSettings,
   loopGuardSettingsOf,
@@ -55,32 +61,85 @@ export interface SessionPoolContext {
   governanceRoot: string;
   streamFn: StreamFn;
   flags: LaunchFlags;
-  // 派出时取主会话当前的设置快照
+  // 本进程当前的设置快照（/reload 后换新的）
   settings(): SettingsSnapshot;
   warn: WarnSink;
   createApprovalHandler: (grants: SessionGrantStore) => ApprovalHandler;
   memoryWrite?: MemoryWriteConfig;
   webToolsFor?: (snapshot: SettingsSnapshot) => { webTools?: WebToolsConfig };
-  // /take 取回到哪（主会话当前的工作区）
+  // /take 取回到哪（当前会话的工作区）
   mainWorkspace(): string;
-  // 决策 469：派出时主会话当前的审批模式（派出的会话各有自己的模式，从这里起）；缺省按启动参数
+  // 决策 469：派出时当前会话的审批模式（派出的会话各有自己的模式，从这里起）；缺省按启动参数
   approvalMode?(): "prompt" | "yolo";
-  // 工作树建立与清理、钩子、MCP 与打转的说明（写明来源会话）；alert 为报错，醒目显示
+  // 工作树建立与清理、钩子、MCP 与打转的说明（面板里的会话写明来源）；alert 为报错，醒目显示
   notice(line: string, alert?: boolean): void;
   // 测试用：在用锁的家目录（缺省用户家目录）
   homeDir?: string;
-  // 决策 457、480：本进程的通讯录与子 agent 的类型；不给即面板里的会话不派子 agent。waiting：子 agent 在等审批（路径）
+  // 决策 457、480：本进程的通讯录与子 agent 的类型；不给即不派子 agent。waiting：子 agent 在等审批（路径）
   agents?: {
     hub: AgentHub;
     catalog(): AgentTypeCatalog;
     waiting?(path: string, on: boolean): void;
   };
+  // 决策 484：会话是当前会话时的去处——叫醒（壳跑待递通知）、重画、后台作业的结果行、打转检测挂到壳上
+  current?: CurrentRoute;
 }
 
-type PooledLive = Pick<TuiRuntimeFace, "subscribe" | "subscribeStream" | "subscribeToolResults"> & {
+export interface CurrentRoute {
+  wake(): void;
+  render?(): void;
+  jobEnded?(line: string): void;
+  guard(bundle: RuntimeBundle): () => void;
+}
+
+export type PooledLive = Pick<
+  TuiRuntimeFace,
+  "subscribe" | "subscribeStream" | "subscribeToolResults"
+> & {
   // 决策 469：这个会话自己的审批模式
-  approvalMode?: ApprovalModeControl;
+  approvalMode?: ApprovalModeControl | undefined;
+  // 决策 484：它的会话核（进入时换成当前会话用）
+  core: SessionCore;
 };
+
+// 决策 484：一个会话的会话核
+export interface SessionCore {
+  readonly sessionId: SessionId;
+  name: string;
+  // 卡片上的那句话（派它时的、或它的首条输入）
+  task: string;
+  // 运行面（开好之前为 undefined；/reload 重建后换新的）
+  opened?: OpenedSessionRuntime | undefined;
+  modeCell: ApprovalModeCell;
+  workspaceRoot: string;
+  // 它自己的独立工作树（面板派出的、--worktree 或 enter_worktree 进去的），开着期间持有在用锁
+  worktree?: NamedWorktree | undefined;
+  releaseInUse?: (() => void) | undefined;
+  sharedDir?: boolean;
+  // /take 的起点（完整取回后前移）
+  takeBase?: string | undefined;
+  registration?: { host: AgentToolsHost; unregister(): Promise<void> } | undefined;
+  // enter_worktree 的工具槽（从当前会话开的才有；面板派出的已在自己的工作树里）
+  enterWorktree?: EnterWorktreeSlot | undefined;
+  // 是不是当前会话
+  current: boolean;
+  // 在面板里时会话池给的钩子（审批挂上与落定、要叫醒）
+  poolHooks?: PooledHooks | undefined;
+  // 决策 483：主 agent 审批的撤回信号（面板里停下、去掉时撤回；开跑与成为当前会话时换新）
+  approvals: AbortController;
+  // 等 UserPromptSubmit 钩子期间被停下：这一轮不开跑
+  interrupted?: boolean;
+  // SessionStart 等补的上下文（随下一条输入一起交给模型）
+  startContexts: string[];
+  // 打转检测的挂点（换角色时换）
+  detachGuard?: (() => void) | undefined;
+  closed?: boolean;
+}
+
+export function coreBundle(core: SessionCore): RuntimeBundle {
+  if (core.opened === undefined) throw new Error(`session ${core.name} isn't open yet`);
+  return core.opened.bundle;
+}
 
 // 两个路径是不是同一个目录（实际位置；有一个不在即不是）
 function sameDir(left: string, right: string): boolean {
@@ -91,6 +150,309 @@ function sameDir(left: string, right: string): boolean {
   }
 }
 
+// 说明行：当前会话的照写，面板里的写明来源
+export function sayOf(context: SessionPoolContext, core: SessionCore) {
+  return (line: string, alert = false): void => {
+    if (core.current) context.notice(line, alert);
+    else context.notice(`[${core.name}] ${line}`, alert);
+  };
+}
+
+// 要叫醒：当前会话交给壳，面板里的交给会话池
+function wakeCore(context: SessionPoolContext, core: SessionCore): void {
+  if (core.current) context.current?.wake();
+  else core.poolHooks?.wake();
+}
+
+// 挂上一条在等的审批：面板里的卡片标等待回应；返回落定时调用的函数
+function markWaiting(core: SessionCore, text: string): () => void {
+  if (core.current) return () => {};
+  return core.poolHooks?.waiting(text) ?? (() => {});
+}
+
+// 决策 443、483、484：主 agent 的审批 handler——当前会话的照直上审批区；面板里的写明来源会话、卡片标等待回应。
+// 都带上撤回信号（面板里停下、去掉即撤回）
+export function coreApprovalHandler(
+  context: SessionPoolContext,
+  core: SessionCore
+): (grants: SessionGrantStore) => ApprovalHandler {
+  return (grants) => {
+    const inner = context.createApprovalHandler(grants);
+    return async (request) => {
+      const signal =
+        request.signal !== undefined
+          ? AbortSignal.any([request.signal, core.approvals.signal])
+          : core.approvals.signal;
+      if (core.current) return inner({ ...request, signal });
+      const settled = markWaiting(core, `${request.toolName} ${summarizeArgs(request.args)}`);
+      try {
+        return await inner({
+          ...request,
+          sessionId: core.sessionId,
+          pooled: { name: core.name },
+          signal,
+        });
+      } finally {
+        settled();
+      }
+    };
+  };
+}
+
+// 决策 457、480、484：在通讯录里登记（运行面开好之前就登记：它的工具接口要交给运行面）
+export function registerCoreAgents(
+  context: SessionPoolContext,
+  core: SessionCore
+): AgentToolsHost | undefined {
+  const agents = context.agents;
+  if (agents === undefined) return undefined;
+  const say = sayOf(context, core);
+  const registration = agents.hub.registerSession({
+    sessionId: core.sessionId,
+    name: () => core.name,
+    deliver: (text, mark) => {
+      coreBundle(core).adapter.notify(text, mark);
+      wakeCore(context, core);
+    },
+    pendingNotices: () => core.opened?.bundle.adapter.pendingNotices() ?? 0,
+    record: (entry) => {
+      const bundle = coreBundle(core);
+      bundle.sessionStore.append(agentMessageEntry(entry, bundle.adapter.currentRunId()));
+    },
+    open: createSubagentOpener({
+      governanceRoot: context.governanceRoot,
+      streamFn: context.streamFn,
+      flags: context.flags,
+      warn: context.warn,
+      topSessionId: () => core.sessionId,
+      topSessionFile: () => coreBundle(core).sessionStore.filePath(),
+      topContext: () => {
+        const bundle = coreBundle(core);
+        const settings = context.settings();
+        return {
+          sessionId: core.sessionId,
+          settings,
+          approvalModeCell: core.modeCell,
+          workspaceRoot: core.workspaceRoot,
+          ...(bundle.mcp !== undefined ? { mcp: bundle.mcp } : {}),
+          ...(context.webToolsFor?.(settings) ?? {}),
+          grants: bundle.grantStore.list(),
+          modelId: context.flags.modelId,
+          transcript: () => bundle.adapter.transcript(),
+        };
+      },
+      // 子 agent 的审批写明路径；所属会话在面板里时一并写明会话、卡片标等待回应
+      createApprovalHandler: (grants, path) => {
+        const inner = context.createApprovalHandler(grants);
+        return async (request) => {
+          const pooled = !core.current;
+          const settled = markWaiting(
+            core,
+            `${path}: ${request.toolName} ${summarizeArgs(request.args)}`
+          );
+          agents.waiting?.(path, true);
+          try {
+            return await inner({
+              ...request,
+              ...(pooled ? { sessionId: core.sessionId, pooled: { name: core.name } } : {}),
+              subagent: { path },
+            });
+          } finally {
+            settled();
+            agents.waiting?.(path, false);
+          }
+        };
+      },
+      notice: (path, line) => say(`[${path}] ${line}`, true),
+      ...(context.homeDir !== undefined ? { homeDir: context.homeDir } : {}),
+    }),
+    catalog: () => agents.catalog(),
+    limits: () => agentLimitsOfSettings(context.settings()),
+  });
+  core.registration = registration;
+  return registration.host;
+}
+
+// 运行面开好（或重建）之后：后台作业结束按会话核此刻的角色叫醒，打转检测按角色挂上
+export function attachCoreRuntime(context: SessionPoolContext, core: SessionCore): void {
+  const bundle = coreBundle(core);
+  // 后台作业的结束通知是给模型的，不显示（决策 460）；当前会话另在消息区写一行简短结果
+  bundle.jobNotices?.bind({
+    wake: () => wakeCore(context, core),
+    onNotice: () => {
+      if (core.current) context.current?.render?.();
+    },
+    onEnded: (line) => {
+      if (core.current) context.current?.jobEnded?.(line);
+    },
+  });
+  setCoreRole(context, core, core.current);
+}
+
+// 决策 484：换角色——打转检测换挂点（当前会话的挂到壳上；面板里的叫停即中断这一轮并写一行）。成为当前会话时审批的撤回信号换新
+export function setCoreRole(
+  context: SessionPoolContext,
+  core: SessionCore,
+  current: boolean
+): void {
+  core.current = current;
+  if (current) {
+    core.poolHooks = undefined;
+    if (core.approvals.signal.aborted) core.approvals = new AbortController();
+  }
+  core.detachGuard?.();
+  core.detachGuard = undefined;
+  const bundle = core.opened?.bundle;
+  if (bundle === undefined) return;
+  if (current && context.current !== undefined) {
+    core.detachGuard = context.current.guard(bundle);
+    return;
+  }
+  const say = sayOf(context, core);
+  const adapter = bundle.adapter;
+  core.detachGuard = attachLoopGuard(adapter, loopGuardSettingsOf(context.settings()), () => {
+    say("loop detected; turn stopped");
+    void adapter.interrupt("looping").catch(() => {});
+  });
+}
+
+// 决策 484：释放一个会话核（面板里去掉、关掉 Pigeon、/resume 换走闲着的当前会话）：注销通讯录（它派出的子 agent 一并停下）、
+// 跑 SessionEnd、释放运行面与在用锁。cleanWorktree：按有没有改动清理它的工作树（不问；当前会话退出时由入口另问）
+export async function closeCore(
+  context: SessionPoolContext,
+  core: SessionCore,
+  options: { reason: "exit" | "switch"; cleanWorktree: boolean }
+): Promise<void> {
+  if (core.closed === true) return;
+  core.closed = true;
+  core.approvals.abort();
+  // 决策 480、483：会话释放时它派出的子 agent 一并停下并释放
+  await core.registration?.unregister();
+  core.detachGuard?.();
+  core.detachGuard = undefined;
+  const bundle = core.opened?.bundle;
+  const sessionHooks = bundle?.hooks;
+  if (sessionHooks !== undefined && !sessionHooks.disabled) {
+    await sessionHooks
+      .runEvent("SessionEnd", options.reason, { reason: options.reason })
+      .catch(() => {});
+  }
+  if (bundle !== undefined) await disposeRuntime(bundle).catch(() => {});
+  core.releaseInUse?.();
+  core.releaseInUse = undefined;
+  const worktree = core.worktree;
+  if (worktree !== undefined && options.cleanWorktree) {
+    // 完整取回过、之后再没有改动的同样算没有改动（删工作树与分支）
+    const taken =
+      core.takeBase !== undefined && core.takeBase !== worktree.base ? core.takeBase : undefined;
+    await closeNamedWorktree(worktree, {
+      write: sayOf(context, core),
+      ...(taken !== undefined ? { unchanged: () => unchangedSinceTake(worktree.path, taken) } : {}),
+    }).catch(() => "kept");
+    dropTakeBase(context.governanceRoot, worktree.name);
+  }
+}
+
+// 决策 484：会话核在面板里时的运行面（派出的、与从当前会话退下来的同一份）
+export function pooledRuntimeOf(
+  context: SessionPoolContext,
+  core: SessionCore
+): PooledRuntime<PooledLive> {
+  const say = sayOf(context, core);
+  const alert = (line: string) => say(line, true);
+  const bundleNow = () => coreBundle(core);
+  // 开跑：撤回信号换新（上一轮停下时撤回过）
+  const begin = () => {
+    core.interrupted = false;
+    if (core.approvals.signal.aborted) core.approvals = new AbortController();
+  };
+  return {
+    sessionId: core.sessionId,
+    ...(core.worktree !== undefined
+      ? { worktree: { path: core.worktree.path, branch: core.worktree.branch } }
+      : {}),
+    attachHooks: (hooks) => {
+      core.poolHooks = hooks;
+    },
+    // UserPromptSubmit：拦下即这一轮失败并写明原因；补的上下文作前缀
+    run: async (text) => {
+      begin();
+      const bundle = bundleNow();
+      const sessionHooks = bundle.hooks;
+      let input = text;
+      const contexts = core.startContexts.splice(0);
+      if (sessionHooks !== undefined && !sessionHooks.disabled) {
+        try {
+          const report = await sessionHooks.runEvent("UserPromptSubmit", "", { prompt: text });
+          for (const line of report.systemMessages) say(line);
+          const blocked =
+            report.blocked?.reason ??
+            (report.continueFalse !== undefined
+              ? (report.continueFalse.stopReason ?? "hook stopped the session")
+              : undefined);
+          if (blocked !== undefined) {
+            core.startContexts.unshift(...contexts);
+            return { status: "failed", errorMessage: `input blocked by hook: ${blocked}` };
+          }
+          contexts.push(...report.additionalContext);
+        } catch (error) {
+          alert(
+            `UserPromptSubmit hook failed: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      }
+      if (contexts.length > 0) input = `${contexts.join("\n\n")}\n\n${text}`;
+      // 等钩子期间被停下：这一轮不开跑
+      if (core.interrupted === true) return { status: "interrupted" };
+      return bundle.adapter.run(input);
+    },
+    runNotices: () => {
+      begin();
+      return bundleNow().adapter.runNotices();
+    },
+    interrupt: () => {
+      core.interrupted = true;
+      core.approvals.abort();
+      void core.opened?.bundle.adapter.interrupt();
+    },
+    isRunning: () => core.opened?.bundle.adapter.isRunning() ?? false,
+    transcript: () => core.opened?.bundle.adapter.transcript() ?? [],
+    close: () => closeCore(context, core, { reason: "exit", cleanWorktree: true }),
+    live: {
+      subscribe: (listener) => bundleNow().adapter.subscribe(listener),
+      subscribeStream: (listener) => bundleNow().adapter.subscribeStream(listener),
+      subscribeToolResults: (listener) => bundleNow().adapter.subscribeToolResults(listener),
+      get approvalMode() {
+        return core.opened?.bundle.approvalMode;
+      },
+      core,
+    },
+    take: () => {
+      const worktree = core.worktree;
+      // 决策 459：共用目录的会话没有工作树，改动已直接在目录里
+      if (worktree === undefined) return `${core.name} has no worktree; nothing to take`;
+      // 取回的落点就是这个工作树（当前会话进了它的工作树）：自己叠自己，拒绝
+      if (sameDir(context.mainWorkspace(), worktree.path)) {
+        return `the current session is in ${core.name}'s worktree; nothing to take`;
+      }
+      const result = takePooledChanges({
+        name: core.name,
+        repoRoot: context.mainWorkspace(),
+        base: core.takeBase ?? worktree.base,
+        worktreePath: worktree.path,
+      });
+      if (!result.complete) return result.text;
+      // 起点前移到取回时的样子，下次只取之后的改动
+      try {
+        core.takeBase = advanceTakeBase(worktree.path, worktree.name);
+      } catch (error) {
+        return `${result.text}\nadvancing the base failed: ${error instanceof Error ? error.message : String(error)}`;
+      }
+      return result.text;
+    },
+  };
+}
+
 export function createSessionPool(context: SessionPoolContext): {
   pool: LocalSessionPool<PooledLive>;
   face: TuiPoolFace;
@@ -99,12 +461,26 @@ export function createSessionPool(context: SessionPoolContext): {
   const sharedDir = (): boolean => !isGitWorkspace(context.governanceRoot);
   const pool = new LocalSessionPool<PooledLive>({
     sharedDir,
-    open: async ({ name, hooks, sharedDir: shared }) => {
-      const say = (line: string, alert = false) => context.notice(`[${name}] ${line}`, alert);
-      const alert = (line: string) => say(line, true);
+    open: async ({ name, task, hooks, sharedDir: shared }) => {
       const sessionId = newSessionId();
       const settings = context.settings();
-      let worktree: NamedWorktree | undefined;
+      // 决策 469：这个会话自己的审批模式（从当前会话当时的起）；它派出的子 agent 共用
+      const core: SessionCore = {
+        sessionId,
+        name,
+        task,
+        modeCell: {
+          current: context.approvalMode?.() ?? (context.flags.yolo ? "yolo" : "prompt"),
+        },
+        workspaceRoot: context.governanceRoot,
+        current: false,
+        poolHooks: hooks,
+        approvals: new AbortController(),
+        startContexts: [],
+        ...(shared === true ? { sharedDir: true } : {}),
+      };
+      const say = sayOf(context, core);
+      const alert = (line: string) => say(line, true);
       if (shared !== true) {
         let baseMode = worktreeBaseModeOf(worktreeSectionOf(settings));
         // 取远端在后台进行（不卡界面）；取不到即从 HEAD 起
@@ -112,88 +488,25 @@ export function createSessionPool(context: SessionPoolContext): {
           alert("fetching the remote default branch failed; worktree starts from HEAD");
           baseMode = "head";
         }
-        worktree = openNamedWorktree({
+        const worktree = openNamedWorktree({
           cwd: context.governanceRoot,
           name: `${name}-${sessionId.slice(-6).toLowerCase()}`,
           baseMode,
           notice: say,
         });
+        core.worktree = worktree;
+        core.workspaceRoot = worktree.path;
+        // 开着期间持有工作树的在用锁（/worktrees 与退出清理据此不删开着的）；共用目录的没有工作树
+        core.releaseInUse = holdWorktreeInUse(worktree.path, context.homeDir);
       }
-      // 开着期间持有工作树的在用锁（/worktrees 与退出清理据此不删开着的）；共用目录的没有工作树
-      const releaseInUse =
-        worktree !== undefined ? holdWorktreeInUse(worktree.path, context.homeDir) : () => {};
-      let opened: Awaited<ReturnType<typeof openSessionRuntime>> | undefined;
-      // 决策 457、480：在通讯录里登记（运行面开好之前就登记：它的工具接口要交给运行面）
-      // 决策 469：这个会话自己的审批模式（从主会话当时的起）；它派出的子 agent 共用
-      const modeCell: ApprovalModeCell = {
-        current: context.approvalMode?.() ?? (context.flags.yolo ? "yolo" : "prompt"),
-      };
-      const workspaceOf = (): string => worktree?.path ?? context.governanceRoot;
-      const bundleOf = () => {
-        if (opened === undefined) throw new Error(`${name} isn't open yet`);
-        return opened.bundle;
-      };
-      const registration = context.agents?.hub.registerSession({
-        sessionId,
-        name: () => name,
-        deliver: (text, mark) => {
-          bundleOf().adapter.notify(text, mark);
-          hooks.wake();
-        },
-        pendingNotices: () => opened?.bundle.adapter.pendingNotices() ?? 0,
-        record: (entry) =>
-          bundleOf().sessionStore.append(
-            agentMessageEntry(entry, bundleOf().adapter.currentRunId())
-          ),
-        open: createSubagentOpener({
-          governanceRoot: context.governanceRoot,
-          streamFn: context.streamFn,
-          flags: context.flags,
-          warn: context.warn,
-          topSessionId: () => sessionId,
-          topSessionFile: () => bundleOf().sessionStore.filePath(),
-          topContext: () => ({
-            sessionId,
-            settings,
-            approvalModeCell: modeCell,
-            workspaceRoot: workspaceOf(),
-            ...(bundleOf().mcp !== undefined ? { mcp: bundleOf().mcp } : {}),
-            ...(context.webToolsFor?.(settings) ?? {}),
-            grants: bundleOf().grantStore.list(),
-            modelId: context.flags.modelId,
-            transcript: () => bundleOf().adapter.transcript(),
-          }),
-          createApprovalHandler: (grants, path) => {
-            const inner = context.createApprovalHandler(grants);
-            return async (request) => {
-              const settled = hooks.waiting(
-                `${path}: ${request.toolName} ${summarizeArgs(request.args)}`
-              );
-              context.agents?.waiting?.(path, true);
-              try {
-                return await inner({ ...request, sessionId, pooled: { name }, subagent: { path } });
-              } finally {
-                settled();
-                context.agents?.waiting?.(path, false);
-              }
-            };
-          },
-          notice: (path, line) => alert(`[${path}] ${line}`),
-          ...(context.homeDir !== undefined ? { homeDir: context.homeDir } : {}),
-        }),
-        catalog: () => context.agents?.catalog() ?? { types: [], problems: [] },
-        limits: () => agentLimitsOfSettings(settings),
-      });
-      // 决策 483：停下即撤回主 agent 挂着与排着的审批（每轮换新）；等 UserPromptSubmit 钩子期间被停下的这一轮不开跑
-      let approvals = new AbortController();
-      let interrupted = false;
+      const agentsHost = registerCoreAgents(context, core);
       try {
-        opened = await openSessionRuntime({
+        core.opened = await openSessionRuntime({
           governanceRoot: context.governanceRoot,
-          approvalModeCell: modeCell,
-          ...(registration !== undefined ? { agents: registration.host } : {}),
+          approvalModeCell: core.modeCell,
+          ...(agentsHost !== undefined ? { agents: agentsHost } : {}),
           // 共用目录的会话工作区就是当前目录（会话文件头记的工作目录即此，没有工作树）
-          workspaceRoot: worktree?.path ?? context.governanceRoot,
+          workspaceRoot: core.workspaceRoot,
           sessionId,
           settings,
           streamFn: context.streamFn,
@@ -203,160 +516,38 @@ export function createSessionPool(context: SessionPoolContext): {
           ...(context.webToolsFor?.(settings) ?? {}),
           hooksNotice: alert,
           onMcpNote: (note) => alert(`[mcp] ${note}`),
-          // 决策 443：审批汇到同一队列，写明来源会话；挂着时面板把它放进"等待回应"。决策 483：会话停下即撤回
-          createApprovalHandler: (grants) => {
-            const inner = context.createApprovalHandler(grants);
-            return async (request) => {
-              const settled = hooks.waiting(`${request.toolName} ${summarizeArgs(request.args)}`);
-              const signal =
-                request.signal !== undefined
-                  ? AbortSignal.any([request.signal, approvals.signal])
-                  : approvals.signal;
-              try {
-                return await inner({ ...request, sessionId, pooled: { name }, signal });
-              } finally {
-                settled();
-              }
-            };
-          },
+          // 决策 443、484：审批汇到同一队列；在面板里时写明来源会话、挂着时卡片标等待回应
+          createApprovalHandler: coreApprovalHandler(context, core),
         });
       } catch (error) {
-        await registration?.unregister();
-        releaseInUse();
-        if (worktree !== undefined) {
-          await closeNamedWorktree(worktree, { write: say }).catch(() => "kept");
+        await core.registration?.unregister();
+        core.releaseInUse?.();
+        if (core.worktree !== undefined) {
+          await closeNamedWorktree(core.worktree, { write: say }).catch(() => "kept");
         }
         throw error;
       }
-      const bundle = opened.bundle;
+      const bundle = core.opened.bundle;
       // 决策 456：面板会话的名字记进它自己的会话记录（续接与 /resume 列表照用）
       if (validSessionName(name)) bundle.sessionStore.setName(name);
-      const adapter = bundle.adapter;
-      const sessionHooks = bundle.hooks;
-      // 打转检测（同主会话的设置）：叫停即中断这一轮
-      const detachLoopGuard = attachLoopGuard(adapter, loopGuardSettingsOf(settings), () => {
-        say("loop detected; turn stopped");
-        void adapter.interrupt("looping").catch(() => {});
-      });
-      // 后台作业结束：通知写明来源，空闲时叫醒它
-      // 后台作业的结束通知是给模型的，不显示（决策 460）
-      bundle.jobNotices?.bind({ wake: () => hooks.wake(), onNotice: () => {} });
+      attachCoreRuntime(context, core);
       // SessionStart：补的上下文存起来当作第一条输入的前缀
-      let startContexts: string[] = [];
+      const sessionHooks = bundle.hooks;
       if (sessionHooks !== undefined && !sessionHooks.disabled) {
         try {
           const report = await sessionHooks.runEvent("SessionStart", "startup", {
             source: "startup",
           });
           for (const line of report.systemMessages) say(line);
-          startContexts = [...report.additionalContext];
+          core.startContexts.push(...report.additionalContext);
         } catch (error) {
           alert(
             `SessionStart hook failed: ${error instanceof Error ? error.message : String(error)}`
           );
         }
       }
-      let base = worktree?.base;
-      const runtime: PooledRuntime<PooledLive> = {
-        sessionId,
-        ...(worktree !== undefined
-          ? { worktree: { path: worktree.path, branch: worktree.branch } }
-          : {}),
-        // UserPromptSubmit：拦下即这一轮失败并写明原因；补的上下文作前缀
-        run: async (text) => {
-          interrupted = false;
-          approvals = new AbortController();
-          let input = text;
-          if (sessionHooks !== undefined && !sessionHooks.disabled) {
-            try {
-              const report = await sessionHooks.runEvent("UserPromptSubmit", "", { prompt: text });
-              for (const line of report.systemMessages) say(line);
-              const blocked =
-                report.blocked?.reason ??
-                (report.continueFalse !== undefined
-                  ? (report.continueFalse.stopReason ?? "hook stopped the session")
-                  : undefined);
-              if (blocked !== undefined) {
-                return { status: "failed", errorMessage: `input blocked by hook: ${blocked}` };
-              }
-              const contexts = [...startContexts, ...report.additionalContext];
-              startContexts = [];
-              if (contexts.length > 0) input = `${contexts.join("\n\n")}\n\n${text}`;
-            } catch (error) {
-              alert(
-                `UserPromptSubmit hook failed: ${error instanceof Error ? error.message : String(error)}`
-              );
-            }
-          }
-          // 等钩子期间被停下：这一轮不开跑
-          if (interrupted) return { status: "interrupted" };
-          return adapter.run(input);
-        },
-        runNotices: () => {
-          interrupted = false;
-          approvals = new AbortController();
-          return adapter.runNotices();
-        },
-        interrupt: () => {
-          interrupted = true;
-          approvals.abort();
-          void adapter.interrupt();
-        },
-        isRunning: () => adapter.isRunning(),
-        transcript: () => adapter.transcript(),
-        close: async () => {
-          // 决策 480、483：会话从面板去掉时它派出的子 agent 一并停下并释放
-          approvals.abort();
-          await registration?.unregister();
-          detachLoopGuard();
-          if (sessionHooks !== undefined && !sessionHooks.disabled) {
-            await sessionHooks.runEvent("SessionEnd", "exit", { reason: "exit" }).catch(() => {});
-          }
-          await disposeRuntime(bundle).catch(() => {});
-          releaseInUse();
-          if (worktree !== undefined) {
-            // 完整取回过、之后再没有改动的同样算没有改动（删工作树与分支）
-            const taken = base !== undefined && base !== worktree.base ? base : undefined;
-            await closeNamedWorktree(worktree, {
-              write: say,
-              ...(taken !== undefined
-                ? { unchanged: () => unchangedSinceTake(worktree.path, taken) }
-                : {}),
-            }).catch(() => "kept");
-            dropTakeBase(context.governanceRoot, worktree.name);
-          }
-        },
-        live: {
-          subscribe: (listener) => adapter.subscribe(listener),
-          subscribeStream: (listener) => adapter.subscribeStream(listener),
-          subscribeToolResults: (listener) => adapter.subscribeToolResults(listener),
-          ...(bundle.approvalMode !== undefined ? { approvalMode: bundle.approvalMode } : {}),
-        },
-        take: () => {
-          // 决策 459：共用目录的会话没有工作树，改动已直接在目录里
-          if (worktree === undefined) return `${name} has no worktree; nothing to take`;
-          // 取回的落点就是这个工作树（主会话 /resume 过去、进了它的工作树）：自己叠自己，拒绝
-          if (sameDir(context.mainWorkspace(), worktree.path)) {
-            return `the main session is in ${name}'s worktree; nothing to take`;
-          }
-          const result = takePooledChanges({
-            name,
-            repoRoot: context.mainWorkspace(),
-            base,
-            worktreePath: worktree.path,
-          });
-          if (!result.complete) return result.text;
-          // 起点前移到取回时的样子，下次只取之后的改动
-          try {
-            base = advanceTakeBase(worktree.path, worktree.name);
-          } catch (error) {
-            return `${result.text}\nadvancing the base failed: ${error instanceof Error ? error.message : String(error)}`;
-          }
-          return result.text;
-        },
-      };
-      return runtime;
+      return pooledRuntimeOf(context, core);
     },
   });
-  return { pool, face: { source: pool, live: (id) => pool.runtimeOf(id)?.live } };
+  return { pool, face: { source: pool } };
 }

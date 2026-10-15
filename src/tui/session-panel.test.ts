@@ -1,6 +1,7 @@
 // 决策 443：会话面板（终端界面，会话池用进程内实现加替身运行面）。/panel 打开整屏面板，按状态分组、等待回应在前；
-// 底部输入框派新会话；空格偷看、偷看时输入发给选中的会话；空输入回车进入会话（历史与实时投影），Esc 回面板、再 Esc 关面板；
-// 连按两次 Ctrl+X 停止；面板里不用斜杠命令；卡片文字经 036 净化；/take <名字> 取回会话工作树的改动。
+// 底部输入框派新会话；空格偷看、偷看时输入发给选中的会话；空输入回车进入会话（决策 484：它成为当前会话，原来的当前会话
+// 退到面板），Esc 关面板；Ctrl+X 第一下停下、两秒内再按去掉（483）；面板里的斜杠命令作用于当前会话；卡片文字经 036 净化；
+// /take <名字> 取回会话工作树的改动。
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,7 +10,7 @@ import { test } from "vitest";
 import { LocalSessionPool, type PooledRuntime } from "../application/session-pool.ts";
 import type { StreamTextDelta } from "../pi-runtime/adapter.ts";
 import type { EventEnvelope } from "../state/events.ts";
-import { newSessionId } from "../state/ids.ts";
+import { newSessionId, type SessionId } from "../state/ids.ts";
 import { RuntimeEventKind } from "../state/runtime-events.ts";
 import { MessageFlow, projectRuntimeEvent } from "./message-flow.ts";
 import { ScriptedRuntime } from "./runtime-fixtures.ts";
@@ -98,9 +99,27 @@ function makeShell(extra: Partial<TuiShellOptions> = {}, rows = 40) {
       return handle;
     },
   });
+  // 决策 484：进入即换手——装配方（main.ts）的做法：从面板取出、壳交出当前这一轮、换到它；这里原来的当前会话不收进面板
+  const entered: string[] = [];
+  const holder: { shell?: PigeonTuiShell } = {};
   const face: TuiPoolFace = {
     source: pool,
-    live: (id) => pool.runtimeOf(id)?.live as ReturnType<NonNullable<TuiPoolFace["live"]>>,
+    enter: async (id) => {
+      const shell = holder.shell;
+      const out = pool.detach(id);
+      if (shell === undefined || out === undefined) return "can't open";
+      entered.push(id);
+      shell.handOff();
+      shell.switchSession(
+        id as SessionId,
+        { runtime: new ScriptedRuntime(id as SessionId) },
+        {
+          ...(out.inflight !== undefined ? { inflight: out.inflight } : {}),
+          ...(out.queued !== undefined ? { queued: out.queued } : {}),
+        }
+      );
+      return undefined;
+    },
   };
   const shell = new PigeonTuiShell({
     terminal: term,
@@ -116,12 +135,14 @@ function makeShell(extra: Partial<TuiShellOptions> = {}, rows = 40) {
     },
     ...extra,
   });
+  holder.shell = shell;
   shell.start();
   return {
     shell,
     term,
     runtime,
     pool,
+    entered,
     runs,
     finishers,
     streams,
@@ -166,8 +187,8 @@ test("/panel 打开面板；输入框里的话派新会话；按状态分组，�
   }
 });
 
-test("空格偷看，偷看时输入发给选中的会话；空输入回车进入会话（实时投影），Esc 回面板、再 Esc 关面板", async () => {
-  const { term, runs, finishers, streams, cleanup } = makeShell();
+test("空格偷看，偷看时输入发给选中的会话；决策 484：空输入回车进入会话即换成当前会话（接过它在跑的这一轮），Esc 关面板", async () => {
+  const { shell, term, pool, entered, runs, finishers, cleanup } = makeShell();
   try {
     await settle();
     term.input("/panel");
@@ -191,12 +212,19 @@ test("空格偷看，偷看时输入发给选中的会话；空输入回车进�
     assert.doesNotMatch(screenText(term), /-- peek --/);
     term.input("\r");
     await settle();
-    assert.match(screenText(term), /session: s1 running/);
-    for (const listener of streams)
-      listener({ runId: "run_x" as never, kind: "text", delta: "实时的正文" });
+    assert.deepEqual(entered, ["sess_pool1"]);
+    assert.equal(shell.currentView(), "main");
+    assert.equal(shell.sessionId(), "sess_pool1");
+    assert.equal(shell.isRunning(), true, "接过它在跑的这一轮");
+    assert.ok(
+      pool.list().every((card) => card.id !== "sess_pool1"),
+      "成了当前会话，不再是面板里的会话"
+    );
+    finishers[1]?.("二也做完了");
     await settle();
-    assert.match(screenText(term), /实时的正文/);
-    term.input(ESC);
+    assert.equal(shell.isRunning(), false, "这一轮跑完，当前会话空闲");
+    term.input("/panel");
+    term.input("\r");
     await settle();
     assert.match(screenText(term), /== sessions panel/);
     term.input(ESC);
@@ -207,8 +235,8 @@ test("空格偷看，偷看时输入发给选中的会话；空输入回车进�
   }
 });
 
-test("决策 483：Ctrl+X 第一下停下选中的会话（运行面不释放），两秒内再按一下从面板去掉并释放；面板里不用斜杠命令；/take <名字> 取回", async () => {
-  const { term, stopped, finishers, cleanup } = makeShell();
+test("决策 483：Ctrl+X 第一下停下选中的会话（运行面不释放），两秒内再按一下从面板去掉并释放；决策 484：面板里的斜杠命令回到主视图作用于当前会话；/take <名字> 取回", async () => {
+  const { shell, term, stopped, finishers, cleanup } = makeShell();
   try {
     await settle();
     term.input("/panel");
@@ -222,13 +250,11 @@ test("决策 483：Ctrl+X 第一下停下选中的会话（运行面不释放）
     assert.deepEqual(stopped, [], "第一下只停这一轮，不释放");
     assert.match(screenText(term), /stopped \(1\)/);
     assert.doesNotMatch(screenText(term), /press Ctrl\+X again/);
-    term.input("/config");
+    term.input("/tasks");
     term.input("\r");
     await settle();
-    assert.match(screenText(term), /slash commands don't work in the session panel/);
-    term.input("\x15");
-    term.input(ESC);
-    await settle();
+    assert.equal(shell.currentView(), "main");
+    assert.match(screenText(term), /> \/tasks/);
     finishers.length = 0;
     term.input("/take s1");
     term.input("\r");
@@ -715,7 +741,7 @@ test("决策 470：第一下之后按别的键即撤掉；设置关掉时 ← �
   }
 });
 
-test("决策 470：面板里 → 进入选中的会话；进入的会话里输入框为空按两下 ← 回面板并选中它", async () => {
+test("决策 470、484：面板里 → 进入选中的会话（成为当前会话）；输入框为空按两下 ← 回面板并选中它", async () => {
   const { shell, term, finishers, cleanup } = makeShell();
   try {
     await settle();
@@ -730,12 +756,13 @@ test("决策 470：面板里 → 进入选中的会话；进入的会话里输�
     // 光标在新派出的 s1 上：→ 进入
     term.input(RIGHT);
     await settle();
-    assert.equal(shell.currentView(), "pooled");
+    assert.equal(shell.currentView(), "main");
+    assert.equal(shell.sessionId(), "sess_pool1");
     term.input(LEFT);
     term.input(LEFT);
     await settle();
     assert.equal(shell.currentView(), "panel");
-    assert.match(screenText(term), /^ > {3}s1 /m);
+    assert.match(screenText(term), /^ > {3}sess_pool1 current/m);
   } finally {
     cleanup();
   }

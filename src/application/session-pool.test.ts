@@ -1,7 +1,8 @@
 // 决策 443：会话面板的会话池（进程内版）。派出时先"准备中"、开好即在跑，跑完空闲并取最后一条回复的开头作摘要；运行面
 // 正常返回但结局失败记为失败；审批挂着时在"等待回应"、排在最前；在跑时不能发、空闲时发了接着跑；后台作业要叫醒时空闲即
 // 只带通知跑一轮；开运行面期间被停不复活；停下只中断这一轮、去掉才释放（决策 483）；偷看只列人说的话与回复；开运行面失败
-// 记为失败；关掉时等还在开的开完再全部停止，整体有时限、超时如实返回；之后不能再派。
+// 记为失败；关掉时等还在开的开完再全部停止，整体有时限、超时如实返回；之后不能再派。决策 484：收进开着的会话（带上在跑的
+// 这一轮与排着的输入）、取出交回、空闲时做事。
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import {
@@ -407,4 +408,109 @@ test("去掉：开着的、还在开的都释放；关掉时等还在释放的�
   await later.pool.stop("sess_1");
   assert.deepEqual(await later.pool.closeAll(), []);
   assert.equal(later.fakes[0]?.closed, true);
+});
+
+function standalone(id: string) {
+  const transcript: Array<Record<string, unknown>> = [];
+  const runs: string[] = [];
+  const finishers: Array<() => void> = [];
+  let hooks: PooledHooks | undefined;
+  let running = false;
+  const runtime: PooledRuntime = {
+    sessionId: id,
+    run: (text) => {
+      runs.push(text);
+      running = true;
+      return new Promise<void>((resolve) => {
+        finishers.push(() => {
+          transcript.push({ role: "assistant", content: `done ${text}` });
+          running = false;
+          resolve();
+        });
+      });
+    },
+    interrupt: () => {},
+    isRunning: () => running,
+    transcript: () => transcript,
+    close: async () => {},
+    attachHooks: (given) => {
+      hooks = given;
+    },
+  };
+  return { runtime, runs, finishers, hooks: () => hooks };
+}
+
+test("决策 484：收进开着的会话：带上在跑的这一轮，跑完逐条发排着的输入；接上面板的钩子", async () => {
+  const pool = new LocalSessionPool({ open: async () => standalone("unused").runtime });
+  const session = standalone("sess_main");
+  let finishFirst: (() => void) | undefined;
+  const inflight = new Promise<void>((resolve) => {
+    finishFirst = resolve;
+  });
+  const card = pool.adopt(
+    session.runtime,
+    { name: "main", task: "做一" },
+    { inflight, queued: ["做二", "做三"] }
+  );
+  assert.equal(card.id, "sess_main");
+  assert.equal(pool.list()[0]?.state, "running");
+  assert.ok(session.hooks() !== undefined, "接上了面板的钩子");
+  finishFirst?.();
+  await settle();
+  assert.deepEqual(session.runs, ["做二"]);
+  session.finishers[0]?.();
+  await settle();
+  assert.deepEqual(session.runs, ["做二", "做三"]);
+  session.finishers[1]?.();
+  await settle();
+  assert.equal(pool.list()[0]?.state, "idle");
+  assert.equal(pool.list()[0]?.summary, "done 做三");
+});
+
+test("决策 484：取出交回在跑的这一轮与排着的输入，卡片不再列着、钩子不再改它；还在开的、已释放的取不出", async () => {
+  const pool = new LocalSessionPool({ open: async () => standalone("unused").runtime });
+  const session = standalone("sess_a");
+  let finish: (() => void) | undefined;
+  const inflight = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  pool.adopt(session.runtime, { name: "a", task: "一" }, { inflight, queued: ["二"] });
+  const settled = session.hooks()?.waiting("edit_file a.ts");
+  const out = pool.detach("sess_a");
+  assert.equal(out?.inflight, inflight);
+  assert.deepEqual(out?.queued, ["二"]);
+  assert.equal(pool.list().length, 0);
+  settled?.();
+  finish?.();
+  await settle();
+  assert.equal(pool.list().length, 0, "落定不再把卡片放回");
+  assert.deepEqual(session.runs, [], "排着的交出去了，面板不再发");
+  assert.equal(pool.detach("sess_a"), undefined);
+  assert.equal(pool.detach("no_such"), undefined);
+});
+
+test("决策 484：空闲时做事——空闲的马上做，在跑的这一轮跑完后做（先于排着的下一条）；不在的会话返回 false", async () => {
+  const pool = new LocalSessionPool({ open: async () => standalone("unused").runtime });
+  const session = standalone("sess_b");
+  pool.adopt(session.runtime, { name: "b", task: "一" });
+  const done: string[] = [];
+  assert.equal(
+    pool.whenIdle("sess_b", () => done.push("now")),
+    true
+  );
+  assert.deepEqual(done, ["now"]);
+  assert.equal(await pool.send("sess_b", "二"), undefined);
+  pool.whenIdle("sess_b", () => done.push(`after ${session.runs.length}`));
+  assert.deepEqual(done, ["now"]);
+  session.finishers[0]?.();
+  await settle();
+  assert.deepEqual(done, ["now", "after 1"]);
+  assert.equal(
+    pool.whenIdle("no_such", () => done.push("never")),
+    false
+  );
+  assert.deepEqual(
+    pool.runtimes().map((runtime) => runtime.sessionId),
+    ["sess_b"]
+  );
 });

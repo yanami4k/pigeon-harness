@@ -400,7 +400,7 @@ test("/resume 会话不存在与空目录响亮报错；原运行面不受影响
   }
 });
 
-test("运行中只读的 /tasks 放行、/resume 被拒并说明原因；收尾后 /resume 直接换绑，不进菜单（决策 286）", async () => {
+test("运行中只读的 /tasks 放行；决策 484：运行中 /resume 照样换（还在干活的当前会话交出这一轮），直接换绑、不进菜单", async () => {
   const { root, cleanup } = makeRoot();
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-log-"));
   try {
@@ -416,13 +416,20 @@ test("运行中只读的 /tasks 放行、/resume 被拒并说明原因；收尾�
       logDir,
       sessions: { root },
       tasks: () => undefined,
-      resume: { root, rebind: tracker.rebind },
+      // 装配方（main.ts）换走还在干活的当前会话时先让壳交出这一轮
+      resume: {
+        root,
+        rebind: (id) => {
+          shell.handOff();
+          return tracker.rebind(id);
+        },
+      },
     });
     try {
       shell.start();
       await settle();
 
-      // 运行中：只读的 /tasks 照常执行，换会话的 /resume 被拒并说明原因（决策 286）
+      // 运行中：只读的 /tasks 照常执行；/resume 照样换
       runtime.autoResolve = false;
       term.input("任务一");
       term.input("\r");
@@ -434,17 +441,13 @@ test("运行中只读的 /tasks 放行、/resume 被拒并说明原因；收尾�
       term.input(`/resume ${crashed}`);
       term.input("\r");
       await settle();
-      assert.ok(screenFlat(term).includes("can't use /resume while running"), screenText(term));
-      assert.deepEqual(tracker.rebinds, []);
+      assert.ok(!screenText(term).includes("请选择 [1/2/3]"), screenText(term));
+      assert.deepEqual(tracker.rebinds, [crashed]);
+      assert.equal(shell.isRunning(), false, "交出这一轮之后空闲");
       runtime.finishAll();
       runtime.autoResolve = true;
       await settle();
-
-      // 被拒的 /resume 留在输入框里：结束后回车即执行
-      term.input("\r");
-      await settle();
-      assert.ok(!screenText(term).includes("请选择 [1/2/3]"), screenText(term));
-      assert.deepEqual(tracker.rebinds, [crashed]);
+      assert.equal(shell.isRunning(), false, "交出去的那一轮落定不再动壳");
       assert.deepEqual(runtime.runs, ["任务一"], "续跑流程本身不产生提交");
     } finally {
       shell.stop();

@@ -77,6 +77,14 @@ export interface PooledRuntime<Live = unknown> {
   live?: Live;
   // 把工作树里的改动取回主工作目录，返回说明
   take?(): string;
+  // 决策 484：收进面板时接上面板的钩子（审批挂上与落定、要叫醒）；派出的在 open 里已给
+  attachHooks?(hooks: PooledHooks): void;
+}
+
+// 决策 484：会话在当前与面板之间换手时带过去的：还在跑的这一轮、排着还没发出的输入
+export interface PooledHandOff {
+  inflight?: Promise<unknown>;
+  queued?: readonly string[];
 }
 
 // 运行面的钩子：审批挂上与落定、后台作业结束要叫醒时告诉会话池。waiting 挂上一条在等的审批，返回落定时调用的函数
@@ -172,6 +180,10 @@ interface Entry<Live> {
   waits: Array<{ text: string }>;
   // 还在跑的这一轮（从发出到落定；运行面的 isRunning 在钩子、压缩等窗口里不算在跑，不能拿来判断）
   inflight?: Promise<unknown> | undefined;
+  // 决策 484：排着还没发出的输入（从当前会话退下来时带的；这一轮跑完后逐条发）
+  queued?: string[] | undefined;
+  // 空闲下来时要做的（设置重读后的重建等）
+  idle?: Array<() => void>;
   // 人停下的（Ctrl+X 第一下）：不被叫醒；它的子 agent 等审批时卡片照样标出，答完回到已停
   halted?: boolean;
   // 已从面板去掉、已释放运行面
@@ -362,10 +374,105 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
           error: failure,
           summary,
         });
+      this.#settled(entry);
     };
     inflight.then(
       (result) => settle(failureOf(result)),
       (error: unknown) => settle(error instanceof Error ? error.message : String(error))
+    );
+  }
+
+  // 一轮跑完：先做等着空闲的事，再发排着的下一条（停下的不发）
+  #settled(entry: Entry<Live>): void {
+    if (entry.removed === true || entry.closed === true) return;
+    for (const task of entry.idle?.splice(0) ?? []) task();
+    const runtime = entry.runtime;
+    const next = entry.halted !== true ? entry.queued?.shift() : undefined;
+    if (next !== undefined && runtime !== undefined) this.#run(entry, () => runtime.run(next));
+  }
+
+  // 决策 484：把一个开着的会话收进面板（原来的当前会话退到面板）：带上还在跑的这一轮与排着的输入；返回卡片
+  adopt(
+    runtime: PooledRuntime<Live>,
+    card: {
+      name: string;
+      task: string;
+      worktree?: { path: string; branch: string };
+      sharedDir?: boolean;
+    },
+    handOff: PooledHandOff = {}
+  ): PooledSessionCard {
+    const now = this.#now();
+    const entry: Entry<Live> = {
+      card: {
+        id: runtime.sessionId,
+        name: card.name,
+        state: "idle",
+        task: card.task,
+        summary: replySummary(runtime.transcript()),
+        ...(card.worktree !== undefined ? { worktree: card.worktree } : {}),
+        ...(card.sharedDir === true ? { sharedDir: true } : {}),
+        startedAt: now,
+        updatedAt: now,
+      },
+      phase: "idle",
+      waits: [],
+      runtime,
+      ...(handOff.queued !== undefined && handOff.queued.length > 0
+        ? { queued: [...handOff.queued] }
+        : {}),
+    };
+    this.#entries.set(entry.card.id, entry);
+    runtime.attachHooks?.(this.#hooksOf(entry));
+    const inflight = handOff.inflight;
+    if (inflight !== undefined) this.#run(entry, () => inflight);
+    else {
+      this.#notify();
+      this.#settled(entry);
+    }
+    return entry.card;
+  }
+
+  // 决策 484：从面板取出一个会话（它成为当前会话）：交回运行面、还在跑的这一轮与排着的输入；停下的照样能取，
+  // 已释放的（开到一半被停）与还在开的取不出
+  detach(
+    id: string
+  ): ({ runtime: PooledRuntime<Live>; card: PooledSessionCard } & PooledHandOff) | undefined {
+    const entry = this.#entries.get(id);
+    const runtime = entry?.runtime;
+    if (entry === undefined || runtime === undefined || entry.closed === true) return undefined;
+    this.#entries.delete(id);
+    // 不再归面板：挂着的审批落定、叫醒都不再改这张卡
+    entry.removed = true;
+    const inflight = entry.inflight;
+    entry.inflight = undefined;
+    const queued = entry.queued ?? [];
+    entry.queued = undefined;
+    this.#notify();
+    return {
+      runtime,
+      card: entry.card,
+      ...(inflight !== undefined ? { inflight } : {}),
+      ...(queued.length > 0 ? { queued } : {}),
+    };
+  }
+
+  // 空闲时做一件事（在跑的这一轮跑完后做，空闲的马上做）；会话不在返回 false
+  whenIdle(id: string, task: () => void): boolean {
+    const entry = this.#entries.get(id);
+    if (entry === undefined || entry.runtime === undefined || entry.closed === true) return false;
+    if (entry.inflight === undefined) {
+      task();
+      return true;
+    }
+    entry.idle = [...(entry.idle ?? []), task];
+    return true;
+  }
+
+  // 开着的会话的运行面
+  runtimes(): Array<PooledRuntime<Live>> {
+    return [...this.#entries.values()].flatMap((entry) =>
+      entry.runtime !== undefined && entry.closed !== true ? [entry.runtime] : []
     );
   }
 
