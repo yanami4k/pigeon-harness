@@ -19,6 +19,7 @@ import {
   agentTypeOf,
   GENERAL_AGENT_TYPE,
 } from "./agent-types.ts";
+import { takeFromAgent } from "./take-changes.ts";
 
 // 信任说明（给模型看）：agent 之间的一切传话都附这一句
 export const AGENT_TRUST_SENTENCE =
@@ -73,8 +74,10 @@ export interface SubagentRuntime {
   hasJobs?(): boolean;
   // 停掉它开的后台作业
   stopJobs?(): void;
-  // 关掉；interrupted 为干到一半（临时工作树一律保留）
-  close(options?: { interrupted?: boolean }): Promise<void>;
+  // 关掉；interrupted 为干到一半（临时工作树一律保留）；takenBase 为完整取回后前移的起点（之后没再改即删，决策 486）
+  close(options?: { interrupted?: boolean; takenBase?: string }): Promise<void>;
+  // 决策 486：它的工作目录（在临时工作树里干活的即工作树；它取自己子 agent 的改动时作落点）
+  workspaceRoot?(): string;
 }
 
 // 派一个子 agent 要的一切（交给入口装配运行面）
@@ -132,6 +135,11 @@ export interface SessionEndpoint {
   open?: SubagentOpener;
   catalog(): AgentTypeCatalog;
   limits(): { maxConcurrent: number; maxDepth: number };
+  // 决策 486：这个会话的工作目录（take_changes 的落点）；不给即不能取
+  workspaceRoot?(): string;
+  // 决策 486：会话的主 agent 取面板里同一仓库的会话的改动（叠进 into）；没有这个名字的面板会话返回 undefined。
+  // 出错的说明以 "Error: " 开头
+  takeFromPanel?(name: string, into: string): string | undefined;
 }
 
 export interface AgentListing {
@@ -165,6 +173,8 @@ export interface AgentToolsHost {
   send(to: string, text: string): string;
   list(): AgentListing[];
   stop(name: string): Promise<string>;
+  // 决策 486：把自己派出的子 agent（会话的主 agent 另可取面板里同一仓库的会话）的改动取回自己的工作目录
+  take(name: string): string;
 }
 
 interface AgentNode {
@@ -197,6 +207,9 @@ export interface SubagentRecord extends AgentNode {
   opening?: Promise<SubagentRuntime>;
   error?: string;
   worktree?: { path: string; branch: string };
+  // 决策 486：续接认回时的工作目录（还没重开时取回用）；完整取回后前移的起点
+  workspace?: string;
+  takeBase?: string;
   startedAt: number;
   updatedAt: number;
   // 在等它这一次干完的前台调用
@@ -444,7 +457,41 @@ export class AgentHub {
       send: (to, text) => this.#send(node, to, text),
       list: () => this.#list(),
       stop: (name) => this.#stopByName(node, name),
+      take: (name) => this.#take(node, name),
     };
+  }
+
+  // 决策 486：take_changes——取自己直接派出的子 agent（它的子 agent 由它自己取）；在跑的不取。会话的主 agent 找不到这个名字的
+  // 子 agent 时再找面板里的会话
+  #take(node: AgentNode, name: string): string {
+    const into =
+      node.kind === "session"
+        ? node.top.endpoint.workspaceRoot?.()
+        : (node as SubagentRecord).runtime?.workspaceRoot?.();
+    if (into === undefined) return "Error: your working directory is unknown; nothing to take";
+    const record = this.#agents.find((agent) => agent.agentName === name && agent.parent === node);
+    if (record === undefined) {
+      const panel =
+        node.kind === "session" ? node.top.endpoint.takeFromPanel?.(name, into) : undefined;
+      if (panel !== undefined) return panel;
+      return `Error: no sub-agent named ${name} that you started${
+        node.kind === "session" && node.top.endpoint.takeFromPanel !== undefined
+          ? ", and no session by that name in the session panel"
+          : ""
+      }`;
+    }
+    if (this.#active(record) || record.activating === true) {
+      return `Error: ${name} is still working; take its changes after it finishes`;
+    }
+    const taken = takeFromAgent({
+      name: record.agentName,
+      sessionId: record.sessionId,
+      workspace: record.runtime?.workspaceRoot?.() ?? record.workspace,
+      into,
+      ...(record.takeBase !== undefined ? { takenBase: record.takeBase } : {}),
+    });
+    if (taken.takenBase !== undefined) record.takeBase = taken.takenBase;
+    return taken.error === true ? `Error: ${taken.text}` : taken.text;
   }
 
   #list(): AgentListing[] {
@@ -664,7 +711,7 @@ export class AgentHub {
     }
     if (record.worktree !== undefined) {
       lines.push(
-        `Its changes are in the worktree at ${record.worktree.path} (branch ${record.worktree.branch}).`
+        `Its changes are in the worktree at ${record.worktree.path} (branch ${record.worktree.branch}). Use take_changes with its name to bring them into your working directory.`
       );
     }
     const body = reply === "" ? "(no reply)" : reply;
@@ -795,6 +842,7 @@ export class AgentHub {
         parent,
         state: restored.interrupted ? "interrupted" : "idle",
         sessionId: restored.sessionId,
+        ...(restored.workspace !== undefined ? { workspace: restored.workspace } : {}),
         startedAt: restored.startedAt,
         updatedAt: restored.updatedAt,
         deliver: (text, entry) => this.#deliverTo(record, text, entry),
@@ -964,7 +1012,9 @@ export class AgentHub {
     if (!this.#agents.includes(record)) return false;
     for (const agent of subtree) {
       this.#agents.splice(this.#agents.indexOf(agent), 1);
-      void agent.runtime?.close().catch(() => {});
+      void agent.runtime
+        ?.close(agent.takeBase !== undefined ? { takenBase: agent.takeBase } : {})
+        .catch(() => {});
     }
     this.#changed();
     return true;
@@ -994,7 +1044,12 @@ export class AgentHub {
     // 释放也有上限：手上的工具调用等不到收尾的，到时不再等（运行面随进程或之后的收尾释放）
     const closed = Promise.all(
       agents.map((agent) =>
-        agent.runtime?.close({ interrupted: interrupted.has(agent) }).catch(() => {})
+        agent.runtime
+          ?.close({
+            interrupted: interrupted.has(agent),
+            ...(agent.takeBase !== undefined ? { takenBase: agent.takeBase } : {}),
+          })
+          .catch(() => {})
       )
     );
     await raceWithin(closed, SHUTDOWN_WAIT_MS);

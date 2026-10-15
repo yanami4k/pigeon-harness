@@ -86,8 +86,8 @@ export interface PooledRuntime<Live = unknown> {
   close(options?: { removed?: boolean }): Promise<void>;
   // 进程内版：进入会话时订阅的运行面
   live?: Live;
-  // 把工作树里的改动取回主工作目录，返回说明
-  take?(): string;
+  // 把工作树里的改动取回主工作目录（决策 486：into 给出时取回到那里——take_changes 的调用方自己的工作目录与项目），返回说明
+  take?(into?: { workspace: string; root: string }): string;
   // 决策 484：收进面板时接上面板的钩子（审批挂上与落定、要叫醒）；派出的在 open 里已给
   attachHooks?(hooks: PooledHooks): void;
 }
@@ -645,6 +645,11 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
   }
 
   async take(id: string): Promise<string> {
+    return this.takeInto(id);
+  }
+
+  // 决策 486：取回到给定的落点（take_changes）；不给即主工作目录（/take）
+  takeInto(id: string, into?: { workspace: string; root: string }): string {
     const entry = this.#entries.get(id);
     if (entry === undefined) return "no such session";
     if (entry.closed === true) return `session ${entry.card.name} is stopped`;
@@ -657,7 +662,7 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
       return `can't take while ${entry.card.name} is running`;
     }
     // 决策 483：停下的会话运行面还开着，照样取（起点前移，工作树留着；去掉时看取回之后还有没有改动）
-    return entry.runtime.take?.() ?? "session has no worktree";
+    return entry.runtime.take?.(into) ?? "session has no worktree";
   }
 
   // 按名字找（/take 用）
@@ -698,19 +703,22 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
 // /take：把会话工作树里相对起点的改动叠回主工作目录（与取回 worker 同一套叠回：叠不上的留在工作树、会话删的文件不删）。
 // complete 为真表示完整取回（没有叠不上的、没有会话删掉的、没有过大没取回的）
 export function takePooledChanges(input: {
+  // 决策 486：对方是什么（session 或 sub-agent，写进说明）；缺省 session
+  label?: string;
   name: string;
   repoRoot: string;
   base: string | undefined;
   worktreePath: string;
 }): { text: string; complete: boolean } {
+  const label = input.label ?? "session";
   if (!existsSync(input.worktreePath)) {
     return {
-      text: `worktree of session ${input.name} is gone (${input.worktreePath})`,
+      text: `worktree of ${label} ${input.name} is gone (${input.worktreePath})`,
       complete: false,
     };
   }
   if (input.base === undefined) {
-    return { text: `worktree of session ${input.name} has no base recorded`, complete: false };
+    return { text: `worktree of ${label} ${input.name} has no base recorded`, complete: false };
   }
   let result: OverlayResult;
   try {
@@ -721,7 +729,7 @@ export function takePooledChanges(input: {
     });
   } catch (error) {
     return {
-      text: `taking changes from session ${input.name} failed: ${error instanceof Error ? error.message : String(error)}`,
+      text: `taking changes from ${label} ${input.name} failed: ${error instanceof Error ? error.message : String(error)}`,
       complete: false,
     };
   }
@@ -735,7 +743,7 @@ export function takePooledChanges(input: {
     );
   }
   if (result.deletedInWorktree.length > 0) {
-    lines.push(`deleted in session, kept here: ${result.deletedInWorktree.join(", ")}`);
+    lines.push(`deleted in ${label}, kept here: ${result.deletedInWorktree.join(", ")}`);
   }
   if ((result.skipped?.length ?? 0) > 0) {
     lines.push(
@@ -747,21 +755,26 @@ export function takePooledChanges(input: {
     result.deletedInWorktree.length === 0 &&
     (result.skipped?.length ?? 0) === 0;
   return {
-    text: lines.length > 0 ? lines.join("\n") : `no changes to take from session ${input.name}`,
+    text: lines.length > 0 ? lines.join("\n") : `no changes to take from ${label} ${input.name}`,
     complete,
   };
 }
 
-// /take 完整取回之后：起点前移到工作树此刻的样子（快照提交钉在 refs/pigeon/panel/<工作树名> 下），下次只取之后的改动
-export function advanceTakeBase(worktreePath: string, worktreeName: string): string {
+// /take 完整取回之后：起点前移到工作树此刻的样子（快照提交钉在 refs/pigeon/<scope>/<工作树名> 下：面板会话 panel，
+// 决策 486 子 agent 的临时工作树 agent），下次只取之后的改动
+export function advanceTakeBase(
+  worktreePath: string,
+  worktreeName: string,
+  scope: "panel" | "agent" = "panel"
+): string {
   return snapshotWorkdir({
     repoRoot: worktreePath,
-    ref: takeBaseRef(worktreeName),
+    ref: takeBaseRef(worktreeName, scope),
   }).commit;
 }
 
-function takeBaseRef(worktreeName: string): string {
-  return `${SNAPSHOT_REF_ROOT}panel/${worktreeName}`;
+function takeBaseRef(worktreeName: string, scope: "panel" | "agent"): string {
+  return `${SNAPSHOT_REF_ROOT}${scope}/${worktreeName}`;
 }
 
 // 从面板去掉时：上次完整取回之后工作树再没有改动（取回的就是全部）
@@ -770,9 +783,13 @@ export function unchangedSinceTake(worktreePath: string, base: string): boolean 
 }
 
 // 从面板去掉时：起点前移留下的快照引用不再要了（不存在也算删掉；出错不管）
-export function dropTakeBase(worktreePath: string, worktreeName: string): void {
+export function dropTakeBase(
+  worktreePath: string,
+  worktreeName: string,
+  scope: "panel" | "agent" = "panel"
+): void {
   try {
-    deleteSnapshotRef(worktreePath, takeBaseRef(worktreeName));
+    deleteSnapshotRef(worktreePath, takeBaseRef(worktreeName, scope));
   } catch {
     // 工作树已不在等：引用留着无害
   }

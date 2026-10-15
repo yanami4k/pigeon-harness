@@ -257,6 +257,8 @@ export async function runHeadless(options: HeadlessRunOptions): Promise<Headless
             wakeUp();
           },
           pendingNotices: () => liveBundle?.adapter.pendingNotices() ?? 0,
+          // 决策 486：take_changes 的落点
+          workspaceRoot: () => options.workspaceRoot,
           record: (entry) =>
             mainBundle().sessionStore.append(
               agentMessageEntry(entry, mainBundle().adapter.currentRunId())

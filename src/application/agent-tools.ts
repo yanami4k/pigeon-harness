@@ -2,6 +2,8 @@
 // 类型、名字、模型），send_message 按名字给本进程里的会话或子 agent 发消息（续聊子 agent 也用它），list_agents 列出
 // 通讯录，stop_agent 停下自己派出的子 agent。工具背后是 AgentToolsHost（subagents.ts），绑着调用它的会话或子 agent。
 // 层数到了上限的子 agent 不注册 spawn_agent；四件都免审批（权限继承派出方，子 agent 自己的工具调用照常审批）。
+// 决策 486：take_changes 把自己派出的子 agent（会话的主 agent 另可取面板里同一仓库的会话）的改动取回自己的工作目录——
+// 会写调用方的工作目录，按写档审批；只读的类型（explore）不注册（只读范围只留读档与联网档的工具）。
 import { type TSchema, Type } from "typebox";
 import type { ToolRegistration } from "../tools/registry.ts";
 import type { PigeonAgentTool, PigeonToolResult } from "../tools/wrap.ts";
@@ -12,12 +14,14 @@ export const SPAWN_AGENT_TOOL = "spawn_agent";
 export const SEND_MESSAGE_TOOL = "send_message";
 export const LIST_AGENTS_TOOL = "list_agents";
 export const STOP_AGENT_TOOL = "stop_agent";
+export const TAKE_CHANGES_TOOL = "take_changes";
 
 export const AGENT_TOOL_NAMES: readonly string[] = [
   SPAWN_AGENT_TOOL,
   SEND_MESSAGE_TOOL,
   LIST_AGENTS_TOOL,
   STOP_AGENT_TOOL,
+  TAKE_CHANGES_TOOL,
 ];
 
 // spawn_agent 的说明：可用的类型逐个列出（说明供模型判断何时派）
@@ -45,6 +49,18 @@ export const LIST_AGENTS_DESCRIPTION =
 
 export const STOP_AGENT_DESCRIPTION =
   "Stop a running sub-agent you started (its own sub-agents stop too). It can be continued later with send_message.";
+
+export const TAKE_CHANGES_DESCRIPTION =
+  "Bring the changes a sub-agent you started made in its worktree into your own working directory: everything changed since it started (committed or not, new files included) is merged file by file. " +
+  "Files that can't be merged cleanly are left in its worktree and listed; files it deleted are listed, not deleted here. " +
+  "Call it after the sub-agent has finished; calling it again later takes only what changed since. " +
+  "A session's main agent can also take a session from the session panel in the same repository by its name.";
+
+export const TakeChangesParamsSchema = Type.Object({
+  name: Type.String({
+    description: "The name of the sub-agent (or panel session) to take changes from",
+  }),
+});
 
 export const SpawnAgentParamsSchema = Type.Object({
   task: Type.String({
@@ -165,10 +181,21 @@ export function createAgentTools(host: AgentToolsHost): PigeonAgentTool<TSchema,
       return result(await host.stop(params.name));
     },
   };
+  const take: PigeonAgentTool<typeof TakeChangesParamsSchema, undefined> = {
+    name: TAKE_CHANGES_TOOL,
+    label: TAKE_CHANGES_TOOL,
+    description: TAKE_CHANGES_DESCRIPTION,
+    parameters: TakeChangesParamsSchema,
+    executionMode: "sequential",
+    async execute(_id, params) {
+      return result(host.take(params.name));
+    },
+  };
   tools.push(
     send as unknown as PigeonAgentTool<TSchema, undefined>,
     list as unknown as PigeonAgentTool<TSchema, undefined>,
-    stop as unknown as PigeonAgentTool<TSchema, undefined>
+    stop as unknown as PigeonAgentTool<TSchema, undefined>,
+    take as unknown as PigeonAgentTool<TSchema, undefined>
   );
   return tools;
 }
@@ -210,6 +237,15 @@ export function agentToolRegistrations(host: AgentToolsHost): ToolRegistration[]
       parameters: StopAgentParamsSchema,
       executionMode: "sequential" as const,
       ...base,
+    },
+    // 决策 486：会写调用方的工作目录，按写档审批
+    {
+      name: TAKE_CHANGES_TOOL,
+      description: "take a sub-agent's changes into your working directory",
+      parameters: TakeChangesParamsSchema,
+      executionMode: "sequential" as const,
+      tier: "write" as const,
+      pathConfinement: { kind: "none" as const },
     },
   ];
 }

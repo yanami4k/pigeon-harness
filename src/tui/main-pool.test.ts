@@ -291,6 +291,19 @@ test("/take：落点就是这个工作树时拒绝；停下的会话按还开着
   const taken = await pool.take(card?.id ?? "");
   assert.match(taken, /took 1 file/);
   assert.ok(existsSync(worktree));
+  // 决策 486：take_changes 取回到调用方自己的工作目录：别的仓库的不取，落点就是它的工作树的不取
+  assert.match(
+    pool.takeInto(card?.id ?? "", { workspace: root, root: join(root, "elsewhere") }),
+    /is in another repository; nothing to take/
+  );
+  assert.match(
+    pool.takeInto(card?.id ?? "", { workspace: worktree, root }),
+    /you are working in .+'s worktree; nothing to take/
+  );
+  assert.match(
+    pool.takeInto(card?.id ?? "", { workspace: root, root }),
+    /no changes to take from session/
+  );
   writeFileSync(join(worktree, "later.txt"), "later\n");
   await pool.remove(card?.id ?? "");
   assert.ok(existsSync(join(worktree, "later.txt")), "取回之后又改了的工作树保留");

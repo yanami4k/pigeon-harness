@@ -403,6 +403,21 @@ export async function main(argv: string[]): Promise<void> {
     currentRoot: () => current.governanceRoot,
     listed: (id) => sandbox === undefined && safeIndexed(id),
     onListed: (core) => listCore(core),
+    // 决策 486：会话的主 agent 用 take_changes 取面板里同一仓库的会话（在干活的不取）
+    panelTake: (caller, name, into) => {
+      const pool = sessionPool?.pool;
+      const card = pool?.list().find((item) => item.name === name && item.id !== caller.sessionId);
+      if (pool === undefined || card === undefined) return undefined;
+      const target = pool.runtimeOf(card.id)?.live?.core;
+      if (target === undefined) return `Error: session ${name} isn't open`;
+      if (rootKey(target.governanceRoot) !== rootKey(caller.governanceRoot)) {
+        return `Error: ${name} is in another repository; nothing to take`;
+      }
+      if (card.state === "running" || card.state === "waiting" || card.state === "preparing") {
+        return `Error: session ${name} is still working; take its changes after it finishes`;
+      }
+      return pool.takeInto(card.id, { workspace: into, root: caller.governanceRoot });
+    },
     onUnlisted: (id) => {
       try {
         removeFromSessionIndex(id);

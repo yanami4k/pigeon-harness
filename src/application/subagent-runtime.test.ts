@@ -1,6 +1,6 @@
 // 子 agent 的运行面装配（决策 457、480）：会话文件在所属会话名下的子文件夹、文件头记来历、收件方记谁发给谁；
 // explore 只给读与搜；前台直接带回回复；临时工作树从派出方的工作目录快照起步，有改动的结果附位置与分支、关掉时保留，
-// 没有改动的关掉即删
+// 没有改动的关掉即删；决策 486：take_changes 把子 agent 工作树里的改动取回派出方的工作目录，完整取回后再没改的关掉即删
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
@@ -24,6 +24,7 @@ import { sessionsDirOf, subagentSessionsDir } from "../state/paths.ts";
 import { SessionEntryType } from "../state/session-entries.ts";
 import { emptySettingsSnapshot, type SettingsSnapshot } from "../state/settings.ts";
 import { MailGate } from "./agent-mail.ts";
+import { agentToolRegistrations, TAKE_CHANGES_TOOL } from "./agent-tools.ts";
 import { loadAgentTypes } from "./agent-types.ts";
 import { loadSessionHistory } from "./history.ts";
 import type { McpSession } from "./mcp.ts";
@@ -33,7 +34,7 @@ import { accumulatedSessionCost, sessionCostTally } from "./session-cost.ts";
 import { openSessionRuntime } from "./session-runtime.ts";
 import { agentMessageEntry } from "./session-store.ts";
 import { createSubagentOpener, restoredAgentsOf } from "./subagent-runtime.ts";
-import { AGENT_TRUST_SENTENCE, AgentHub } from "./subagents.ts";
+import { AGENT_TRUST_SENTENCE, AgentHub, type AgentToolsHost } from "./subagents.ts";
 
 const noMcp = async (): Promise<McpSession> => ({
   tools: [],
@@ -102,6 +103,7 @@ async function openTop(
       bundle().adapter.notify(text, mark);
     },
     pendingNotices: () => bundle().adapter.pendingNotices(),
+    workspaceRoot: () => root.dir,
     record: (entry) =>
       bundle().sessionStore.append(agentMessageEntry(entry, bundle().adapter.currentRunId())),
     open: createSubagentOpener({
@@ -450,4 +452,59 @@ test("回看、回退与续接列表按消息上的标记认出 agent 的传话�
     await disposeRuntime(opened.bundle).catch(() => {});
     root.cleanup();
   }
+});
+
+test("决策 486：take_changes 把子 agent 工作树里的改动（含新建文件）叠进派出方的工作目录；再取只取之后的；不认识的名字报错；完整取回后再没改的关掉即删", async () => {
+  const root = repo();
+  const delivered: string[] = [];
+  const { streamFn } = routed(
+    [
+      {
+        text: "",
+        toolCalls: [
+          {
+            name: "spawn_agent",
+            args: { task: "write b.txt", worktree: true, background: false },
+            id: "s1",
+          },
+        ],
+      },
+      { text: "", toolCalls: [{ name: "take_changes", args: { name: "general-1" }, id: "t1" }] },
+      { text: "", toolCalls: [{ name: "take_changes", args: { name: "general-1" }, id: "t2" }] },
+      { text: "", toolCalls: [{ name: "take_changes", args: { name: "nobody" }, id: "t3" }] },
+      { text: "done" },
+    ],
+    [
+      { text: "", toolCalls: [{ name: "write_file", args: { path: "b.txt", content: "hi\n" } }] },
+      { text: "wrote b.txt" },
+    ]
+  );
+  const { hub, sessionId, opened } = await openTop(root, streamFn, delivered);
+  try {
+    await opened.bundle.adapter.run("go");
+    const [writer] = hub.agentsOf(sessionId);
+    const wt = writer?.worktree;
+    assert.ok(wt !== undefined);
+    assert.equal(
+      readFileSync(join(root.dir, "b.txt"), "utf8").replace(/\r\n/g, "\n"),
+      "hi\n",
+      "新建的文件叠进派出方的工作目录"
+    );
+    const transcript = JSON.stringify(opened.bundle.adapter.transcript());
+    assert.ok(transcript.includes("Use take_changes with its name"), "交回结果里写明用它取回");
+    assert.ok(transcript.includes("took 1 file: b.txt"));
+    assert.ok(transcript.includes("no changes to take from sub-agent general-1"), "再取只取之后的");
+    assert.ok(transcript.includes("no sub-agent named nobody that you started"));
+    await hub.close();
+    assert.equal(existsSync(wt.path), false, "完整取回之后再没改：关掉即删");
+  } finally {
+    await disposeRuntime(opened.bundle).catch(() => {});
+    root.cleanup();
+  }
+});
+
+test("决策 486：take_changes 按写档注册（ask 模式下审批；只读类型的工具范围不收它）", () => {
+  const host = { canSpawn: () => false } as unknown as AgentToolsHost;
+  const take = agentToolRegistrations(host).find((item) => item.name === TAKE_CHANGES_TOOL);
+  assert.equal(take?.tier, "write");
 });

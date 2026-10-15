@@ -352,11 +352,15 @@ export function createSubagentOpener(base: SubagentOpenerBase): SubagentOpener {
                 : undefined,
           }
         : {}),
+      // 决策 486：它的工作目录（取它自己子 agent 的改动时的落点）
+      workspaceRoot: () => opened.scope.workspaceRoot,
       close: async (options) => {
         detachLoopGuard();
         contexts.delete(sessionId);
         await disposeRuntime(bundle).catch(() => {});
-        if (worktree !== undefined) closeAgentWorktree(worktree, options?.interrupted === true);
+        if (worktree !== undefined) {
+          closeAgentWorktree(worktree, options?.interrupted === true, options?.takenBase);
+        }
         releaseResumed?.();
       },
     };

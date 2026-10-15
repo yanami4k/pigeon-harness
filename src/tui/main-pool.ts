@@ -97,6 +97,8 @@ export interface SessionPoolContext {
   onListed?(core: SessionCore): void;
   // 从面板去掉：删出工作清单
   onUnlisted?(sessionId: string): void;
+  // 决策 486：会话（caller）的主 agent 用 take_changes 取面板里的会话；没有这个名字的面板会话返回 undefined
+  panelTake?(caller: SessionCore, name: string, into: string): string | undefined;
 }
 
 export interface CurrentRoute {
@@ -300,6 +302,13 @@ export function registerCoreAgents(
       ...(context.homeDir !== undefined ? { homeDir: context.homeDir } : {}),
     }),
     catalog: () => agents.catalog(core.governanceRoot),
+    // 决策 486：take_changes 的落点，与取面板里的会话
+    workspaceRoot: () => core.workspaceRoot,
+    ...(context.panelTake !== undefined
+      ? {
+          takeFromPanel: (name: string, into: string) => context.panelTake?.(core, name, into),
+        }
+      : {}),
     limits: () => agentLimitsOfSettings(settingsOf(context, core)),
   });
   core.registration = registration;
@@ -480,22 +489,25 @@ export function pooledRuntimeOf(
       },
       core,
     },
-    take: () => {
+    take: (into) => {
       const worktree = core.worktree;
       // 决策 459：共用目录的会话没有工作树，改动已直接在目录里
       if (worktree === undefined) return `${core.name} has no worktree; nothing to take`;
-      // 取回的落点就是这个工作树（当前会话进了它的工作树）：自己叠自己，拒绝
-      // 决策 485：别的仓库里的会话不取
-      const currentRoot = context.currentRoot?.();
-      if (currentRoot !== undefined && !sameDir(currentRoot, core.governanceRoot)) {
+      // 决策 485：别的仓库里的会话不取；决策 486：take_changes 取回到调用方自己的工作目录
+      const landingRoot = into?.root ?? context.currentRoot?.();
+      const landing = into?.workspace ?? context.mainWorkspace();
+      if (landingRoot !== undefined && !sameDir(landingRoot, core.governanceRoot)) {
         return `${core.name} is in another repository; nothing to take`;
       }
-      if (sameDir(context.mainWorkspace(), worktree.path)) {
-        return `the current session is in ${core.name}'s worktree; nothing to take`;
+      // 取回的落点就是这个工作树（进了它的工作树）：自己叠自己，拒绝
+      if (sameDir(landing, worktree.path)) {
+        return into !== undefined
+          ? `you are working in ${core.name}'s worktree; nothing to take`
+          : `the current session is in ${core.name}'s worktree; nothing to take`;
       }
       const result = takePooledChanges({
         name: core.name,
-        repoRoot: context.mainWorkspace(),
+        repoRoot: landing,
         base: core.takeBase ?? worktree.base,
         worktreePath: worktree.path,
       });
