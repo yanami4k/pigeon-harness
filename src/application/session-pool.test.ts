@@ -186,16 +186,24 @@ test("开运行面期间被停：开完即释放，不开跑", async () => {
   assert.deepEqual(fakes[0]?.runs, [], "没有开跑");
 });
 
-test("停下先中断再释放，之后只读；取回交给运行面；运行抛错记为失败", async () => {
+test("决策 483：停下只中断这一轮、不释放（不被叫醒，收到话即接着干）；去掉才释放；取回交给运行面；运行抛错记为失败", async () => {
   const { pool, fakes } = harness();
   await pool.spawn("一");
   await settle();
   await pool.stop("sess_1");
   assert.equal(fakes[0]?.interrupted, 1);
-  assert.equal(fakes[0]?.closed, true);
+  assert.equal(fakes[0]?.closed, false, "运行面不释放");
   assert.equal(pool.list()[0]?.state, "stopped");
-  assert.match((await pool.send("sess_1", "再来")) ?? "", /is stopped/);
-  assert.equal(await pool.take("sess_1"), "取回 s1（stopped）");
+  fakes[0]?.hooks.wake();
+  assert.equal(fakes[0]?.noticeRuns, 0, "停下的不被叫醒");
+  assert.equal(await pool.take("sess_1"), "取回 s1（idle）", "按还开着取");
+  assert.equal(await pool.send("sess_1", "再来"), undefined);
+  assert.equal(pool.list()[0]?.state, "running");
+  fakes[0]?.finish("接着做完了");
+  await settle();
+  await pool.remove("sess_1");
+  assert.equal(fakes[0]?.closed, true, "去掉即释放");
+  assert.equal(pool.list().length, 0);
   await pool.spawn("二");
   await settle();
   fakes[1]?.fail("连接断了");
@@ -282,4 +290,16 @@ test("偷看不列开工状态块（不是人说的话）", async () => {
   await pool.spawn("做事");
   await settle();
   assert.deepEqual(await pool.peek("sess_status"), ["s1: 做事", "> 做事", "  做完了"]);
+});
+
+test("决策 483：停下的会话里它的子 agent 在等审批，卡片照样标等待回应；答完回到已停", async () => {
+  const { pool, fakes } = harness();
+  await pool.spawn("一");
+  await settle();
+  await pool.stop("sess_1");
+  fakes[0]?.hooks.waiting("general-1: edit_file a.ts");
+  assert.equal(pool.list()[0]?.state, "waiting");
+  assert.equal(pool.list()[0]?.waiting, "general-1: edit_file a.ts");
+  fakes[0]?.hooks.waiting(undefined);
+  assert.equal(pool.list()[0]?.state, "stopped");
 });

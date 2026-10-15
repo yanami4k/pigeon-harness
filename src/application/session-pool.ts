@@ -47,8 +47,10 @@ export interface SessionPanelSource {
   spawn(task: string): Promise<PooledSessionCard>;
   // 给空闲的会话发一句话（接着做）；不能发时返回原因
   send(id: string, text: string): Promise<string | undefined>;
-  // 停下（在跑的先中断；还在开的开完即释放），之后只读
+  // 决策 457、483：停下（在跑的先中断）——运行面不释放，它派出的子 agent 接着跑，结果等它再干时交给它；还在开的开完即释放
   stop(id: string): Promise<void>;
+  // 从面板去掉：释放运行面（它派出的子 agent 一并停下），会话记录保留
+  remove(id: string): Promise<void>;
   // 偷看：等待中的问题，或最近的几句（人说的与回复）
   peek(id: string): Promise<string[]>;
   // 把它工作树里的改动取回主工作目录（/take）；返回说明
@@ -158,6 +160,11 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | "timeout">
 
 interface Entry<Live> {
   card: PooledSessionCard;
+  // 人停下的（Ctrl+X 第一下）：不被叫醒；它的子 agent 等审批时卡片照样标出，答完回到已停
+  halted?: boolean;
+  // 已从面板去掉、已释放运行面
+  removed?: boolean;
+  closed?: boolean;
   runtime?: PooledRuntime<Live>;
   // 建工作树与开运行面（还没开完）
   opening?: Promise<void> | undefined;
@@ -235,10 +242,18 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
     this.#entries.set(entry.card.id, entry);
     this.#notify();
     const hooks: PooledHooks = {
+      // 决策 483：这个会话或它的子 agent 在等审批即标出（停下了也标：子 agent 还在跑）；答完回到原来的样子
       waiting: (line) => {
-        if (entry.card.state === "stopped") return;
+        if (entry.removed === true) return;
         this.#changed(entry, {
-          state: line !== undefined ? "waiting" : "running",
+          state:
+            line !== undefined
+              ? "waiting"
+              : entry.halted === true
+                ? "stopped"
+                : entry.runtime?.isRunning() === true
+                  ? "running"
+                  : "idle",
           waiting: line,
         });
       },
@@ -262,9 +277,14 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
         }
         return;
       }
-      // 会话号定了：卡片改用它
+      // 会话号定了：卡片改用它（开的期间已从面板去掉的不再放回）
       this.#entries.delete(entry.card.id);
       entry.runtime = runtime;
+      if (entry.removed === true) {
+        entry.closed = true;
+        await runtime.close().catch(() => {});
+        return;
+      }
       entry.card = {
         ...entry.card,
         id: runtime.sessionId,
@@ -273,6 +293,7 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
       this.#entries.set(runtime.sessionId, entry);
       // 开的期间被停（或面板已关）：释放，不开跑
       if (entry.card.state === "stopped" || this.#closed) {
+        entry.closed = true;
         await runtime.close().catch(() => {});
         this.#changed(entry, { state: "stopped" });
         return;
@@ -327,13 +348,17 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
   async send(id: string, text: string): Promise<string | undefined> {
     const entry = this.#entries.get(id);
     if (entry === undefined) return "no such session";
-    if (entry.runtime === undefined) return `session ${entry.card.name} is still starting`;
+    if (entry.runtime === undefined) {
+      return entry.card.state === "stopped"
+        ? `session ${entry.card.name} is stopped`
+        : `session ${entry.card.name} is still starting`;
+    }
     if (text.trim() === "") return "message is empty";
-    const state = entry.card.state;
-    if (state === "stopped") return `session ${entry.card.name} is stopped`;
-    if (state === "running" || state === "waiting" || entry.runtime.isRunning()) {
+    if (entry.runtime.isRunning()) {
       return `can't send while ${entry.card.name} is running`;
     }
+    // 决策 483：停下的会话收到话即接着干，停着期间子 agent 交回的结果随这一轮一并交给它
+    entry.halted = false;
     const runtime = entry.runtime;
     const message = text.trim();
     this.#run(entry, () => runtime.run(message));
@@ -344,15 +369,38 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
     const entry = this.#entries.get(id);
     if (entry === undefined || entry.card.state === "stopped") return;
     const runtime = entry.runtime;
+    entry.halted = true;
     this.#changed(entry, { state: "stopped", waiting: undefined });
     if (runtime === undefined) {
       // 还在开：开完由开的那一段释放
       await entry.opening;
       return;
     }
+    // 决策 483：只停这一轮，运行面不释放（它派出的子 agent 接着跑）
+    if (runtime.isRunning()) runtime.interrupt();
+    this.#changed(entry, { summary: replySummary(runtime.transcript()) || entry.card.summary });
+  }
+
+  async remove(id: string): Promise<void> {
+    const entry = this.#entries.get(id);
+    if (entry === undefined) return;
+    entry.removed = true;
+    entry.halted = true;
+    this.#entries.delete(id);
+    this.#notify();
+    await this.#release(entry);
+  }
+
+  // 释放一个会话的运行面（在跑的先中断；还在开的开完由开的那一段释放）
+  async #release(entry: Entry<Live>): Promise<void> {
+    if (entry.card.state !== "stopped")
+      this.#changed(entry, { state: "stopped", waiting: undefined });
+    await entry.opening;
+    const runtime = entry.runtime;
+    if (runtime === undefined || entry.closed === true) return;
+    entry.closed = true;
     if (runtime.isRunning()) runtime.interrupt();
     await runtime.close().catch(() => {});
-    this.#changed(entry, { summary: replySummary(runtime.transcript()) || entry.card.summary });
   }
 
   async peek(id: string): Promise<string[]> {
@@ -392,7 +440,9 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
     if (entry.card.state === "running" || entry.card.state === "waiting") {
       return `can't take while ${entry.card.name} is running`;
     }
-    return entry.runtime.take?.(entry.card.state) ?? "session has no worktree";
+    // 决策 483：停下的会话运行面还开着，按还开着取（起点前移，工作树留着；去掉时再按有没有改动清理）
+    const state = entry.card.state === "stopped" ? "idle" : entry.card.state;
+    return entry.runtime.take?.(state) ?? "session has no worktree";
   }
 
   // 按名字找（/take 用）
@@ -409,8 +459,8 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
     const done = await withTimeout(
       Promise.all(
         entries.map(async (entry) => {
-          await entry.opening;
-          await this.stop(entry.card.id);
+          entry.halted = true;
+          await this.#release(entry);
         })
       ),
       ms

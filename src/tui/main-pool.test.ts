@@ -31,7 +31,7 @@ function lockCount(home: string): number {
   return existsSync(dir) ? readdirSync(dir).length : 0;
 }
 
-test("派出的会话进自己的工作树改文件、持有在用锁；审批写明来源、挂着时在等待回应；/take 取回、起点前移；停下后完整取回即删工作树", async () => {
+test("派出的会话进自己的工作树改文件、持有在用锁；审批写明来源、挂着时在等待回应；/take 取回、起点前移；停下不释放、去掉才释放（有改动的工作树保留）", async () => {
   const { root, cleanup } = tempRoot("pigeon-pool-");
   cleanups.push(cleanup);
   const home = join(root, ".home");
@@ -95,13 +95,15 @@ test("派出的会话进自己的工作树改文件、持有在用锁；审批�
   writeFileSync(join(root, "made.txt"), "edited by hand\n");
   assert.match(await pool.take(id), /no changes to take/);
   assert.equal(readFileSync(join(root, "made.txt"), "utf8"), "edited by hand\n");
+  // 决策 483：停下不释放（在用锁留着）；去掉才释放，有改动的工作树保留
   await pool.stop(id);
   assert.equal(pool.list()[0]?.state, "stopped");
-  assert.equal(lockCount(home), 0, "停下即释放在用锁");
+  assert.equal(lockCount(home), 1, "停下不释放在用锁");
+  assert.match(await pool.take(id), /no changes to take/);
+  await pool.remove(id);
+  assert.equal(pool.list().length, 0);
+  assert.equal(lockCount(home), 0, "去掉即释放在用锁");
   assert.ok(existsSync(worktree), "有改动的工作树保留");
-  assert.match(await pool.take(id), /deleted worktree/);
-  assert.equal(existsSync(worktree), false);
-  assert.match(await pool.take(id), /worktree was deleted; nothing to take/);
 });
 
 test("起点按 worktree.baseRef：fresh 时在后台取远端（取不到从 HEAD 起并说明），head 时不取", async () => {
@@ -188,7 +190,7 @@ test("钩子：SessionStart 与 SessionEnd 跑；UserPromptSubmit 拦下即这�
   assert.ok(existsSync(join(scripts, "ended")), "SessionEnd 跑了");
 });
 
-test("/take：落点就是这个工作树时拒绝；已停但另有会话开着这个工作树时不删", async () => {
+test("/take：落点就是这个工作树时拒绝；停下的会话按还开着取、工作树不删", async () => {
   const { root, cleanup } = tempRoot("pigeon-pool-take-");
   cleanups.push(cleanup);
   const home = join(root, ".home");
@@ -228,21 +230,10 @@ test("/take：落点就是这个工作树时拒绝；已停但另有会话开着
     /the main session is in .+'s worktree; nothing to take/
   );
   mainWorkspace = root;
+  // 决策 483：停下的会话运行面还开着：取回按还开着取（起点前移），工作树不删
   await pool.stop(card?.id ?? "");
-  // 另一个进程开着这个工作树（父进程号代替）
-  const key = createHash("sha256")
-    .update(process.platform === "win32" ? resolve(worktree).toLowerCase() : resolve(worktree))
-    .digest("hex")
-    .slice(0, 24);
-  const lockDir = join(home, ".pigeon", "state", "worktree-use");
-  mkdirSync(lockDir, { recursive: true });
-  writeFileSync(
-    join(lockDir, `${key}-${process.ppid}.lock`),
-    `${JSON.stringify({ pid: process.ppid, path: resolve(worktree) })}\n`
-  );
   const taken = await pool.take(card?.id ?? "");
   assert.match(taken, /took 1 file/);
-  assert.match(taken, /is open in another session; kept/);
   assert.ok(existsSync(worktree));
 });
 

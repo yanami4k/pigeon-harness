@@ -203,7 +203,7 @@ test("空格偷看，偷看时输入发给选中的会话；空输入回车进�
   }
 });
 
-test("连按两次 Ctrl+X 停止选中的会话（第一次只提示）；面板里不用斜杠命令；/take <名字> 取回", async () => {
+test("决策 483：Ctrl+X 第一下停下选中的会话（运行面不释放），两秒内再按一下从面板去掉并释放；面板里不用斜杠命令；/take <名字> 取回", async () => {
   const { term, stopped, finishers, cleanup } = makeShell();
   try {
     await settle();
@@ -215,14 +215,9 @@ test("连按两次 Ctrl+X 停止选中的会话（第一次只提示）；面板
     await settle();
     term.input(CTRL_X);
     await settle();
-    assert.match(screenText(term), /press Ctrl\+X again to stop s1/);
-    assert.deepEqual(stopped, []);
-    term.input(CTRL_X);
-    await settle();
-    assert.deepEqual(stopped, ["s1"]);
-    // 停下之后"再按一次"的提示不留着
-    assert.doesNotMatch(screenText(term), /press Ctrl\+X again/);
+    assert.deepEqual(stopped, [], "第一下只停这一轮，不释放");
     assert.match(screenText(term), /stopped \(1\)/);
+    assert.doesNotMatch(screenText(term), /press Ctrl\+X again/);
     term.input("/config");
     term.input("\r");
     await settle();
@@ -235,6 +230,15 @@ test("连按两次 Ctrl+X 停止选中的会话（第一次只提示）；面板
     term.input("\r");
     await settle();
     assert.match(screenText(term), /已取回 s1 的改动/);
+    // 再进面板，连按两下：第二下从面板去掉并释放
+    term.input("/panel");
+    term.input("\r");
+    await settle();
+    term.input(CTRL_X);
+    term.input(CTRL_X);
+    await settle();
+    assert.deepEqual(stopped, ["s1"]);
+    assert.doesNotMatch(screenText(term), /stopped \(1\)/);
   } finally {
     cleanup();
   }

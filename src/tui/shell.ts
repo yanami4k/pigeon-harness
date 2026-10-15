@@ -298,8 +298,8 @@ export const EXIT_CONFIRM = "sub-agents are still running; exit anyway? (y/n)";
 
 // 决策 480：子 agent 状态有变后隔多久重算花费（期间的变化合并成一次）
 const AGENT_COST_DELAY_MS = 500;
-// 决策 443：会话面板里连按两次 Ctrl+X 停止的间隔
-const PANEL_STOP_CONFIRM_MS = 1500;
+// 决策 443、483：会话面板里 Ctrl+X 第一下停下、这个间隔内再按一下从面板去掉
+const PANEL_STOP_CONFIRM_MS = 2000;
 // 设置面板里"被哪一层覆盖"的说法（与面板上那一项旁的标注同一口径）
 const OVERRIDE_LAYER = { project: "project settings", local: "project local settings" } as const;
 
@@ -1372,7 +1372,9 @@ export class PigeonTuiShell
   private mainCard(): PooledSessionCard {
     const id = this.current.sessionId;
     const digest = this.flow.digest();
-    const waiting = this.pendingApprovalState?.mainWaiting;
+    // 决策 483：它自己的审批挂着，或它派出的子 agent 在等审批（排着的也算）
+    const waiting =
+      this.pendingApprovalState?.mainWaiting ?? this.agentWaitingLine(this.current.sessionId);
     const state: PooledSessionState =
       waiting !== undefined ? "waiting" : this.isBusy() ? "running" : "idle";
     return {
@@ -1386,6 +1388,15 @@ export class PigeonTuiShell
       startedAt: 0,
       updatedAt: 0,
     };
+  }
+
+  // 某会话派出的子 agent 里在等审批的（第一个的路径）；没有为 undefined
+  private agentWaitingLine(sessionId: string): string | undefined {
+    const face = this.options.agents;
+    const waiting = face?.waiting?.();
+    if (face === undefined || waiting === undefined || waiting.size === 0) return undefined;
+    const record = face.list(sessionId).find((agent) => waiting.has(agent.path));
+    return record !== undefined ? `${record.path}: approval` : undefined;
   }
 
   // 决策 458：偷看当前会话——在等什么，加最近几条对话
@@ -1517,11 +1528,39 @@ export class PigeonTuiShell
       this.sessionPanel.setNote(`${card.name} is not running`);
       return;
     }
-    if (card.state === "stopped") {
-      this.sessionPanel.setNote(`${card.name} already stopped`);
+    const now = Date.now();
+    // 决策 483：别的会话——第一下停下（运行面留着，它派出的子 agent 接着跑），两秒内再按一下从面板去掉（子 agent 一并停下，
+    // 会话记录保留）；已停下的第一下只等第二下
+    if (!main) {
+      const last = this.lastPanelStop;
+      if (last !== undefined && last.id === card.id && now - last.at <= PANEL_STOP_CONFIRM_MS) {
+        this.lastPanelStop = undefined;
+        this.sessionPanel.setNote("");
+        pool.source.remove(card.id).then(
+          () => this.tui.requestRender(),
+          (error: unknown) => {
+            this.sessionPanel.setNote(
+              `removing ${card.name} failed: ${error instanceof Error ? error.message : String(error)}`
+            );
+            this.tui.requestRender();
+          }
+        );
+        return;
+      }
+      this.lastPanelStop = { id: card.id, at: now };
+      if (card.state !== "stopped") {
+        pool.source.stop(card.id).then(
+          () => this.tui.requestRender(),
+          (error: unknown) => {
+            this.sessionPanel.setNote(
+              `stopping ${card.name} failed: ${error instanceof Error ? error.message : String(error)}`
+            );
+            this.tui.requestRender();
+          }
+        );
+      }
       return;
     }
-    const now = Date.now();
     const last = this.lastPanelStop;
     const work = main ? this.workStartedAt : undefined;
     if (
@@ -1532,27 +1571,11 @@ export class PigeonTuiShell
     ) {
       this.lastPanelStop = undefined;
       this.sessionPanel.setNote("");
-      if (main) {
-        this.requestInterrupt();
-        return;
-      }
-      pool.source.stop(card.id).then(
-        () => this.tui.requestRender(),
-        (error: unknown) => {
-          this.sessionPanel.setNote(
-            `stopping ${card.name} failed: ${error instanceof Error ? error.message : String(error)}`
-          );
-          this.tui.requestRender();
-        }
-      );
+      this.requestInterrupt();
       return;
     }
     this.lastPanelStop = { id: card.id, at: now, work };
-    this.sessionPanel.setNote(
-      main
-        ? `press Ctrl+X again to interrupt ${card.name}`
-        : `press Ctrl+X again to stop ${card.name}`
-    );
+    this.sessionPanel.setNote(`press Ctrl+X again to interrupt ${card.name}`);
   }
 
   // 会话面板里的输入：偷看时发给选中的会话（回复），否则派新会话；进入的会话里发给它

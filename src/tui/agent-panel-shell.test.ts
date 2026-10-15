@@ -203,3 +203,44 @@ test("审批挂着时退出确认照样先答：y 退出、不当作批准；撤
   const result = await second;
   assert.notEqual(result.key, "y", "没有当作批准");
 });
+
+test("决策 483：当前会话派出的子 agent 在等审批，会话面板里当前会话那张卡标等待回应", async () => {
+  const term = new MockTerminal(110, 24);
+  const agent = record("general-1", "running");
+  const sessionId = newSessionId();
+  const shell = new PigeonTuiShell({
+    terminal: term,
+    runtime: new StubRuntime(),
+    sessionId,
+    logDir: mkdtempSync(join(tmpdir(), "pigeon-agent-shell-")),
+    agents: {
+      list: () => [agent],
+      running: () => 1,
+      waiting: () => new Set(["general-1"]),
+      stop: async () => {},
+      send: () => undefined,
+      live: () => undefined,
+      historyDir: () => undefined,
+    },
+    pool: {
+      source: {
+        list: () => [],
+        subscribe: () => () => {},
+        spawn: async () => {
+          throw new Error("unused");
+        },
+        send: async () => undefined,
+        stop: async () => {},
+        remove: async () => {},
+        peek: async () => [],
+      },
+    },
+  });
+  shell.start();
+  await settle();
+  term.input("/panel");
+  term.input("\r");
+  await settle();
+  assert.match(screenText(term), /waiting: general-1: approval/);
+  shell.stop();
+});
