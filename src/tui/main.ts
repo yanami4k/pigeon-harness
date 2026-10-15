@@ -15,6 +15,7 @@
 // 输入历史按项目存在 .pigeon/state/tui-history.json。
 
 import { homedir } from "node:os";
+import { resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { pathToFileURL } from "node:url";
 import { ProcessTerminal } from "@earendil-works/pi-tui";
@@ -75,6 +76,7 @@ import {
   startSandbox,
 } from "../application/sandbox-session.ts";
 import { subagentSessionsDirFor } from "../application/session-cost.ts";
+import { sessionOpenElsewhere } from "../application/session-holder.ts";
 import { sessionNameOf, validSessionName } from "../application/session-name.ts";
 import { dropTakeBase, unchangedSinceTake } from "../application/session-pool.ts";
 import {
@@ -88,15 +90,29 @@ import {
   type TrustChoice,
   trustPromptText,
 } from "../application/session-settings.ts";
-import { createSettingsReloader } from "../application/settings-reload.ts";
+import {
+  applySettingsReload,
+  createSettingsReloader,
+  planSettingsReload,
+} from "../application/settings-reload.ts";
 import { restoredAgentsOf } from "../application/subagent-runtime.ts";
 import { AgentHub, type SubagentRecord } from "../application/subagents.ts";
 import { renderTaskList } from "../application/task-list-tool.ts";
 import { closeTuiSession } from "../application/tui-exit.ts";
 import { prepareWorkspace } from "../application/workspace.ts";
-import { createTuiWorktreesFace, isGitWorkspace } from "../application/worktree-cleanup.ts";
+import {
+  createTuiWorktreesFace,
+  isGitWorkspace,
+  type TuiWorktreesFace,
+} from "../application/worktree-cleanup.ts";
 import type { SessionGrantStore } from "../approvals/grant-store.ts";
 import { createApprovalQueue } from "../approvals/queue.ts";
+import { recordTrustedEntries } from "../persistence/config-trust-store.ts";
+import {
+  addToSessionIndex,
+  type ListedSession,
+  sessionIndexed,
+} from "../persistence/session-index.ts";
 import { holdWorktreeInUse } from "../persistence/worktree-in-use.ts";
 import type { TrustEntry } from "../state/config-trust.ts";
 import { asSessionId, newSessionId, type SessionId } from "../state/ids.ts";
@@ -106,6 +122,7 @@ import {
   keybindingsSectionOf,
   loopGuardSettingsOf,
   memoryLimitsOf,
+  type SettingsSnapshot,
   taskListEnabledOf,
   withHooksDisabled,
   worktreeSectionOf,
@@ -130,12 +147,15 @@ import {
   type SessionPoolContext,
   sayOf,
   setCoreRole,
+  settingsOf,
 } from "./main-pool.ts";
 import { type MainReloadContext, reopenMainSessionForReload } from "./main-reload.ts";
+import { askTrustPanel } from "./modal.ts";
 import { PigeonTuiShell, type TuiHandOff, type TuiShellOptions } from "./shell.ts";
 import { installTerminalReset } from "./terminal-reset.ts";
 import { switchableWarn } from "./warn-sink.ts";
 import { modelLabelOf, tildePath } from "./welcome.ts";
+import { WorkList } from "./work-list.ts";
 import { takeWorktreeFlag } from "./worktree-flag.ts";
 import { createWorktreeSwitch } from "./worktree-switch.ts";
 
@@ -148,6 +168,21 @@ const USAGE =
 
 // 决策 484：/reload 时面板里的会话还有子 agent 在干活，隔多久再看一次
 const POOLED_RELOAD_RETRY_MS = 1000;
+
+// 决策 485：比较项目与工作区路径用的键（Windows 上不分大小写）
+function rootKey(path: string): string {
+  const resolved = resolvePath(path);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+// 决策 485：在不在工作清单里（清单读不成按不在）
+function safeIndexed(sessionId: string): boolean {
+  try {
+    return sessionIndexed(sessionId);
+  } catch {
+    return false;
+  }
+}
 
 // 决策 445：壳退出之后在标准错误输出上问一句（EOF 为 null）
 async function askOnStderr(prompt: string): Promise<string | null> {
@@ -263,13 +298,14 @@ export async function main(argv: string[]): Promise<void> {
     else shell.addSystem(line);
   };
   // 决策 331、332：/memory 的上下文（两层上限取本会话的设置快照）
+  // 决策 485：跟着当前会话所在的项目（换会话时换）
   const memoryContext = { governanceRoot: governanceRoot, limits: memoryLimitsOf(settings) };
   // M7（决策 079）：/fork 手动分叉——分支在独立工作树里续跑，跑完回报（按这个运行面）
   const forkFor =
     (opened: OpenedSessionRuntime) =>
     (args: string): Promise<string> =>
       runForkCommand({
-        governanceRoot: governanceRoot,
+        governanceRoot: current.governanceRoot,
         opened,
         args,
         run: {
@@ -305,7 +341,17 @@ export async function main(argv: string[]): Promise<void> {
     sandbox === undefined && flags.subagents
       ? new AgentHub({ mail: new MailGate(), onChange: () => shellHolder.current?.agentsChanged() })
       : undefined;
-  let agentCatalog: AgentTypeCatalog = loadAgentTypes({ governanceRoot });
+  // 决策 485：子 agent 的类型按项目读（别的工作区的会话用它那个项目的）；/reload 重读
+  const catalogs = new Map<string, AgentTypeCatalog>();
+  const catalogOf = (root: string): AgentTypeCatalog => {
+    const key = rootKey(root);
+    const known = catalogs.get(key);
+    if (known !== undefined) return known;
+    const loaded = loadAgentTypes({ governanceRoot: root });
+    catalogs.set(key, loaded);
+    return loaded;
+  };
+  const agentCatalog = catalogOf(governanceRoot);
   // 决策 482：在等审批的子 agent（路径），子 agent 面板据此标出
   const waitingCounts = new Map<string, number>();
   const waitingAgents = new Set<string>();
@@ -333,7 +379,7 @@ export async function main(argv: string[]): Promise<void> {
     streamFn,
     flags,
     ...(agentHub !== undefined
-      ? { agents: { hub: agentHub, catalog: () => agentCatalog, waiting: agentWaiting } }
+      ? { agents: { hub: agentHub, catalog: catalogOf, waiting: agentWaiting } }
       : {}),
     settings: () => settings,
     warn,
@@ -347,6 +393,14 @@ export async function main(argv: string[]): Promise<void> {
       if (poolExiting) console.error(line);
       else say(line, alert === true);
     },
+    // 决策 485：面板里新派的会话开在当前会话所在的项目；/take 不跨仓库；清单里的会话释放时工作树留着
+    spawnTarget: () => ({
+      governanceRoot: current.governanceRoot,
+      settings: settingsOfCore(current),
+    }),
+    currentRoot: () => current.governanceRoot,
+    listed: (id) => sandbox === undefined && safeIndexed(id),
+    onListed: (core) => listCore(core),
     current: {
       wake: () => shellHolder.current?.runNotices(),
       render: () => shellHolder.current?.render(),
@@ -361,11 +415,22 @@ export async function main(argv: string[]): Promise<void> {
         }),
     },
   };
-  // 决策 484：从当前会话这边开的会话核（启动、/resume）：带 enter_worktree 的工具槽（沙箱里没有）
-  function newCore(id: SessionId, workspaceRoot: string, mode: "prompt" | "yolo"): SessionCore {
+  // 决策 485：会话用的设置快照（别的项目的会话用它那个项目的）
+  const settingsOfCore = (core: SessionCore) => settingsOf(coreContext, core);
+  // 决策 484：从当前会话这边开的会话核（启动、/resume、打开工作清单里的）：带 enter_worktree 的工具槽（沙箱里没有）。
+  // 决策 485：别的项目的会话带着那个项目的治理根与设置快照
+  function newCore(
+    id: SessionId,
+    root: string,
+    workspaceRoot: string,
+    mode: "prompt" | "yolo",
+    snapshot?: SettingsSnapshot
+  ): SessionCore {
     const enterWorktree = enterWorktreeOf();
     const core: SessionCore = {
       sessionId: id,
+      governanceRoot: root,
+      ...(snapshot !== undefined ? { settings: snapshot } : {}),
       name: "",
       task: "",
       modeCell: { current: mode },
@@ -378,9 +443,9 @@ export async function main(argv: string[]): Promise<void> {
     // 决策 446：enter_worktree 的宿主——当前工作区、起点档位、能否移入、建好后记下待移入（本轮结束后换运行面）。
     // 只有当前会话能移（面板里的会话在后台）
     enterWorktree?.bind({
-      governanceRoot,
+      governanceRoot: root,
       workspaceRoot: () => core.workspaceRoot,
-      baseMode: () => worktreeBaseModeOf(worktreeSectionOf(settings)),
+      baseMode: () => worktreeBaseModeOf(worktreeSectionOf(settingsOfCore(core))),
       blocked: () =>
         core.current
           ? (agentsBusy() ?? worktreeSwitch.blocked())
@@ -396,22 +461,23 @@ export async function main(argv: string[]): Promise<void> {
   ): Promise<OpenedSessionRuntime> {
     const agentsHost = registerCoreAgents(coreContext, core);
     const notice = sayOf(coreContext, core);
+    const snapshot = settingsOfCore(core);
     try {
       return await openSessionRuntime({
         approvalModeCell: core.modeCell,
-        governanceRoot,
+        governanceRoot: core.governanceRoot,
         // 决策 436：会话回退要用发消息时的快照
         turnSnapshots: true,
         ...(core.enterWorktree !== undefined ? { enterWorktree: core.enterWorktree } : {}),
-        settings,
+        settings: snapshot,
         sessionId: core.sessionId,
         streamFn,
         flags,
         ...(sandbox !== undefined
           ? { workspaceHost: sandbox.host, statusFacts: sandboxStatusFacts(sandbox) }
           : {}),
-        taskList: taskListEnabledOf(settings),
-        ...webToolsFor(settings),
+        taskList: taskListEnabledOf(snapshot),
+        ...webToolsFor(snapshot),
         warn,
         memoryWrite,
         createApprovalHandler: coreApprovalHandler(coreContext, core),
@@ -442,9 +508,9 @@ export async function main(argv: string[]): Promise<void> {
   function adoptWorkspace(core: SessionCore, root: string): void {
     core.workspaceRoot = root;
     const next =
-      root === governanceRoot
+      rootKey(root) === rootKey(core.governanceRoot)
         ? undefined
-        : (reopenNamedWorktree(governanceRoot, root) ?? core.worktree);
+        : (reopenNamedWorktree(core.governanceRoot, root) ?? core.worktree);
     if (next?.path !== core.worktree?.path || core.releaseInUse === undefined) {
       core.releaseInUse?.();
       core.releaseInUse = next !== undefined ? holdWorktreeInUse(next.path) : undefined;
@@ -459,6 +525,7 @@ export async function main(argv: string[]): Promise<void> {
   // 决策 445：--worktree 时会话开在独立工作树里
   const startCore = newCore(
     sessionId,
+    governanceRoot,
     namedWorktree?.path ?? governanceRoot,
     flags.yolo ? "yolo" : "prompt"
   );
@@ -486,19 +553,165 @@ export async function main(argv: string[]): Promise<void> {
   attachCoreRuntime(coreContext, startCore);
   // 决策 443：会话面板（进程内版）：派出的会话进各自的工作树；沙箱会话不开。退出时全部停止
   const sessionPool = sandbox === undefined ? createSessionPool(coreContext) : undefined;
+  // 决策 485：面板的工作清单——会话池里开着的加上用户级清单里本进程没开的（沙箱会话没有面板，也不进清单）
+  const workList =
+    sessionPool !== undefined
+      ? new WorkList({
+          pool: sessionPool.pool,
+          currentId: () => current.sessionId,
+          currentRoot: () => current.governanceRoot,
+          open: (entry) => openListed(entry),
+          notice: (line) => say(line, true),
+        })
+      : undefined;
+  // 决策 485：会话进工作清单（进过面板的：在面板里新开的、从主视图离开的、退到面板的）
+  function listCore(core: SessionCore): void {
+    if (sandbox !== undefined) return;
+    try {
+      addToSessionIndex({
+        sessionId: core.sessionId,
+        governanceRoot: core.governanceRoot,
+        workspaceRoot: core.workspaceRoot,
+      });
+    } catch (error) {
+      say(
+        `updating the work list failed: ${error instanceof Error ? error.message : String(error)}`,
+        true
+      );
+    }
+  }
+  // 会话号所属项目的治理根（当前会话或面板里开着的；不认识的按启动时的）
+  function rootOfSession(id: string): string {
+    if (id === current.sessionId) return current.governanceRoot;
+    return sessionPool?.pool.runtimeOf(id)?.live?.core.governanceRoot ?? governanceRoot;
+  }
+  // 决策 485：/worktrees 跟着当前会话所在的仓库（各仓库一份，记着待确认的清理）
+  const worktreesFaces = new Map<string, TuiWorktreesFace>();
+  function worktreesFaceOf(core: SessionCore): TuiWorktreesFace {
+    const key = rootKey(core.governanceRoot);
+    const known = worktreesFaces.get(key);
+    if (known !== undefined) return known;
+    const face = createTuiWorktreesFace({ workspaceRoot: core.governanceRoot });
+    worktreesFaces.set(key, face);
+    return face;
+  }
+  // 决策 485：别的项目的设置快照（打开那边的会话时读，没确认过的会执行命令的条目在界面里确认）；启动时的项目用 settings
+  const projectSettings = new Map<string, SettingsSnapshot>();
+  function setProjectSettings(root: string, snapshot: SettingsSnapshot): void {
+    if (rootKey(root) === rootKey(governanceRoot)) {
+      settings = snapshot;
+      return;
+    }
+    projectSettings.set(rootKey(root), snapshot);
+    for (const core of openCores()) {
+      if (rootKey(core.governanceRoot) === rootKey(root)) core.settings = snapshot;
+    }
+  }
+  function openCores(): SessionCore[] {
+    const pooled = (sessionPool?.pool.runtimes() ?? []).flatMap((runtime) =>
+      runtime.live?.core !== undefined ? [runtime.live.core] : []
+    );
+    return [current, ...pooled];
+  }
+  // 界面里确认别的项目的设置（与审批同一个排队；同启动时的确认，记在同一处）
+  const askTrust = (root: string) => (entries: readonly TrustEntry[]) =>
+    approvalQueue.serial(() => askTrustPanel(shell, root, entries));
+  async function settingsForProject(root: string): Promise<SettingsSnapshot | undefined> {
+    if (rootKey(root) === rootKey(governanceRoot)) return undefined;
+    const known = projectSettings.get(rootKey(root));
+    if (known !== undefined) return known;
+    let snapshot = await openSessionSettings(root, {
+      confirmation: { kind: "interactive", ask: askTrust(root) },
+    });
+    if (flags.noHooks) snapshot = withHooksDisabled(snapshot);
+    projectSettings.set(rootKey(root), snapshot);
+    return snapshot;
+  }
+  // 决策 485：在本进程里开起工作清单里没开的会话（按它自己的治理根与工作区续接），收进会话池；开不成写明原因（卡片留着）
+  async function openListed(entry: ListedSession): Promise<string | undefined> {
+    const pool = sessionPool?.pool;
+    if (pool === undefined || pool.runtimeOf(entry.sessionId) !== undefined) return undefined;
+    const name = sessionNameOf(entry.governanceRoot, entry.sessionId, entry.workspaceRoot);
+    if (sessionOpenElsewhere(entry.sessionFile)) return `session ${name} is open elsewhere`;
+    let snapshot: SettingsSnapshot | undefined;
+    try {
+      snapshot = await settingsForProject(entry.governanceRoot);
+    } catch (error) {
+      return `can't open ${name}: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    const core = newCore(
+      asSessionId(entry.sessionId),
+      entry.governanceRoot,
+      entry.workspaceRoot,
+      current.modeCell.current,
+      snapshot
+    );
+    core.name = name;
+    try {
+      core.opened = await openCore(core, { resume: true });
+    } catch (error) {
+      return `can't open ${name}: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    await restoreAgents(core);
+    adoptWorkspace(core, core.opened.scope.workspaceRoot);
+    attachCoreRuntime(coreContext, core);
+    pool.adopt(pooledRuntimeOf(coreContext, core), {
+      name: core.name,
+      task: "",
+      ...(core.worktree !== undefined
+        ? { worktree: { path: core.worktree.path, branch: core.worktree.branch } }
+        : {}),
+    });
+    return undefined;
+  }
+  // 决策 485：/reload、/config 对别的项目的会话：各按自己项目重读再重建（空闲时）；有新的没确认过的会执行命令的条目，在界面里
+  // 确认（拒绝则这次不用）
+  async function reloadOtherProjects(currentRoot: string): Promise<void> {
+    const roots = new Map<string, string>();
+    for (const core of openCores()) {
+      const key = rootKey(core.governanceRoot);
+      if (key !== rootKey(currentRoot) && !roots.has(key)) roots.set(key, core.governanceRoot);
+    }
+    for (const [key, root] of roots) {
+      const before = key === rootKey(governanceRoot) ? settings : projectSettings.get(key);
+      if (before === undefined) continue;
+      try {
+        const plan = planSettingsReload(before, flags.noHooks ? { hooksDisabled: true } : {});
+        const choice = plan.pending.length > 0 ? await askTrust(root)(plan.pending) : "trust";
+        const result = applySettingsReload(plan, choice);
+        if (choice === "trust" && plan.pending.length > 0) recordTrustedEntries(root, plan.pending);
+        setProjectSettings(root, result.snapshot);
+        catalogs.delete(key);
+        rebuildPooled(root);
+      } catch (error) {
+        say(
+          `reloading settings in ${root} failed: ${error instanceof Error ? error.message : String(error)}`,
+          true
+        );
+      }
+    }
+  }
+  // 决策 485：/memory 跟着当前会话所在的项目；打转检测按它的设置
+  function followCurrent(): void {
+    const snapshot = settingsOfCore(current);
+    memoryContext.governanceRoot = current.governanceRoot;
+    memoryContext.limits = memoryLimitsOf(snapshot);
+    loopGuard = loopGuardSettingsOf(snapshot);
+  }
   const bundleOf = (): RuntimeBundle => coreBundle(current);
   const bindingOf = (core: SessionCore) => {
     const bundle = coreBundle(core);
     return {
       runtime: bundle.adapter,
       grants: {
-        root: governanceRoot,
+        root: core.governanceRoot,
         store: bundle.grantStore,
         configRules: bundle.configGrants,
         layeredRules: bundle.settings.grants,
       },
       hooks: bundle.hooks,
       workspaceRoot: core.workspaceRoot,
+      root: core.governanceRoot,
     };
   };
   // 决策 433–438：会话回退的运行面（每次按当前会话现取）
@@ -531,7 +744,10 @@ export async function main(argv: string[]): Promise<void> {
             send: (record: SubagentRecord, text: string) => agentHub.sendFromUser(record, text),
             live: (record: SubagentRecord) => record.runtime?.live,
             historyDir: (record: SubagentRecord) =>
-              subagentSessionsDirFor(sessionsDirOf(governanceRoot), record.top.endpoint.sessionId),
+              subagentSessionsDirFor(
+                sessionsDirOf(rootOfSession(record.top.endpoint.sessionId)),
+                record.top.endpoint.sessionId
+              ),
           },
         }
       : {}),
@@ -541,7 +757,14 @@ export async function main(argv: string[]): Promise<void> {
       : {}),
     // 决策 443、484：会话面板；进入面板里的会话即与当前会话换手
     ...(sessionPool !== undefined
-      ? { pool: { source: sessionPool.pool, enter: (id: string) => enterPooled(id) } }
+      ? {
+          pool: {
+            source: workList ?? sessionPool.pool,
+            enter: (id: string) => enterPooled(id),
+            // 决策 485：从主视图离开（← ← 或 /panel）的当前会话进工作清单
+            left: () => listCore(current),
+          },
+        }
       : {}),
     // 决策 433–438：会话回退——按当前运行面现取（/reload、换会话之后照样对）；没有快照的会话只退对话
     rewind: {
@@ -554,18 +777,18 @@ export async function main(argv: string[]): Promise<void> {
     },
     // 决策 442：/config 设置面板——生效值取本进程当前的设置快照，改动写用户级设置（随后壳按 /reload 重建，决策 484：所有会话）
     config: {
-      view: () => configView(settings),
+      view: () => configView(settingsOfCore(current)),
       busy: agentsBusy,
       // 决策 465：键位组的改动名字带 keybindings: 前缀（值为键，空串 = 清空，default = 恢复缺省）
       set: (id: string, value: string) =>
         id.startsWith(KEYBINDING_ID_PREFIX)
           ? setUserKeybinding(
-              governanceRoot,
+              current.governanceRoot,
               id.slice(KEYBINDING_ID_PREFIX.length),
               value === "default" ? undefined : value === "" ? [] : [value]
             )
-          : setUserConfig(governanceRoot, id, value),
-      keys: () => keybindingRows(userKeybindings(governanceRoot)),
+          : setUserConfig(current.governanceRoot, id, value),
+      keys: () => keybindingRows(userKeybindings(current.governanceRoot)),
     },
     // 决策 439：输入框补全，路径与 @ 引用以工作区为根
     autocomplete: { basePath: startCore.workspaceRoot, fdPath: findFdPath() },
@@ -575,7 +798,7 @@ export async function main(argv: string[]): Promise<void> {
     // 决策 469：当前会话的审批模式（状态栏显示、Shift+Tab 切换）；重建运行面、换会话后取新的
     approvalMode: () => current.opened?.bundle.approvalMode,
     // 决策 470：输入框为空时按两下 ← 打开会话面板（设置可关；/reload 后取新的）
-    leftArrowOpensPanel: () => settings.merged.tui?.leftArrowOpensPanel !== false,
+    leftArrowOpensPanel: () => settingsOfCore(current).merged.tui?.leftArrowOpensPanel !== false,
     sessionId: startCore.sessionId,
     // 决策 325：终端界面日志在程序状态目录下
     logDir: tuiLogDirOf(governanceRoot),
@@ -593,7 +816,7 @@ export async function main(argv: string[]): Promise<void> {
     // 决策 323、324：本会话的钩子面（会话级事件与 /hooks；清单随开局快照冻结，/reload 换新的）
     hooks: startBundle.hooks,
     // 决策 323：收尾钩子的连续拦截上限取设置快照（/reload 后跟着变）
-    stopHookCap: () => settings.merged.stopHookBlockCap,
+    stopHookCap: () => settingsOfCore(current).merged.stopHookBlockCap,
     // 会话目录所在的根（花费累计用）
     sessions: { root: governanceRoot },
     // M5 S2（决策 045）：/resume 历史渲染上限
@@ -618,15 +841,17 @@ export async function main(argv: string[]): Promise<void> {
     // 沙箱会话里不提供换绑（命令给出原因）
     ...(sandbox !== undefined ? {} : { resume: resumeOptions() }),
     // 决策 340、484：/reload 重读设置，新快照自下一轮起生效：当前会话马上重建，面板里的会话空闲时重建
+    // 决策 485：当前会话所在的项目照 /reload 的确认流程；别的项目的会话各按自己项目重读（新的没确认过的条目在界面里确认）
     reload: createSettingsReloader({
-      current: () => settings,
+      current: () => settingsOfCore(current),
       // 决策 324：--no-hooks 是本次运行的进程级开关，/reload 重读出的新快照同样停用钩子
       ...(flags.noHooks ? { hooksDisabled: true } : {}),
       sandboxSessionId: () => (sandbox !== undefined ? current.sessionId : undefined),
       busy: agentsBusy,
       apply: async (snapshot) => {
         await rebuildMain(snapshot);
-        rebuildPooled();
+        rebuildPooled(current.governanceRoot);
+        await reloadOtherProjects(current.governanceRoot);
       },
     }),
     // 决策 294 B1：/tasks 查看当前会话的任务清单（换会话后跟着当前会话）
@@ -666,10 +891,10 @@ export async function main(argv: string[]): Promise<void> {
       id === current.sessionId
         ? current.name
         : (sessionPool?.pool.runtimeOf(id)?.live?.core.name ??
-          sessionNameOf(governanceRoot, id, current.workspaceRoot)),
+          sessionNameOf(current.governanceRoot, id, current.workspaceRoot)),
     // 决策 448：/worktrees 列出与删除留下的工作树（git 仓库、不在沙箱里才有）
     ...(sandbox === undefined && isGitWorkspace(governanceRoot)
-      ? { worktrees: createTuiWorktreesFace({ workspaceRoot: governanceRoot }) }
+      ? { worktrees: { run: (args: readonly string[]) => worktreesFaceOf(current).run(args) } }
       : {}),
     // S5+（裁决 033）：双击 Ctrl+C / /quit 的真实退出路径——壳内已先 stop()
     //（dispose 对称、挂起审批 fail-closed），此处只释放当前运行面并退进程
@@ -686,9 +911,9 @@ export async function main(argv: string[]): Promise<void> {
       bundle: previous,
     });
     core.settingsStale = false;
-    settings = snapshot;
+    setProjectSettings(core.governanceRoot, snapshot);
     // 决策 480：子 agent 的类型随 /reload 重读
-    agentCatalog = loadAgentTypes({ governanceRoot });
+    catalogs.delete(rootKey(core.governanceRoot));
     // 决策 439：键位随新快照重装
     shellHolder.current?.applyKeybindings(keybindingsSectionOf(snapshot));
     loopGuard = reloaded.loopGuard;
@@ -706,10 +931,10 @@ export async function main(argv: string[]): Promise<void> {
   }
   // 决策 484：/reload、/config 对面板里的会话同样生效——空闲的马上重建，在跑的这一轮跑完后重建；它的子 agent 在跑时等它们停下。
   // 重建在会话池里独占进行（期间不开跑、不叫醒、不能进入，发来的话排着）；同一个会话只排一次
-  function rebuildPooled(): void {
+  function rebuildPooled(root: string): void {
     for (const runtime of sessionPool?.pool.runtimes() ?? []) {
       const core = runtime.live?.core;
-      if (core === undefined) continue;
+      if (core === undefined || rootKey(core.governanceRoot) !== rootKey(root)) continue;
       core.settingsStale = true;
       scheduleRebuild(core);
     }
@@ -753,7 +978,7 @@ export async function main(argv: string[]): Promise<void> {
   function rebuildIfStale(): Promise<void> | undefined {
     const core = current;
     if (core.settingsStale !== true || agentsBusy() !== undefined) return undefined;
-    return rebuildMain(settings).catch((error: unknown) => {
+    return rebuildMain(settingsOfCore(core)).catch((error: unknown) => {
       shell.addAlert(
         `reloading settings failed: ${error instanceof Error ? error.message : String(error)}`
       );
@@ -762,7 +987,7 @@ export async function main(argv: string[]): Promise<void> {
   async function rebuildPooledCore(core: SessionCore): Promise<void> {
     const opened = core.opened;
     if (opened === undefined || core.closed === true) return;
-    const reloaded = await reopenMainSessionForReload(reloadContextOf(core), settings, {
+    const reloaded = await reopenMainSessionForReload(reloadContextOf(core), settingsOfCore(core), {
       sessionId: core.sessionId,
       bundle: opened.bundle,
     });
@@ -798,9 +1023,11 @@ export async function main(argv: string[]): Promise<void> {
     const notice = sayOf(coreContext, core);
     return {
       approvalModeCell: core.modeCell,
-      governanceRoot,
+      governanceRoot: core.governanceRoot,
       // 决策 445：独立工作树里的会话，重建时工作区仍是工作树（第一条消息之前会话文件还没建，推导不出）
-      ...(core.workspaceRoot !== governanceRoot ? { workspaceRoot: core.workspaceRoot } : {}),
+      ...(rootKey(core.workspaceRoot) !== rootKey(core.governanceRoot)
+        ? { workspaceRoot: core.workspaceRoot }
+        : {}),
       ...(core.enterWorktree !== undefined ? { enterWorktree: core.enterWorktree } : {}),
       streamFn,
       flags,
@@ -824,6 +1051,8 @@ export async function main(argv: string[]): Promise<void> {
     core.startContexts.push(...(handOff.contexts ?? []));
     core.heldInput = handOff.held !== undefined ? [...handOff.held] : undefined;
     core.cancelHandedOff = handOff.interrupt;
+    // 决策 485：退到面板的进工作清单
+    listCore(core);
     // 还没按新快照重建的（子 agent 在跑没能重建）：在面板里空闲时重建
     if (core.settingsStale === true) queueMicrotask(() => scheduleRebuild(core));
     if (core.task === "") core.task = shellHolder.current?.currentTask() ?? "";
@@ -869,6 +1098,12 @@ export async function main(argv: string[]): Promise<void> {
     pool: NonNullable<typeof sessionPool>["pool"],
     id: string
   ): Promise<string | undefined> {
+    // 决策 485：工作清单里本进程没开的：先开起来（开不成写明原因）
+    const listed = workList?.dormant(id);
+    if (listed !== undefined) {
+      const refusal = await openListed(listed);
+      if (refusal !== undefined) return refusal;
+    }
     const card = pool.list().find((item) => item.id === id);
     const detached = pool.detach(id);
     const target = detached?.runtime.live?.core;
@@ -893,6 +1128,7 @@ export async function main(argv: string[]): Promise<void> {
     const previous = current;
     retireToPanel(previous, shell.handOff());
     current = target;
+    followCurrent();
     setCoreRole(coreContext, target, true);
     // 面板里那一轮的结局：钩子拦下的算失败照写，等钩子时被停下的不算一轮
     const inflight = detached.inflight?.then((result) =>
@@ -925,14 +1161,16 @@ export async function main(argv: string[]): Promise<void> {
         const previous = current;
         if (worktreeSwitch.pending()) throw new Error("can't switch sessions right now");
         // 决策 469：换到的会话沿用当前的审批模式
-        const next = newCore(targetId, governanceRoot, previous.modeCell.current);
+        // 决策 485：/resume 只管当前会话所在的项目
+        const root = previous.governanceRoot;
+        const next = newCore(targetId, root, root, previous.modeCell.current, previous.settings);
         // 分支会话回到它的工作树（工作树缺失时响亮失败）；决策 3b：会话 grant 种子还原。两者与 MCP 启动一并在 session-runtime.ts（与 cli resume 同一份）
         // 决策 183：还原对话上下文，悬空的工具调用补"结果未知"的工具结果
         next.opened = await openCore(next, { resume: true });
         await restoreAgents(next);
         // 决策 445、446：换到的会话开在独立工作树里时，工作区与退出清理跟着它
         adoptWorkspace(next, next.opened.scope.workspaceRoot);
-        next.name = sessionNameOf(governanceRoot, targetId, next.workspaceRoot);
+        next.name = sessionNameOf(root, targetId, next.workspaceRoot);
         const bundle = next.opened.bundle;
         if (bundle.instructionsNotice !== undefined) shell.addSystem(bundle.instructionsNotice);
         if (bundle.toolsNotice !== undefined) shell.addSystem(bundle.toolsNotice);
@@ -957,6 +1195,7 @@ export async function main(argv: string[]): Promise<void> {
         }
         current = next;
         next.current = true;
+        followCurrent();
         attachCoreRuntime(coreContext, next);
         return bindingOf(next);
       },
@@ -967,7 +1206,7 @@ export async function main(argv: string[]): Promise<void> {
     setWorkspace: (root) => {
       current.workspaceRoot = root;
     },
-    rebuild: () => rebuildMain(settings),
+    rebuild: () => rebuildMain(settingsOfCore(current)),
     adopt: (worktree) => {
       const core = current;
       if (core.worktree?.path !== worktree.path) {
@@ -1033,16 +1272,17 @@ export async function main(argv: string[]): Promise<void> {
       for (const line of poolProblems) console.error(line);
       core.detachGuard?.();
       await closeTuiSession({
-        governanceRoot: governanceRoot,
+        governanceRoot: core.governanceRoot,
         sessionId: core.sessionId,
         bundle: coreBundle(core),
         // 决策 245：会话结束时自动交回一次、删除容器；壳已停，分支名与查看命令打到标准输出
         ...(sandbox !== undefined ? { closeSandbox: () => closeSandbox(sandbox) } : {}),
         log: (line) => console.log(`[sandbox] ${line}`),
       });
-      // 决策 445：独立工作树——没有改动（或完整取回之后再没有改动）即删；有改动在终端行内问保留还是删除（壳已停）
+      // 决策 445：独立工作树——没有改动（或完整取回之后再没有改动）即删；有改动在终端行内问保留还是删除（壳已停）。
+      // 决策 485：还在工作清单里的会话工作树留着（下次从面板进来接着用）
       const worktree = core.worktree;
-      if (worktree !== undefined) {
+      if (worktree !== undefined && !(sandbox === undefined && safeIndexed(core.sessionId))) {
         const taken =
           core.takeBase !== undefined && core.takeBase !== worktree.base
             ? core.takeBase
@@ -1054,7 +1294,7 @@ export async function main(argv: string[]): Promise<void> {
             ? { unchanged: () => unchangedSinceTake(worktree.path, taken) }
             : {}),
         });
-        dropTakeBase(governanceRoot, worktree.name);
+        dropTakeBase(core.governanceRoot, worktree.name);
       }
       core.releaseInUse?.();
     })().finally(() => {

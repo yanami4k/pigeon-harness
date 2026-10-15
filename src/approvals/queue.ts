@@ -8,6 +8,8 @@ export const APPROVAL_WITHDRAWN_REASON = "The request was withdrawn: its agent w
 
 export interface ApprovalQueue {
   wrap(handler: ApprovalHandler): ApprovalHandler;
+  // 决策 485：与审批同一个排队里问别的事（打开别的工作区的会话时确认它的设置）
+  serial<T>(ask: () => Promise<T>): Promise<T>;
   // 在问与排队中的请求数
   pending(): number;
 }
@@ -28,6 +30,14 @@ export function createApprovalQueue(): ApprovalQueue {
             }
           : handler(request)
       );
+      tail = turn.catch(() => undefined);
+      return turn.finally(() => {
+        pending -= 1;
+      });
+    },
+    serial: (ask) => {
+      pending += 1;
+      const turn = tail.then(ask);
       tail = turn.catch(() => undefined);
       return turn.finally(() => {
         pending -= 1;

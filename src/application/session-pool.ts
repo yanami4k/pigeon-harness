@@ -40,6 +40,14 @@ export interface PooledSessionCard {
   sharedDir?: boolean;
   // 当前会话那张卡：已请求中断、这一轮还没停下（卡上写 cancelling）
   cancelling?: boolean;
+  // 决策 485：工作清单里本进程没开的会话（重启前留下的、别的进程开着的）
+  dormant?: boolean;
+  // 别的 Pigeon 进程开着它（只能看历史）
+  elsewhere?: boolean;
+  // 不在当前会话所在的项目里：它的目录（卡上标明）
+  place?: string;
+  // 会话所属项目的治理根（读它的会话记录用）；缺省当前会话所在的项目
+  root?: string;
   startedAt: number;
   updatedAt: number;
 }
@@ -60,6 +68,8 @@ export interface SessionPanelSource {
   peek(id: string): Promise<string[]>;
   // 把它工作树里的改动取回主工作目录（/take）；返回说明
   take?(id: string): Promise<string>;
+  // 决策 485：重读工作清单（打开面板时）
+  refresh?(): void;
 }
 
 export interface PooledRuntime<Live = unknown> {

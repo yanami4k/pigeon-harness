@@ -166,10 +166,14 @@ export async function openSessionSettings(
   return confirmSessionConfig(snapshot, options);
 }
 
+// 确认会执行命令或放权的条目时的第一行（启动时的行内问答与界面里的确认同一句）
+export const TRUST_PROMPT_HEADER =
+  "new or changed settings that run commands or grant permissions:";
+
 // 交互确认的问答文字（终端界面接管终端之前）：列出条目，返回提示语
 export function trustPromptText(entries: readonly TrustEntry[]): string {
   return [
-    "new or changed settings that run commands or grant permissions:",
+    TRUST_PROMPT_HEADER,
     ...entries.map((entry) => `  ${describeTrustEntry(entry)}`),
     "a trust all | s skip this time | q quit",
   ].join("\n");

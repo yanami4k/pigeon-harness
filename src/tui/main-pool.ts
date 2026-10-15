@@ -82,11 +82,19 @@ export interface SessionPoolContext {
   // 决策 457、480：本进程的通讯录与子 agent 的类型；不给即不派子 agent。waiting：子 agent 在等审批（路径）
   agents?: {
     hub: AgentHub;
-    catalog(): AgentTypeCatalog;
+    // 某个项目的子 agent 类型（按治理根）
+    catalog(governanceRoot: string): AgentTypeCatalog;
     waiting?(path: string, on: boolean): void;
   };
   // 决策 484：会话是当前会话时的去处——叫醒（壳跑待递通知）、重画、后台作业的结果行、打转检测挂到壳上
   current?: CurrentRoute;
+  // 决策 485：面板里新派的会话开在哪个项目（当前会话所在的；缺省 governanceRoot 与 settings()）
+  spawnTarget?(): { governanceRoot: string; settings: SettingsSnapshot };
+  // 当前会话所在项目的治理根（/take 不跨仓库）
+  currentRoot?(): string;
+  // 在不在工作清单里（清单里的会话释放时工作树留着）；派出的会话开好时记进清单
+  listed?(sessionId: string): boolean;
+  onListed?(core: SessionCore): void;
 }
 
 export interface CurrentRoute {
@@ -109,6 +117,9 @@ export type PooledLive = Pick<
 // 决策 484：一个会话的会话核
 export interface SessionCore {
   readonly sessionId: SessionId;
+  // 决策 485：会话所属项目的治理根（会话记录、设置与记忆所在）与它的设置快照（缺省本进程的）
+  governanceRoot: string;
+  settings?: SettingsSnapshot | undefined;
   name: string;
   // 卡片上的那句话（派它时的、或它的首条输入）
   task: string;
@@ -145,6 +156,11 @@ export interface SessionCore {
   // 打转检测的挂点（换角色时换）
   detachGuard?: (() => void) | undefined;
   closed?: boolean;
+}
+
+// 决策 485：会话用的设置快照（别的项目的会话用它自己项目的）
+export function settingsOf(context: SessionPoolContext, core: SessionCore): SettingsSnapshot {
+  return core.settings ?? context.settings();
 }
 
 export function coreBundle(core: SessionCore): RuntimeBundle {
@@ -232,7 +248,7 @@ export function registerCoreAgents(
       bundle.sessionStore.append(agentMessageEntry(entry, bundle.adapter.currentRunId()));
     },
     open: createSubagentOpener({
-      governanceRoot: context.governanceRoot,
+      governanceRoot: core.governanceRoot,
       streamFn: context.streamFn,
       flags: context.flags,
       warn: context.warn,
@@ -240,7 +256,7 @@ export function registerCoreAgents(
       topSessionFile: () => coreBundle(core).sessionStore.filePath(),
       topContext: () => {
         const bundle = coreBundle(core);
-        const settings = context.settings();
+        const settings = settingsOf(context, core);
         return {
           sessionId: core.sessionId,
           settings,
@@ -278,8 +294,8 @@ export function registerCoreAgents(
       notice: (path, line) => say(`[${path}] ${line}`, true),
       ...(context.homeDir !== undefined ? { homeDir: context.homeDir } : {}),
     }),
-    catalog: () => agents.catalog(),
-    limits: () => agentLimitsOfSettings(context.settings()),
+    catalog: () => agents.catalog(core.governanceRoot),
+    limits: () => agentLimitsOfSettings(settingsOf(context, core)),
   });
   core.registration = registration;
   return registration.host;
@@ -322,10 +338,14 @@ export function setCoreRole(
   }
   const say = sayOf(context, core);
   const adapter = bundle.adapter;
-  core.detachGuard = attachLoopGuard(adapter, loopGuardSettingsOf(context.settings()), () => {
-    say("loop detected; turn stopped");
-    void adapter.interrupt("looping").catch(() => {});
-  });
+  core.detachGuard = attachLoopGuard(
+    adapter,
+    loopGuardSettingsOf(settingsOf(context, core)),
+    () => {
+      say("loop detected; turn stopped");
+      void adapter.interrupt("looping").catch(() => {});
+    }
+  );
 }
 
 // 决策 484：释放一个会话核（面板里去掉、关掉 Pigeon、/resume 换走闲着的当前会话）：注销通讯录（它派出的子 agent 一并停下）、
@@ -368,7 +388,7 @@ export async function closeCore(
         ),
       ...(taken !== undefined ? { unchanged: () => unchangedSinceTake(worktree.path, taken) } : {}),
     }).catch(() => "kept");
-    dropTakeBase(context.governanceRoot, worktree.name);
+    dropTakeBase(core.governanceRoot, worktree.name);
   }
 }
 
@@ -437,7 +457,12 @@ export function pooledRuntimeOf(
     },
     isRunning: () => core.opened?.bundle.adapter.isRunning() ?? false,
     transcript: () => core.opened?.bundle.adapter.transcript() ?? [],
-    close: () => closeCore(context, core, { reason: "exit", cleanWorktree: true }),
+    // 决策 485：还在工作清单里的会话（关掉 Pigeon 时）工作树留着，下次进来接着用；从面板去掉的已先删出清单
+    close: () =>
+      closeCore(context, core, {
+        reason: "exit",
+        cleanWorktree: context.listed?.(core.sessionId) !== true,
+      }),
     live: {
       subscribe: (listener) => bundleNow().adapter.subscribe(listener),
       subscribeStream: (listener) => bundleNow().adapter.subscribeStream(listener),
@@ -452,6 +477,11 @@ export function pooledRuntimeOf(
       // 决策 459：共用目录的会话没有工作树，改动已直接在目录里
       if (worktree === undefined) return `${core.name} has no worktree; nothing to take`;
       // 取回的落点就是这个工作树（当前会话进了它的工作树）：自己叠自己，拒绝
+      // 决策 485：别的仓库里的会话不取
+      const currentRoot = context.currentRoot?.();
+      if (currentRoot !== undefined && !sameDir(currentRoot, core.governanceRoot)) {
+        return `${core.name} is in another repository; nothing to take`;
+      }
       if (sameDir(context.mainWorkspace(), worktree.path)) {
         return `the current session is in ${core.name}'s worktree; nothing to take`;
       }
@@ -478,12 +508,18 @@ export function createSessionPool(context: SessionPoolContext): {
   face: TuiPoolFace;
 } {
   // 决策 459：不是 git 仓库时，面板派出的会话直接在当前目录里干活（不建工作树、与其他会话不隔离）
-  const sharedDir = (): boolean => !isGitWorkspace(context.governanceRoot);
+  // 决策 485：在当前会话所在的项目里派
+  const target = () =>
+    context.spawnTarget?.() ?? {
+      governanceRoot: context.governanceRoot,
+      settings: context.settings(),
+    };
+  const sharedDir = (): boolean => !isGitWorkspace(target().governanceRoot);
   const pool = new LocalSessionPool<PooledLive>({
     sharedDir,
     open: async ({ name, task, hooks, sharedDir: shared }) => {
       const sessionId = newSessionId();
-      const settings = context.settings();
+      const { governanceRoot, settings } = target();
       // 决策 469：这个会话自己的审批模式（从当前会话当时的起）；它派出的子 agent 共用
       const core: SessionCore = {
         sessionId,
@@ -492,7 +528,9 @@ export function createSessionPool(context: SessionPoolContext): {
         modeCell: {
           current: context.approvalMode?.() ?? (context.flags.yolo ? "yolo" : "prompt"),
         },
-        workspaceRoot: context.governanceRoot,
+        governanceRoot,
+        settings,
+        workspaceRoot: governanceRoot,
         current: false,
         poolHooks: hooks,
         approvals: new AbortController(),
@@ -504,12 +542,12 @@ export function createSessionPool(context: SessionPoolContext): {
       if (shared !== true) {
         let baseMode = worktreeBaseModeOf(worktreeSectionOf(settings));
         // 取远端在后台进行（不卡界面）；取不到即从 HEAD 起
-        if (baseMode === "fresh" && !(await prefetchWorktreeBase(context.governanceRoot))) {
+        if (baseMode === "fresh" && !(await prefetchWorktreeBase(governanceRoot))) {
           alert("fetching the remote default branch failed; worktree starts from HEAD");
           baseMode = "head";
         }
         const worktree = openNamedWorktree({
-          cwd: context.governanceRoot,
+          cwd: governanceRoot,
           name: `${name}-${sessionId.slice(-6).toLowerCase()}`,
           baseMode,
           notice: say,
@@ -522,7 +560,7 @@ export function createSessionPool(context: SessionPoolContext): {
       const agentsHost = registerCoreAgents(context, core);
       try {
         core.opened = await openSessionRuntime({
-          governanceRoot: context.governanceRoot,
+          governanceRoot,
           approvalModeCell: core.modeCell,
           ...(agentsHost !== undefined ? { agents: agentsHost } : {}),
           // 共用目录的会话工作区就是当前目录（会话文件头记的工作目录即此，没有工作树）
@@ -551,6 +589,8 @@ export function createSessionPool(context: SessionPoolContext): {
       // 决策 456：面板会话的名字记进它自己的会话记录（续接与 /resume 列表照用）
       if (validSessionName(name)) bundle.sessionStore.setName(name);
       attachCoreRuntime(context, core);
+      // 决策 485：在面板里新开的会话进工作清单
+      context.onListed?.(core);
       // SessionStart：补的上下文存起来当作第一条输入的前缀
       const sessionHooks = bundle.hooks;
       if (sessionHooks !== undefined && !sessionHooks.disabled) {

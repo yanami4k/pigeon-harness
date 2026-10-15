@@ -41,8 +41,13 @@ export function sessionCardText(card: PooledSessionCard): string {
       : card.state === "failed" && card.error !== undefined
         ? `failed: ${oneLine(card.error)}`
         : oneLine(card.summary);
-  // 决策 459：共用目录的会话（不是 git 仓库）在名字后标明（状态信息，弱化样式）
-  const name = card.sharedDir === true ? `${card.name} ${secondary("shared dir")}` : card.name;
+  // 决策 459：共用目录的会话（不是 git 仓库）在名字后标明（状态信息，弱化样式）；决策 485：别的进程开着的、别的项目里的同样标明
+  const tags = [
+    ...(card.sharedDir === true ? ["shared dir"] : []),
+    ...(card.elsewhere === true ? ["open elsewhere"] : []),
+    ...(card.place !== undefined ? [card.place] : []),
+  ];
+  const name = tags.length > 0 ? `${card.name} ${secondary(tags.join(" · "))}` : card.name;
   return `${name}  ${oneLine(card.task)}${detail !== "" ? `  | ${detail}` : ""}`;
 }
 

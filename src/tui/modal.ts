@@ -2,8 +2,10 @@
 // 状态（待审批、退出布防时刻）一律由壳本体持有，本模块只经窄接口读写，不各自存一份。
 // 决策 286：恢复菜单（S4 决策 031 的 1/2/3 单键决议）自决策 183 起已无调用方，连同状态行提示删除。
 import { summarizeArgs } from "../application/format.ts";
+import { TRUST_PROMPT_HEADER } from "../application/session-settings.ts";
 import type { ApprovalRequest } from "../approvals/handler.ts";
 import { APPROVAL_WITHDRAWN_REASON } from "../approvals/queue.ts";
+import { describeTrustEntry, type TrustEntry } from "../state/config-trust.ts";
 import {
   APPROVAL_CANCEL_BUSY,
   APPROVAL_CANCEL_CLOSED,
@@ -23,6 +25,8 @@ export interface PendingApproval {
   protectedPath?: boolean;
   // 决策 458：主会话自己的审批（不是 worker 或面板会话）在等什么——会话面板里当前会话那张卡用
   mainWaiting?: string;
+  // 决策 485：这一项是确认别的工作区的设置（a 信任、s 这次不用），不是审批
+  trust?: (choice: "trust" | "skip") => void;
 }
 
 // 单击 Ctrl+C 布防之后状态行的临时提示（布防窗口内显示，过了窗口或有别的输入即恢复）
@@ -130,6 +134,41 @@ export function askApprovalPanel(
   return promise;
 }
 
+// 决策 485：在面板里打开别的工作区的会话时，确认那个项目没确认过的会执行命令或放权的条目——与审批放在同一处、列的内容与
+// 启动时的确认一致；a 信任（由调用方照启动时记下）、s 这次不用；答完收成一行暗色结论。壳已停即按这次不用
+export function askTrustPanel(
+  host: ModalHost,
+  root: string,
+  entries: readonly TrustEntry[]
+): Promise<"trust" | "skip"> {
+  if (!host.isStarted() || host.pendingApproval() !== null) return Promise.resolve("skip");
+  const lines: ApprovalBlockLine[] = [
+    { kind: "title", text: TRUST_PROMPT_HEADER },
+    { kind: "detail", text: root },
+    ...entries.map((entry) => ({ kind: "subject" as const, text: describeTrustEntry(entry) })),
+    { kind: "keys", text: "a trust all | s skip this time" },
+  ];
+  const text = lines.map((line) => line.text).join("\n");
+  if (host.addApprovalBlock !== undefined) host.addApprovalBlock(text, lines);
+  else approvalLine(host, text);
+  const { promise, resolve } = Promise.withResolvers<"trust" | "skip">();
+  host.setPendingApproval({
+    resolve: () => resolve("skip"),
+    trust: (choice) => {
+      const line =
+        choice === "trust"
+          ? `trusted settings in ${root}`
+          : `skipped unconfirmed settings in ${root}`;
+      if (host.settleApproval !== undefined) host.settleApproval(line);
+      else approvalLine(host, line);
+      resolve(choice);
+    },
+  });
+  host.updateStatus();
+  host.render();
+  return promise;
+}
+
 // 壳停止时的模态收口：挂起的审批 fail-closed 按拒绝处理（理由逐字），不吊死 Run
 export function closePendingModals(host: ModalHost): void {
   const approval = host.pendingApproval();
@@ -213,6 +252,18 @@ export function handleModalKey(host: ModalHost, data: string): { consume: true }
         return { consume: true };
       }
       return undefined;
+    }
+    // 决策 485：确认别的工作区的设置：a 信任、s 这次不用，其余吞掉
+    if (approval.trust !== undefined) {
+      const choice =
+        data === "a" || data === "A" ? "trust" : data === "s" || data === "S" ? "skip" : undefined;
+      if (choice !== undefined) {
+        host.setPendingApproval(null);
+        host.updateStatus();
+        approval.trust(choice);
+        host.render();
+      }
+      return { consume: true };
     }
     // 决策 439：面板的键从键位表取（缺省 y/n/r/a/d/s，字母不分大小写）
     const key: ApprovalPanelKey | "r" | undefined = isKey(data, "pigeon.approval.approve")

@@ -232,6 +232,11 @@ export function userMigrationBackupDirOf(homeDir: string = homedir()): string {
   return path.join(userStateDir(homeDir), "migration-backup", "user");
 }
 
+// 决策 485：用户级的会话工作清单（进过会话面板的会话，跨工作区、跨重启）
+export function sessionIndexPathOf(homeDir: string = homedir()): string {
+  return path.join(userStateDir(homeDir), "session-index.json");
+}
+
 // 会执行命令的配置的内容指纹记录（决策 326 ③）
 export function configTrustPathOf(homeDir: string = homedir()): string {
   return path.join(userStateDir(homeDir), "config-trust.json");
