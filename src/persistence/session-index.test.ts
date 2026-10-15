@@ -7,7 +7,12 @@ import { join } from "node:path";
 import { afterEach, test } from "vitest";
 import { newSessionId } from "../state/ids.ts";
 import { sessionIndexPathOf, sessionsDirOf, userStateDir } from "../state/paths.ts";
-import { addToSessionIndex, listSessionIndex, removeFromSessionIndex } from "./session-index.ts";
+import {
+  addToSessionIndex,
+  listSessionIndex,
+  removeFromSessionIndex,
+  sessionIndexed,
+} from "./session-index.ts";
 import { sessionFileName } from "./session-reader.ts";
 
 const cleanups: string[] = [];
@@ -82,4 +87,19 @@ test("文件畸形按空清单，下次写入即重写", () => {
     listSessionIndex(home).map((item) => item.sessionId),
     [session.id]
   );
+});
+
+test("记进清单时，会话文件已不在的别的行顺手去掉", () => {
+  const home = temp("pigeon-index-home-");
+  const root = temp("pigeon-index-root-");
+  const gone = sessionFile(root);
+  const kept = sessionFile(root);
+  addToSessionIndex({ sessionId: gone.id, governanceRoot: root, workspaceRoot: root }, home);
+  addToSessionIndex({ sessionId: kept.id, governanceRoot: root, workspaceRoot: root }, home);
+  rmSync(gone.file);
+  assert.equal(sessionIndexed(gone.id, home), true, "只是列出时不列，行还在");
+  const fresh = sessionFile(root);
+  addToSessionIndex({ sessionId: fresh.id, governanceRoot: root, workspaceRoot: root }, home);
+  assert.equal(sessionIndexed(gone.id, home), false);
+  assert.equal(sessionIndexed(kept.id, home), true);
 });

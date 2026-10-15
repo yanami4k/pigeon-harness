@@ -89,12 +89,14 @@ export interface SessionPoolContext {
   // 决策 484：会话是当前会话时的去处——叫醒（壳跑待递通知）、重画、后台作业的结果行、打转检测挂到壳上
   current?: CurrentRoute;
   // 决策 485：面板里新派的会话开在哪个项目（当前会话所在的；缺省 governanceRoot 与 settings()）
-  spawnTarget?(): { governanceRoot: string; settings: SettingsSnapshot };
+  spawnTarget?(): { governanceRoot: string; settings?: SettingsSnapshot | undefined };
   // 当前会话所在项目的治理根（/take 不跨仓库）
   currentRoot?(): string;
   // 在不在工作清单里（清单里的会话释放时工作树留着）；派出的会话开好时记进清单
   listed?(sessionId: string): boolean;
   onListed?(core: SessionCore): void;
+  // 从面板去掉：删出工作清单
+  onUnlisted?(sessionId: string): void;
 }
 
 export interface CurrentRoute {
@@ -169,9 +171,12 @@ export function coreBundle(core: SessionCore): RuntimeBundle {
 }
 
 // 两个路径是不是同一个目录（实际位置；有一个不在即不是）
+// （Windows 上不分大小写：同一目录的写法可能只差大小写）
 function sameDir(left: string, right: string): boolean {
   try {
-    return realpathSync(left) === realpathSync(right);
+    const a = realpathSync.native(left);
+    const b = realpathSync.native(right);
+    return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
   } catch {
     return false;
   }
@@ -458,11 +463,14 @@ export function pooledRuntimeOf(
     isRunning: () => core.opened?.bundle.adapter.isRunning() ?? false,
     transcript: () => core.opened?.bundle.adapter.transcript() ?? [],
     // 决策 485：还在工作清单里的会话（关掉 Pigeon 时）工作树留着，下次进来接着用；从面板去掉的已先删出清单
-    close: () =>
-      closeCore(context, core, {
+    close: async (options) => {
+      // 从面板去掉的：先删出清单，工作树按有没有改动清理
+      if (options?.removed === true) context.onUnlisted?.(core.sessionId);
+      await closeCore(context, core, {
         reason: "exit",
-        cleanWorktree: context.listed?.(core.sessionId) !== true,
-      }),
+        cleanWorktree: options?.removed === true || context.listed?.(core.sessionId) !== true,
+      });
+    },
     live: {
       subscribe: (listener) => bundleNow().adapter.subscribe(listener),
       subscribeStream: (listener) => bundleNow().adapter.subscribeStream(listener),
@@ -519,7 +527,10 @@ export function createSessionPool(context: SessionPoolContext): {
     sharedDir,
     open: async ({ name, task, hooks, sharedDir: shared }) => {
       const sessionId = newSessionId();
-      const { governanceRoot, settings } = target();
+      const spawnedIn = target();
+      const governanceRoot = spawnedIn.governanceRoot;
+      // 本进程启动的项目里的不带快照（用本进程的，/reload 换新的）
+      const settings = spawnedIn.settings ?? context.settings();
       // 决策 469：这个会话自己的审批模式（从当前会话当时的起）；它派出的子 agent 共用
       const core: SessionCore = {
         sessionId,
@@ -529,7 +540,7 @@ export function createSessionPool(context: SessionPoolContext): {
           current: context.approvalMode?.() ?? (context.flags.yolo ? "yolo" : "prompt"),
         },
         governanceRoot,
-        settings,
+        ...(spawnedIn.settings !== undefined ? { settings: spawnedIn.settings } : {}),
         workspaceRoot: governanceRoot,
         current: false,
         poolHooks: hooks,

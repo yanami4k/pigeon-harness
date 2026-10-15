@@ -82,7 +82,8 @@ export interface PooledRuntime<Live = unknown> {
   interrupt(): void;
   isRunning(): boolean;
   transcript(): readonly unknown[];
-  close(): Promise<void>;
+  // removed：从面板去掉（决策 485：删出工作清单，工作树按有没有改动清理）；缺省为关掉 Pigeon 等
+  close(options?: { removed?: boolean }): Promise<void>;
   // 进程内版：进入会话时订阅的运行面
   live?: Live;
   // 把工作树里的改动取回主工作目录，返回说明
@@ -341,7 +342,7 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
       entry.runtime = runtime;
       if (entry.removed === true) {
         entry.closed = true;
-        await runtime.close().catch(() => {});
+        await runtime.close({ removed: true }).catch(() => {});
         return;
       }
       entry.card = {
@@ -610,7 +611,7 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
     if (runtime === undefined || entry.closed === true) return;
     entry.closed = true;
     runtime.interrupt();
-    await runtime.close().catch(() => {});
+    await runtime.close(entry.removed === true ? { removed: true } : {}).catch(() => {});
   }
 
   async peek(id: string): Promise<string[]> {

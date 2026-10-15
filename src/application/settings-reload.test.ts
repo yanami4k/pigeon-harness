@@ -517,3 +517,36 @@ test("顶层钩子开关的变化 /reload 读得出：disableAllHooks 与 stopHo
   assert.match(lines, /disableAllHooks, stopHookBlockCap|stopHookBlockCap, disableAllHooks/, lines);
   assert.equal(applied, 1, "有变化即重建");
 });
+
+test("决策 485：待确认的是别的项目的（之后换到了别的项目的会话）：confirm 作废、要重来；当前项目没变化也做之后那一步，等确认时不做", async () => {
+  const rootA = temp("pigeon-reload-a-");
+  const rootB = temp("pigeon-reload-b-");
+  const home = temp("pigeon-reload-home-");
+  write(projectSettingsPath(rootA), { commands: { commands: { mark: "git tag a" } } });
+  let current = loadSettings(rootA, { homeDir: home });
+  write(projectSettingsPath(rootA), { commands: { commands: { mark: "git tag b" } } });
+  const snapshotB = loadSettings(rootB, { homeDir: home });
+  const applied: string[] = [];
+  let afters = 0;
+  const reload = createSettingsReloader({
+    current: () => current,
+    apply: async (next) => {
+      applied.push(next.root);
+      current = next;
+    },
+    after: async () => {
+      afters += 1;
+      return ["others reloaded"];
+    },
+    homeDir: home,
+  });
+  assert.match((await reload([])).join("\n"), /command mark: git tag b/);
+  assert.equal(afters, 0, "等确认时不做");
+  current = snapshotB;
+  assert.deepEqual(await reload(["confirm"]), [
+    "the pending reload is for another project; run /reload again",
+  ]);
+  assert.deepEqual(applied, []);
+  assert.deepEqual(await reload([]), ["settings unchanged", "others reloaded"]);
+  assert.equal(afters, 1);
+});

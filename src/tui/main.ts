@@ -111,6 +111,7 @@ import { recordTrustedEntries } from "../persistence/config-trust-store.ts";
 import {
   addToSessionIndex,
   type ListedSession,
+  removeFromSessionIndex,
   sessionIndexed,
 } from "../persistence/session-index.ts";
 import { holdWorktreeInUse } from "../persistence/worktree-in-use.ts";
@@ -394,13 +395,24 @@ export async function main(argv: string[]): Promise<void> {
       else say(line, alert === true);
     },
     // 决策 485：面板里新派的会话开在当前会话所在的项目；/take 不跨仓库；清单里的会话释放时工作树留着
+    // 启动的项目里的不带快照（用本进程的，/reload 换新的）
     spawnTarget: () => ({
       governanceRoot: current.governanceRoot,
-      settings: settingsOfCore(current),
+      settings: current.settings,
     }),
     currentRoot: () => current.governanceRoot,
     listed: (id) => sandbox === undefined && safeIndexed(id),
     onListed: (core) => listCore(core),
+    onUnlisted: (id) => {
+      try {
+        removeFromSessionIndex(id);
+      } catch (error) {
+        say(
+          `updating the work list failed: ${error instanceof Error ? error.message : String(error)}`,
+          true
+        );
+      }
+    },
     current: {
       wake: () => shellHolder.current?.runNotices(),
       render: () => shellHolder.current?.render(),
@@ -560,13 +572,27 @@ export async function main(argv: string[]): Promise<void> {
           pool: sessionPool.pool,
           currentId: () => current.sessionId,
           currentRoot: () => current.governanceRoot,
-          open: (entry) => openListed(entry),
+          open: (entry, task) => openListed(entry, task),
+          // 开着的别的项目的会话同样标目录
+          placeOf: (id) => {
+            const core = sessionPool.pool.runtimeOf(id)?.live?.core;
+            return core !== undefined &&
+              rootKey(core.governanceRoot) !== rootKey(current.governanceRoot)
+              ? tildePath(core.workspaceRoot, homedir())
+              : undefined;
+          },
           notice: (line) => say(line, true),
         })
       : undefined;
-  // 决策 485：会话进工作清单（进过面板的：在面板里新开的、从主视图离开的、退到面板的）
+  // 决策 485：会话进工作清单（进过面板的：在面板里新开的、从主视图离开的、退到面板的）；还没建会话文件的不记（没东西可接）
   function listCore(core: SessionCore): void {
     if (sandbox !== undefined) return;
+    void (async () => {
+      const file = await core.opened?.bundle.sessionStore.filePath();
+      if (file !== undefined) addListed(core);
+    })().catch(() => {});
+  }
+  function addListed(core: SessionCore): void {
     try {
       addToSessionIndex({
         sessionId: core.sessionId,
@@ -598,13 +624,13 @@ export async function main(argv: string[]): Promise<void> {
   // 决策 485：别的项目的设置快照（打开那边的会话时读，没确认过的会执行命令的条目在界面里确认）；启动时的项目用 settings
   const projectSettings = new Map<string, SettingsSnapshot>();
   function setProjectSettings(root: string, snapshot: SettingsSnapshot): void {
-    if (rootKey(root) === rootKey(governanceRoot)) {
-      settings = snapshot;
-      return;
-    }
-    projectSettings.set(rootKey(root), snapshot);
+    const launch = rootKey(root) === rootKey(governanceRoot);
+    if (launch) settings = snapshot;
+    else projectSettings.set(rootKey(root), snapshot);
+    // 带着这个项目快照的会话一并换上（启动项目里的会话一般不带快照，直接用 settings）
     for (const core of openCores()) {
-      if (rootKey(core.governanceRoot) === rootKey(root)) core.settings = snapshot;
+      if (rootKey(core.governanceRoot) !== rootKey(root)) continue;
+      if (!launch || core.settings !== undefined) core.settings = snapshot;
     }
   }
   function openCores(): SessionCore[] {
@@ -616,19 +642,39 @@ export async function main(argv: string[]): Promise<void> {
   // 界面里确认别的项目的设置（与审批同一个排队；同启动时的确认，记在同一处）
   const askTrust = (root: string) => (entries: readonly TrustEntry[]) =>
     approvalQueue.serial(() => askTrustPanel(shell, root, entries));
+  // 同一个项目的设置同时只读一次（两个会话同时打开不弹两次确认）
+  const readingSettings = new Map<string, Promise<SettingsSnapshot>>();
   async function settingsForProject(root: string): Promise<SettingsSnapshot | undefined> {
-    if (rootKey(root) === rootKey(governanceRoot)) return undefined;
-    const known = projectSettings.get(rootKey(root));
+    const key = rootKey(root);
+    if (key === rootKey(governanceRoot)) return undefined;
+    const known = projectSettings.get(key);
     if (known !== undefined) return known;
-    let snapshot = await openSessionSettings(root, {
-      confirmation: { kind: "interactive", ask: askTrust(root) },
-    });
-    if (flags.noHooks) snapshot = withHooksDisabled(snapshot);
-    projectSettings.set(rootKey(root), snapshot);
-    return snapshot;
+    const reading =
+      readingSettings.get(key) ??
+      (async () => {
+        let snapshot = await openSessionSettings(root, {
+          confirmation: { kind: "interactive", ask: askTrust(root) },
+        });
+        if (flags.noHooks) snapshot = withHooksDisabled(snapshot);
+        projectSettings.set(key, snapshot);
+        return snapshot;
+      })().finally(() => readingSettings.delete(key));
+    readingSettings.set(key, reading);
+    return reading;
   }
-  // 决策 485：在本进程里开起工作清单里没开的会话（按它自己的治理根与工作区续接），收进会话池；开不成写明原因（卡片留着）
-  async function openListed(entry: ListedSession): Promise<string | undefined> {
+  // 决策 485：在本进程里开起工作清单里没开的会话（按它自己的治理根与工作区续接），收进会话池；开不成写明原因（卡片留着）。
+  // 同一个会话同时只开一次
+  const openingListed = new Map<string, Promise<string | undefined>>();
+  function openListed(entry: ListedSession, task = ""): Promise<string | undefined> {
+    const running = openingListed.get(entry.sessionId);
+    if (running !== undefined) return running;
+    const opening = openListedOnce(entry, task).finally(() =>
+      openingListed.delete(entry.sessionId)
+    );
+    openingListed.set(entry.sessionId, opening);
+    return opening;
+  }
+  async function openListedOnce(entry: ListedSession, task: string): Promise<string | undefined> {
     const pool = sessionPool?.pool;
     if (pool === undefined || pool.runtimeOf(entry.sessionId) !== undefined) return undefined;
     const name = sessionNameOf(entry.governanceRoot, entry.sessionId, entry.workspaceRoot);
@@ -647,6 +693,7 @@ export async function main(argv: string[]): Promise<void> {
       snapshot
     );
     core.name = name;
+    if (poolExiting) return "Pigeon is closing";
     try {
       core.opened = await openCore(core, { resume: true });
     } catch (error) {
@@ -655,9 +702,15 @@ export async function main(argv: string[]): Promise<void> {
     await restoreAgents(core);
     adoptWorkspace(core, core.opened.scope.workspaceRoot);
     attachCoreRuntime(coreContext, core);
+    // 开的途中关掉了 Pigeon：释放，不收进面板（工作树留着，它还在清单里）
+    if (poolExiting) {
+      await closeCore(coreContext, core, { reason: "exit", cleanWorktree: false });
+      return "Pigeon is closing";
+    }
+    core.task = task;
     pool.adopt(pooledRuntimeOf(coreContext, core), {
       name: core.name,
-      task: "",
+      task,
       ...(core.worktree !== undefined
         ? { worktree: { path: core.worktree.path, branch: core.worktree.branch } }
         : {}),
@@ -666,11 +719,15 @@ export async function main(argv: string[]): Promise<void> {
   }
   // 决策 485：/reload、/config 对别的项目的会话：各按自己项目重读再重建（空闲时）；有新的没确认过的会执行命令的条目，在界面里
   // 确认（拒绝则这次不用）
-  async function reloadOtherProjects(currentRoot: string): Promise<void> {
+  async function reloadOtherProjects(currentRoot: string): Promise<string[]> {
     const roots = new Map<string, string>();
     for (const core of openCores()) {
       const key = rootKey(core.governanceRoot);
       if (key !== rootKey(currentRoot) && !roots.has(key)) roots.set(key, core.governanceRoot);
+    }
+    // 没有开着会话的别的项目：快照作废，下次打开那边的会话时重读
+    for (const key of [...projectSettings.keys()]) {
+      if (!roots.has(key) && key !== rootKey(currentRoot)) projectSettings.delete(key);
     }
     for (const [key, root] of roots) {
       const before = key === rootKey(governanceRoot) ? settings : projectSettings.get(key);
@@ -690,6 +747,7 @@ export async function main(argv: string[]): Promise<void> {
         );
       }
     }
+    return [];
   }
   // 决策 485：/memory 跟着当前会话所在的项目；打转检测按它的设置
   function followCurrent(): void {
@@ -697,6 +755,8 @@ export async function main(argv: string[]): Promise<void> {
     memoryContext.governanceRoot = current.governanceRoot;
     memoryContext.limits = memoryLimitsOf(snapshot);
     loopGuard = loopGuardSettingsOf(snapshot);
+    // 键位跟着当前会话所在项目的设置
+    shellHolder.current?.applyKeybindings(keybindingsSectionOf(snapshot));
   }
   const bundleOf = (): RuntimeBundle => coreBundle(current);
   const bindingOf = (core: SessionCore) => {
@@ -851,8 +911,9 @@ export async function main(argv: string[]): Promise<void> {
       apply: async (snapshot) => {
         await rebuildMain(snapshot);
         rebuildPooled(current.governanceRoot);
-        await reloadOtherProjects(current.governanceRoot);
       },
+      // 当前项目有没有变化都重读别的项目
+      after: () => reloadOtherProjects(current.governanceRoot),
     }),
     // 决策 294 B1：/tasks 查看当前会话的任务清单（换会话后跟着当前会话）
     tasks: () => {
@@ -893,8 +954,16 @@ export async function main(argv: string[]): Promise<void> {
         : (sessionPool?.pool.runtimeOf(id)?.live?.core.name ??
           sessionNameOf(current.governanceRoot, id, current.workspaceRoot)),
     // 决策 448：/worktrees 列出与删除留下的工作树（git 仓库、不在沙箱里才有）
-    ...(sandbox === undefined && isGitWorkspace(governanceRoot)
-      ? { worktrees: { run: (args: readonly string[]) => worktreesFaceOf(current).run(args) } }
+    ...(sandbox === undefined
+      ? {
+          worktrees: {
+            // 按当前会话所在的仓库现判断
+            run: (args: readonly string[]) =>
+              isGitWorkspace(current.governanceRoot)
+                ? worktreesFaceOf(current).run(args)
+                : "not a git repository",
+          },
+        }
       : {}),
     // S5+（裁决 033）：双击 Ctrl+C / /quit 的真实退出路径——壳内已先 stop()
     //（dispose 对称、挂起审批 fail-closed），此处只释放当前运行面并退进程
@@ -1037,7 +1106,10 @@ export async function main(argv: string[]): Promise<void> {
       warn,
       createApprovalHandler: coreApprovalHandler(coreContext, core),
       memoryWrite,
-      memoryContext,
+      // 面板里的会话重建不动当前会话 /memory 的上限
+      memoryContext: core.current
+        ? memoryContext
+        : { limits: memoryLimitsOf(settingsOfCore(core)) },
       webToolsFor,
       hooksNotice: (line) => notice(line, true),
       onMcpNote: (note) => notice(`[mcp] ${note}`, true),

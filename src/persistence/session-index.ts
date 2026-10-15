@@ -88,7 +88,17 @@ function modify(
   }
 }
 
-// 记进清单（已在的更新治理根与工作区，加入时刻不变）
+// 会话文件还在不在（找不到、读不成按不在）
+function sessionFileExists(entry: SessionIndexEntry): boolean {
+  try {
+    const ref = locateSessionFile(sessionsDirOf(entry.governanceRoot), entry.sessionId);
+    return ref !== undefined && existsSync(ref.path);
+  } catch {
+    return false;
+  }
+}
+
+// 记进清单（已在的更新治理根与工作区，加入时刻不变）；会话文件已不在的别的行顺手去掉
 export function addToSessionIndex(
   entry: Omit<SessionIndexEntry, "addedAt"> & { addedAt?: number },
   homeDir: string = homedir()
@@ -101,7 +111,10 @@ export function addToSessionIndex(
       workspaceRoot: path.resolve(entry.workspaceRoot),
       addedAt: existing?.addedAt ?? entry.addedAt ?? Date.now(),
     };
-    return [...entries.filter((item) => item.sessionId !== entry.sessionId), next];
+    return [
+      ...entries.filter((item) => item.sessionId !== entry.sessionId && sessionFileExists(item)),
+      next,
+    ];
   });
 }
 

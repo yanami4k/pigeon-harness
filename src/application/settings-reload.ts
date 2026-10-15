@@ -8,6 +8,7 @@
 // 本模块只算"读出什么、要问什么、改了哪些节"；问人与重建运行面在终端界面入口。
 import { homedir } from "node:os";
 import {
+  normalizeProjectPath,
   recordTrustedEntries,
   sandboxDockerfileContent,
 } from "../persistence/config-trust-store.ts";
@@ -163,6 +164,8 @@ export interface SettingsReloaderDeps {
   busy?(): string | undefined;
   // 沙箱会话的会话号（在沙箱里才给）：sandbox 一节有变化时提示退出后续跑才对容器生效
   sandboxSessionId?(): string | undefined;
+  // 决策 485：这次重读做完之后（不论当前项目有没有变化；等确认时不做）再做的事，返回给人看的行（重读别的项目等）
+  after?(): Promise<string[]>;
   homeDir?: string;
 }
 
@@ -183,6 +186,13 @@ export function createSettingsReloader(
     let choice: "trust" | "skip" = "skip";
     if (sub === "confirm" || sub === "skip") {
       if (pending === undefined) return ["nothing pending to confirm"];
+      // 决策 485：待确认的是别的项目的（之后换到了别的项目的会话）：作废，重来
+      if (
+        normalizeProjectPath(pending.current.root) !== normalizeProjectPath(deps.current().root)
+      ) {
+        pending = undefined;
+        return ["the pending reload is for another project; run /reload again"];
+      }
       plan = pending;
       choice = sub === "confirm" ? "trust" : "skip";
     } else if (sub !== undefined) {
@@ -208,8 +218,10 @@ export function createSettingsReloader(
       recordTrustedEntries(plan.current.root, plan.pending, homeOption.homeDir ?? homedir());
     }
     const sandboxSession = deps.sandboxSessionId?.();
+    const later = (await deps.after?.()) ?? [];
     return [
       ...result.lines,
+      ...later,
       ...(result.sandboxChanged && sandboxSession !== undefined
         ? [
             `sandbox settings changed; takes effect after: pigeon --sandbox --resume ${sandboxSession}`,

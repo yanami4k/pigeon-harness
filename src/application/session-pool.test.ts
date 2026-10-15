@@ -514,3 +514,32 @@ test("决策 484：空闲时做事——空闲的马上做，在跑的这一轮�
     ["sess_b"]
   );
 });
+
+test("决策 485：去掉还在开的会话，开完关掉时说明是去掉（删出清单、清理工作树）", async () => {
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const closes: Array<{ removed?: boolean } | undefined> = [];
+  const pool = new LocalSessionPool({
+    open: async () => {
+      await gate;
+      return {
+        sessionId: "sess_r",
+        run: async () => {},
+        interrupt: () => {},
+        isRunning: () => false,
+        transcript: () => [],
+        close: async (options) => {
+          closes.push(options);
+        },
+      };
+    },
+  });
+  const card = await pool.spawn("一");
+  const removing = pool.remove(card.id);
+  release?.();
+  await removing;
+  await settle();
+  assert.deepEqual(closes, [{ removed: true }]);
+});

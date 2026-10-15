@@ -28,8 +28,10 @@ export interface WorkListDeps<Live> {
   // 当前会话（不列）与它所在项目的治理根（别的项目的卡片标目录）
   currentId(): string;
   currentRoot(): string;
-  // 在本进程里按它自己的治理根与工作区开起来（收进会话池）；开不成返回原因
-  open(entry: ListedSession): Promise<string | undefined>;
+  // 在本进程里按它自己的治理根与工作区开起来（收进会话池；task 为卡片上的首条输入）；开不成返回原因
+  open(entry: ListedSession, task: string): Promise<string | undefined>;
+  // 会话池里开着的会话：不在当前会话所在项目里的，它的目录（卡上标明）
+  placeOf?(id: string): string | undefined;
   // 删出清单失败等写一行
   notice(line: string): void;
   homeDir?: string;
@@ -128,7 +130,7 @@ export class WorkList<Live> implements SessionPanelSource {
           dormant: true,
           ...(elsewhere ? { elsewhere: true } : {}),
           ...(!samePath(entry.governanceRoot, currentRoot)
-            ? { place: tildePath(entry.workspaceRoot, homedir()) }
+            ? { place: tildePath(entry.workspaceRoot, this.#homeDir) }
             : {}),
           root: entry.governanceRoot,
           startedAt: entry.addedAt,
@@ -153,7 +155,11 @@ export class WorkList<Live> implements SessionPanelSource {
 
   list(): PooledSessionCard[] {
     const pool = this.#deps.pool;
-    const open = pool.list();
+    // 开着的别的项目的会话同样标目录
+    const open = pool.list().map((card) => {
+      const place = this.#deps.placeOf?.(card.id);
+      return place !== undefined ? { ...card, place } : card;
+    });
     const ids = new Set(open.map((card) => card.id));
     const currentId = this.#deps.currentId();
     return [
@@ -182,7 +188,7 @@ export class WorkList<Live> implements SessionPanelSource {
     if (dormant !== undefined) {
       if (dormant.card.elsewhere === true) return `session ${dormant.card.name} is open elsewhere`;
       if (text.trim() === "") return "message is empty";
-      const refusal = await this.#deps.open(dormant.entry);
+      const refusal = await this.#deps.open(dormant.entry, dormant.card.task);
       if (refusal !== undefined) return refusal;
       this.#dormant.delete(id);
     }

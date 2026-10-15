@@ -37,6 +37,7 @@ async function storedSession(root: string, task: string, reply: string): Promise
 function harness(home: string, currentRoot: string) {
   const runs: Array<[string, string]> = [];
   const opened: ListedSession[] = [];
+  const tasks: string[] = [];
   const pool = new LocalSessionPool({
     open: async () => {
       throw new Error("unused");
@@ -46,8 +47,9 @@ function harness(home: string, currentRoot: string) {
     pool,
     currentId: () => "sess_current",
     currentRoot: () => currentRoot,
-    open: async (entry) => {
+    open: async (entry, task) => {
       opened.push(entry);
+      tasks.push(task);
       const runtime: PooledRuntime = {
         sessionId: entry.sessionId,
         run: async (text) => {
@@ -58,13 +60,14 @@ function harness(home: string, currentRoot: string) {
         transcript: () => [],
         close: async () => {},
       };
-      pool.adopt(runtime, { name: "opened", task: "" });
+      pool.adopt(runtime, { name: "opened", task });
       return undefined;
     },
+    placeOf: (id) => (id === "sess_far_open" ? "~/far" : undefined),
     notice: () => {},
     homeDir: home,
   });
-  return { list, pool, runs, opened };
+  return { list, pool, runs, opened, tasks };
 }
 
 test("本进程没开的会话列成 idle 卡片：摘要取最后一条回复，别的项目的标目录；当前会话不列；发话先开起来再发；偷看取最近几句；去掉删出清单", async () => {
@@ -76,7 +79,7 @@ test("本进程没开的会话列成 idle 卡片：摘要取最后一条回复�
   addToSessionIndex({ sessionId: local, governanceRoot: here, workspaceRoot: here }, home);
   addToSessionIndex({ sessionId: remote, governanceRoot: there, workspaceRoot: there }, home);
   addToSessionIndex({ sessionId: "sess_current", governanceRoot: here, workspaceRoot: here }, home);
-  const { list, runs, opened } = harness(home, here);
+  const { list, pool, runs, opened, tasks } = harness(home, here);
   list.refresh();
   const cards = list.list();
   assert.deepEqual(
@@ -98,6 +101,20 @@ test("本进程没开的会话列成 idle 卡片：摘要取最后一条回复�
     [local]
   );
   assert.deepEqual(runs, [[local, "接着做"]]);
+  assert.deepEqual(tasks, ["修登录"], "开起来的卡片带着首条输入");
+  // 开着的别的项目的会话同样标目录
+  pool.adopt(
+    {
+      sessionId: "sess_far_open",
+      run: async () => {},
+      interrupt: () => {},
+      isRunning: () => false,
+      transcript: () => [],
+      close: async () => {},
+    },
+    { name: "far", task: "" }
+  );
+  assert.equal(list.list().find((card) => card.id === "sess_far_open")?.place, "~/far");
   await list.remove(remote);
   assert.ok(!listSessionIndex(home).some((entry) => entry.sessionId === remote));
   assert.ok(!list.list().some((card) => card.id === remote));
