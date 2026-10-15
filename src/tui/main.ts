@@ -498,6 +498,7 @@ export async function main(argv: string[]): Promise<void> {
         layeredRules: bundle.settings.grants,
       },
       hooks: bundle.hooks,
+      workspaceRoot: core.workspaceRoot,
     };
   };
   // 决策 433–438：会话回退的运行面（每次按当前会话现取）
@@ -648,7 +649,8 @@ export async function main(argv: string[]): Promise<void> {
         }),
     },
     // 决策 446：模型调了 enter_worktree 的那一轮收尾后，按 /reload 的先建后换移进工作树，再递一条通知让 agent 接着做
-    afterTurn: (info) => worktreeSwitch.afterTurn(info),
+    // 决策 484：面板里排着重建、还没重建就成了当前会话的，在这一轮收尾时按新快照重建
+    afterTurn: (info) => worktreeSwitch.afterTurn(info) ?? rebuildIfStale(),
     // 决策 456：/rename 改当前会话的名字——记进会话记录（续接后还在）；沙箱里照样能改。改成了回一行简短结果（会话名不在
     // 主视图上，看不到别处变化）
     renameSession: (name: string) => {
@@ -683,6 +685,7 @@ export async function main(argv: string[]): Promise<void> {
       sessionId: core.sessionId,
       bundle: previous,
     });
+    core.settingsStale = false;
     settings = snapshot;
     // 决策 480：子 agent 的类型随 /reload 重读
     agentCatalog = loadAgentTypes({ governanceRoot });
@@ -701,46 +704,69 @@ export async function main(argv: string[]): Promise<void> {
     attachCoreRuntime(coreContext, core);
     shellHolder.current?.rebindSession(core.sessionId, bindingOf(core));
   }
-  // 决策 484：/reload、/config 对面板里的会话同样生效——空闲的马上重建，在跑的这一轮跑完后重建；它的子 agent 在跑时等它们停下
+  // 决策 484：/reload、/config 对面板里的会话同样生效——空闲的马上重建，在跑的这一轮跑完后重建；它的子 agent 在跑时等它们停下。
+  // 重建在会话池里独占进行（期间不开跑、不叫醒、不能进入，发来的话排着）；同一个会话只排一次
   function rebuildPooled(): void {
-    const pool = sessionPool?.pool;
-    if (pool === undefined) return;
-    for (const runtime of pool.runtimes()) {
+    for (const runtime of sessionPool?.pool.runtimes() ?? []) {
       const core = runtime.live?.core;
       if (core === undefined) continue;
-      const apply = (): void => {
-        if (core.closed === true || core.current || core.opened === undefined) return;
-        if (agentHub !== undefined && agentHub.busyUnder(core.sessionId) > 0) {
-          setTimeout(() => pool.whenIdle(core.sessionId, apply), POOLED_RELOAD_RETRY_MS).unref();
-          return;
-        }
-        void rebuildPooledCore(core).catch((error: unknown) =>
+      core.settingsStale = true;
+      scheduleRebuild(core);
+    }
+  }
+  function scheduleRebuild(core: SessionCore): void {
+    const pool = sessionPool?.pool;
+    if (pool === undefined || core.reloadQueued === true) return;
+    core.reloadQueued = true;
+    const retry = (): void => {
+      setTimeout(() => {
+        if (!pool.whenIdle(core.sessionId, apply)) core.reloadQueued = false;
+      }, POOLED_RELOAD_RETRY_MS).unref();
+    };
+    const apply = (): void => {
+      // 成了当前会话（在这一轮收尾时重建）、已去掉、已重建过：不再管
+      if (core.closed === true || core.current || core.settingsStale !== true) {
+        core.reloadQueued = false;
+        return;
+      }
+      if (agentHub !== undefined && agentHub.busyUnder(core.sessionId) > 0) {
+        retry();
+        return;
+      }
+      const started = pool.exclusive(core.sessionId, async () => {
+        try {
+          await rebuildPooledCore(core);
+        } catch (error) {
           sayOf(coreContext, core)(
             `reloading settings failed: ${error instanceof Error ? error.message : String(error)}`,
             true
-          )
-        );
-      };
-      pool.whenIdle(core.sessionId, apply);
-    }
+          );
+        } finally {
+          core.reloadQueued = false;
+        }
+      });
+      if (!started) retry();
+    };
+    if (!pool.whenIdle(core.sessionId, apply)) core.reloadQueued = false;
+  }
+  // 决策 484：成了当前会话、还没按新快照重建的：当前会话的子 agent 没在跑时重建
+  function rebuildIfStale(): Promise<void> | undefined {
+    const core = current;
+    if (core.settingsStale !== true || agentsBusy() !== undefined) return undefined;
+    return rebuildMain(settings).catch((error: unknown) => {
+      shell.addAlert(
+        `reloading settings failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    });
   }
   async function rebuildPooledCore(core: SessionCore): Promise<void> {
     const opened = core.opened;
-    if (opened === undefined) return;
+    if (opened === undefined || core.closed === true) return;
     const reloaded = await reopenMainSessionForReload(reloadContextOf(core), settings, {
       sessionId: core.sessionId,
       bundle: opened.bundle,
     });
-    // 重建期间又跑起来了、换成了当前会话或被去掉：这次不换，新开的运行面释放
-    if (core.closed === true || core.current || opened.bundle.adapter.isRunning()) {
-      await disposeRuntime(reloaded.opened.bundle).catch(() => {});
-      if (core.closed !== true && !core.current) {
-        sessionPool?.pool.whenIdle(core.sessionId, () => {
-          rebuildPooledCore(core).catch(() => {});
-        });
-      }
-      return;
-    }
+    core.settingsStale = false;
     await opened.checkpoints?.settle();
     await runSessionEvent(opened.bundle, "SessionEnd", "switch", { reason: "switch" });
     core.detachGuard?.();
@@ -796,6 +822,10 @@ export async function main(argv: string[]): Promise<void> {
     const pool = sessionPool?.pool;
     if (pool === undefined) return;
     core.startContexts.push(...(handOff.contexts ?? []));
+    core.heldInput = handOff.held !== undefined ? [...handOff.held] : undefined;
+    core.cancelHandedOff = handOff.interrupt;
+    // 还没按新快照重建的（子 agent 在跑没能重建）：在面板里空闲时重建
+    if (core.settingsStale === true) queueMicrotask(() => scheduleRebuild(core));
     if (core.task === "") core.task = shellHolder.current?.currentTask() ?? "";
     setCoreRole(coreContext, core, false);
     pool.adopt(
@@ -814,18 +844,51 @@ export async function main(argv: string[]): Promise<void> {
       }
     );
   }
-  // 决策 484：进入面板里的会话——它成为当前会话（接过它在跑的这一轮与排着的输入），原来的当前会话退到面板接着跑
+  // 决策 484：进入面板里的会话——它成为当前会话（接过它在跑的这一轮与排着的输入），原来的当前会话退到面板接着跑；
+  // 一次只进一个
+  let entering = false;
   async function enterPooled(id: string): Promise<string | undefined> {
     const pool = sessionPool?.pool;
     if (pool === undefined) return undefined;
-    if (shell.handOffBlocked() !== undefined || worktreeSwitch.pending()) {
+    if (
+      entering ||
+      shell.handOffBlocked() !== undefined ||
+      worktreeSwitch.pending() ||
+      pool.busy(id)
+    ) {
       return "can't switch sessions right now";
     }
+    entering = true;
+    try {
+      return await enterDetached(pool, id);
+    } finally {
+      entering = false;
+    }
+  }
+  async function enterDetached(
+    pool: NonNullable<typeof sessionPool>["pool"],
+    id: string
+  ): Promise<string | undefined> {
     const card = pool.list().find((item) => item.id === id);
     const detached = pool.detach(id);
     const target = detached?.runtime.live?.core;
     if (detached === undefined || target === undefined) {
-      return card !== undefined ? `session ${card.name} is stopped` : "no such session";
+      if (card === undefined) return "no such session";
+      return card.state === "stopped"
+        ? `session ${card.name} is stopped`
+        : `session ${card.name} isn't open`;
+    }
+    // 面板里排着的重建随取出作废；这一轮也没在跑的先按新快照重建再进入（在跑的在这一轮收尾时重建）
+    target.reloadQueued = false;
+    if (target.settingsStale === true && detached.inflight === undefined) {
+      try {
+        await rebuildPooledCore(target);
+      } catch (error) {
+        sayOf(coreContext, target)(
+          `reloading settings failed: ${error instanceof Error ? error.message : String(error)}`,
+          true
+        );
+      }
     }
     const previous = current;
     retireToPanel(previous, shell.handOff());
@@ -835,9 +898,21 @@ export async function main(argv: string[]): Promise<void> {
     const inflight = detached.inflight?.then((result) =>
       (result as { status?: unknown } | undefined)?.status === "interrupted" ? undefined : result
     );
+    const held = target.heldInput;
+    target.heldInput = undefined;
+    target.cancelHandedOff = undefined;
     shell.switchSession(target.sessionId, bindingOf(target), {
-      ...(inflight !== undefined ? { inflight } : {}),
+      ...(inflight !== undefined
+        ? {
+            inflight,
+            // 还在等 UserPromptSubmit 钩子时按 Esc：钩子之后不再开跑
+            interrupt: () => {
+              target.interrupted = true;
+            },
+          }
+        : {}),
       ...(detached.queued !== undefined ? { queued: detached.queued } : {}),
+      ...(held !== undefined ? { held } : {}),
       contexts: target.startContexts.splice(0),
     });
     return undefined;
@@ -848,12 +923,7 @@ export async function main(argv: string[]): Promise<void> {
       root: governanceRoot,
       rebind: async (targetId) => {
         const previous = current;
-        // 决策 484：原来的当前会话还在干活（这一轮没完，或还有子 agent 在干活，含停着但后台作业没收尾的）就退到面板接着跑，
-        // 闲着的直接关掉
-        const working =
-          shell.isRunning() ||
-          (agentHub !== undefined && agentHub.busyUnder(previous.sessionId) > 0);
-        if (working && worktreeSwitch.pending()) throw new Error("can't switch sessions right now");
+        if (worktreeSwitch.pending()) throw new Error("can't switch sessions right now");
         // 决策 469：换到的会话沿用当前的审批模式
         const next = newCore(targetId, governanceRoot, previous.modeCell.current);
         // 分支会话回到它的工作树（工作树缺失时响亮失败）；决策 3b：会话 grant 种子还原。两者与 MCP 启动一并在 session-runtime.ts（与 cli resume 同一份）
@@ -868,6 +938,11 @@ export async function main(argv: string[]): Promise<void> {
         if (bundle.toolsNotice !== undefined) shell.addSystem(bundle.toolsNotice);
         // 决策 350：换走旧会话之前先等它未完成的快照拍完（新会话可能在同一工作区上接着改文件）
         await previous.opened?.checkpoints?.settle();
+        // 决策 484：原来的当前会话还在干活（这一轮没完，或还有子 agent 在干活，含停着但后台作业没收尾的）就退到面板接着跑，
+        // 闲着的直接关掉（开好目标会话之后再看）
+        const working =
+          shell.isRunning() ||
+          (agentHub !== undefined && agentHub.busyUnder(previous.sessionId) > 0);
         if (working) {
           retireToPanel(previous, shell.handOff());
         } else {

@@ -45,7 +45,11 @@ import type { WebToolsConfig } from "../application/web-tools.ts";
 import { isGitWorkspace } from "../application/worktree-cleanup.ts";
 import type { SessionGrantStore } from "../approvals/grant-store.ts";
 import type { ApprovalHandler } from "../approvals/handler.ts";
-import { holdWorktreeInUse } from "../persistence/worktree-in-use.ts";
+import {
+  holdWorktreeInUse,
+  worktreeHeldHere,
+  worktreeInUseByOthers,
+} from "../persistence/worktree-in-use.ts";
 import type { StreamFn } from "../pi-runtime/index.ts";
 import { newSessionId, type SessionId } from "../state/ids.ts";
 import {
@@ -131,6 +135,13 @@ export interface SessionCore {
   interrupted?: boolean;
   // SessionStart 等补的上下文（随下一条输入一起交给模型）
   startContexts: string[];
+  // 当前会话被中断时退回、还没放回输入框的排队内容（回到它时放进输入框）
+  heldInput?: string[] | undefined;
+  // 从当前会话交出来、还在等 UserPromptSubmit 钩子的那一轮：停下它（钩子之后不再开跑）
+  cancelHandedOff?: (() => void) | undefined;
+  // 决策 484：设置重读过、还没按新快照重建；已排着重建
+  settingsStale?: boolean;
+  reloadQueued?: boolean;
   // 打转检测的挂点（换角色时换）
   detachGuard?: (() => void) | undefined;
   closed?: boolean;
@@ -153,7 +164,8 @@ function sameDir(left: string, right: string): boolean {
 // 说明行：当前会话的照写，面板里的写明来源
 export function sayOf(context: SessionPoolContext, core: SessionCore) {
   return (line: string, alert = false): void => {
-    if (core.current) context.notice(line, alert);
+    // 还没起名（正在开）的同当前会话照写
+    if (core.current || core.name === "") context.notice(line, alert);
     else context.notice(`[${core.name}] ${line}`, alert);
   };
 }
@@ -347,6 +359,13 @@ export async function closeCore(
       core.takeBase !== undefined && core.takeBase !== worktree.base ? core.takeBase : undefined;
     await closeNamedWorktree(worktree, {
       write: sayOf(context, core),
+      // 本进程里别的会话还在这个工作树里（它已放下自己的在用锁）同样算开着
+      inUseByOthers: () =>
+        worktreeHeldHere(worktree.path) ||
+        worktreeInUseByOthers(
+          worktree.path,
+          context.homeDir !== undefined ? { homeDir: context.homeDir } : {}
+        ),
       ...(taken !== undefined ? { unchanged: () => unchangedSinceTake(worktree.path, taken) } : {}),
     }).catch(() => "kept");
     dropTakeBase(context.governanceRoot, worktree.name);
@@ -412,6 +431,7 @@ export function pooledRuntimeOf(
     },
     interrupt: () => {
       core.interrupted = true;
+      core.cancelHandedOff?.();
       core.approvals.abort();
       void core.opened?.bundle.adapter.interrupt();
     },

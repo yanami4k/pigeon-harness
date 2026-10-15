@@ -184,6 +184,8 @@ interface Entry<Live> {
   queued?: string[] | undefined;
   // 空闲下来时要做的（设置重读后的重建等）
   idle?: Array<() => void>;
+  // 独占的一段（设置重读后的重建）：期间不开跑、不叫醒、不能取出
+  exclusive?: Promise<void> | undefined;
   // 人停下的（Ctrl+X 第一下）：不被叫醒；它的子 agent 等审批时卡片照样标出，答完回到已停
   halted?: boolean;
   // 已从面板去掉、已释放运行面
@@ -384,7 +386,7 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
 
   // 一轮跑完：先做等着空闲的事，再发排着的下一条（停下的不发）
   #settled(entry: Entry<Live>): void {
-    if (entry.removed === true || entry.closed === true) return;
+    if (entry.removed === true || entry.closed === true || entry.exclusive !== undefined) return;
     for (const task of entry.idle?.splice(0) ?? []) task();
     const runtime = entry.runtime;
     const next = entry.halted !== true ? entry.queued?.shift() : undefined;
@@ -440,7 +442,14 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
   ): ({ runtime: PooledRuntime<Live>; card: PooledSessionCard } & PooledHandOff) | undefined {
     const entry = this.#entries.get(id);
     const runtime = entry?.runtime;
-    if (entry === undefined || runtime === undefined || entry.closed === true) return undefined;
+    if (
+      entry === undefined ||
+      runtime === undefined ||
+      entry.closed === true ||
+      entry.exclusive !== undefined
+    ) {
+      return undefined;
+    }
     this.#entries.delete(id);
     // 不再归面板：挂着的审批落定、叫醒都不再改这张卡
     entry.removed = true;
@@ -469,6 +478,33 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
     return true;
   }
 
+  // 决策 484：独占一段（设置重读后的重建）：期间不开跑、不叫醒、不能取出，发来的话排着，做完再发、再看要不要叫醒；
+  // 已有独占的或会话不在返回 false
+  exclusive(id: string, task: () => Promise<void>): boolean {
+    const entry = this.#entries.get(id);
+    if (
+      entry === undefined ||
+      entry.runtime === undefined ||
+      entry.closed === true ||
+      entry.exclusive !== undefined
+    ) {
+      return false;
+    }
+    entry.exclusive = task()
+      .catch(() => {})
+      .finally(() => {
+        entry.exclusive = undefined;
+        this.#settled(entry);
+        this.#wake(entry);
+      });
+    return true;
+  }
+
+  // 正在独占的（取不出、不能换手）
+  busy(id: string): boolean {
+    return this.#entries.get(id)?.exclusive !== undefined;
+  }
+
   // 开着的会话的运行面
   runtimes(): Array<PooledRuntime<Live>> {
     return [...this.#entries.values()].flatMap((entry) =>
@@ -479,7 +515,14 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
   // 后台作业结束等要叫醒：空闲（或失败后）即只带通知跑一轮；在跑时通知照常在轮间递进去
   #wake(entry: Entry<Live>): void {
     const runtime = entry.runtime;
-    if (runtime?.runNotices === undefined || entry.halted === true || entry.closed === true) return;
+    if (
+      runtime?.runNotices === undefined ||
+      entry.halted === true ||
+      entry.closed === true ||
+      entry.exclusive !== undefined
+    ) {
+      return;
+    }
     if ((entry.phase !== "idle" && entry.phase !== "failed") || entry.inflight !== undefined)
       return;
     if (runtime.isRunning()) return;
@@ -496,6 +539,12 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
         : `session ${entry.card.name} is still starting`;
     }
     if (text.trim() === "") return "message is empty";
+    // 独占期间（重建运行面）：排着，做完再发
+    if (entry.exclusive !== undefined && entry.inflight === undefined) {
+      entry.halted = false;
+      entry.queued = [...(entry.queued ?? []), text.trim()];
+      return undefined;
+    }
     if (entry.inflight !== undefined || entry.runtime.isRunning()) {
       return `can't send while ${entry.card.name} is running`;
     }
@@ -545,6 +594,8 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
   async #release(entry: Entry<Live>): Promise<void> {
     if (entry.removed !== true) this.#moved(entry, { phase: "stopped" });
     await entry.opening;
+    // 独占的一段（重建运行面）做完再释放
+    await entry.exclusive;
     const runtime = entry.runtime;
     if (runtime === undefined || entry.closed === true) return;
     entry.closed = true;
@@ -587,7 +638,11 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
     if (entry === undefined) return "no such session";
     if (entry.closed === true) return `session ${entry.card.name} is stopped`;
     if (entry.runtime === undefined) return `session ${entry.card.name} is still starting`;
-    if (entry.inflight !== undefined || entry.runtime.isRunning()) {
+    if (
+      entry.inflight !== undefined ||
+      entry.exclusive !== undefined ||
+      entry.runtime.isRunning()
+    ) {
       return `can't take while ${entry.card.name} is running`;
     }
     // 决策 483：停下的会话运行面还开着，照样取（起点前移，工作树留着；去掉时看取回之后还有没有改动）

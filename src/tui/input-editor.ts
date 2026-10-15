@@ -76,6 +76,17 @@ export function createPromptEditor(
   return editor;
 }
 
+// 决策 484：换到别的会话时路径补全与 @ 引用换成它的工作区
+export function setPromptAutocompleteRoot(
+  editor: Editor,
+  autocomplete: PromptAutocomplete,
+  basePath: string
+): void {
+  editor.setAutocompleteProvider(
+    new PromptAutocompleteProvider(slashCommandItems(), basePath, autocomplete.fdPath)
+  );
+}
+
 // 补全用的命令表：按命令词首段去重（"grants save" 归在 grants 下），说明取用法
 export function slashCommandItems(): SlashCommand[] {
   const seen = new Map<string, SlashCommand>();

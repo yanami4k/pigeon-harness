@@ -108,7 +108,11 @@ import {
 } from "./commands.ts";
 import { ConfigPanel } from "./config-panel.ts";
 import type { TuiHooksFace } from "./hooks-view.ts";
-import { createPromptEditor, type PromptAutocomplete } from "./input-editor.ts";
+import {
+  createPromptEditor,
+  type PromptAutocomplete,
+  setPromptAutocompleteRoot,
+} from "./input-editor.ts";
 import { InputQueue } from "./input-queue.ts";
 import { installKeybindings, isKey, type KeybindingRow } from "./keybindings.ts";
 import { attachToolResultTo, MessageFlow, projectRuntimeEvent } from "./message-flow.ts";
@@ -170,6 +174,8 @@ export interface TuiRuntimeFace {
 export interface TuiSessionBinding extends SessionBinding<TuiRuntimeFace, TuiGrantsContext> {
   // 决策 323/324：目标会话的钩子面——换绑后本会话的会话级事件用它（各会话的清单随各自的快照冻结）
   hooks?: TuiHooksFace;
+  // 决策 484：目标会话的工作区（路径补全与 @ 引用的根跟着换）
+  workspaceRoot?: string;
 }
 
 export interface TuiShellOptions {
@@ -294,7 +300,11 @@ export interface TuiPoolFace {
 export interface TuiHandOff {
   inflight?: Promise<unknown>;
   queued?: readonly string[];
+  // 中断时退回来、还没放回输入框的排队内容（不自动发出，回到这个会话时放进输入框）
+  held?: readonly string[];
   contexts?: readonly string[];
+  // 停下这一轮（还在等 UserPromptSubmit 钩子时，钩子之后不再开跑）
+  interrupt?: () => void;
 }
 
 // 决策 482：有子 agent 在跑时退出前的确认（需要当场决定）
@@ -442,6 +452,10 @@ export class PigeonTuiShell
   // 决策 484：这一次工作的代号（换手时换新：交出去的那一轮落定时不再动壳）与在跑的这一轮（换手时交出去）
   private workGen = 0;
   private inflight: Promise<unknown> | undefined;
+  // 这一轮已落定、正在收尾（Stop 钩子、移进工作树的重建）：不换手
+  private closing = false;
+  // 停下在跑的这一轮里还没开跑的部分（等 UserPromptSubmit 钩子时）
+  private cancelWork: (() => void) | undefined;
   private lastRun: { result: RunResult | null; error?: unknown } | null = null;
   private stopCause: RunStopCause | undefined;
   // start/stop 的 dispose 对称面：壳级监听器在此成对登记（S5 的同位置留位）；
@@ -916,31 +930,49 @@ export class PigeonTuiShell
   // 决策 323、324：UserPromptSubmit——拦下则这一条不跑（理由落消息区），补的上下文与 SessionStart
   // 待用上下文一起前缀给本次输入。钩子出错如实提示，不挡提交
   //（决策 484：钩子与这一轮合起来算在跑的这一轮，换手时整段交出去；拦下时结果为 undefined）
+  //（决策 484：开跑时就取定这个会话的运行面、钩子与待用上下文；等钩子期间换过手的，不再动壳上的东西）
   private runWithHooks(value: string): void {
     const runtime = this.current.runtime;
     const hooks = this.current.hooks;
+    const gen = this.workGen;
+    const contexts = this.hookContexts.splice(0);
+    const notes = this.nextInputNotes.splice(0);
+    const cancel = { cancelled: false };
+    this.cancelWork = () => {
+      cancel.cancelled = true;
+    };
+    const own = () => gen === this.workGen;
     const work = (async (): Promise<RunResult | undefined> => {
       let input = value;
       if (hooks !== undefined && !hooks.disabled) {
         try {
           const report = await hooks.runEvent("UserPromptSubmit", "", { prompt: value });
-          for (const line of report.systemMessages) this.flow.addSystem(line);
+          if (own()) for (const line of report.systemMessages) this.flow.addSystem(line);
           const blocked =
             report.blocked?.reason ??
             (report.continueFalse !== undefined
               ? (report.continueFalse.stopReason ?? "hook stopped the session")
               : undefined);
-          if (blocked !== undefined) return undefined;
-          const contexts = [...this.hookContexts, ...report.additionalContext];
-          this.hookContexts = [];
-          if (contexts.length > 0) input = `${contexts.join("\n\n")}\n\n${value}`;
+          if (blocked !== undefined) {
+            // 拦下：待用的上下文留给下一条
+            if (own()) {
+              this.hookContexts.unshift(...contexts);
+              this.nextInputNotes.unshift(...notes);
+            }
+            return undefined;
+          }
+          contexts.push(...report.additionalContext);
         } catch (error) {
-          this.flow.addAlert(
-            `UserPromptSubmit hook failed: ${error instanceof Error ? error.message : String(error)}`
-          );
+          if (own()) {
+            this.flow.addAlert(
+              `UserPromptSubmit hook failed: ${error instanceof Error ? error.message : String(error)}`
+            );
+          }
         }
       }
-      const notes = this.nextInputNotes.splice(0);
+      // 等钩子期间被停下：这一轮不开跑
+      if (cancel.cancelled) return undefined;
+      if (contexts.length > 0) input = `${contexts.join("\n\n")}\n\n${value}`;
       if (notes.length > 0) input = `${notes.join("\n\n")}\n\n${input}`;
       return runtime.run(input);
     })();
@@ -954,8 +986,10 @@ export class PigeonTuiShell
     work.then(
       (result) => {
         if (gen !== this.workGen) return;
-        if (result === undefined) this.finishRun();
-        else this.handleRunEnd(result);
+        if (result === undefined) {
+          this.closing = true;
+          this.finishRun();
+        } else this.handleRunEnd(result);
       },
       (error: unknown) => {
         if (gen === this.workGen) this.handleRunEnd(null, error);
@@ -963,9 +997,15 @@ export class PigeonTuiShell
     );
   }
 
-  // 决策 484：能不能换手（进入面板里的会话）：续接、回退、重读设置、压缩进行中不换
+  // 决策 484：能不能换手（进入面板里的会话、/resume）：续接、回退、重读设置、压缩进行中，以及这一轮正在收尾（Stop 钩子、
+  // 移进工作树的重建）时不换
   handOffBlocked(): string | undefined {
-    if (this.resuming || this.rewinding || (this.running && this.inflight === undefined)) {
+    if (
+      this.resuming ||
+      this.rewinding ||
+      this.closing ||
+      (this.running && this.inflight === undefined)
+    ) {
       return "can't switch sessions right now";
     }
     return undefined;
@@ -975,9 +1015,13 @@ export class PigeonTuiShell
   // 壳回到空闲（交出去的那一轮落定时不再动壳）
   handOff(): TuiHandOff {
     const inflight = this.running ? this.inflight : undefined;
+    const interrupt = inflight !== undefined ? this.cancelWork : undefined;
     this.workGen += 1;
     this.inflight = undefined;
-    const queued = [...this.heldQueue.splice(0), ...this.queue.clear()];
+    this.cancelWork = undefined;
+    this.closing = false;
+    const queued = this.queue.clear();
+    const held = this.heldQueue.splice(0);
     const contexts = [...this.hookContexts.splice(0), ...this.nextInputNotes.splice(0)];
     this.running = false;
     this.interrupting = false;
@@ -988,7 +1032,9 @@ export class PigeonTuiShell
     this.stopCause = undefined;
     return {
       ...(inflight !== undefined ? { inflight } : {}),
+      ...(interrupt !== undefined ? { interrupt } : {}),
       ...(queued.length > 0 ? { queued } : {}),
+      ...(held.length > 0 ? { held } : {}),
       ...(contexts.length > 0 ? { contexts } : {}),
     };
   }
@@ -1004,6 +1050,8 @@ export class PigeonTuiShell
       ...(binding.hooks !== undefined ? { hooks: binding.hooks } : {}),
     };
     this.hookContexts = [...(handOff.contexts ?? [])];
+    this.heldQueue = [...(handOff.held ?? [])];
+    this.followWorkspace(binding);
     this.reportedListenerErrors = 0;
     this.bindRuntime(binding.runtime);
     this.resetCosts(sessionId, true);
@@ -1017,6 +1065,7 @@ export class PigeonTuiShell
       this.runCancelled = false;
       this.beginWork();
       this.followWork(inflight as Promise<RunResult | undefined>);
+      this.cancelWork = handOff.interrupt;
     } else {
       this.activeRunId = null;
       this.drainQueue();
@@ -2248,6 +2297,8 @@ export class PigeonTuiShell
           // 按 Esc 取消：不说
         } else if (picked.sandbox) {
           this.flow.addSystem(sandboxResumeHint(picked.sessionId));
+        } else if (this.handOffBlocked() !== undefined) {
+          this.flow.addSystem(this.handOffBlocked() ?? "");
         } else {
           dispatchResumeCommand(this, picked.sessionId);
         }
@@ -2452,6 +2503,12 @@ export class PigeonTuiShell
 
   // /resume：不带会话号弹出选择器（286）；沙箱会话不在本机界面里续接，说明用法
   resumeCommand(arg: string | undefined): void {
+    // 决策 484：换会话与进入面板里的会话同一道守卫
+    const blocked = this.handOffBlocked();
+    if (blocked !== undefined) {
+      this.flow.addSystem(blocked);
+      return;
+    }
     if (arg === undefined) {
       this.openSessionPicker();
       return;
@@ -2557,8 +2614,10 @@ export class PigeonTuiShell
     if (cause !== undefined) this.stopCause = cause;
     // 决策 323：被取消的一轮不跑 Stop 钩子（外部取消与打转叫停都算）
     this.runCancelled = true;
+    // 决策 484：还在等 UserPromptSubmit 钩子的（运行面上还没开跑）钩子之后不再开跑
+    this.cancelWork?.();
     // pi 惯例：中断时排队内容退回输入框，不在中断后自动发出。决策 458：在会话面板里中断当前会话时，
-    // 输入框不是主会话的，先拿出来留着，回到主视图时再放进输入框
+    // 输入框不是它的，先拿出来留着，回到主视图时再放进输入框（决策 484：换走时随会话带走，回到它时再放进输入框）
     if (this.view === "panel") this.heldQueue.push(...this.queue.clear());
     else this.restoreQueueToEditor();
     this.updateStatus();
@@ -2653,6 +2712,7 @@ export class PigeonTuiShell
       ...(binding.grants !== undefined ? { grants: binding.grants } : {}),
       ...(binding.hooks !== undefined ? { hooks: binding.hooks } : {}),
     };
+    this.followWorkspace(binding);
     // 先换会话面再切视图（切视图时按新会话重画）
     this.showView("main");
     // 决策 323、324：换到新会话——SessionStart（source "resume"）补的上下文归新会话；
@@ -2664,6 +2724,13 @@ export class PigeonTuiShell
     this.bindRuntime(binding.runtime);
     this.resetCosts(sessionId, true);
     this.tui.requestRender();
+  }
+
+  // 决策 484：路径补全与 @ 引用的根跟着当前会话的工作区
+  private followWorkspace(binding: TuiSessionBinding): void {
+    const autocomplete = this.options.autocomplete;
+    if (autocomplete === undefined || binding.workspaceRoot === undefined) return;
+    setPromptAutocompleteRoot(this.input, autocomplete, binding.workspaceRoot);
   }
 
   // 读会话文件渲染历史（与 /resume 同一份读取与上限）；endLine 为历史之后的分隔行（不给即不写）
@@ -2773,6 +2840,8 @@ export class PigeonTuiShell
   }
 
   private handleRunEnd(result: RunResult | null, error?: unknown): void {
+    this.closing = true;
+    this.cancelWork = undefined;
     this.activeRunId = null;
     this.lastRun = { result, error };
     // D2 可见化（S5）：每次 run 收尾复查落盘失败（增量报数，同 repl 口径）
@@ -2847,6 +2916,8 @@ export class PigeonTuiShell
 
   private finishRunNow(): void {
     this.inflight = undefined;
+    this.closing = false;
+    this.cancelWork = undefined;
     this.running = false;
     this.updateStatus();
     this.tui.requestRender();
@@ -2860,8 +2931,9 @@ export class PigeonTuiShell
   // 缺省 8）后不再理会并提示一行。stop_hook_active 首次 false、继续后 true。
   // 出错收尾的 Run 不跑 Stop——它的通知是 StopFailure（复审 P2：与 headless 同一口径）
   private async afterRun(result: RunResult | null): Promise<void> {
-    // 决策 484：换过手即不再接着跑、不收尾（这一轮已交给会话面板）
+    // 决策 484：开始时取定这个会话的运行面与钩子；换过手即不再接着跑、不收尾（收尾期间本不换手，这里再守一道）
     const gen = this.workGen;
+    const runtime = this.current.runtime;
     try {
       // 中止收尾（含钩子 continue:false 停下的整轮）：不再跑 Stop（整体审查修复）
       if (result === null || this.runCancelled || result.status === "aborted") return;
@@ -2884,6 +2956,7 @@ export class PigeonTuiShell
         let report: HookEventReport;
         try {
           report = await hooks.runEvent("Stop", "", { stop_hook_active: stopHookActive });
+          if (gen !== this.workGen) return;
         } catch (error) {
           this.flow.addAlert(
             `Stop hook failed: ${error instanceof Error ? error.message : String(error)}`
@@ -2905,7 +2978,7 @@ export class PigeonTuiShell
         const next = [...report.additionalContext, ...(reason !== undefined ? [reason] : [])].join(
           "\n\n"
         );
-        const continuing = this.current.runtime.run(next);
+        const continuing = runtime.run(next);
         this.inflight = continuing;
         const continued = await continuing;
         if (gen !== this.workGen) return;
