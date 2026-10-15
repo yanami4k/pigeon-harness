@@ -256,7 +256,7 @@ function sourceOf(request: ApprovalRequest): string {
 
 // 决策 480：撤回的请求（子 agent 被停下）答完的一行
 export function withdrawnLine(request: ApprovalRequest): string {
-  return `${sourceOf(request)}withdrawn: ${request.subagent?.path ?? request.toolName} was stopped`;
+  return `${sourceOf(request)}withdrawn: ${request.subagent?.path ?? request.pooled?.name ?? request.toolName} was stopped`;
 }
 
 export function approvedLine(request: ApprovalRequest, note = ""): string {

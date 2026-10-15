@@ -71,7 +71,11 @@ function makeShell(extra: Partial<TuiShellOptions> = {}, rows = 40) {
             });
           });
         },
-        interrupt: () => pending?.(),
+        interrupt: () => {
+          const current = pending;
+          pending = undefined;
+          current?.();
+        },
         isRunning: () => pending !== undefined,
         transcript: () => transcript,
         close: async () => {

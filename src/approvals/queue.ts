@@ -4,7 +4,7 @@
 import type { ApprovalHandler } from "./handler.ts";
 
 // 撤回的请求交给模型的拒绝理由
-export const APPROVAL_WITHDRAWN_REASON = "The request was withdrawn: the sub-agent was stopped";
+export const APPROVAL_WITHDRAWN_REASON = "The request was withdrawn: its agent was stopped";
 
 export interface ApprovalQueue {
   wrap(handler: ApprovalHandler): ApprovalHandler;

@@ -291,6 +291,8 @@ export async function closeNamedWorktree(
     write: (line: string) => void;
     // 别的仍在的进程开着这个工作树（缺省查在用锁）
     inUseByOthers?: () => boolean;
+    // 另外也算没有改动的（面板会话完整取回之后再没有改动，决策 483）
+    unchanged?: () => boolean;
   }
 ): Promise<"removed" | "kept"> {
   if ((io.inUseByOthers ?? (() => worktreeInUseByOthers(worktree.path)))()) {
@@ -312,7 +314,7 @@ export async function closeNamedWorktree(
       return kept();
     }
   };
-  if (namedWorktreeUnchanged(worktree)) return remove();
+  if (namedWorktreeUnchanged(worktree) || io.unchanged?.() === true) return remove();
   if (io.ask === undefined) return kept();
   for (;;) {
     const answer = await io.ask(

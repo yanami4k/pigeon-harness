@@ -198,6 +198,18 @@ export function deleteSnapshotRef(repoRoot: string, ref: string): void {
   git(repoRoot, ["update-ref", "-d", ref]);
 }
 
+// 工作目录此刻的样子是不是正好是某个提交（快照）的样子：受跟踪与未跟踪的文件都算，有过大没进树的按不是；出错按不是
+export function workdirMatches(repoRoot: string, commit: string): boolean {
+  try {
+    const top = repoToplevel(repoRoot);
+    const { tree, skipped } = workdirTree(top);
+    if (skipped.length > 0) return false;
+    return tree === git(top, ["rev-parse", `${commit}^{tree}`]).trim();
+  } catch {
+    return false;
+  }
+}
+
 // 引用当前指向的提交；不存在返回 undefined
 export function readSnapshotRef(repoRoot: string, ref: string): string | undefined {
   try {

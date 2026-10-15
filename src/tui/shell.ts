@@ -378,7 +378,7 @@ export class PigeonTuiShell
   private view: ShellView = "main";
   // 决策 435：消息树（会话回退）与双击 Esc 的上一下
   private readonly messageTree: MessageTree;
-  // 决策 443：会话面板、进入的会话与连按两次 Ctrl+X 停止的上一下
+  // 决策 443：会话面板与进入的会话
   private readonly sessionPanel: SessionPanel;
   private pooledSession:
     | { id: string; flow: MessageFlow; unsubscribe: () => void; mode?: ApprovalModeControl }
@@ -1359,13 +1359,9 @@ export class PigeonTuiShell
     return (this.options.pool?.source.list() ?? []).some((item) => item.name === name);
   }
 
-  // 决策 443：会话面板里还开着（没停）的会话号（/resume 与会话选择器排除它们）
+  // 决策 443、483：会话面板里的会话号（/resume 与会话选择器排除它们；停下的运行面还开着，同样排除）
   pooledSessionIds(): ReadonlySet<string> {
-    return new Set(
-      (this.options.pool?.source.list() ?? [])
-        .filter((card) => card.state !== "stopped")
-        .map((card) => card.id)
-    );
+    return new Set((this.options.pool?.source.list() ?? []).map((card) => card.id));
   }
 
   // 决策 458：会话面板里当前会话那张卡——名字、状态（主会话自己的审批挂着为等待回应，在跑、空闲）、首条输入与最近回复
@@ -1401,7 +1397,8 @@ export class PigeonTuiShell
 
   // 决策 458：偷看当前会话——在等什么，加最近几条对话
   private mainPeekLines(): string[] {
-    const waiting = this.pendingApprovalState?.mainWaiting;
+    const waiting =
+      this.pendingApprovalState?.mainWaiting ?? this.agentWaitingLine(this.current.sessionId);
     return [
       ...(waiting !== undefined ? [`waiting: ${waiting}`] : []),
       ...this.flow.digest().recent,
@@ -1517,7 +1514,7 @@ export class PigeonTuiShell
     return { consume: true };
   }
 
-  // 连按两次 Ctrl+X 停下选中的会话（第一次只提示）
+  // 面板里的 Ctrl+X：别的会话第一下停下、两秒内再按去掉；当前会话那张卡连按两下中断这一轮
   private stopFromPanel(): void {
     const pool = this.options.pool;
     const card = this.sessionPanel.selected();

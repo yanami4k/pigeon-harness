@@ -1,9 +1,9 @@
 // 决策 443：会话面板的会话池接上真实运行面（与终端界面同一条装配路径，假模型，临时 git 仓库）。派出的会话进自己的独立
 // 工作树、在那里改文件（主工作目录不动），开着期间持有在用锁；起点按 worktree.baseRef（head 时不取远端）；审批经同一个
 // 处理口、写明来源会话，挂着时卡片在"等待回应"；/take 把工作树里的改动取回主工作目录、完整取回后起点前移（再取不重复），
-// 停下之后完整取回即删工作树；钩子：SessionStart 与 SessionEnd 跑、UserPromptSubmit 拦下即这一轮失败并写明原因。
+// 决策 483：停下不释放、撤回主 agent 挂着的审批，去掉才释放（完整取回之后再没有改动的工作树删掉，有改动的保留）；
+// 钩子：SessionStart 与 SessionEnd 跑、UserPromptSubmit 拦下即这一轮失败并写明原因。
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, test } from "vitest";
@@ -31,7 +31,7 @@ function lockCount(home: string): number {
   return existsSync(dir) ? readdirSync(dir).length : 0;
 }
 
-test("派出的会话进自己的工作树改文件、持有在用锁；审批写明来源、挂着时在等待回应；/take 取回、起点前移；停下不释放、去掉才释放（有改动的工作树保留）", async () => {
+test("派出的会话进自己的工作树改文件、持有在用锁；审批写明来源、挂着时在等待回应；/take 取回、起点前移；停下不释放、去掉才释放（取回之后没再改的工作树删掉）", async () => {
   const { root, cleanup } = tempRoot("pigeon-pool-");
   cleanups.push(cleanup);
   const home = join(root, ".home");
@@ -95,15 +95,64 @@ test("派出的会话进自己的工作树改文件、持有在用锁；审批�
   writeFileSync(join(root, "made.txt"), "edited by hand\n");
   assert.match(await pool.take(id), /no changes to take/);
   assert.equal(readFileSync(join(root, "made.txt"), "utf8"), "edited by hand\n");
-  // 决策 483：停下不释放（在用锁留着）；去掉才释放，有改动的工作树保留
+  // 决策 483：停下不释放（在用锁留着）；去掉才释放，完整取回之后再没有改动的工作树与分支删掉
   await pool.stop(id);
   assert.equal(pool.list()[0]?.state, "stopped");
   assert.equal(lockCount(home), 1, "停下不释放在用锁");
   assert.match(await pool.take(id), /no changes to take/);
+  const branch = opened?.worktree?.branch ?? "";
   await pool.remove(id);
   assert.equal(pool.list().length, 0);
   assert.equal(lockCount(home), 0, "去掉即释放在用锁");
-  assert.ok(existsSync(worktree), "有改动的工作树保留");
+  assert.equal(existsSync(worktree), false, "取回之后没再改的工作树删掉");
+  assert.equal(git(root, ["branch", "--list", branch]).trim(), "", "分支删掉");
+  assert.equal(git(root, ["for-each-ref", "refs/pigeon/panel/"]).trim(), "", "起点快照引用删掉");
+});
+
+test("决策 483：停下即撤回主 agent 挂着的审批（子 agent 的不撤回）", async () => {
+  const { root, cleanup } = tempRoot("pigeon-pool-withdraw-");
+  cleanups.push(cleanup);
+  initRepo(root, { "a.txt": "one\n" });
+  writeFileSync(join(root, ".gitignore"), ".pigeon/\n.home/\n");
+  const { streamFn } = routedModel({
+    main: [
+      {
+        text: "写",
+        toolCalls: [{ name: "write_file", args: { path: "made.txt", content: "made\n" } }],
+      },
+      { text: "不写了" },
+    ],
+  });
+  const requests: ApprovalRequest[] = [];
+  const { pool } = createSessionPool({
+    governanceRoot: root,
+    streamFn,
+    flags: { provider: "custom", modelId: "custom" } as never,
+    settings: () => loadSettings(root, { homeDir: root }),
+    warn: () => {},
+    homeDir: join(root, ".home"),
+    createApprovalHandler: () => async (request) => {
+      requests.push(request);
+      const signal = request.signal;
+      await new Promise<void>((resolve) => {
+        if (signal?.aborted === true) resolve();
+        else signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      return { approved: false, reason: "withdrawn" };
+    },
+    mainWorkspace: () => root,
+    notice: () => {},
+  });
+  cleanups.push(() => pool.closeAll());
+  await pool.spawn("建一个文件");
+  await until(() => requests.length === 1, "审批到了");
+  const id = pool.list()[0]?.id ?? "";
+  assert.equal(pool.list()[0]?.state, "waiting");
+  await pool.stop(id);
+  await until(() => requests[0]?.signal?.aborted === true, "审批撤回");
+  await until(() => pool.list()[0]?.state === "stopped", "落定后仍是已停");
+  const worktree = pool.list()[0]?.worktree?.path ?? "";
+  assert.equal(existsSync(join(worktree, "made.txt")), false, "没有写");
 });
 
 test("起点按 worktree.baseRef：fresh 时在后台取远端（取不到从 HEAD 起并说明），head 时不取", async () => {
@@ -190,7 +239,7 @@ test("钩子：SessionStart 与 SessionEnd 跑；UserPromptSubmit 拦下即这�
   assert.ok(existsSync(join(scripts, "ended")), "SessionEnd 跑了");
 });
 
-test("/take：落点就是这个工作树时拒绝；停下的会话按还开着取、工作树不删", async () => {
+test("/take：落点就是这个工作树时拒绝；停下的会话按还开着取、工作树不删；取回之后又改了的去掉时保留", async () => {
   const { root, cleanup } = tempRoot("pigeon-pool-take-");
   cleanups.push(cleanup);
   const home = join(root, ".home");
@@ -235,6 +284,9 @@ test("/take：落点就是这个工作树时拒绝；停下的会话按还开着
   const taken = await pool.take(card?.id ?? "");
   assert.match(taken, /took 1 file/);
   assert.ok(existsSync(worktree));
+  writeFileSync(join(worktree, "later.txt"), "later\n");
+  await pool.remove(card?.id ?? "");
+  assert.ok(existsSync(join(worktree, "later.txt")), "取回之后又改了的工作树保留");
 });
 
 test("决策 459：不是 git 仓库时，派出的会话在当前目录里干活（不建工作树、不持有在用锁），卡片标共用目录；/take 说明不用取回；停下不涉及工作树", async () => {
