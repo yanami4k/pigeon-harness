@@ -14,9 +14,9 @@ import { newSessionId, type SessionId } from "../state/ids.ts";
 import { RuntimeEventKind } from "../state/runtime-events.ts";
 import { MessageFlow, projectRuntimeEvent } from "./message-flow.ts";
 import { ScriptedRuntime } from "./runtime-fixtures.ts";
-import { SessionPanel } from "./session-panel.ts";
+import { SessionPanel, sessionCardText } from "./session-panel.ts";
 import { PigeonTuiShell, type TuiPoolFace, type TuiShellOptions } from "./shell.ts";
-import { MockTerminal, screenText, settle } from "./testing.ts";
+import { MockTerminal, screenText, settle, withoutStyles } from "./testing.ts";
 
 test("面板会话的实时消息区没有收尾行：轮内出错照样写一行原因（只取首行）；主会话的投影不写（由收尾行写）", () => {
   const turnFailed = {
@@ -177,9 +177,10 @@ test("/panel 打开面板；输入框里的话派新会话；按状态分组，�
     await settle();
     const screen = screenText(term);
     assert.match(screen, /running \(1\)/);
-    assert.match(screen, /idle \(1\)/);
-    assert.match(screen, /s1 {2}修登录 {2}\| 登录修好了/);
-    assert.ok(screen.indexOf("running (1)") < screen.indexOf("idle (1)"));
+    // 决策 489：当前会话也落在自己的状态组里（这一条里它是闲着的），不再单占一段
+    assert.match(screen, /idle \(2\)/);
+    assert.match(screen, /s1 +修登录 +\| 登录修好了/);
+    assert.ok(screen.indexOf("running (1)") < screen.indexOf("idle (2)"));
     assert.ok(!term.writes.join("").includes(`${ESC}[2J 日志`), "卡片里的控制序列不写进终端");
     assert.equal(pool.list().length, 2);
   } finally {
@@ -404,8 +405,9 @@ test("决策 458：当前会话是面板的第一张卡（标 current、状态�
     term.input("\r");
     await settle();
     let screen = screenText(term);
-    assert.match(screen, /^\s+current$/m);
-    assert.match(screen, /> {3}demo-main current · idle {2}先做一件 {2}\| 主会话的回复/);
+    // 决策 489：当前会话按状态落在组里，卡上带 current 标签（不再单占一段、不再写状态词）
+    assert.match(screen, /> demo-main current {2}先做一件 {2}\| 主会话的回复/);
+    assert.match(screen, /^\s+idle \(1\)$/m);
     assert.doesNotMatch(screen, /\(no sessions\)/);
     assert.match(screen, /panel: 1 session(?!s)/);
     // 偷看：最近的对话
@@ -420,7 +422,8 @@ test("决策 458：当前会话是面板的第一张卡（标 current、状态�
     term.input("\r");
     await settle();
     assert.deepEqual(runtime.runs, ["先做一件", "再做一件"]);
-    assert.match(screenText(term), /demo-main current · running/);
+    assert.match(screenText(term), /^\s+running \(1\)$/m);
+    assert.match(screenText(term), /demo-main current/);
     // 在跑时再发：排队，这一轮跑完后发出
     term.input("排队的一条");
     term.input("\r");
@@ -477,7 +480,7 @@ test("决策 458：在面板里对当前会话按两次 Ctrl+X 是中断它这�
     await settle();
     assert.equal(runtime.interrupts, 1);
     assert.equal(shell.currentView(), "panel", "没有退出程序，也没离开面板");
-    // 已请求中断、这一轮还没停下：卡片写 cancelling，"再按一次"的提示不留着
+    // 已请求中断、这一轮还没停下：卡上带 cancelling 临时标签，"再按一次"的提示不留着
     assert.doesNotMatch(screenText(term), /press Ctrl\+X again/);
     assert.match(screenText(term), /demo-main current · cancelling/);
     stop();
@@ -490,10 +493,8 @@ test("决策 458：在面板里对当前会话按两次 Ctrl+X 是中断它这�
       args: { command: "npm test" },
     });
     await settle();
-    assert.match(
-      screenText(term),
-      /demo-main current · waiting {2}跑一件 {2}\| waiting: run_command/
-    );
+    assert.match(screenText(term), /^\s+waiting \(1\)$/m);
+    assert.match(screenText(term), /demo-main current {2}跑一件 {2}\| waiting: run_command/);
     term.input("y");
     await settle();
     // 空输入回车：回到主视图
@@ -682,7 +683,8 @@ test("决策 458 复查：准备中的会话开好、会话号换了之后，选
     peek: () => [],
     main: () => main,
   });
-  panel.move(1);
+  // 决策 489：当前会话落在自己的状态组里（这里 idle 排在 preparing 之后），光标默认在它上面，向上移一格即选到准备中的那一个
+  panel.move(-1);
   assert.equal(panel.selected()?.id, "pending:s1");
   cards = [{ ...cards[0], id: "sess_real_s1", state: "running" as const } as never];
   assert.equal(panel.selected()?.id, "sess_real_s1");
@@ -702,7 +704,8 @@ test("决策 470：输入框为空时按两下 ← 打开面板并选中当前�
     term.input(LEFT);
     await settle();
     assert.equal(shell.currentView(), "panel");
-    assert.match(screenText(term), /^ > {3}\S+ current/m);
+    // 决策 489：当前会话不再单占一段，按状态落在组里，卡上只多一个 current 标签
+    assert.match(screenText(term), /^ {2}> .*current/m);
     term.input(ESC);
     await settle();
     // 有字：← 移光标，不开面板也不提示
@@ -762,8 +765,27 @@ test("决策 470、484：面板里 → 进入选中的会话（成为当前会�
     term.input(LEFT);
     await settle();
     assert.equal(shell.currentView(), "panel");
-    assert.match(screenText(term), /^ > {3}sess_pool1 current/m);
+    // 决策 489：进入的会话成了当前会话，卡上带 current 标签（状态由分组表达）
+    assert.match(screenText(term), /^ {2}> sess_pool1 current/m);
   } finally {
     cleanup();
   }
+});
+
+test("决策 489：共用目录的会话在卡上写它用的工作区，不再只写 shared dir", () => {
+  const base = {
+    id: "sess_shared",
+    name: "s1",
+    state: "idle" as const,
+    task: "做事",
+    summary: "",
+    startedAt: 0,
+    updatedAt: 0,
+    sharedDir: true,
+  };
+  // 标签是暗色（带控制序列），比对前先剥掉样式
+  assert.match(withoutStyles(sessionCardText({ ...base, workspace: "~" })), /s1 ~/);
+  assert.doesNotMatch(withoutStyles(sessionCardText({ ...base, workspace: "~" })), /shared dir/);
+  // 拿不到工作区时退回旧说法
+  assert.match(sessionCardText(base), /shared dir/);
 });

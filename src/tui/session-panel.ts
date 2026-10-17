@@ -5,6 +5,7 @@
 // 决策 458：当前窗口的主会话作为第一张卡（名字后标 current，弱化样式），始终排在最前、不参与按状态分组，状态写在卡里；
 // 对它的偷看、回复、进入、停止由壳接到主会话上
 import type { Component } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { sanitizeTerminalText } from "../application/format.ts";
 import type { PooledSessionCard, PooledSessionState } from "../application/session-pool.ts";
 import { clipToWidth } from "./status-bar.ts";
@@ -34,21 +35,104 @@ function oneLine(text: string): string {
   return sanitizeTerminalText(text.replace(/\s+/g, " ").trim());
 }
 
-export function sessionCardText(card: PooledSessionCard): string {
+// 一张卡拆成的三段（决策 489：名字、任务、概要各占一列，列宽按本次要画的卡算，短了补空格、长了省略）
+interface CardCells {
+  // 会话名（纯文本，可能被截）
+  name: string;
+  // 标签（纯文本）：current、cancelling、工作区一类的属性
+  tags: readonly string[];
+  task: string;
+  detail: string;
+}
+
+// 名字那一段的显示宽度（名字 + 一个空格 + 标签）
+function nameCellWidth(cell: CardCells): number {
+  return (
+    visibleWidth(cell.name) + (cell.tags.length > 0 ? 1 + visibleWidth(cell.tags.join(" · ")) : 0)
+  );
+}
+
+function cellsOf(card: PooledSessionCard, extraTags: readonly string[]): CardCells {
   const detail =
     card.state === "waiting" && card.waiting !== undefined
       ? `waiting: ${oneLine(card.waiting)}`
       : card.state === "failed" && card.error !== undefined
         ? `failed: ${oneLine(card.error)}`
         : oneLine(card.summary);
-  // 决策 459：共用目录的会话（不是 git 仓库）在名字后标明（状态信息，弱化样式）；决策 485：别的进程开着的、别的项目里的同样标明
+  // 决策 459、485；决策 489：状态由分组表达，卡上只留临时标签（current、cancelling）与工作区一类的属性；
+  // 共用目录的会话直接写它用的工作区（写不出来才退回 "shared dir"）；同样的字只写一次
   const tags = [
-    ...(card.sharedDir === true ? ["shared dir"] : []),
+    ...extraTags,
+    ...(card.cancelling === true ? ["cancelling"] : []),
+    ...(card.sharedDir === true ? [card.workspace ?? "shared dir"] : []),
     ...(card.elsewhere === true ? ["open elsewhere"] : []),
     ...(card.place !== undefined ? [card.place] : []),
-  ];
-  const name = tags.length > 0 ? `${card.name} ${secondary(tags.join(" · "))}` : card.name;
-  return `${name}  ${oneLine(card.task)}${detail !== "" ? `  | ${detail}` : ""}`;
+  ].filter((tag, index, all) => all.indexOf(tag) === index);
+  return { name: card.name, tags, task: oneLine(card.task), detail };
+}
+
+// 名字列：标签留着，先截会话名（决策 489：名字太长时不能让 current 这类标签被截掉）
+function nameCell(cell: CardCells, width: number): string {
+  const tagsText = cell.tags.join(" · ");
+  const tagsWidth = visibleWidth(tagsText);
+  if (cell.tags.length === 0) return clipToWidth(cell.name, width, "…");
+  // 标签自己也放不下时整体截断
+  if (tagsWidth + 2 >= width) {
+    return clipToWidth(`${cell.name} ${tagsText}`, width, "…");
+  }
+  const room = width - tagsWidth - 1;
+  // 名字本身不在这里补齐：整格（名字 + 标签）由调用方按列宽补空格
+  return `${clipToWidth(cell.name, room, "…")} ${secondary(tagsText)}`;
+}
+
+// 两列之间的空隙；概要那一列前面还要 `| ` 三个字符
+const COLUMN_GAP = 2;
+const DETAIL_PREFIX = "  | ";
+// 名字列的上限（再长就省略），任务列不超过剩余的六成
+const NAME_COLUMN_MAX = 32;
+
+export interface CardColumns {
+  name: number;
+  task: number;
+}
+
+// 按本次要画的卡算列宽：名字取最长的那个（有上限），任务取剩余的部分，剩下的留给概要
+export function cardColumns(
+  entries: readonly { card: PooledSessionCard; main: boolean }[],
+  available: number
+): CardColumns {
+  const cells = entries.map((entry) => cellsOf(entry.card, entry.main ? ["current"] : []));
+  const name = Math.min(NAME_COLUMN_MAX, Math.max(0, ...cells.map((cell) => nameCellWidth(cell))));
+  const rest = Math.max(0, available - name - COLUMN_GAP);
+  const longestTask = Math.max(0, ...cells.map((cell) => visibleWidth(cell.task)));
+  const withDetail = cells.some((cell) => cell.detail !== "");
+  const task = withDetail
+    ? Math.min(longestTask, Math.max(6, Math.floor(rest * 0.5)))
+    : Math.min(longestTask, rest);
+  return { name, task };
+}
+
+// 按列宽画一张卡（名字列、任务列补齐，概要接在后面；放不下的以 … 省略）
+export function sessionCardText(
+  card: PooledSessionCard,
+  extraTags: readonly string[] = [],
+  columns?: CardColumns
+): string {
+  const cell = cellsOf(card, extraTags);
+  if (columns === undefined) {
+    // 不给列宽时按自然宽度画（另一处只做一行文本的用处）：标签照常带上
+    const tags = cell.tags.length > 0 ? ` ${secondary(cell.tags.join(" · "))}` : "";
+    return `${cell.name}${tags}  ${cell.task}${cell.detail !== "" ? `${DETAIL_PREFIX}${secondary(cell.detail)}` : ""}`;
+  }
+  const name = `${nameCell(cell, columns.name)}${" ".repeat(
+    Math.max(0, columns.name - Math.min(nameCellWidth(cell), columns.name))
+  )}`;
+  const task = `${clipToWidth(cell.task, columns.task, "…")}${" ".repeat(
+    Math.max(0, columns.task - Math.min(visibleWidth(cell.task), columns.task))
+  )}`;
+  // 决策 489：概要（等待什么、失败原因或最后一条回复的开头）用暗色，与任务那一段分开
+  const detail = cell.detail !== "" ? `${DETAIL_PREFIX}${secondary(cell.detail)}` : "";
+  return `${name}${" ".repeat(COLUMN_GAP)}${task}${detail}`.trimEnd();
 }
 
 export interface SessionPanelSourceView {
@@ -59,11 +143,9 @@ export interface SessionPanelSourceView {
   main?(): PooledSessionCard | undefined;
 }
 
-// 决策 458：当前会话那张卡：名字后标 current，状态写在卡里（它不在分组里）
-export function currentSessionCardText(card: PooledSessionCard): string {
-  const [name, ...rest] = sessionCardText(card).split("  ");
-  const state = card.cancelling === true ? "cancelling" : GROUP_LABEL[card.state];
-  return [`${name} ${secondary("current")} · ${state}`, ...rest].join("  ");
+// 决策 458、489：当前会话的卡——状态由分组表达，这里只多一个临时标签 current（它照旧落在自己的状态组里）
+export function currentSessionCardText(card: PooledSessionCard, columns?: CardColumns): string {
+  return sessionCardText(card, ["current"], columns);
 }
 
 export class SessionPanel implements Component {
@@ -78,16 +160,17 @@ export class SessionPanel implements Component {
     this.source = source;
   }
 
-  // 本窗口派出的会话，按状态分组
+  // 本窗口派出的会话与当前会话一起按状态分组（决策 489：当前会话落在自己的状态组里、排在该组最前）
   private grouped(): PooledSessionCard[] {
     const cards = this.source.cards();
-    return GROUPS.flatMap((state) => cards.filter((card) => card.state === state));
+    const main = this.source.main?.();
+    const all = main !== undefined ? [main, ...cards] : cards;
+    return GROUPS.flatMap((state) => all.filter((card) => card.state === state));
   }
 
-  // 按分组顺序排好的卡片（与渲染同序）；当前会话在最前
+  // 按分组顺序排好的卡片（与渲染同序）
   private ordered(): PooledSessionCard[] {
-    const main = this.source.main?.();
-    return [...(main !== undefined ? [main] : []), ...this.grouped()];
+    return this.grouped();
   }
 
   // 决策 458：选中的是不是当前窗口的主会话
@@ -101,6 +184,8 @@ export class SessionPanel implements Component {
       cards.find((card) => card.id === this.selectedId) ??
       // 会话号变了（准备中的会话开好）按名字找回；当前会话那张卡不按名字认（它可能与面板会话同名）
       cards.find((card) => card.name === this.selectedName && !this.isMain(card)) ??
+      // 决策 470：还没选过时落在当前会话那张卡上（它现在按状态落在组里，不再排在最前）
+      this.source.main?.() ??
       cards[0]
     );
   }
@@ -154,6 +239,7 @@ export class SessionPanel implements Component {
   invalidate(): void {}
 
   render(width: number): string[] {
+    const main = this.source.main?.();
     const lines = [clipToWidth(SESSION_PANEL_HEADER, width)];
     const cards = this.ordered();
     const selected = this.selected();
@@ -162,27 +248,21 @@ export class SessionPanel implements Component {
     }
     const body: string[] = [];
     let cursorLine = 0;
-    const main = this.source.main?.();
-    if (main !== undefined) {
-      body.push(clipToWidth("  current", width));
-      if (main.id === selected?.id) cursorLine = body.length;
-      body.push(
-        clipToWidth(
-          ` ${main.id === selected?.id ? ">" : " "}   ${currentSessionCardText(main)}`,
-          width
-        )
-      );
-    }
     const others = this.grouped();
+    // 决策 489：名字、任务、概要各占一列，列宽按本次要画的卡算（行首缩进 2 + 光标位与空格共 4 列）
+    const columns = cardColumns(
+      others.map((card) => ({ card, main: card.id === main?.id })),
+      Math.max(24, width - 4)
+    );
     for (const state of GROUPS) {
       const group = others.filter((card) => card.state === state);
       if (group.length === 0) continue;
       body.push(clipToWidth(`  ${GROUP_LABEL[state]} (${group.length})`, width));
       for (const card of group) {
         if (card.id === selected?.id) cursorLine = body.length;
-        body.push(
-          clipToWidth(` ${card.id === selected?.id ? ">" : " "}   ${sessionCardText(card)}`, width)
-        );
+        const text = sessionCardText(card, card.id === main?.id ? ["current"] : [], columns);
+        // 决策 489：组标题缩进 2，卡片的名字对齐在它下面一格；一行放不下即以 … 省略，不折行
+        body.push(clipToWidth(`  ${card.id === selected?.id ? ">" : " "} ${text}`, width, "…"));
       }
     }
     const peek =

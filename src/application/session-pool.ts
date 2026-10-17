@@ -40,6 +40,8 @@ export interface PooledSessionCard {
   worktree?: { path: string; branch: string };
   // 决策 459：不是 git 仓库时派出的会话与其他会话共用当前目录（没有工作树、不隔离）
   sharedDir?: boolean;
+  // 决策 489：共用目录的会话所用的工作区（展示写法）；卡上直接写它，不再写 "shared dir"
+  workspace?: string;
   // 当前会话那张卡：已请求中断、这一轮还没停下（卡上写 cancelling）
   cancelling?: boolean;
   // 决策 485：工作清单里本进程没开的会话（重启前留下的、别的进程开着的）
@@ -118,8 +120,10 @@ export interface LocalSessionPoolOptions<Live> {
   now?: () => number;
   // 关掉时整体的时限（缺省 15 秒）
   closeTimeoutMs?: number;
-  // 决策 459：派出的会话共用当前目录（不是 git 仓库）；派出时判定，卡片上标明
+  // 决策 459：派出的会话共用当前目录（不是 git 仓库）；派出时判定，卡片上写它用的工作区（决策 489）
   sharedDir?: () => boolean;
+  // 决策 489：共用目录的会话在卡上写出来的工作区（展示用的写法，如 `~` 缩写）；缺省退回 "shared dir"
+  sharedWorkspace?: () => string | undefined;
 }
 
 const STATE_ORDER: Record<PooledSessionState, number> = {
@@ -304,6 +308,9 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
     this.#seq += 1;
     const name = `s${this.#seq}`;
     const now = this.#now();
+    // 决策 489：共用目录的会话把工作区直接写在卡上
+    const shared = this.#options.sharedDir?.() === true;
+    const workspace = shared ? this.#options.sharedWorkspace?.() : undefined;
     const entry: Entry<Live> = {
       card: {
         id: `pending:${name}`,
@@ -311,7 +318,8 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
         state: "preparing",
         task: text,
         summary: "",
-        ...(this.#options.sharedDir?.() === true ? { sharedDir: true } : {}),
+        ...(shared ? { sharedDir: true } : {}),
+        ...(workspace !== undefined ? { workspace } : {}),
         startedAt: now,
         updatedAt: now,
       },

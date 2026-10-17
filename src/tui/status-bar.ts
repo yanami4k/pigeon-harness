@@ -67,10 +67,10 @@ export function statusBarText(state: StatusBarState, width: number): string {
   return clipToWidth(build(true), width);
 }
 
-// 按显示宽度硬截（不补省略号、不补空格）；编排面板与树形视图同样用它。决策 439：改用 pi-tui 的 truncateToWidth
-//（逐字形累加再量宽度的旧写法在长串上是二次方开销）
-export function clipToWidth(text: string, width: number): string {
-  const out = truncateToWidth(text, Math.max(0, width), "");
+// 按显示宽度截断；缺省硬截（不补省略号、不补空格），编排面板与树形视图同样用它。决策 439：改用 pi-tui 的 truncateToWidth
+//（逐字形累加再量宽度的旧写法在长串上是二次方开销）。决策 489：会话面板的卡片传 "…"，超出即省略
+export function clipToWidth(text: string, width: number, ellipsis = ""): string {
+  const out = truncateToWidth(text, Math.max(0, width), ellipsis);
   // 截断时它在末尾补一个样式复位；原文本没有控制序列时去掉，保持"不带任何控制序列"
   const reset = "\x1b[0m";
   return !text.includes("\x1b") && out.endsWith(reset) ? out.slice(0, -reset.length) : out;

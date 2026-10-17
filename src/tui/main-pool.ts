@@ -9,6 +9,7 @@
 // 会话是同一种；进入面板里的会话即与当前会话换手。审批的来源标记、要叫醒时找谁、打转检测挂在哪，都按会话核此刻是不是当前
 // 会话走：当前会话的审批照直上审批区、叫醒交给壳；面板里的写明来源、卡片标等待回应、叫醒交给会话池。
 import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import type { AgentTypeCatalog } from "../application/agent-types.ts";
 import type { EnterWorktreeSlot } from "../application/enter-worktree-tool.ts";
 import { summarizeArgs } from "../application/format.ts";
@@ -61,6 +62,7 @@ import {
 } from "../state/settings.ts";
 import { worktreeBaseModeOf } from "../state/worktree-config.ts";
 import type { ApprovalModeControl, TuiPoolFace, TuiRuntimeFace } from "./shell.ts";
+import { tildePath } from "./welcome.ts";
 
 export interface SessionPoolContext {
   governanceRoot: string;
@@ -553,8 +555,12 @@ export function createSessionPool(context: SessionPoolContext): {
       settings: context.settings(),
     };
   const sharedDir = (): boolean => !isGitWorkspace(target().governanceRoot);
+  // 决策 489：共用目录的会话在卡上写它用的工作区（`~` 缩写；与欢迎头、/resume 列表同一写法）
+  const sharedWorkspace = (): string =>
+    tildePath(target().governanceRoot, context.homeDir ?? homedir());
   const pool = new LocalSessionPool<PooledLive>({
     sharedDir,
+    sharedWorkspace,
     open: async ({ name, task, hooks, sharedDir: shared }) => {
       const sessionId = newSessionId();
       const spawnedIn = target();

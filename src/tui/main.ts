@@ -1193,6 +1193,8 @@ export async function main(argv: string[]): Promise<void> {
           ? { worktree: { path: core.worktree.path, branch: core.worktree.branch } }
           : {}),
         ...(core.sharedDir === true ? { sharedDir: true } : {}),
+        // 决策 489：共用目录的会话在卡上写它用的工作区
+        ...(core.sharedDir === true ? { workspace: tildePath(core.workspaceRoot, homedir()) } : {}),
       },
       {
         ...(handOff.inflight !== undefined ? { inflight: handOff.inflight } : {}),

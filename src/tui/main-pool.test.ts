@@ -338,6 +338,9 @@ test("决策 459：不是 git 仓库时，派出的会话在当前目录里干�
   cleanups.push(() => pool.closeAll());
   const card = await pool.spawn("建一个文件");
   assert.equal(card.sharedDir, true);
+  // 决策 489：共用目录的会话在卡上直接写它用的工作区
+  assert.equal(typeof card.workspace, "string");
+  assert.notEqual(card.workspace, "");
   await until(() => pool.list()[0]?.state === "idle", "跑完空闲");
   const opened = pool.list()[0];
   assert.equal(opened?.worktree, undefined, "没有工作树");
