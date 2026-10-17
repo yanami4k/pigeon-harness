@@ -54,10 +54,10 @@ export const PIGEON_KEYBINDINGS = {
     defaultKeys: "ctrl+r",
     description: "Rename the selected session (resume list)",
   },
-  // 决策 469：在询问与放手两种审批模式之间切换（只对当前会话）
+  // 决策 469、487：在询问与放手两种审批模式之间切换（只对当前会话；放手档在状态栏里显示 auto）
   "pigeon.toggleMode": {
     defaultKeys: "shift+tab",
-    description: "Switch the approval mode (ask / yolo)",
+    description: "Switch the approval mode (ask / auto)",
   },
   "pigeon.dequeue": {
     defaultKeys: ["alt+up", "alt+q"],

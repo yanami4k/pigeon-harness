@@ -918,6 +918,41 @@ export async function main(argv: string[]): Promise<void> {
     // 旧运行面不受影响，壳继续留在原会话
     // 沙箱会话里不提供换绑（命令给出原因）
     ...(sandbox !== undefined ? {} : { resume: resumeOptions() }),
+    // 决策 488：/new 开一个新会话——工作区与治理根跟当前会话所在的项目，沿用当前的审批模式；
+    // 当前会话还在干活就退到面板接着跑，闲着的关掉（与 /resume 换走时同一套）
+    newSession: {
+      create: async () => {
+        if (worktreeSwitch.pending()) throw new Error("can't switch sessions right now");
+        const previous = current;
+        const root = previous.governanceRoot;
+        const id = newSessionId();
+        const next = newCore(
+          id,
+          root,
+          previous.workspaceRoot,
+          previous.modeCell.current,
+          previous.settings
+        );
+        // 决策 432：新会话等第一次真要落盘时才建会话文件
+        next.opened = await openCore(next, { deferSessionFile: true });
+        // 决策 350：换走旧会话之前先等它未完成的快照拍完（新会话在同一工作区上接着改文件）
+        await previous.opened?.checkpoints?.settle();
+        // 决策 484：还在干活（这一轮没完，或它的子 agent 在跑）就退到面板接着跑
+        const working =
+          shell.isRunning() ||
+          (agentHub !== undefined && agentHub.busyUnder(previous.sessionId) > 0);
+        if (working) {
+          retireToPanel(previous, shell.handOff());
+        } else {
+          await closeCore(coreContext, previous, { reason: "switch", cleanWorktree: false });
+        }
+        current = next;
+        next.current = true;
+        followCurrent();
+        attachCoreRuntime(coreContext, next);
+        return { sessionId: id, binding: bindingOf(next) };
+      },
+    },
     // 决策 340、484：/reload 重读设置，新快照自下一轮起生效：当前会话马上重建，面板里的会话空闲时重建
     // 决策 485：当前会话所在的项目照 /reload 的确认流程；别的项目的会话各按自己项目重读（新的没确认过的条目在界面里确认）
     reload: createSettingsReloader({

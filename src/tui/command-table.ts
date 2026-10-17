@@ -32,6 +32,13 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     whileRunning: { allow: true },
     scope: "session",
   },
+  // 决策 488：开一个新会话，当前会话还在干活时退到面板接着跑；工作区跟当前会话所在的项目
+  {
+    name: "new",
+    usage: "/new",
+    whileRunning: { allow: true },
+    scope: "session",
+  },
   {
     name: "grants",
     usage: "/grants",

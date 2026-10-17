@@ -59,6 +59,8 @@ export interface CommandsHost {
   // M7（决策 079）：/fork 手动分叉，交回给人看的一行（缺省 = 不可用）
   readonly forkCommand?: ((args: string) => Promise<string>) | undefined;
   resumeCommand(arg: string | undefined): void;
+  // 决策 488：/new 开一个新会话（当前会话还在干活时退到面板接着跑）；缺省 = /new 不可用
+  readonly newSessionCommand?: (() => void) | undefined;
   compactCommand(focus: string | undefined): void;
   // 决策 340：/reload 重读设置（装配方给了重载入口才在场）
   readonly reloadCommand?: ((args: readonly string[]) => void) | undefined;
@@ -260,6 +262,15 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
     // 决策 340：/reload 重读设置（结果与待确认条目写进消息区）
     if (tokens[0] === "reload" && host.reloadCommand !== undefined) {
       host.reloadCommand(tokens.slice(1));
+      return;
+    }
+    // 决策 488：/new 开一个新会话；工作区跟当前会话所在的项目，不带参数
+    if (tokens[0] === "new" && host.newSessionCommand !== undefined) {
+      if (tokens.length > 1) {
+        host.addSystem("usage: /new");
+        return;
+      }
+      host.newSessionCommand();
       return;
     }
     // S4：/resume <sessionId> 冷恢复对账 + 换绑续跑（异步流程，见 resume-view.ts）

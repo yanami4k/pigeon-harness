@@ -37,7 +37,7 @@ function makeShell(control?: ApprovalModeControl) {
   };
 }
 
-test("状态栏最前面写模式；Shift+Tab 切换当场生效，yolo 醒目、ask 暗色", async () => {
+test("状态栏最前面写模式；Shift+Tab 切换当场生效，放手档显示 auto 且醒目、ask 暗色", async () => {
   const changes: string[] = [];
   let mode: "prompt" | "yolo" = "prompt";
   const control: ApprovalModeControl = {
@@ -54,9 +54,9 @@ test("状态栏最前面写模式；Shift+Tab 切换当场生效，yolo 醒目�
     term.writes.length = 0;
     term.input(SHIFT_TAB);
     await settle();
-    assert.equal(bar(), "yolo · ctx 23% (46k/200k) · 0 tokens");
+    assert.equal(bar(), "auto · ctx 23% (46k/200k) · 0 tokens");
     assert.deepEqual(changes, ["prompt->yolo"]);
-    assert.ok(term.writes.join("").includes("\x1b[31myolo\x1b[39m"), "yolo 醒目");
+    assert.ok(term.writes.join("").includes("\x1b[31mauto\x1b[39m"), "auto 醒目");
     term.input(SHIFT_TAB);
     await settle();
     assert.equal(bar(), "ask · ctx 23% (46k/200k) · 0 tokens");
@@ -95,7 +95,7 @@ test("审批挂着时 Shift+Tab 归审批：不切换、不替人回答", async 
     term.input(SHIFT_TAB);
     await settle();
     assert.equal(mode, "yolo");
-    assert.match(bar(), /^yolo · /);
+    assert.match(bar(), /^auto · /);
   } finally {
     cleanup();
   }

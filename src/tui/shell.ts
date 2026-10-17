@@ -49,7 +49,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { compactionNoticeText, manualCompactionText } from "../application/compaction-text.ts";
 import { type ConfigItemView, parseConfigAssignment } from "../application/config-options.ts";
-import { plural, workEndLine } from "../application/format.ts";
+import { failureLine, plural, workEndLine } from "../application/format.ts";
 import { loadSessionHistory } from "../application/history.ts";
 import type { HookEventReport } from "../application/hooks.ts";
 import type { PromptHistoryStore } from "../application/prompt-history.ts";
@@ -195,6 +195,9 @@ export interface TuiShellOptions {
   // rebind 由装配方注入：对账收口后按目标 sessionId 重建运行面（restoredGrants 种子）
   // 并释放旧运行面；缺省 = /resume 不可用
   resume?: ResumeOptions<TuiSessionBinding>;
+  // 决策 488：/new 开一个新会话——装配方建好新会话核，交出它的会话号与换绑产物（工作区跟当前会话所在的项目）；
+  // 缺省 = /new 不可用
+  newSession?: { create: () => Promise<{ sessionId: SessionId; binding: TuiSessionBinding }> };
   // 决策 340：/reload 重读设置——返回给人看的行（装配方实现：重读、确认、换上新快照并重建运行面）
   reload?: (args: readonly string[]) => Promise<string[]>;
   // S5+（裁决 033）：优雅退出回调——双击 Ctrl+C / /quit 触发；壳先 stop() 再回调。
@@ -2583,6 +2586,46 @@ export class PigeonTuiShell
     dispatchResumeCommand(this, arg);
   }
 
+  // 决策 488：/new——开一个新会话并换过去；当前会话还在干活时退到面板接着跑（装配方在 create 里做这件事）
+  newSessionConfigured(): boolean {
+    return this.options.newSession !== undefined;
+  }
+
+  newSessionCommand(): void {
+    // 决策 484：换会话与 /resume、进入面板里的会话同一道守卫（收尾、回退、重读设置、压缩进行中不给换）
+    const blocked = this.handOffBlocked();
+    if (blocked !== undefined) {
+      this.flow.addSystem(blocked);
+      return;
+    }
+    const create = this.options.newSession?.create;
+    if (create === undefined) {
+      this.flow.addSystem("/new is not available in this session");
+      return;
+    }
+    // 换手期间与 /resume 同样占住输入
+    this.setResuming(true);
+    this.updateStatus();
+    this.render();
+    const finish = (error?: unknown): void => {
+      this.setResuming(false);
+      if (error !== undefined) this.flow.addAlert(failureLine("new", error));
+      this.updateStatus();
+      this.render();
+    };
+    void create().then(
+      (created) => {
+        // 新会话的 SessionStart 按 startup（不是续跑），花费从零起算
+        this.rebindSession(created.sessionId, created.binding, {
+          source: "startup",
+          resumed: false,
+        });
+        finish();
+      },
+      (error: unknown) => finish(error)
+    );
+  }
+
   // 决策 340：/reload——重读期间与 Run 同样占住输入；结果逐行写进消息区
   get reloadCommand(): ((args: readonly string[]) => void) | undefined {
     const reload = this.options.reload;
@@ -2765,7 +2808,11 @@ export class PigeonTuiShell
 
   // 换绑（S4）：会话上下文一体替换（sessionId + 运行面 + 治理上下文），chrome 标题跟进，
   // 运行面订阅先退旧再订新；消息区内容保留（对账报告与重建说明是恢复的证据链呈现）
-  rebindSession(sessionId: SessionId, binding: TuiSessionBinding): void {
+  rebindSession(
+    sessionId: SessionId,
+    binding: TuiSessionBinding,
+    options: { source?: "startup" | "resume"; resumed?: boolean } = {}
+  ): void {
     // 决策 458：换到别的会话时当前会话卡的摘要（首条输入、最近回复、偷看）从新会话重新记（随后画的历史一并记下）
     if (sessionId !== this.current.sessionId) this.flow.resetDigest();
     this.current = {
@@ -2778,14 +2825,15 @@ export class PigeonTuiShell
     this.followWorkspace(binding);
     // 先换会话面再切视图（切视图时按新会话重画）
     this.showView("main");
-    // 决策 323、324：换到新会话——SessionStart（source "resume"）补的上下文归新会话；
+    // 决策 323、324：换到新会话——SessionStart（缺省 source "resume"；决策 488 的 /new 用 "startup"）补的上下文归新会话；
     // 旧会话的 SessionEnd 由装配方在释放旧运行面前跑
-    void this.beginSession("resume");
+    void this.beginSession(options.source ?? "resume");
     this.activeRunId = null;
     // S5：落盘失败警告计数随运行面一起换绑——新面的 listenerErrors 从零起算
     this.reportedListenerErrors = 0;
     this.bindRuntime(binding.runtime);
-    this.resetCosts(sessionId, true);
+    // 决策 488：/new 的新会话从零起算（不按会话记录累计）
+    this.resetCosts(sessionId, options.resumed ?? true);
     this.tui.requestRender();
   }
 
