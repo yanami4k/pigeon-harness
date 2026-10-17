@@ -935,6 +935,8 @@ export async function main(argv: string[]): Promise<void> {
         );
         // 决策 432：新会话等第一次真要落盘时才建会话文件
         next.opened = await openCore(next, { deferSessionFile: true });
+        // 决策 456：会话名（还没改过即缺省名——面板卡片、/take 的说明与 trace 都用它）
+        next.name = sessionNameOf(root, id, next.workspaceRoot);
         // 决策 350：换走旧会话之前先等它未完成的快照拍完（新会话在同一工作区上接着改文件）
         await previous.opened?.checkpoints?.settle();
         // 决策 484：还在干活（这一轮没完，或它的子 agent 在跑）就退到面板接着跑
