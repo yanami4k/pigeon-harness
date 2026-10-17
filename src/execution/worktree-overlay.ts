@@ -1,4 +1,4 @@
-// 工作树改动叠回（决策 279；起初给 worker，决策 457 起给会话面板里会话的 /take）：只取工作树相对起点快照自己的改动，
+// 工作树改动叠回（决策 279；起初给 worker，决策 457 起给会话面板里会话的 /take，决策 486 起也给模型的 take_changes）：只取工作树相对起点快照自己的改动，
 // 以快照里的版本为共同祖先逐文件三方合并，写进主工作目录。下文的"worker"指被取回改动的那个工作树。
 // 硬性规则：
 //   ① 只写入 worker 改过的文件，worker 没碰的文件一律不动；
@@ -33,6 +33,8 @@ export interface OverlayInput {
   worktreePath: string;
   // 决策 381：worker 新建的未跟踪文件的上限（缺省取产品缺省），过大的不叠回
   limits?: UntrackedLimits;
+  // 决策 486：这些路径（仓库内相对路径，正斜杠）不叠回，列进 excluded（take_changes 不写受保护的 .pigeon/）
+  exclude?: (path: string) => boolean;
 }
 
 export interface OverlayResult {
@@ -46,6 +48,8 @@ export interface OverlayResult {
   deletedInWorktree: string[];
   // 决策 381：worker 新建却因过大没写进树、因而没叠回的文件；没有即缺省
   skipped?: SkippedFile[];
+  // 决策 486：按 exclude 没叠回的文件；没有即缺省
+  excluded?: string[];
 }
 
 // 列表类命令在大仓库里输出可达数十 MiB
@@ -147,7 +151,10 @@ function workerChanges(input: OverlayInput): {
 }
 
 export function overlayWorktreeChanges(input: OverlayInput): OverlayResult {
-  const { top, base, workerTree, changes, skipped } = workerChanges(input);
+  const { top, base, workerTree, changes: all, skipped } = workerChanges(input);
+  const exclude = input.exclude;
+  const excluded = exclude !== undefined ? all.filter((change) => exclude(change.path)) : [];
+  const changes = excluded.length > 0 ? all.filter((change) => !excluded.includes(change)) : all;
   const topResolved = resolve(top);
   const result: OverlayResult = {
     applied: [],
@@ -155,6 +162,7 @@ export function overlayWorktreeChanges(input: OverlayInput): OverlayResult {
     conflicts: [],
     deletedInWorktree: [],
     ...(skipped.length > 0 ? { skipped } : {}),
+    ...(excluded.length > 0 ? { excluded: excluded.map((change) => change.path) } : {}),
   };
   const scratch = mkdtempSync(join(tmpdir(), "pigeon-overlay-"));
   try {
@@ -181,6 +189,7 @@ function sorted(result: OverlayResult): OverlayResult {
     conflicts: [...result.conflicts].sort(),
     deletedInWorktree: [...result.deletedInWorktree].sort(),
     ...(result.skipped !== undefined ? { skipped: result.skipped } : {}),
+    ...(result.excluded !== undefined ? { excluded: [...result.excluded].sort() } : {}),
   };
 }
 

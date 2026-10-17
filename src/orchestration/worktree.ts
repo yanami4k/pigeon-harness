@@ -405,7 +405,12 @@ export function deleteBranch(input: { repoRoot: string; branch: string }): void 
   assertBranchTail(tail);
   runGit(input.repoRoot, ["branch", "-D", input.branch]);
   runGit(input.repoRoot, ["update-ref", "-d", worktreeStartRefFor(tail)]);
+  // 决策 486：子 agent 工作树完整取回后前移的起点（refs/pigeon/agent/<tail>）一并删
+  runGit(input.repoRoot, ["update-ref", "-d", `${TAKE_BASE_REF_ROOT}agent/${tail}`]);
 }
+
+// 决策 483、486：完整取回后前移的起点挂在这下面（panel/<工作树名>、agent/<分支名去掉 pigeon/>），删分支时一并删
+const TAKE_BASE_REF_ROOT = "refs/pigeon/";
 
 // 决策 448：删一个工作树连同它的分支。目录在不在都按登记删（目录已被手删的只删登记），不跟随链接；分支已不在不算失败；
 // pigeon/ 下的分支连起点引用一并删（deleteBranch），其余（独立工作树的等）只删分支
@@ -427,6 +432,13 @@ export function removeWorktreeAndBranch(input: {
     deleteBranch({ repoRoot: input.repoRoot, branch });
   } else {
     runGit(input.repoRoot, ["branch", "-D", branch]);
+    // 面板会话的独立工作树（pigeon-wt/<名字>）：取回起点引用一并删
+    if (branch.startsWith("pigeon-wt/")) {
+      const name = branch.slice("pigeon-wt/".length);
+      if (BRANCH_TAIL.test(name)) {
+        runGit(input.repoRoot, ["update-ref", "-d", `${TAKE_BASE_REF_ROOT}panel/${name}`]);
+      }
+    }
   }
 }
 

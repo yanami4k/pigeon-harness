@@ -7,11 +7,13 @@
 import { existsSync } from "node:fs";
 import {
   deleteSnapshotRef,
+  readSnapshotRef,
   SNAPSHOT_REF_ROOT,
   snapshotWorkdir,
   workdirMatches,
 } from "../execution/workdir-snapshot.ts";
 import { type OverlayResult, overlayWorktreeChanges } from "../execution/worktree-overlay.ts";
+import { isPigeonRel } from "../state/paths.ts";
 import { isStatusMessage } from "../state/status-text.ts";
 import { plural } from "./format.ts";
 import { humanInputText } from "./rewind.ts";
@@ -650,16 +652,20 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
 
   // 决策 486：取回到给定的落点（take_changes）；不给即主工作目录（/take）
   takeInto(id: string, into?: { workspace: string; root: string }): string {
+    // 决策 486：模型取（给了落点）的出错作工具错误交回
+    const refuse = (text: string) => (into !== undefined ? `Error: ${text}` : text);
     const entry = this.#entries.get(id);
-    if (entry === undefined) return "no such session";
-    if (entry.closed === true) return `session ${entry.card.name} is stopped`;
-    if (entry.runtime === undefined) return `session ${entry.card.name} is still starting`;
+    if (entry === undefined) return refuse("no such session");
+    if (entry.closed === true) return refuse(`session ${entry.card.name} is stopped`);
+    if (entry.runtime === undefined) {
+      return refuse(`session ${entry.card.name} is still starting`);
+    }
     if (
       entry.inflight !== undefined ||
       entry.exclusive !== undefined ||
       entry.runtime.isRunning()
     ) {
-      return `can't take while ${entry.card.name} is running`;
+      return refuse(`can't take while ${entry.card.name} is running`);
     }
     // 决策 483：停下的会话运行面还开着，照样取（起点前移，工作树留着；去掉时看取回之后还有没有改动）
     return entry.runtime.take?.(into) ?? "session has no worktree";
@@ -709,16 +715,23 @@ export function takePooledChanges(input: {
   repoRoot: string;
   base: string | undefined;
   worktreePath: string;
-}): { text: string; complete: boolean } {
+  // 决策 486：模型取回（take_changes）不写受保护的 .pigeon/（只列出）
+  protectPigeon?: boolean;
+}): { text: string; complete: boolean; error?: boolean } {
   const label = input.label ?? "session";
   if (!existsSync(input.worktreePath)) {
     return {
       text: `worktree of ${label} ${input.name} is gone (${input.worktreePath})`,
       complete: false,
+      error: true,
     };
   }
   if (input.base === undefined) {
-    return { text: `worktree of ${label} ${input.name} has no base recorded`, complete: false };
+    return {
+      text: `worktree of ${label} ${input.name} has no base recorded`,
+      complete: false,
+      error: true,
+    };
   }
   let result: OverlayResult;
   try {
@@ -726,11 +739,13 @@ export function takePooledChanges(input: {
       repoRoot: input.repoRoot,
       base: input.base,
       worktreePath: input.worktreePath,
+      ...(input.protectPigeon === true ? { exclude: isPigeonRel } : {}),
     });
   } catch (error) {
     return {
       text: `taking changes from ${label} ${input.name} failed: ${error instanceof Error ? error.message : String(error)}`,
       complete: false,
+      error: true,
     };
   }
   const lines: string[] = [];
@@ -750,7 +765,11 @@ export function takePooledChanges(input: {
       `too large, not taken: ${(result.skipped ?? []).map((item) => item.path).join(", ")}`
     );
   }
+  if ((result.excluded?.length ?? 0) > 0) {
+    lines.push(`protected, not taken: ${(result.excluded ?? []).join(", ")}`);
+  }
   const complete =
+    (result.excluded?.length ?? 0) === 0 &&
     result.conflicts.length === 0 &&
     result.deletedInWorktree.length === 0 &&
     (result.skipped?.length ?? 0) === 0;
@@ -773,8 +792,17 @@ export function advanceTakeBase(
   }).commit;
 }
 
-function takeBaseRef(worktreeName: string, scope: "panel" | "agent"): string {
+export function takeBaseRef(worktreeName: string, scope: "panel" | "agent"): string {
   return `${SNAPSHOT_REF_ROOT}${scope}/${worktreeName}`;
+}
+
+// 决策 486：上次完整取回后前移的起点（钉在引用上，跨重启与续接）；没有即 undefined
+export function readTakeBase(
+  repoPath: string,
+  worktreeName: string,
+  scope: "panel" | "agent"
+): string | undefined {
+  return readSnapshotRef(repoPath, takeBaseRef(worktreeName, scope));
 }
 
 // 从面板去掉时：上次完整取回之后工作树再没有改动（取回的就是全部）

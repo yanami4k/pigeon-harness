@@ -33,6 +33,7 @@ import {
   LocalSessionPool,
   type PooledHooks,
   type PooledRuntime,
+  readTakeBase,
   takePooledChanges,
   unchangedSinceTake,
 } from "../application/session-pool.ts";
@@ -362,6 +363,17 @@ export function setCoreRole(
   );
 }
 
+// /take 完整取回后前移的起点：本进程记下的，没有即钉在引用上的（重启、从工作清单开起来的）
+function takenBaseOf(core: SessionCore): string | undefined {
+  const worktree = core.worktree;
+  if (core.takeBase !== undefined || worktree === undefined) return core.takeBase;
+  try {
+    return readTakeBase(worktree.path, worktree.name, "panel");
+  } catch {
+    return undefined;
+  }
+}
+
 // 决策 484：释放一个会话核（面板里去掉、关掉 Pigeon、/resume 换走闲着的当前会话）：注销通讯录（它派出的子 agent 一并停下）、
 // 跑 SessionEnd、释放运行面与在用锁。cleanWorktree：按有没有改动清理它的工作树（不问；当前会话退出时由入口另问）
 export async function closeCore(
@@ -389,8 +401,8 @@ export async function closeCore(
   const worktree = core.worktree;
   if (worktree !== undefined && options.cleanWorktree) {
     // 完整取回过、之后再没有改动的同样算没有改动（删工作树与分支）
-    const taken =
-      core.takeBase !== undefined && core.takeBase !== worktree.base ? core.takeBase : undefined;
+    const recorded = takenBaseOf(core);
+    const taken = recorded !== undefined && recorded !== worktree.base ? recorded : undefined;
     await closeNamedWorktree(worktree, {
       write: sayOf(context, core),
       // 本进程里别的会话还在这个工作树里（它已放下自己的在用锁）同样算开着
@@ -491,27 +503,33 @@ export function pooledRuntimeOf(
     },
     take: (into) => {
       const worktree = core.worktree;
+      // 决策 486：模型取（take_changes）的出错作工具错误交回
+      const refuse = (text: string) => (into !== undefined ? `Error: ${text}` : text);
       // 决策 459：共用目录的会话没有工作树，改动已直接在目录里
-      if (worktree === undefined) return `${core.name} has no worktree; nothing to take`;
+      if (worktree === undefined) return refuse(`${core.name} has no worktree; nothing to take`);
       // 决策 485：别的仓库里的会话不取；决策 486：take_changes 取回到调用方自己的工作目录
       const landingRoot = into?.root ?? context.currentRoot?.();
       const landing = into?.workspace ?? context.mainWorkspace();
       if (landingRoot !== undefined && !sameDir(landingRoot, core.governanceRoot)) {
-        return `${core.name} is in another repository; nothing to take`;
+        return refuse(`${core.name} is in another repository; nothing to take`);
       }
       // 取回的落点就是这个工作树（进了它的工作树）：自己叠自己，拒绝
       if (sameDir(landing, worktree.path)) {
         return into !== undefined
-          ? `you are working in ${core.name}'s worktree; nothing to take`
+          ? refuse(`you are working in ${core.name}'s worktree; nothing to take`)
           : `the current session is in ${core.name}'s worktree; nothing to take`;
       }
+      // 起点：上次 /take 完整取回后前移的（钉在引用上，重启后照样认）
       const result = takePooledChanges({
         name: core.name,
         repoRoot: landing,
-        base: core.takeBase ?? worktree.base,
+        base: takenBaseOf(core) ?? worktree.base,
         worktreePath: worktree.path,
+        ...(into !== undefined ? { protectPigeon: true } : {}),
       });
-      if (!result.complete) return result.text;
+      if (result.error === true) return refuse(result.text);
+      // 决策 486：模型取回到别处时起点不前移（起点是给人的 /take 与去掉时的清理用的）
+      if (!result.complete || into !== undefined) return result.text;
       // 起点前移到取回时的样子，下次只取之后的改动
       try {
         core.takeBase = advanceTakeBase(worktree.path, worktree.name);

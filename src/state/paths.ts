@@ -46,6 +46,11 @@ export function userPigeonRel(...segments: string[]): string {
   return ["~", PIGEON_DIR, ...segments].join("/");
 }
 
+// 决策 486：仓库相对写法（正斜杠）是不是 Pigeon 自己的目录本身或它下面——取回时不写这类路径
+export function isPigeonRel(rel: string): boolean {
+  return rel === PIGEON_DIR || rel.startsWith(`${PIGEON_DIR}/`);
+}
+
 // ---- 项目级 ----
 
 export function projectPigeonDir(root: string): string {

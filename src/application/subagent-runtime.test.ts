@@ -35,6 +35,7 @@ import { openSessionRuntime } from "./session-runtime.ts";
 import { agentMessageEntry } from "./session-store.ts";
 import { createSubagentOpener, restoredAgentsOf } from "./subagent-runtime.ts";
 import { AGENT_TRUST_SENTENCE, AgentHub, type AgentToolsHost } from "./subagents.ts";
+import { takeFromAgent } from "./take-changes.ts";
 
 const noMcp = async (): Promise<McpSession> => ({
   tools: [],
@@ -507,4 +508,64 @@ test("决策 486：take_changes 按写档注册（ask 模式下审批；只读�
   const host = { canSpawn: () => false } as unknown as AgentToolsHost;
   const take = agentToolRegistrations(host).find((item) => item.name === TAKE_CHANGES_TOOL);
   assert.equal(take?.tier, "write");
+});
+
+test("决策 486：派出方有未提交改动时按起点快照引用取回；取回起点钉在引用上，从引用读回；派出方自己改过的块不被重新叠回", async () => {
+  const root = repo();
+  writeFileSync(join(root.dir, "a.txt"), "uncommitted\n");
+  const delivered: string[] = [];
+  const { streamFn } = routed(
+    [
+      {
+        text: "",
+        toolCalls: [
+          {
+            name: "spawn_agent",
+            args: { task: "write c.txt", worktree: true, background: false },
+            id: "s1",
+          },
+        ],
+      },
+      { text: "", toolCalls: [{ name: "take_changes", args: { name: "general-1" }, id: "t1" }] },
+      { text: "done" },
+    ],
+    [
+      { text: "", toolCalls: [{ name: "write_file", args: { path: "c.txt", content: "c\n" } }] },
+      { text: "wrote c.txt" },
+    ]
+  );
+  const { hub, sessionId, opened } = await openTop(root, streamFn, delivered);
+  try {
+    await opened.bundle.adapter.run("go");
+    const [writer] = hub.agentsOf(sessionId);
+    const wt = writer?.worktree;
+    assert.ok(wt !== undefined);
+    assert.equal(readFileSync(join(root.dir, "c.txt"), "utf8").replace(/\r\n/g, "\n"), "c\n");
+    assert.equal(
+      readFileSync(join(root.dir, "a.txt"), "utf8").replace(/\r\n/g, "\n"),
+      "uncommitted\n",
+      "派出方未提交的改动不受影响"
+    );
+    const tail = wt.branch.replace(/^pigeon\//, "");
+    const pinned = git(root.dir, [
+      "for-each-ref",
+      "--format=%(refname)",
+      `refs/pigeon/agent/${tail}`,
+    ]);
+    assert.match(pinned, /refs\/pigeon\/agent\//, "取回起点钉在引用上");
+    // 派出方撤掉取回来的文件：再取（起点从引用读回，已前移）不重新叠回
+    rmSync(join(root.dir, "c.txt"));
+    const again = takeFromAgent({
+      name: "general-1",
+      sessionId: writer?.sessionId,
+      workspace: wt.path,
+      into: root.dir,
+    });
+    assert.equal(again.text, "no changes to take from sub-agent general-1");
+    assert.equal(existsSync(join(root.dir, "c.txt")), false);
+  } finally {
+    await hub.close();
+    await disposeRuntime(opened.bundle).catch(() => {});
+    root.cleanup();
+  }
 });

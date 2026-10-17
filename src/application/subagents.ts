@@ -74,8 +74,10 @@ export interface SubagentRuntime {
   hasJobs?(): boolean;
   // 停掉它开的后台作业
   stopJobs?(): void;
-  // 关掉；interrupted 为干到一半（临时工作树一律保留）；takenBase 为完整取回后前移的起点（之后没再改即删，决策 486）
-  close(options?: { interrupted?: boolean; takenBase?: string }): Promise<void>;
+  // 关掉；interrupted 为干到一半（临时工作树一律保留）
+  close(options?: { interrupted?: boolean }): Promise<void>;
+  // 决策 486：派出时它临时工作树的起点（本进程派出的才有）
+  worktreeBase?(): string | undefined;
   // 决策 486：它的工作目录（在临时工作树里干活的即工作树；它取自己子 agent 的改动时作落点）
   workspaceRoot?(): string;
 }
@@ -207,9 +209,8 @@ export interface SubagentRecord extends AgentNode {
   opening?: Promise<SubagentRuntime>;
   error?: string;
   worktree?: { path: string; branch: string };
-  // 决策 486：续接认回时的工作目录（还没重开时取回用）；完整取回后前移的起点
+  // 决策 486：续接认回时的工作目录（还没重开时取回用）
   workspace?: string;
-  takeBase?: string;
   startedAt: number;
   updatedAt: number;
   // 在等它这一次干完的前台调用
@@ -480,17 +481,20 @@ export class AgentHub {
           : ""
       }`;
     }
-    if (this.#active(record) || record.activating === true) {
-      return `Error: ${name} is still working; take its changes after it finishes`;
-    }
+    // 它或它下面各层还在干活（在跑、收尾中、后台作业没收尾）：它们可能还在往工作树里写
+    const working = [record, ...this.#descendantsOf(record)].some(
+      (agent) =>
+        this.#active(agent) || agent.activating === true || agent.runtime?.hasJobs?.() === true
+    );
+    if (working) return `Error: ${name} is still working; take its changes after it finishes`;
+    const base = record.runtime?.worktreeBase?.();
     const taken = takeFromAgent({
       name: record.agentName,
       sessionId: record.sessionId,
       workspace: record.runtime?.workspaceRoot?.() ?? record.workspace,
+      ...(base !== undefined ? { base } : {}),
       into,
-      ...(record.takeBase !== undefined ? { takenBase: record.takeBase } : {}),
     });
-    if (taken.takenBase !== undefined) record.takeBase = taken.takenBase;
     return taken.error === true ? `Error: ${taken.text}` : taken.text;
   }
 
@@ -1012,9 +1016,7 @@ export class AgentHub {
     if (!this.#agents.includes(record)) return false;
     for (const agent of subtree) {
       this.#agents.splice(this.#agents.indexOf(agent), 1);
-      void agent.runtime
-        ?.close(agent.takeBase !== undefined ? { takenBase: agent.takeBase } : {})
-        .catch(() => {});
+      void agent.runtime?.close().catch(() => {});
     }
     this.#changed();
     return true;
@@ -1044,12 +1046,7 @@ export class AgentHub {
     // 释放也有上限：手上的工具调用等不到收尾的，到时不再等（运行面随进程或之后的收尾释放）
     const closed = Promise.all(
       agents.map((agent) =>
-        agent.runtime
-          ?.close({
-            interrupted: interrupted.has(agent),
-            ...(agent.takeBase !== undefined ? { takenBase: agent.takeBase } : {}),
-          })
-          .catch(() => {})
+        agent.runtime?.close({ interrupted: interrupted.has(agent) }).catch(() => {})
       )
     );
     await raceWithin(closed, SHUTDOWN_WAIT_MS);

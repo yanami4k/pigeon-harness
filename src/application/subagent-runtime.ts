@@ -25,6 +25,7 @@ import {
   agentWorktreeChanged,
   closeAgentWorktree,
   openAgentWorktree,
+  unchangedSinceLastTake,
 } from "./agent-worktree.ts";
 import { attachLoopGuard, LOOP_GUARD_TEXTS } from "./loop-guard.ts";
 import { describeMcpStartup, type McpSession, startMcpSession } from "./mcp.ts";
@@ -346,10 +347,12 @@ export function createSubagentOpener(base: SubagentOpenerBase): SubagentOpener {
       },
       ...(worktree !== undefined
         ? {
+            // 决策 486：完整取回之后再没有改动的不再报（没有可取的）
             settle: async () =>
-              agentWorktreeChanged(worktree)
+              agentWorktreeChanged(worktree) && !unchangedSinceLastTake(worktree)
                 ? { path: worktree.path, branch: worktree.branch }
                 : undefined,
+            worktreeBase: () => worktree.base,
           }
         : {}),
       // 决策 486：它的工作目录（取它自己子 agent 的改动时的落点）
@@ -359,7 +362,7 @@ export function createSubagentOpener(base: SubagentOpenerBase): SubagentOpener {
         contexts.delete(sessionId);
         await disposeRuntime(bundle).catch(() => {});
         if (worktree !== undefined) {
-          closeAgentWorktree(worktree, options?.interrupted === true, options?.takenBase);
+          closeAgentWorktree(worktree, options?.interrupted === true);
         }
         releaseResumed?.();
       },

@@ -362,3 +362,36 @@ test("决策 325：worker 改了仓库已跟踪的 .pigeon/settings.json——�
     rmSync(main, { recursive: true, force: true });
   }
 });
+
+test("决策 486：按 exclude 不叠回的路径列进 excluded，其余照叠（take_changes 不写受保护的 .pigeon/）", () => {
+  const main = realpathSync.native(mkdtempSync(join(tmpdir(), "pigeon-overlay-exclude-")));
+  try {
+    git(main, "init", "-q", "-b", "main");
+    git(main, "config", "user.email", "pigeon@example.invalid");
+    git(main, "config", "user.name", "pigeon-test");
+    git(main, "config", "core.autocrlf", "false");
+    mkdirSync(join(main, ".pigeon"));
+    writeFileSync(join(main, ".pigeon", ".gitignore"), "state/\nsettings.local.json\n");
+    writeFileSync(join(main, ".pigeon", "settings.json"), "{}\n");
+    writeFileSync(join(main, "a.txt"), "a\n");
+    git(main, "add", ".");
+    git(main, "commit", "-q", "-m", "init");
+    const snap = snapshotWorkdir({ repoRoot: main, ref: "refs/pigeon/worker-start/x" });
+    const worker = join(main, ".pigeon", "state", "worktrees", "s-x");
+    mkdirSync(join(main, ".pigeon", "state", "worktrees"), { recursive: true });
+    git(main, "worktree", "add", "-q", "-b", "pigeon/x", worker, snap.commit);
+    writeFileSync(join(worker, ".pigeon", "settings.json"), '{"commands":{}}\n');
+    writeFileSync(join(worker, "a.txt"), "changed\n");
+    const result = overlayWorktreeChanges({
+      repoRoot: main,
+      base: snap.commit,
+      worktreePath: worker,
+      exclude: (path) => path.startsWith(".pigeon/"),
+    });
+    assert.deepEqual(result.applied, ["a.txt"]);
+    assert.deepEqual(result.excluded, [".pigeon/settings.json"]);
+    assert.equal(readFileSync(join(main, ".pigeon", "settings.json"), "utf8"), "{}\n");
+  } finally {
+    rmSync(main, { recursive: true, force: true });
+  }
+});
