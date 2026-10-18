@@ -16,6 +16,8 @@ import {
   mainRepoRoot,
   removeWorktreeAndBranch,
   resolveCommit,
+  treesDirFor,
+  treesHomeOf,
   worktreePristine,
 } from "../orchestration/worktree.ts";
 import { ensureGlobalIgnoreRulesOnce } from "../persistence/global-ignore.ts";
@@ -208,15 +210,12 @@ export function resolveWorktreeBase(
 }
 
 // 决策 494：程序生成的名字撞了就让路——在 <名字>、<名字>-2… 里挑第一个目录与分支都不存在的
-export function availableWorktreeName(
-  repoRoot: string,
-  name: string,
-  // 工作树目录所在的根（子 agent 的树放在会话的治理根下）；缺省主仓库根（repoRoot 可以是仓库里的子目录）
-  dirRoot: string = mainRepoRoot(repoRoot)
-): string {
+// repoRoot 可以是仓库里的子目录（项目开在子目录里）：目录一律按主仓库根的 .pigeon/trees 查
+export function availableWorktreeName(repoRoot: string, name: string): string {
+  const dir = treesDirFor(repoRoot);
   for (let n = 1; n < 100; n += 1) {
     const candidate = n === 1 ? name : `${name}-${n}`;
-    if (existsSync(join(worktreesDirOf(dirRoot), candidate))) continue;
+    if (existsSync(join(dir, candidate))) continue;
     try {
       git(repoRoot, [
         "show-ref",
@@ -330,19 +329,22 @@ export function namedWorktreeRepoRoot(cwd: string): string {
   }
 }
 
-// 路径在本仓库的工作树里（.pigeon/trees/<名字> 之下）
-export function insideNamedWorktree(repoRoot: string, path: string): boolean {
-  const rel = relative(worktreesDirOf(repoRoot), resolve(path));
+// 路径在本仓库的工作树里（<主仓库根>/.pigeon/trees/<名字> 之下）；root 是项目根或主仓库根（决策 494：项目开在仓库子目录里时
+// 工作树同样在主仓库根下）
+export function insideNamedWorktree(root: string, path: string): boolean {
+  const rel = relative(treesDirFor(root), resolve(path));
   return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
 // 决策 446：会话移进工作树之后再打开它（续接、/reload）：按记下的路径找回，目录还在且仍是本仓库登记的工作树才算。
-// 决策 495：路径是工作树里的子目录时找回它所在的那棵树
-export function reopenNamedWorktree(repoRoot: string, path: string): NamedWorktree | undefined {
-  if (!insideNamedWorktree(repoRoot, path) || !existsSync(path)) return undefined;
-  const name = relative(worktreesDirOf(repoRoot), resolve(path)).split(/[/\\]/)[0] ?? "";
+// 决策 495：路径是工作树里的子目录时找回它所在的那棵树。root 同上
+export function reopenNamedWorktree(root: string, path: string): NamedWorktree | undefined {
+  if (!insideNamedWorktree(root, path) || !existsSync(path)) return undefined;
+  const repoRoot = treesHomeOf(root);
+  const dir = worktreesDirOf(repoRoot);
+  const name = relative(dir, resolve(path)).split(/[/\\]/)[0] ?? "";
   if (name === "") return undefined;
-  return existingNamedWorktree(repoRoot, join(worktreesDirOf(repoRoot), name), name);
+  return existingNamedWorktree(repoRoot, join(dir, name), name);
 }
 
 // 独立工作树记下的起点（/worktrees 列出时按它算改动；取不到为 undefined）

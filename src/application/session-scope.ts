@@ -4,10 +4,10 @@
 // 尚未写出文件）。
 import { existsSync } from "node:fs";
 import { isAbsolute, relative } from "node:path";
+import { treesDirFor } from "../orchestration/worktree.ts";
 import type { StoredEntry } from "../persistence/session-reader.ts";
 import { loadStoreSession } from "../persistence/session-view.ts";
 import type { SessionId } from "../state/ids.ts";
-import { worktreesDirOf } from "../state/paths.ts";
 import { SessionEntryType } from "../state/session-entries.ts";
 import { sessionsDirOf } from "./workspace.ts";
 
@@ -43,7 +43,8 @@ function mainSessionWorkspace(
   cwd: string,
   entries: readonly StoredEntry[]
 ): string {
-  const dir = worktreesDirOf(governanceRoot);
+  // 决策 494：项目开在仓库子目录里时，工作树照样在主仓库根的 .pigeon/trees 下
+  const dir = treesDirFor(governanceRoot);
   const usable = (path: string): boolean => {
     const rel = relative(dir, path);
     return existsSync(path) && rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);

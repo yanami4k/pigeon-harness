@@ -26,14 +26,16 @@ import {
   worktreeInUseByOthers,
 } from "../persistence/worktree-in-use.ts";
 import { newSessionId } from "../state/ids.ts";
-import { sessionsDirOf } from "../state/paths.ts";
+import { sessionsDirOf, worktreesDirOf } from "../state/paths.ts";
 import {
   assertWorktreeName,
+  insideNamedWorktree,
   NamedWorktreeError,
   namedWorktreeUnchanged,
   nonInteractiveGitEnv,
   openNamedWorktree,
   removeNamedWorktree,
+  reopenNamedWorktree,
   resolveWorktreeBase,
   uncommittedCount,
 } from "./named-worktree.ts";
@@ -337,4 +339,21 @@ test("取远端时的 ssh：使用者没指定 ssh 才加批处理方式；GIT_S
   assert.equal(nonInteractiveGitEnv({ GIT_SSH: "plink" }).GIT_SSH_COMMAND, undefined);
   assert.equal(nonInteractiveGitEnv({}, true).GIT_SSH_COMMAND, undefined);
   assert.equal(nonInteractiveGitEnv({}).GIT_TERMINAL_PROMPT, "0");
+});
+
+// 决策 494：项目开在仓库子目录里时，enter_worktree、面板派出的树在主仓库根下——按项目根照样认得出（续接、在用标记、"已在树里"）
+test("子目录项目：按项目根认主仓库根下的树；树里的子目录找回它所在的那棵树", () => {
+  const repo = plainRepo();
+  const project = join(repo, "packages", "web");
+  mkdirSync(project, { recursive: true });
+  const wt = openNamedWorktree({ cwd: project, name: "deep", baseMode: "head" });
+  assert.equal(wt.path, join(worktreesDirOf(repo), "deep"));
+  const inTree = join(wt.path, "packages", "web");
+  mkdirSync(inTree, { recursive: true });
+  assert.equal(insideNamedWorktree(project, wt.path), true);
+  assert.equal(insideNamedWorktree(project, inTree), true);
+  assert.equal(insideNamedWorktree(project, project), false);
+  const found = reopenNamedWorktree(project, inTree);
+  assert.equal(found?.path, wt.path);
+  assert.equal(found?.branch, "pigeon/deep");
 });

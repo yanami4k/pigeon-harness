@@ -105,7 +105,7 @@ import {
 } from "../application/worktree-cleanup.ts";
 import type { SessionGrantStore } from "../approvals/grant-store.ts";
 import { createApprovalQueue } from "../approvals/queue.ts";
-import { describeHead } from "../orchestration/worktree.ts";
+import { describeHead, treesHomeOf } from "../orchestration/worktree.ts";
 import { recordTrustedEntries } from "../persistence/config-trust-store.ts";
 import {
   addToSessionIndex,
@@ -832,7 +832,12 @@ export async function main(argv: string[]): Promise<void> {
       ...(core.name !== "" ? { name: core.name } : {}),
       activity: shellHolder.current?.isRunning() === true ? "running" : "idle",
       project: tildePath(core.governanceRoot, homedir()),
-      cwd: statusCwd(core.governanceRoot, core.workspaceRoot, homedir()),
+      cwd: statusCwd(
+        core.governanceRoot,
+        core.workspaceRoot,
+        homedir(),
+        treesHomeOf(core.governanceRoot)
+      ),
       ...(record !== undefined ? { record: tildePath(record, homedir()) } : {}),
       settings: layers,
       mode: core.modeCell.current,

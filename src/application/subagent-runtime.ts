@@ -12,13 +12,14 @@ import { existsSync } from "node:fs";
 import { isAbsolute, relative } from "node:path";
 import type { SessionGrantStore } from "../approvals/grant-store.ts";
 import type { ApprovalHandler } from "../approvals/handler.ts";
+import { treesDirFor } from "../orchestration/worktree.ts";
 import { listSessionRefs, readSessionView } from "../persistence/session-catalog.ts";
 import { holdWorktreeInUse } from "../persistence/worktree-in-use.ts";
 import type { AgentMessage, StreamFn } from "../pi-runtime/index.ts";
 import type { ActiveGrant } from "../state/grants.ts";
 import { DEFAULT_STOP_HOOK_BLOCK_CAP } from "../state/hooks.ts";
 import { asSessionId, newSessionId } from "../state/ids.ts";
-import { subagentSessionsDir, worktreesDirOf } from "../state/paths.ts";
+import { subagentSessionsDir } from "../state/paths.ts";
 import { loopGuardSettingsOf, mcpConfigOf, type SettingsSnapshot } from "../state/settings.ts";
 import {
   type AgentWorktree,
@@ -161,7 +162,7 @@ export function createSubagentOpener(base: SubagentOpenerBase): SubagentOpener {
         : undefined;
     const releaseResumed =
       resumedWorkspace !== undefined &&
-      insideDir(worktreesDirOf(base.governanceRoot), resumedWorkspace)
+      insideDir(treesDirFor(base.governanceRoot), resumedWorkspace)
         ? holdWorktreeInUse(resumedWorkspace, base.homeDir)
         : undefined;
     // 决策 480：临时工作树——起点是派出方工作目录此刻的快照
@@ -169,7 +170,6 @@ export function createSubagentOpener(base: SubagentOpenerBase): SubagentOpener {
       spec.worktree && resuming === undefined
         ? openAgentWorktree({
             parentWorkspace: parent.workspaceRoot,
-            governanceRoot: base.governanceRoot,
             sessionId,
             name: spec.name,
             ...(base.homeDir !== undefined ? { homeDir: base.homeDir } : {}),

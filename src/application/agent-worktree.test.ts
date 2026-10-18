@@ -2,7 +2,7 @@
 // 关掉时没有改动即删（连同分支与起点引用），别人还持着在用标记的不删。另测面板派出时从缺省显示名派生树名的清洗（审计 9）。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, test } from "vitest";
@@ -12,6 +12,7 @@ import { worktreesDirOf } from "../state/paths.ts";
 import { agentWorktreeAt, closeAgentWorktree, openAgentWorktree } from "./agent-worktree.ts";
 import { assertWorktreeName, worktreeNameFrom } from "./named-worktree.ts";
 import { defaultSessionName } from "./session-name.ts";
+import { listLeftoverWorktrees } from "./worktree-cleanup.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -46,14 +47,12 @@ test("同名子 agent 的树让路成 <名字>-2；起点快照引用与树同�
   writeFileSync(join(root, "a.txt"), "dirty\n");
   const first = openAgentWorktree({
     parentWorkspace: root,
-    governanceRoot: root,
     sessionId: newSessionId(),
     name: "Fixer",
     homeDir: home,
   });
   const second = openAgentWorktree({
     parentWorkspace: root,
-    governanceRoot: root,
     sessionId: newSessionId(),
     name: "fixer",
     homeDir: home,
@@ -81,7 +80,6 @@ test("关掉时别人还持着这棵树的在用标记（同名的树被别的�
   const home = temp("pigeon-agent-home-");
   const tree = openAgentWorktree({
     parentWorkspace: root,
-    governanceRoot: root,
     sessionId: newSessionId(),
     name: "busy",
     homeDir: home,
@@ -123,7 +121,6 @@ test("上一棵同名的树被人手删、留下了取回起点与起点引用�
   git(root, ["-c", "user.email=t@e.invalid", "-c", "user.name=t", "commit", "-qam", "newer"]);
   const tree = openAgentWorktree({
     parentWorkspace: root,
-    governanceRoot: root,
     sessionId: newSessionId(),
     name: "stale",
     homeDir: home,
@@ -134,4 +131,23 @@ test("上一棵同名的树被人手删、留下了取回起点与起点引用�
   assert.equal(lookup.ok && lookup.base, tree.base);
   assert.notEqual(tree.base, old);
   closeAgentWorktree(tree, false);
+});
+
+// 决策 494：项目开在仓库子目录里时，子 agent 的树也建在主仓库根的 .pigeon/trees 下，/worktrees（从子目录项目跑）列得出、清得掉
+test("子目录项目派出的子 agent：树在主仓库根下，从子目录跑 /worktrees 列得出", () => {
+  const root = repo();
+  const home = temp("pigeon-agent-home-");
+  const project = join(root, "packages", "web");
+  mkdirSync(project, { recursive: true });
+  const tree = openAgentWorktree({
+    parentWorkspace: project,
+    sessionId: newSessionId(),
+    name: "sub",
+    homeDir: home,
+  });
+  assert.equal(tree.path, join(worktreesDirOf(root), "sub"));
+  tree.release();
+  const items = listLeftoverWorktrees({ workspaceRoot: project, homeDir: home });
+  assert.ok(items.some((item) => item.name === "sub" && item.kind === "worktree"));
+  assert.equal(closeAgentWorktree(tree, false), false);
 });

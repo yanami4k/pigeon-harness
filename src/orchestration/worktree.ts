@@ -50,9 +50,24 @@ export function assertWorkerName(name: string): void {
   }
 }
 
-// 决策 494：工作树目录一棵一个名字，不再带会话号前缀（撞名由调用方挑一个可用名字）
-export function worktreePathFor(governanceRoot: string, name: string): string {
-  return join(worktreesDirOf(governanceRoot), name);
+// 决策 494：工作树目录一棵一个名字，不再带会话号前缀（撞名由调用方挑一个可用名字）。repoRoot 为主仓库根
+export function worktreePathFor(repoRoot: string, name: string): string {
+  return join(worktreesDirOf(repoRoot), name);
+}
+
+// 决策 494：工作树所在的根——项目所在仓库的主仓库根（项目开在仓库的子目录里也一样：所有工作树都在主仓库根的
+// .pigeon/trees 下，建与认都按它）；不是 git 仓库时就是它本身
+export function treesHomeOf(root: string): string {
+  try {
+    return mainRepoRoot(root);
+  } catch {
+    return resolve(root);
+  }
+}
+
+// 工作树目录（<主仓库根>/.pigeon/trees）
+export function treesDirFor(root: string): string {
+  return worktreesDirOf(treesHomeOf(root));
 }
 
 export const WORKER_BRANCH_PREFIX = "pigeon/";
@@ -85,10 +100,8 @@ function assertExplicitBranch(branch: string): void {
 }
 
 export interface AddWorktreeInput {
-  // 主仓库根：工作树与分支建在它上面
+  // 仓库根（可以是仓库里的子目录）：工作树与分支建在它所在的仓库上，目录在主仓库根的 .pigeon/trees 下（决策 494）
   repoRoot: string;
-  // M6.5 S2（决策 057）：工作树目录所在的治理根（放在其 .pigeon/trees 下）；缺省同仓库根
-  governanceRoot?: string;
   sessionId: SessionId;
   name: string;
   // 起点提交；缺省 HEAD
@@ -105,7 +118,7 @@ export function addWorktree(input: AddWorktreeInput): WorktreeHandle {
   if (baseRef.startsWith("-")) {
     throw new WorktreeError(`invalid base commit: ${baseRef}`);
   }
-  const path = worktreePathFor(input.governanceRoot ?? input.repoRoot, input.name);
+  const path = worktreePathFor(treesHomeOf(input.repoRoot), input.name);
   let branch: string;
   if (input.branch !== undefined) {
     assertExplicitBranch(input.branch);

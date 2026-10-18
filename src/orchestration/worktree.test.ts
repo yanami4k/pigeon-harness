@@ -388,11 +388,12 @@ test(".worktreeinclude 按仓库顶层：会话在子目录时，规则读顶层
     writeFileSync(join(repo, "pkg", ".env"), "PKG=1\n");
     const w = addWorktree({
       repoRoot: join(repo, "pkg"),
-      governanceRoot: repo,
       sessionId: newSessionId(),
       name: "sub",
     });
     assert.equal(readFileSync(join(w.path, "pkg", ".env"), "utf8"), "PKG=1\n");
+    // 决策 494：从仓库子目录建树也落在主仓库根的 .pigeon/trees 下
+    assert.equal(w.path, join(repo, ".pigeon", "trees", "sub"));
     assert.equal(existsSync(join(w.path, ".env")), false);
   } finally {
     cleanup();

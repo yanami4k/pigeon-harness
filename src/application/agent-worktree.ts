@@ -49,9 +49,8 @@ export function worktreeSafeName(name: string): string {
 }
 
 export function openAgentWorktree(input: {
-  // 派出方的工作目录（快照它）
+  // 派出方的工作目录（快照它）；树建在它所在仓库的主仓库根下（决策 494）
   parentWorkspace: string;
-  governanceRoot: string;
   sessionId: SessionId;
   name: string;
   homeDir?: string;
@@ -63,7 +62,7 @@ export function openAgentWorktree(input: {
     throw new Error("a worktree needs a git repository");
   }
   // 决策 494：程序起的名字撞了（上一棵同名的树还留着、别的会话的同名子 agent 在跑）就让路；起点引用与树同名
-  const name = availableWorktreeName(repoRoot, worktreeSafeName(input.name), input.governanceRoot);
+  const name = availableWorktreeName(repoRoot, worktreeSafeName(input.name));
   // 上一棵同名的树被人手删时留下的引用不接手
   dropTreeRefs(repoRoot, name);
   const startRef = worktreeStartRefFor(name);
@@ -72,7 +71,6 @@ export function openAgentWorktree(input: {
   try {
     handle = addWorktree({
       repoRoot,
-      governanceRoot: input.governanceRoot,
       sessionId: input.sessionId,
       name,
       baseRef: snapshot.commit,

@@ -3,6 +3,7 @@
 import { isAbsolute, relative, sep } from "node:path";
 import { compactNumber } from "../application/format.ts";
 import type { SandboxApproval } from "../application/launch-flags.ts";
+import { PIGEON_DIR, WORKTREES_DIR } from "../state/paths.ts";
 import { modeLabel } from "./status-bar.ts";
 import { tildePath } from "./welcome.ts";
 
@@ -38,14 +39,23 @@ export interface StatusReport {
 
 const LABEL_WIDTH = 9;
 
-// 决策 495：工作目录相对项目根写（树里如 .pigeon/trees/feature-x，子目录如 packages/web，分隔符一律 /）；与项目根相同为空串，
-// 不在项目里（不该有，照写）为 ~ 缩写的原路径
-export function statusCwd(project: string, cwd: string, home: string): string {
+// 决策 495：工作目录相对项目根写（树里如 .pigeon/trees/feature-x，子目录如 packages/web，分隔符一律 /）；与项目根相同为空串。
+// 决策 494：工作树一律在主仓库根（treesRoot）的 .pigeon/trees 下——项目开在仓库子目录里时，树里的工作目录相对主仓库根写。
+// 别的情形（不该有，照写）为 ~ 缩写的原路径
+export function statusCwd(project: string, cwd: string, home: string, treesRoot?: string): string {
   const key = (path: string) => (process.platform === "win32" ? path.toLowerCase() : path);
-  const rel = relative(key(project), key(cwd));
-  if (rel === "") return "";
-  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return tildePath(cwd, home);
-  return relative(project, cwd).split(sep).join("/");
+  const under = (base: string): string | undefined => {
+    const rel = relative(key(base), key(cwd));
+    if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return undefined;
+    return relative(base, cwd).split(sep).join("/");
+  };
+  const inProject = under(project);
+  if (inProject !== undefined) return inProject;
+  if (treesRoot !== undefined) {
+    const inTree = under(treesRoot);
+    if (inTree?.startsWith(`${PIGEON_DIR}/${WORKTREES_DIR}/`) === true) return inTree;
+  }
+  return tildePath(cwd, home);
 }
 
 function line(label: string, value: string): string {

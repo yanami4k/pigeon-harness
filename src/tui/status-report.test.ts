@@ -75,6 +75,11 @@ test("statusCwd：与项目根相同为空串，树里与子目录写相对路�
   // 名字以 .. 开头的子目录仍在项目里
   assert.equal(statusCwd(project, join(project, "..cache"), home), "..cache");
   assert.match(statusCwd(project, join(home, "other"), home), /^~[/\\]other$/);
+  // 决策 494：项目开在仓库子目录里，工作树在主仓库根下——树里的工作目录相对主仓库根写
+  const repo = join(home, "repo");
+  const sub = join(repo, "packages", "web");
+  assert.equal(statusCwd(sub, join(repo, ".pigeon", "trees", "x"), home, repo), ".pigeon/trees/x");
+  assert.equal(statusCwd(sub, join(sub, "src"), home, repo), "src");
   if (process.platform === "win32") {
     // Windows 上路径不分大小写：只是大小写不同的仍算同一处
     assert.equal(statusCwd(project, project.toUpperCase(), home), "");

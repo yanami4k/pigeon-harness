@@ -1,7 +1,8 @@
 // 决策 445、446、494：续接回到会话的工作目录——主分支上最后一条 pigeon.worktree 条目（必须在 .pigeon/trees 下、目录还在）优先，
 // 其次会话文件头记的工作目录；都不成即回到项目根（主检出）
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
@@ -80,5 +81,24 @@ test("不在 .pigeon/trees 下的目录不认：回到项目根", async () => {
     writer.append(worktreeEntry(elsewhere));
     await writer.close();
     assert.equal(sessionRuntimeScope(root, sessionId).workspaceRoot, root);
+  });
+});
+
+// 决策 494：项目开在仓库的子目录里（.pigeon 在子目录），工作树照样在主仓库根的 .pigeon/trees 下——续接认得回去
+test("子目录项目：文件头记着主仓库根下的工作树（含其中的子目录），续接回到那里", async () => {
+  await withRoot(async (base) => {
+    const repo = realpathSync(base);
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    const project = join(repo, "packages", "web");
+    mkdirSync(project, { recursive: true });
+    const tree = join(worktreesDirOf(repo), "feature-x");
+    const inTree = join(tree, "packages", "web");
+    mkdirSync(inTree, { recursive: true });
+    for (const cwd of [tree, inTree]) {
+      const sessionId = newSessionId();
+      const writer = createFixtureSession({ sessionsDir: sessionsDirOf(project), sessionId, cwd });
+      await writer.close();
+      assert.equal(sessionRuntimeScope(project, sessionId).workspaceRoot, cwd);
+    }
   });
 });
