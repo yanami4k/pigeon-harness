@@ -117,7 +117,8 @@ test("后台派出：按类型加序号起名，任务附信任说明，干完�
   assert.equal(child.spec.name, "explore-1");
   assert.equal(child.spec.path, "explore-1");
   assert.equal(child.spec.depth, 1);
-  assert.equal(child.spec.parentName, "main");
+  // 决策 490：子 agent 眼里派出它的会话带会话号（回话用它）
+  assert.equal(child.spec.parentName, "session main-session (main)");
   assert.ok(child.inputs[0]?.includes(AGENT_TRUST_SENTENCE));
   assert.ok(child.inputs[0]?.includes("find the parser"));
   assert.deepEqual(child.records, [

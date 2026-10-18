@@ -76,6 +76,8 @@ export interface SessionPanelSource {
   refresh?(): void;
   // 决策 490：派出时的占位会话号开好之后换成真会话号——按占位号问现在的会话号（面板据此跟住刚派出的那张卡）
   currentId?(id: string): string;
+  // 决策 490：/take 现在能不能取它（与 take 拒绝的条件同一组）；/take 的候选只列能取的
+  canTake?(id: string): boolean;
 }
 
 export interface PooledRuntime<Live = unknown> {
@@ -85,6 +87,8 @@ export interface PooledRuntime<Live = unknown> {
   worktree?: { path: string; branch: string };
   // 跑一轮；结果带 status（"failed" 即失败，errorMessage 为原因）
   run(text: string): Promise<unknown>;
+  // 决策 490：人用 /take 取它会不会被拒（有没有工作树、在不在同一仓库、落点是不是它的工作树）；不给即按有没有工作树
+  takeable?(): boolean;
   // 空闲时只带待递的通知跑一轮（后台作业结束等）；不支持即 undefined
   runNotices?(): Promise<unknown>;
   interrupt(): void;
@@ -703,9 +707,15 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
     return entry.runtime.take?.(into) ?? "session has no worktree";
   }
 
-  // 按名字找（/take 用）
-  byName(name: string): PooledSessionCard | undefined {
-    return [...this.#entries.values()].find((entry) => entry.card.name === name)?.card;
+  // 决策 490：/take 现在能不能取它——运行面开着、没关、不在跑，且它自己那一侧不拒（工作树、仓库、落点）
+  canTake(id: string): boolean {
+    const entry = this.#entries.get(id);
+    const runtime = entry?.runtime;
+    if (entry === undefined || entry.closed === true || runtime === undefined) return false;
+    if (entry.inflight !== undefined || entry.exclusive !== undefined || runtime.isRunning()) {
+      return false;
+    }
+    return runtime.takeable?.() ?? entry.card.worktree !== undefined;
   }
 
   // 关掉 Pigeon：先等还在开的开完，再全部停止；整体有时限，没在时限内停下的如实返回

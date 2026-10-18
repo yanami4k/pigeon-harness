@@ -127,3 +127,22 @@ test("等着 y/N 时来了审批：按键归审批，不触发删除；审批答
     cleanup();
   }
 });
+
+test("等着 y/N 时再打一条命令即作罢，命令的第一个字不丢、照常执行", async () => {
+  const { term, calls, cleanup } = makeShell();
+  try {
+    await settle();
+    term.input("/worktrees clean");
+    term.input("\r");
+    await settle(200);
+    term.input("/status");
+    term.input("\r");
+    await settle(200);
+    assert.deepEqual(calls, ["run", "cancel"]);
+    const screen = screenText(term);
+    assert.match(screen, /cancelled/);
+    assert.match(screen, /\/status is not available in this session/, "按命令执行，不当成普通输入");
+  } finally {
+    cleanup();
+  }
+});

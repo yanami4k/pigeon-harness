@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Editor } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { promptHistoryStore } from "../application/prompt-history.ts";
 import { newSessionId } from "../state/ids.ts";
@@ -230,4 +231,10 @@ test("命令参数补全：只有 /take 带参数补全，候选由调用方给�
   // 别的命令带着补全器，但拿不到候选（返回 null）——pi-tui 据此不弹列表
   const resume = items.find((item) => item.name === "resume");
   assert.equal(await resume?.getArgumentCompletions?.(""), null);
+});
+
+// 决策 490：/take 不带参数时直接弹出候选用的是 pi-tui 编辑器里没公开的 tryTriggerAutocomplete；升级 pi-tui 后它不在了即在这里报出
+test("pi-tui 编辑器仍有 tryTriggerAutocomplete（/take 直接弹出候选用）", () => {
+  const proto = Editor.prototype as unknown as { tryTriggerAutocomplete?: unknown };
+  assert.equal(typeof proto.tryTriggerAutocomplete, "function");
 });

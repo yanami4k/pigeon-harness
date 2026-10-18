@@ -148,6 +148,11 @@ export class WorkList<Live> implements SessionPanelSource {
     return this.#deps.pool.currentId(id);
   }
 
+  // 本进程没开的取不了（同 take）
+  canTake(id: string): boolean {
+    return this.#dormantOf(id) === undefined && this.#deps.pool.canTake(id);
+  }
+
   list(): PooledSessionCard[] {
     const pool = this.#deps.pool;
     // 开着的别的项目的会话同样标目录

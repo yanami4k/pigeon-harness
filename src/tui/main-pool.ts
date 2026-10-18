@@ -476,6 +476,14 @@ export function pooledRuntimeOf(
       },
       core,
     },
+    // 决策 490：/take 的候选只列取得成的（与下面 take 的拒绝条件同一组，按人用 /take 的落点）
+    takeable: () => {
+      const worktree = core.worktree;
+      if (worktree === undefined) return false;
+      const landingRoot = context.currentRoot?.();
+      if (landingRoot !== undefined && !sameDir(landingRoot, core.governanceRoot)) return false;
+      return !sameDir(context.mainWorkspace(), worktree.path);
+    },
     take: (into) => {
       const worktree = core.worktree;
       // 决策 486：模型取（take_changes）的出错作工具错误交回

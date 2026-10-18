@@ -183,7 +183,7 @@ test("前台派 explore：回复直接带回；会话文件在所属会话名下
     assert.match(sub.calls[0]?.context.systemPrompt ?? "", /read-only exploration agent/);
     assert.match(
       sub.calls[0]?.context.systemPrompt ?? "",
-      /sub-agent named explore-1, started by main/
+      /sub-agent named explore-1, started by session \S+ \(main\)/
     );
     const firstInput = JSON.stringify(sub.calls[0]?.context.messages.at(-1));
     assert.ok(firstInput.includes(AGENT_TRUST_SENTENCE));

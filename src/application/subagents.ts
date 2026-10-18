@@ -1,5 +1,6 @@
 // 子 agent 与进程内通讯录（决策 457、480）：子 agent 是起点与配置不同的 agent 实例，只供模型使用。
-// - 通讯录：本进程里的会话（终端界面的当前会话、会话面板里的会话）与它们派出的子 agent，按名字寻址；名字整个进程内不重名。
+// - 通讯录：本进程里的会话（终端界面的当前会话、会话面板里的会话）与它们派出的子 agent；子 agent 按名字寻址（子 agent 之间不
+//   重名），会话按全量会话号寻址（决策 490：会话的显示名只用于显示）。
 //   子 agent 不起名即按类型加序号（explore-1、general-2），起的名字被占了自动加序号。
 // - 派出：缺省后台跑，干完以一条消息把最后那段回复的全文送回派出方（不截断）；可选前台，派出的那次工具调用等它干完、
 //   直接带回结果。同一会话（连同它下面各层）同时在跑的子 agent 有上限，超了即派不出并如实说明，不排队；最多到会话往下
@@ -522,7 +523,7 @@ export class AgentHub {
       kind: "agent",
       type: agent.type.name,
       state: agent.state,
-      parent: agent.parent.name(),
+      parent: this.#senderOf(agent.parent),
       path: agent.path,
     }));
     return [...sessions, ...agents];
@@ -591,7 +592,7 @@ export class AgentHub {
       path,
       depth: record.depth,
       parentSessionId,
-      parentName: parent.name(),
+      parentName: this.#senderOf(parent),
       inheritContext: request.inheritContext === true,
       worktree: request.worktree === true,
       agents: this.#hostOf(record),
@@ -877,7 +878,7 @@ export class AgentHub {
           path,
           depth: record.depth,
           parentSessionId: restored.parentSessionId,
-          parentName: parent.name(),
+          parentName: this.#senderOf(parent),
           inheritContext: false,
           worktree: false,
           agents: this.#hostOf(record),
@@ -902,7 +903,9 @@ export class AgentHub {
     const target = this.#lookup(to);
     if (target === undefined) {
       const known = this.#list()
-        .map((item) => item.sessionId ?? item.name)
+        .map((item) =>
+          item.sessionId !== undefined ? `${item.sessionId} (${item.name})` : item.name
+        )
         .join(", ");
       return `Error: no sub-agent named ${to} and no session with that full session ID. Known: ${known}.`;
     }
@@ -931,7 +934,7 @@ export class AgentHub {
       undefined,
       `To reply, use send_message to ${this.#addressOf(from)}.`
     );
-    target.deliver(wrapped, { from: from.name(), to, kind: "message", text });
+    target.deliver(wrapped, { from: this.#addressOf(from), to, kind: "message", text });
     return `Sent to ${to}.`;
   }
 
