@@ -198,8 +198,11 @@ export class SessionPanel implements Component {
       this.selectedId !== undefined
         ? (this.source.currentId?.(this.selectedId) ?? this.selectedId)
         : undefined;
+    const found = cards.find((card) => card.id === id);
+    // 找到了即记下现在的会话号（占位号的映射在它离开面板后就没了）
+    if (found !== undefined) this.selectedId = found.id;
     return (
-      cards.find((card) => card.id === id) ??
+      found ??
       // 决策 470：还没选过时落在当前会话那张卡上（它现在按状态落在组里，不再排在最前）
       this.source.main?.() ??
       cards[0]

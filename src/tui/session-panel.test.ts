@@ -881,9 +881,19 @@ test("会话池换号之后面板照样选中刚派出的会话；卡上与当�
     },
   });
   let currentWorkspace = "~/myapp";
+  // 另有一张排在前面的卡（在跑的组排在空闲之前）：映射不对时选中会落到它上面
+  const other = {
+    id: "sess_other",
+    name: "other-1",
+    state: "running" as const,
+    task: "别的",
+    summary: "",
+    startedAt: 0,
+    updatedAt: 0,
+  };
   const panel = new SessionPanel({
     height: () => 20,
-    cards: () => pool.list(),
+    cards: () => [other, ...pool.list()],
     peek: () => [],
     currentId: (id) => pool.currentId(id),
     currentWorkspace: () => currentWorkspace,
@@ -899,5 +909,8 @@ test("会话池换号之后面板照样选中刚派出的会话；卡上与当�
   assert.match(lines(), /myapp-real ~\/t\/x/);
   currentWorkspace = "~/t/x";
   assert.doesNotMatch(lines(), /~\/t\/x/, "与当前会话相同的工作区不写");
+  // 去掉之后占位号的映射一并清掉；面板已记下真会话号，不靠它
+  await pool.remove("sess_real");
+  assert.equal(pool.currentId(card.id), card.id, "映射已清");
   await pool.closeAll();
 });

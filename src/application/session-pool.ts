@@ -372,13 +372,13 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
       }
       // 会话号定了：卡片改用它（开的期间已从面板去掉的不再放回）
       this.#entries.delete(entry.card.id);
-      this.#renamed.set(entry.card.id, runtime.sessionId);
       entry.runtime = runtime;
       if (entry.removed === true) {
         entry.closed = true;
         await runtime.close({ removed: true }).catch(() => {});
         return;
       }
+      this.#renamed.set(entry.card.id, runtime.sessionId);
       entry.card = {
         ...entry.card,
         id: runtime.sessionId,

@@ -106,3 +106,46 @@ test("决策 500：小写变量写法（$src/$dest、$i/$n、带花括号的变�
   // 代码与转义好的 $ 不动
   assert.ok(rendered("`cp $src/$dest`").includes("cp $src/$dest"));
 });
+
+// 审查 H1：判成变量的配对两个 $ 都转义、配不上收尾的 $ 也转义——落单的 $ 不再让 pi-tui 把同一段后文当没写完的公式（粗体、
+// 行内代码照常排版）；同一行几对变量各自认
+test("决策 500：变量与落单的 $ 之后的粗体、行内代码照常排版；同一行几对变量都原样", () => {
+  for (const [input, shown] of [
+    ["cp $src/$dest 然后 **注意**", "cp $src/$dest 然后 注意"],
+    ["用 $i/$n 表示进度，见 `cfg` 与 **粗**", "用 $i/$n 表示进度，见 cfg 与 粗"],
+    ["费用 $5 到 $10，**注意**", "费用 $5 到 $10，注意"],
+    ["价格 $5 元，**注意**", "价格 $5 元，注意"],
+    ["mv $a/$b to $c/$d", "mv $a/$b to $c/$d"],
+    ["cp $src/$dest $a/$b", "cp $src/$dest $a/$b"],
+  ] as const) {
+    const out = rendered(input);
+    assert.ok(out.includes(shown), `${input} => ${out}`);
+    assert.doesNotMatch(out, /\*\*|\\/, `${input} => ${out}`);
+  }
+});
+
+// 审查 H2、L1：照 pi-tui 的配对从左往右认——中文里不留空格的连续公式、公式紧跟字母的写法照常渲染，不多出 $
+test("决策 500：中文里不留空格的连续公式与 LaTeX 命令照常渲染", () => {
+  for (const input of ["当$n$为偶数时，$f(n)$也是偶数", "设$a$与$b$为实数"]) {
+    const out = rendered(input);
+    assert.doesNotMatch(out, /\$/, `${input} => ${out}`);
+  }
+  const greek = rendered("$\\alpha$x$\\beta$");
+  assert.match(greek, /α/);
+  assert.match(greek, /β/);
+  assert.doesNotMatch(greek, /\\alpha|\\beta/);
+});
+
+// 审查 M1、M2：缩进代码块、多个反引号的行内代码、网址与链接目标里的 $ 不动（不露出反斜杠）
+test("决策 500：缩进代码块、双反引号行内代码、网址与链接目标里的 $ 原样，不露出反斜杠", () => {
+  for (const [input, shown] of [
+    ["说明：\n\n    cp $src/$dest\n", "cp $src/$dest"],
+    ["看 `` $x/$y `` 这段", "$x/$y"],
+    ["[接口](http://e.com/$a/$b)", "http://e.com/$a/$b"],
+    ["见 https://api.x/y?$filter=a&$top=5 的说明", "https://api.x/y?$filter=a&$top=5"],
+  ] as const) {
+    const out = rendered(input);
+    assert.ok(out.includes(shown), `${input} => ${out}`);
+    assert.doesNotMatch(out, /\\\$/, `${input} => ${out}`);
+  }
+});

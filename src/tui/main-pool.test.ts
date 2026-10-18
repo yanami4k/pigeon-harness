@@ -512,8 +512,10 @@ test("take_changes 取面板会话：按全量会话号取；显示名不认，�
     undefined,
     "不取自己"
   );
+  const elsewhere = join(root, ".home", "elsewhere");
+  mkdirSync(elsewhere);
   assert.match(
-    take(card.id, { ...caller, governanceRoot: join(root, "elsewhere") } as SessionCore) ?? "",
+    take(card.id, { ...caller, governanceRoot: elsewhere } as SessionCore) ?? "",
     /is in another repository; nothing to take/
   );
   assert.match(take(card.id) ?? "", /took 1 file: made\.txt/);
