@@ -1,5 +1,5 @@
-// worker 工作树管理（M5.5 S1，决策 040）：隔离工作区第一版为 git 工作树。
-// 目录 <治理根>/.pigeon/trees/<name>（决策 494：工作树只有一种形状），分支 pigeon/<名字>。git 经参数数组直接调用，不经 shell；
+// 工作树管理（M5.5 S1，决策 040）：隔离工作区为 git 工作树。
+// 目录 <主仓库根>/.pigeon/trees/<name>（决策 494：工作树只有一种形状），分支 pigeon/<名字>。git 经参数数组直接调用，不经 shell；
 // 名字先按白名单校验再进参数，杜绝被当成选项或路径穿越。合并由人用 git 完成，本模块不合并。
 // 决策 449：建好后把项目根 .worktreeinclude 列出、又被 git 忽略的文件从来源工作目录复制进去。
 import { execFileSync } from "node:child_process";
@@ -16,7 +16,7 @@ import {
   rmSync,
   unlinkSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { SessionId } from "../state/ids.ts";
 import { isUnderPigeonDir, worktreesDirOf } from "../state/paths.ts";
 import { GIT_HARDENING_CONFIG, hardenedGitArgs } from "../tools/git-hardening.ts";
@@ -455,13 +455,27 @@ export function removeWorktreeAndBranch(input: {
 
 // 路径所在仓库的主仓库根（M6.5 S2：任务 repo 为 "." 时）——从工作树里调用同样返回主检出，
 // 工作树与分支都建在主仓库上
+// 认法：仓库目录（common dir）就是 <顶层>/.git 时取它的上一级（普通仓库与它的链接工作树都回到主检出）；不是时
+// （submodule 的 .git/modules/<名字>、--separate-git-dir、bare 仓库加 worktree）不能取上一级——那会落进 git 元数据目录、
+// 工作区之外或几个仓库共用的目录：仓库配置里有 core.worktree（submodule）即取它，否则取当前检出的顶层（每个检出各放一处）
 export function mainRepoRoot(path: string): string {
-  const commonDir = runGit(path, [
-    "rev-parse",
-    "--path-format=absolute",
-    "--git-common-dir",
-  ]).trim();
-  return dirname(resolve(commonDir));
+  const commonDir = resolve(
+    runGit(path, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).trim()
+  );
+  if (basename(commonDir) === ".git") return dirname(commonDir);
+  try {
+    const configured = runGit(path, [
+      "config",
+      "--file",
+      join(commonDir, "config"),
+      "--get",
+      "core.worktree",
+    ]).trim();
+    if (configured !== "") return resolve(commonDir, configured);
+  } catch {
+    // 没有 core.worktree：按当前检出的顶层
+  }
+  return resolve(runGit(path, ["rev-parse", "--show-toplevel"]).trim());
 }
 
 // 把一个 ref 解析成完整提交号（M8，决策 082）：worker 工作树建好后起点提交进派出记录，

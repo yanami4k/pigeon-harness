@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
@@ -36,6 +37,7 @@ import { agentMessageEntry } from "./session-store.ts";
 import { createSubagentOpener, restoredAgentsOf } from "./subagent-runtime.ts";
 import { AGENT_TRUST_SENTENCE, AgentHub, type AgentToolsHost } from "./subagents.ts";
 import { takeFromAgent } from "./take-changes.ts";
+import { listLeftoverWorktrees } from "./worktree-cleanup.ts";
 
 const noMcp = async (): Promise<McpSession> => ({
   tools: [],
@@ -500,6 +502,52 @@ test("决策 486：take_changes 把子 agent 工作树里的改动（含新建�
   }
 });
 
+// 决策 494：项目开在仓库子目录里时，经派出流程（createSubagentOpener）建的子 agent 临时工作树也在主仓库根的 .pigeon/trees 下，
+// 从子目录项目跑 /worktrees 列得出
+test("子目录项目派出带工作树的子 agent：树建在主仓库根下，/worktrees 从子目录列得出", async () => {
+  const root = repo();
+  const project = join(root.dir, "packages", "web");
+  mkdirSync(project, { recursive: true });
+  const delivered: string[] = [];
+  const { streamFn } = routed(
+    [
+      {
+        text: "",
+        toolCalls: [
+          {
+            name: "spawn_agent",
+            args: { task: "write b.txt", worktree: true, background: false },
+            id: "s1",
+          },
+        ],
+      },
+      { text: "done" },
+    ],
+    [
+      { text: "", toolCalls: [{ name: "write_file", args: { path: "b.txt", content: "hi\n" } }] },
+      { text: "wrote b.txt" },
+    ]
+  );
+  const { hub, sessionId, opened } = await openTop(
+    { dir: project, home: root.home },
+    streamFn,
+    delivered
+  );
+  try {
+    await opened.bundle.adapter.run("go");
+    const [writer] = hub.agentsOf(sessionId);
+    const wt = writer?.worktree;
+    assert.ok(wt !== undefined);
+    assert.equal(dirname(wt.path), join(root.dir, ".pigeon", "trees"), "树在主仓库根下");
+    const items = listLeftoverWorktrees({ workspaceRoot: project, homeDir: root.home });
+    assert.ok(items.some((item) => item.path !== undefined && samePath(item.path, wt.path)));
+    await hub.close();
+  } finally {
+    await disposeRuntime(opened.bundle).catch(() => {});
+    root.cleanup();
+  }
+});
+
 test("决策 486：take_changes 按写档注册（ask 模式下审批；只读类型的工具范围不收它）", () => {
   const host = { canSpawn: () => false } as unknown as AgentToolsHost;
   const take = agentToolRegistrations(host).find((item) => item.name === TAKE_CHANGES_TOOL);
@@ -565,3 +613,7 @@ test("决策 486：派出方有未提交改动时按起点快照引用取回；�
     root.cleanup();
   }
 });
+
+function samePath(a: string, b: string): boolean {
+  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+}

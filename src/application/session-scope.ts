@@ -43,11 +43,13 @@ function mainSessionWorkspace(
   cwd: string,
   entries: readonly StoredEntry[]
 ): string {
-  // 决策 494：项目开在仓库子目录里时，工作树照样在主仓库根的 .pigeon/trees 下
-  const dir = treesDirFor(governanceRoot);
+  // 决策 494：项目开在仓库子目录里时，工作树照样在主仓库根的 .pigeon/trees 下（用到时才问 git）
+  let dir: string | undefined;
   const usable = (path: string): boolean => {
+    if (path === governanceRoot || !existsSync(path)) return false;
+    dir ??= treesDirFor(governanceRoot);
     const rel = relative(dir, path);
-    return existsSync(path) && rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+    return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
   };
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];

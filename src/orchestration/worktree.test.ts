@@ -22,6 +22,7 @@ import {
   copyWorktreeIncludes,
   deleteBranch,
   listWorktrees,
+  mainRepoRoot,
   removeWorktree,
   removeWorktreeAndBranch,
   WorktreeError,
@@ -460,5 +461,51 @@ test("worktreePristine 给了分支时：提交之后把 HEAD 分离回起点，
     assert.equal(worktreePristine(w.path, head, w.branch), false);
   } finally {
     cleanup();
+  }
+});
+
+// 主仓库根的认法：只有仓库目录是 <顶层>/.git 时才取上一级；submodule、--separate-git-dir、bare 仓库加 worktree 都不能取上一级
+// （会落进 git 元数据目录、工作区之外、或几个仓库共用的目录）
+test("mainRepoRoot：普通仓库与链接工作树回到主检出；submodule、分离的仓库目录、bare 加 worktree 各回到自己的检出", () => {
+  const base = realpathSync.native(mkdtempSync(join(tmpdir(), "pigeon-mainroot-")));
+  try {
+    const init = (dir: string, extra: string[] = []) => {
+      mkdirSync(dir, { recursive: true });
+      git(dir, ["init", "-q", ...extra]);
+      git(dir, ["config", "user.email", "t@e.invalid"]);
+      git(dir, ["config", "user.name", "t"]);
+      writeFileSync(join(dir, "a.txt"), "a\n");
+      git(dir, ["add", "a.txt"]);
+      git(dir, ["commit", "-q", "-m", "init"]);
+    };
+    // 普通仓库：子目录与链接工作树都回到主检出
+    const plain = join(base, "plain");
+    init(plain);
+    mkdirSync(join(plain, "pkg"));
+    assert.equal(mainRepoRoot(join(plain, "pkg")), plain);
+    const linked = join(base, "linked");
+    git(plain, ["worktree", "add", "-q", "-b", "side", linked]);
+    assert.equal(mainRepoRoot(linked), plain);
+    // --separate-git-dir：仓库目录在工作区之外
+    const work = join(base, "sep-work");
+    mkdirSync(work);
+    git(work, ["init", "-q", "--separate-git-dir", join(base, "sep.git")]);
+    mkdirSync(join(work, "pkg"));
+    assert.equal(mainRepoRoot(join(work, "pkg")), work);
+    // bare 仓库加 worktree：各检出各自为根，不落到 bare 仓库的上一级
+    const bare = join(base, "proj.git");
+    git(base, ["clone", "-q", "--bare", plain, bare]);
+    const main = join(base, "proj-main");
+    git(bare, ["worktree", "add", "-q", main, "HEAD"]);
+    assert.equal(mainRepoRoot(main), main);
+    // submodule：回到 submodule 自己的检出，不落进 .git/modules
+    const lib = join(base, "lib");
+    init(lib);
+    const sup = join(base, "sup");
+    init(sup);
+    git(sup, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", lib, "libs/foo"]);
+    assert.equal(mainRepoRoot(join(sup, "libs", "foo")), join(sup, "libs", "foo"));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
   }
 });
