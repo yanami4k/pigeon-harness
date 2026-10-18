@@ -26,11 +26,16 @@ export const MARKDOWN_THEME: MarkdownTheme = {
 
 // 只改正文：围栏代码块（``` 或 ~~~，任意缩进、引用里的也算，按开头的字符与长度配对；``` 开头而同一行后面还有反引号的不算围栏）、
 // 缩进代码块与行内代码（按反引号连续的个数配对）原样。缩进代码块：空行（或另一行缩进代码）之后、比所在的块多缩进 4 个空格的行——
-// 列表里按列表项内容的缩进算，Tab 开头的不算（pi-tui 在这之后才把 Tab 换成空格，按段落排）。拿不准时宁可当代码跳过
+// 列表里按列表项内容的缩进算，Tab 开头的不算（pi-tui 在这之后才把 Tab 换成空格，按段落排）；标题与围栏之后不隔空行也算。
+// 另外整行跳过：成块公式（$$ 开头到收尾的 $$，跨行也认，引用与列表项里的也算）、HTML 行（< 加字母、/ 或 ! 开头）。
+// 拿不准时宁可跳过
 function mapProse(markdown: string, change: (prose: string) => string): string {
   let fence: { char: string; length: number } | undefined;
+  // 上一行之后可以开始缩进代码块（空行、标题、围栏收尾之后）
   let previousBlank = true;
   let previousIndentedCode = false;
+  // 在 $$ 成块公式里（开头的 $$ 那一行没有收尾）
+  let display = false;
   // 当前列表项内容的缩进（不在列表里为 undefined）
   let listContent: number | undefined;
   return markdown
@@ -47,14 +52,34 @@ function mapProse(markdown: string, change: (prose: string) => string): string {
           (marker?.[2] ?? "").trim() === ""
         ) {
           fence = undefined;
+          previousBlank = true;
+        } else {
+          previousBlank = false;
         }
-        previousBlank = false;
         previousIndentedCode = false;
+        return line;
+      }
+      if (display) {
+        if (body.includes("$$")) display = false;
+        previousBlank = false;
         return line;
       }
       const opening = marker?.[1];
       if (opening !== undefined && !(opening[0] === "`" && (marker?.[2] ?? "").includes("`"))) {
         fence = { char: opening[0] ?? "`", length: opening.length };
+        previousBlank = false;
+        previousIndentedCode = false;
+        return line;
+      }
+      // 去掉列表标记之后的内容：$$ 成块公式与 HTML 行按它认
+      const content = body.replace(/^ *(?:[-*+]|\d{1,9}[.)])(?: +|$)/, "").trimStart();
+      if (content.startsWith("$$")) {
+        if (!content.slice(2).includes("$$")) display = true;
+        previousBlank = false;
+        previousIndentedCode = false;
+        return line;
+      }
+      if (/^<[A-Za-z/!]/.test(content)) {
         previousBlank = false;
         previousIndentedCode = false;
         return line;
@@ -73,7 +98,7 @@ function mapProse(markdown: string, change: (prose: string) => string): string {
         listContent = undefined;
       }
       previousIndentedCode = indentedCode;
-      previousBlank = blank;
+      previousBlank = blank || /^ {0,3}#{1,6}(?:\s|$)/.test(body);
       if (indentedCode) return line;
       return mapOutsideInlineCode(line, change);
     })
@@ -119,11 +144,16 @@ export function revealLinkTargets(markdown: string): string {
     prose.replace(
       /\[([^\]\n]{1,500})\]\(([^()\s]{1,2000})\)/g,
       (match, text: string, href: string) =>
-        text.trim() === href || `mailto:${text.trim()}` === href
+        plainText(text) === href || `mailto:${plainText(text)}` === href
           ? match
           : `${match} (<${revealedHref(href)}>)`
     )
   );
+}
+
+// 链接文字比较网址时按显示出来的样子（转义成 \$ 的 $ 还原）
+function plainText(text: string): string {
+  return text.replaceAll("\\$", "$").trim();
 }
 
 // 补出来的网址：带协议的（http:、mailto: 等）是自动链接，照原样；不带的（./a、/tmp/x）不是，按正文排——里面的 $ 转义成 \$，
@@ -132,12 +162,14 @@ function revealedHref(href: string): string {
   return /^[A-Za-z][A-Za-z0-9+.-]*:/.test(href) ? href : href.replaceAll("$", "\\$");
 }
 
-// 两个 $ 之间是变量名（可带花括号）加至多几个分隔符（不含字母、数字、反斜杠与空白）：src/、arr[、a=、{a}-、HOME)/
-const VARIABLE_BETWEEN = /^\{?[A-Za-z_][A-Za-z0-9_]*\}?[^A-Za-z0-9_\s$\\]{0,3}$/;
+// 两个 $ 之间是变量名加 1 至 3 个分隔符（不含字母、数字、反斜杠与空白：src/、arr[、a=、HOME)/），或花括号里的变量名（{a}、{a}-）。
+// 没有分隔符的（the $i$th、$x$y）让 pi-tui 当公式
+const VARIABLE_BETWEEN =
+  /^(?:[A-Za-z_][A-Za-z0-9_]*[^A-Za-z0-9_\s$\\{}]{1,3}|\{[A-Za-z_][A-Za-z0-9_]*\}[^A-Za-z0-9_\s$\\]{0,3})$/;
 
-// 网址（http(s):// 与 www. 开头的）、自动链接（<协议:…>、<邮箱>）与链接目标里的 $ 不动
+// 图片（alt 文字原样显示）、网址（http(s):// 与 www. 开头的）、自动链接（<协议:…>、<邮箱>）、行内 HTML 标签与链接目标里的 $ 不动
 const URL_LIKE =
-  /(<[A-Za-z][A-Za-z0-9+.-]*:[^<>\s]*>|<[^<>\s@]+@[^<>\s]+>|https?:\/\/[^\s<>]+|www\.[^\s<>]+|\]\([^()\s]*\))/;
+  /(!\[[^\]\n]*\]\([^()\s]*\)|<\/?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?\/?>|<!--.*?-->|<[A-Za-z][A-Za-z0-9+.-]*:[^<>\s]*>|<[^<>\s@]+@[^<>\s]+>|https?:\/\/[^\s<>]+|www\.[^\s<>]+|\]\([^()\s]*\))/;
 
 function isEscapedAt(text: string, at: number): boolean {
   let slashes = 0;

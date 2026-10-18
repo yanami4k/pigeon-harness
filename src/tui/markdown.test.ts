@@ -189,3 +189,35 @@ test("决策 500：相对链接补出的网址、$$ 进程号、紧挨的公式�
   const compare = rendered("$x<y$和$y>z$");
   assert.doesNotMatch(compare, /\$/, compare);
 });
+
+// 最终复审：成块公式的收尾 $$ 贴在行末（跨行）、引用与列表里的成块公式照常渲染，其后的排版不受影响；紧跟字母的短公式照常渲染
+test("决策 500：多行成块公式（收尾 $$ 贴在行末）、引用与列表里的成块公式照常渲染，后文照常排版", () => {
+  const aligned = rendered(
+    "$$\\begin{aligned}\na &= b\n\\end{aligned}$$\n\n后文 **粗体**\n\n- 列表"
+  );
+  assert.doesNotMatch(aligned, /\\\$|\$\$|\*\*|\\end/, aligned);
+  assert.match(aligned, /后文 粗体/);
+  for (const input of ["> $$\n> x^2\n> $$", "- $$\n  x^2+1\n  $$", "$$x=1\ny=2$$"]) {
+    const out = rendered(input);
+    assert.doesNotMatch(out, /\$\$|\\\$/, `${input} => ${out}`);
+  }
+  for (const input of ["the $i$th", "耗时 $t$s"]) {
+    const out = rendered(input);
+    assert.doesNotMatch(out, /\$/, `${input} => ${out}`);
+  }
+});
+
+// 最终复审：HTML 行、图片 alt、标题后紧跟的缩进代码、链接文字与网址相同的写法不露出反斜杠、不多补网址
+test("决策 500：HTML 行、图片 alt、标题后的缩进代码与文字即网址的链接原样", () => {
+  for (const [input, shown] of [
+    ["<details>\n<summary>价格 $5</summary>\n</details>", "价格 $5"],
+    ["![$5 icon](x.png)", "$5 icon"],
+    ["## Example\n    echo $a/$b", "echo $a/$b"],
+  ] as const) {
+    const out = rendered(input);
+    assert.ok(out.includes(shown), `${input} => ${out}`);
+    assert.doesNotMatch(out, /\\\$/, `${input} => ${out}`);
+  }
+  const same = rendered("[./$x](./$x)");
+  assert.doesNotMatch(same, /\(<\.\/\$x>\)|\\\$/, same);
+});
