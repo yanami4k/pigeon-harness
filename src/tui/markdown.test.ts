@@ -149,3 +149,43 @@ test("决策 500：缩进代码块、双反引号行内代码、网址与链接�
     assert.doesNotMatch(out, /\\\$/, `${input} => ${out}`);
   }
 });
+
+// 复审 H1、M1：列表里缩进 4 格以上的围栏代码块照样是代码；松散列表里缩进 4 格的正文、Tab 开头的行照样是正文
+test("决策 500：列表里的围栏代码块原样；松散列表里的缩进正文与 Tab 开头的行照常处理变量", () => {
+  for (const [input, shown] of [
+    ["1. 步骤：\n    ```bash\n    cp $src/$dest\n    ```", "cp $src/$dest"],
+    ["- 外层\n  - 内层：\n      ```\n      cp $a/$b\n      ```", "cp $a/$b"],
+  ] as const) {
+    const out = rendered(input);
+    assert.ok(out.includes(shown), `${input} => ${out}`);
+    assert.doesNotMatch(out, /\\\$/, `${input} => ${out}`);
+  }
+  for (const [input, shown] of [
+    ["1. 步骤\n\n    cp $src/$dest 然后 **注意**", "cp $src/$dest 然后 注意"],
+    ["- a\n\n    - b 用 $i/$n", "b 用 $i/$n"],
+    ["- 项目\n\n    价格 $5 元，**注意**", "价格 $5 元，注意"],
+    ["\tcp $src/$dest", "cp $src/$dest"],
+  ] as const) {
+    const out = rendered(input);
+    assert.ok(out.includes(shown), `${input} => ${out}`);
+    assert.doesNotMatch(out, /\*\*|\\\$/, `${input} => ${out}`);
+  }
+});
+
+// 复审 M2、M3 与低项：补出的相对网址、shell 的 $$、紧挨着的两个公式、www. 网址、信息串里带反引号的"伪围栏"、中文里的比较式
+test("决策 500：相对链接补出的网址、$$ 进程号、紧挨的公式、www. 网址与比较式照原样或照常渲染", () => {
+  const relative = rendered("[文件](./$a/$b.md) 和 **粗**");
+  assert.ok(relative.includes("./$a/$b.md"), relative);
+  assert.doesNotMatch(relative, /\*\*|\\\$/, relative);
+  const pid = rendered("echo $$ 是进程号，$a/$b 和 **粗**");
+  assert.ok(pid.includes("echo $$ 是进程号，$a/$b 和 粗"), pid);
+  assert.doesNotMatch(pid, /\*\*|\\\$/, pid);
+  const twin = rendered("其中$a$$b$为实数");
+  assert.doesNotMatch(twin, /\$/, twin);
+  const www = rendered("见 www.x.com/$a/$b");
+  assert.ok(www.includes("www.x.com/$a/$b"), www);
+  const fakeFence = rendered("``` 行内三反引号 $a/$b ```\n\n下一段 $x/$y");
+  assert.ok(fakeFence.includes("下一段 $x/$y"), fakeFence);
+  const compare = rendered("$x<y$和$y>z$");
+  assert.doesNotMatch(compare, /\$/, compare);
+});

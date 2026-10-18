@@ -24,32 +24,56 @@ export const MARKDOWN_THEME: MarkdownTheme = {
   underline: sgr(4, 24),
 };
 
-// 只改正文：围栏代码块（``` 或 ~~~，按开头的字符与长度配对，引用里的也算）、缩进代码块（空行或另一行缩进代码之后、
-// 以 4 个空格或 Tab 开头的行）与行内代码（按反引号连续的个数配对）原样
+// 只改正文：围栏代码块（``` 或 ~~~，任意缩进、引用里的也算，按开头的字符与长度配对；``` 开头而同一行后面还有反引号的不算围栏）、
+// 缩进代码块与行内代码（按反引号连续的个数配对）原样。缩进代码块：空行（或另一行缩进代码）之后、比所在的块多缩进 4 个空格的行——
+// 列表里按列表项内容的缩进算，Tab 开头的不算（pi-tui 在这之后才把 Tab 换成空格，按段落排）。拿不准时宁可当代码跳过
 function mapProse(markdown: string, change: (prose: string) => string): string {
   let fence: { char: string; length: number } | undefined;
   let previousBlank = true;
   let previousIndentedCode = false;
+  // 当前列表项内容的缩进（不在列表里为 undefined）
+  let listContent: number | undefined;
   return markdown
     .split("\n")
     .map((line) => {
       const body = line.replace(/^(?:\s{0,3}>\s?)+/, "");
-      const marker = /^\s{0,3}(`{3,}|~{3,})/.exec(body)?.[1];
+      const marker = /^\s*(`{3,}|~{3,})(.*)$/.exec(body);
       if (fence !== undefined) {
-        if (marker !== undefined && marker[0] === fence.char && marker.length >= fence.length) {
+        const closing = marker?.[1];
+        if (
+          closing !== undefined &&
+          closing[0] === fence.char &&
+          closing.length >= fence.length &&
+          (marker?.[2] ?? "").trim() === ""
+        ) {
           fence = undefined;
         }
         previousBlank = false;
+        previousIndentedCode = false;
         return line;
       }
-      if (marker !== undefined) {
-        fence = { char: marker[0] ?? "`", length: marker.length };
+      const opening = marker?.[1];
+      if (opening !== undefined && !(opening[0] === "`" && (marker?.[2] ?? "").includes("`"))) {
+        fence = { char: opening[0] ?? "`", length: opening.length };
         previousBlank = false;
+        previousIndentedCode = false;
         return line;
       }
-      const indentedCode = /^( {4}|\t)/.test(line) && (previousBlank || previousIndentedCode);
+      const blank = body.trim() === "";
+      const indent = /^ */.exec(body)?.[0].length ?? 0;
+      const item = /^( *)([-*+]|\d{1,9}[.)])( {1,4}|$)/.exec(body);
+      const indentedCode =
+        !blank &&
+        item === null &&
+        indent >= (listContent ?? 0) + 4 &&
+        (previousBlank || previousIndentedCode);
+      if (item !== null) {
+        listContent = (item[1]?.length ?? 0) + (item[2]?.length ?? 0) + (item[3]?.length || 1);
+      } else if (!blank && indent === 0) {
+        listContent = undefined;
+      }
       previousIndentedCode = indentedCode;
-      previousBlank = line.trim() === "";
+      previousBlank = blank;
       if (indentedCode) return line;
       return mapOutsideInlineCode(line, change);
     })
@@ -95,16 +119,25 @@ export function revealLinkTargets(markdown: string): string {
     prose.replace(
       /\[([^\]\n]{1,500})\]\(([^()\s]{1,2000})\)/g,
       (match, text: string, href: string) =>
-        text.trim() === href || `mailto:${text.trim()}` === href ? match : `${match} (<${href}>)`
+        text.trim() === href || `mailto:${text.trim()}` === href
+          ? match
+          : `${match} (<${revealedHref(href)}>)`
     )
   );
+}
+
+// 补出来的网址：带协议的（http:、mailto: 等）是自动链接，照原样；不带的（./a、/tmp/x）不是，按正文排——里面的 $ 转义成 \$，
+// 免得被当成公式（决策 500）
+function revealedHref(href: string): string {
+  return /^[A-Za-z][A-Za-z0-9+.-]*:/.test(href) ? href : href.replaceAll("$", "\\$");
 }
 
 // 两个 $ 之间是变量名（可带花括号）加至多几个分隔符（不含字母、数字、反斜杠与空白）：src/、arr[、a=、{a}-、HOME)/
 const VARIABLE_BETWEEN = /^\{?[A-Za-z_][A-Za-z0-9_]*\}?[^A-Za-z0-9_\s$\\]{0,3}$/;
 
-// 网址、自动链接与链接目标里的 $ 不动
-const URL_LIKE = /(<[^<>\s]+>|https?:\/\/[^\s<>]+|\]\([^()\s]*\))/;
+// 网址（http(s):// 与 www. 开头的）、自动链接（<协议:…>、<邮箱>）与链接目标里的 $ 不动
+const URL_LIKE =
+  /(<[A-Za-z][A-Za-z0-9+.-]*:[^<>\s]*>|<[^<>\s@]+@[^<>\s]+>|https?:\/\/[^\s<>]+|www\.[^\s<>]+|\]\([^()\s]*\))/;
 
 function isEscapedAt(text: string, at: number): boolean {
   let slashes = 0;
@@ -125,11 +158,21 @@ function escapeDollarsInProse(text: string): string {
   let k = 0;
   while (k < dollars.length) {
     const open = dollars[k] as number;
-    // $$：成块（或行内成块）公式的边界，找它的收尾 $$ 跳过
+    // $$：同一行里有收尾的 $$ 是（行内）成块公式，整段跳过；没有收尾的——行首的留给 pi-tui 当多行公式的开头，行中的
+    //（shell 的 $$ 进程号）两个都转义
     if (text[open + 1] === "$") {
       const end = text.indexOf("$$", open + 2);
-      if (end < 0) break;
-      while (k < dollars.length && (dollars[k] as number) <= end + 1) k += 1;
+      if (end >= 0) {
+        while (k < dollars.length && (dollars[k] as number) <= end + 1) k += 1;
+        continue;
+      }
+      if (text.slice(0, open).trim() === "") {
+        k += 2;
+        continue;
+      }
+      marks.add(open);
+      marks.add(open + 1);
+      k += 2;
       continue;
     }
     // 后面是空白：pi-tui 不当开头——它是普通的 $，转义（它可能被前面的 $ 当成收尾）
@@ -139,7 +182,7 @@ function escapeDollarsInProse(text: string): string {
       continue;
     }
     const closeAt = dollars[k + 1];
-    if (closeAt === undefined || text[closeAt + 1] === "$") {
+    if (closeAt === undefined) {
       // 配不上收尾：转义它，免得 pi-tui 把后文当没写完的公式
       marks.add(open);
       k += 1;
