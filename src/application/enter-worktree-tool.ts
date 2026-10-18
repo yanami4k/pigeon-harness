@@ -1,10 +1,10 @@
-// 模型自己建工作树的工具 enter_worktree（决策 446）：按 445 同一套建立（.pigeon/wt/<名字>、分支 pigeon-wt/<名字>、
+// 模型自己建工作树的工具 enter_worktree（决策 446）：按 445 同一套建立（.pigeon/trees/<名字>、分支 pigeon/<名字>、
 // 起点缺省为远端默认分支、.worktreeinclude 复制、全局排除规则），在会话里记一条 pigeon.worktree 条目，由终端界面在本轮结束后
 // 按 /reload 的先建后换把会话移进去，并自动递一条通知让 agent 接着做。普通会话只在使用者明确要求时用（工具说明写明）；
-// 只给终端界面的主会话注册（pigeon run、worker、沙箱都不注册）。写档：建目录与分支，按本会话的审批模式请示。
+// 只给终端界面的主会话注册（pigeon run、沙箱都不注册）。写档：建目录与分支，按本会话的审批模式请示。
 // 工具说明、参数说明与返回文字面向模型，用英文（决策 428）。
 import { type Static, Type } from "typebox";
-import { pigeonRel } from "../state/paths.ts";
+import { pigeonRel, WORKTREES_DIR } from "../state/paths.ts";
 import {
   SESSION_ENTRY_VERSION,
   type SessionEntrySink,
@@ -24,7 +24,7 @@ export const ENTER_WORKTREE_TOOL = "enter_worktree";
 
 export const ENTER_WORKTREE_DESCRIPTION = [
   'Create a git worktree for this session and move the session into it. Use this ONLY when the user explicitly asks you to work in a worktree (for example "work in a worktree" or "do this in a separate worktree"); never use it on your own initiative.',
-  `The worktree is created at ${pigeonRel("worktrees")}/<name> in the main repository on a new branch pigeon-wt/<name>, starting from the latest remote default branch (or HEAD when there is no remote or the fetch fails); if a worktree with that name already exists, it is reused. Uncommitted changes in the current checkout are NOT carried over.`,
+  `The worktree is created at ${pigeonRel(WORKTREES_DIR)}/<name> in the main repository on a new branch pigeon/<name>, starting from the latest remote default branch (or HEAD when there is no remote or the fetch fails); if a worktree with that name already exists, it is reused. Uncommitted changes in the current checkout are NOT carried over.`,
   "The move happens when the current turn ends: after calling this tool, finish the turn with a brief reply and do not edit files in the current checkout; the session then continues inside the worktree automatically.",
 ].join("\n");
 
@@ -164,7 +164,7 @@ export function enterWorktreeRegistration(): ToolRegistration {
       "create a worktree and move the session into it after this turn (only when the user asks)",
     parameters: EnterWorktreeParamsSchema,
     tier: "write",
-    // 参数是名字不是路径：位置由工具自己定在主仓库的 .pigeon/wt 下
+    // 参数是名字不是路径：位置由工具自己定在主仓库的 .pigeon/trees 下
     pathConfinement: { kind: "none" },
     executionMode: "sequential",
   };

@@ -11,7 +11,7 @@
 //      memory-review.json、旧人写说明 .pigeon/memory/ 一律挪出仓库进用户级备份目录（仓库里不留备份）；
 //      .pigeon/memory/ 另打印提示"把其中内容并入项目的 AGENTS.md"；
 //   ④ 用户级旧偏好（决策 330）：~/.pigeon/preferences.md 改名为 ~/.pigeon/AGENTS.md，目标已存在即拦阻、不覆盖；
-//   ⑤ worker 工作树：git worktree move 到 .pigeon/state/worktrees/；
+//   ⑤ 工作树：决策 494 起不再迁移（旧位置一概不认）；
 //   ⑥ 退役的 verify.json（决策 322）：不并入设置——挪进备份目录，并打印把原验证命令改写为收尾（Stop）钩子的
 //      配置示例（分步配置按各步命令以 && 连接）。
 // 有锁被存活进程占用（会话正开着、worker 正在运行）或工作树被锁定时拒绝并说明。可重复执行：没有要做的事即如实说明。

@@ -170,7 +170,7 @@ test("决策 325：受跟踪的 .pigeon/settings.json 是项目内容，改动�
     const snap = snapshotWorkdir({ repoRoot: dir, ref: REF });
     assert.equal(snap.snapshot, true);
     assert.deepEqual(snap.files, [".pigeon/settings.json", "a.txt"]);
-    assert.equal(git(dir, "ls-tree", "-r", "--name-only", snap.commit, ".pigeon/wt"), "");
+    assert.equal(git(dir, "ls-tree", "-r", "--name-only", snap.commit, ".pigeon/trees"), "");
     assert.equal(git(dir, "show", `${snap.commit}:.pigeon/settings.json`), '{"changed":1}');
     assert.equal(git(dir, "show", `${snap.commit}:.pigeon/verify.json`), "{}");
     assert.equal(git(dir, "ls-tree", "-r", "--name-only", snap.commit, ".pigeon/state"), "");

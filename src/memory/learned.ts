@@ -36,7 +36,7 @@ export const MEMORY_DISPLAY_PATHS: Readonly<Record<MemoryLayer, string>> = {
 // 英文的 (recorded 日期 · 来源 · session 会话号)、来源取英文短名，推送段里讲尾巴的那句随之改写
 export const MEMORY_TEXT_VERSION = "v5";
 
-// 新建文件时写入的文件头；已有文件的文件头原样保留（决策 431 之前的中文文件头由迁移换成这里的）
+// 新建文件时写入的文件头；已有文件的文件头原样保留
 export const MEMORY_FILE_HEADERS: Readonly<Record<MemoryLayer, string>> = {
   project:
     "# Learned memory (this project)\n" +
@@ -48,7 +48,7 @@ export const MEMORY_FILE_HEADERS: Readonly<Record<MemoryLayer, string>> = {
     "\n",
 };
 
-// 条目的来处（工具补在行内）：日期（YYYY-MM-DD）、来源（入口的英文短名，如 tui、cli；人手写的或迁移时认不出的照原文）、会话编号
+// 条目的来处（工具补在行内）：日期（YYYY-MM-DD）、来源（入口的英文短名，如 tui、cli；人手写的照原文）、会话编号
 export interface MemoryOrigin {
   date: string;
   source: string;
@@ -145,7 +145,7 @@ export function entryId(layer: MemoryLayer, id: number): string {
   return `${MEMORY_LAYER_PREFIX[layer]}${id}`;
 }
 
-// 行末的尾巴（连同前导空格）：` (recorded 2026-10-01 · tui · session sess_…)`；迁移旧格式时同样经它写出
+// 行末的尾巴（连同前导空格）：` (recorded 2026-10-01 · tui · session sess_…)`
 export function originTail(origin: MemoryOrigin): string {
   return ` (recorded ${[origin.date, origin.source, `session ${origin.sessionId}`].join(ORIGIN_SEPARATOR)})`;
 }

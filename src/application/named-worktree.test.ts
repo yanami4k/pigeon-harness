@@ -283,7 +283,7 @@ test("/worktrees 列出工作树；clean 缺省挑没改动的、--all 挑全部
   assert.equal(git(repo, ["branch", "--list", wt.branch]), "");
 });
 
-test("/worktrees：有进程开着的独立工作树（在用锁，含没有会话文件的）点名也不删；换到别的分支的只删 pigeon-wt/<名字>", () => {
+test("/worktrees：有进程开着的工作树（在用标记，含没有会话文件的）点名也不删；换到别的分支的只删 pigeon/<名字>", () => {
   const repo = plainRepo();
   const busy = openNamedWorktree({ cwd: repo, name: "busy" });
   const release = holdWorktreeInUse(busy.path, temp("pigeon-wt-use-"));

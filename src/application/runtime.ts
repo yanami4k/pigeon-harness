@@ -1102,8 +1102,8 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     }
     return state;
   };
-  // 状态变化通道：首次与压缩之后给完整块，其余只给变了的节；起点见 statusSent。沿用的是旧会话的系统提示（没有权威层级
-  // 说明，还带"开局冻结"的旧说法）时，首次的完整块开头另加一句以本状态块为准
+  // 状态变化通道：首次与压缩之后给完整块，其余只给变了的节；起点见 statusSent。沿用的是旧会话的系统提示（没有英文的权威
+  // 层级说明：更早的、还带"开局冻结"旧说法的，以及 428 之前写成中文的）时，首次的完整块开头另加一句以本状态块为准
   const statusTracker = new StatusTracker(deps.statusSent, {
     legacyNote: !systemPrompt.includes(STATUS_AUTHORITY_SENTENCE),
   });

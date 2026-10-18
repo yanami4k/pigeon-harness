@@ -34,7 +34,7 @@ async function storedSession(root: string, task: string, reply: string): Promise
   return (await session.close()).sessionId;
 }
 
-function harness(home: string, currentRoot: string) {
+function harness(home: string) {
   const runs: Array<[string, string]> = [];
   const opened: ListedSession[] = [];
   const tasks: string[] = [];
@@ -46,7 +46,6 @@ function harness(home: string, currentRoot: string) {
   const list = new WorkList({
     pool,
     currentId: () => "sess_current",
-    currentRoot: () => currentRoot,
     open: async (entry, task) => {
       opened.push(entry);
       tasks.push(task);
@@ -79,7 +78,7 @@ test("本进程没开的会话列成 idle 卡片：摘要取最后一条回复�
   addToSessionIndex({ sessionId: local, governanceRoot: here, workspaceRoot: here }, home);
   addToSessionIndex({ sessionId: remote, governanceRoot: there, workspaceRoot: there }, home);
   addToSessionIndex({ sessionId: "sess_current", governanceRoot: here, workspaceRoot: here }, home);
-  const { list, pool, runs, opened, tasks } = harness(home, here);
+  const { list, pool, runs, opened, tasks } = harness(home);
   list.refresh();
   const cards = list.list();
   assert.deepEqual(
@@ -132,7 +131,7 @@ test("别的 Pigeon 进程开着的会话标 open elsewhere，发不了话", asy
   const file = listSessionIndex(home)[0]?.sessionFile ?? "";
   // 会话锁在一个还活着的别的进程手里（父进程）
   writeFileSync(`${file}.lock`, JSON.stringify({ pid: process.ppid, acquiredAt: Date.now() }));
-  const { list, opened } = harness(home, root);
+  const { list, opened } = harness(home);
   list.refresh();
   assert.equal(list.list()[0]?.elsewhere, true);
   assert.match((await list.send(id, "接着做")) ?? "", /is open elsewhere/);

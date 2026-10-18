@@ -586,7 +586,6 @@ export async function main(argv: string[]): Promise<void> {
       ? new WorkList({
           pool: sessionPool.pool,
           currentId: () => current.sessionId,
-          currentRoot: () => current.governanceRoot,
           open: (entry, task) => openListed(entry, task),
           // 开着的别的项目的会话同样标目录
           placeOf: (id) => {

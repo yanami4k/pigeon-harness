@@ -4,7 +4,6 @@
 // 不在当前会话所在项目里的标它的目录。偷看取会话记录最近几句；发话先在本进程开起来再发（开不成写明原因）；
 // Ctrl+X 第一下不做事，第二下删出清单。从面板去掉即删出清单（会话记录保留）；开着的再释放。清单在打开面板时重读。
 import { homedir } from "node:os";
-import { resolve } from "node:path";
 import { loadSessionHistory, userTextParts } from "../application/history.ts";
 import { sessionOpenElsewhere } from "../application/session-holder.ts";
 import { sessionDisplayName } from "../application/session-name.ts";
@@ -27,7 +26,6 @@ export interface WorkListDeps<Live> {
   pool: LocalSessionPool<Live>;
   // 当前会话（不列）与它所在项目的治理根（别的项目的卡片标目录）
   currentId(): string;
-  currentRoot(): string;
   // 在本进程里按它自己的治理根与工作区开起来（收进会话池；task 为卡片上的首条输入）；开不成返回原因
   open(entry: ListedSession, task: string): Promise<string | undefined>;
   // 会话池里开着的会话：不在当前会话所在项目里的，它的目录（卡上标明）
@@ -44,12 +42,6 @@ interface DormantCard {
 
 const PEEK_LINES = 4;
 const PEEK_CHARS = 200;
-
-function samePath(left: string, right: string): boolean {
-  const a = resolve(left);
-  const b = resolve(right);
-  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
-}
 
 // 会话记录里的名字、首条人说的话与最后一条回复的开头；读不成为 undefined
 function factsOf(
@@ -106,7 +98,6 @@ export class WorkList<Live> implements SessionPanelSource {
   refresh(): void {
     const pool = this.#deps.pool;
     const currentId = this.#deps.currentId();
-    const currentRoot = this.#deps.currentRoot();
     let listed: ListedSession[];
     try {
       listed = listSessionIndex(this.#homeDir);

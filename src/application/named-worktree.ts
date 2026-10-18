@@ -3,8 +3,8 @@
 // - 起点缺省为远端默认分支（origin/HEAD 指向的分支）：远端引用超过 24 小时没取过就先 fetch，限时约 5 秒、不许交互；
 //   没有远端、取不到或超时即用当前 HEAD。设置 worktree.baseRef 为 "head" 时直接用当前 HEAD。
 // - 建立时按 .worktreeinclude 复制被忽略的文件（449，见 orchestration/worktree.ts 的 createWorktreeAt），并确保全局排除
-//   文件里有 **/.pigeon/wt/（444、445）。
-// - 退出时：没有改动（没有未提交改动与未跟踪文件、HEAD 与分支仍指向起点）即删工作树与分支；有改动由调用方问保留还是删除。
+//   文件里有 **/.pigeon/trees/（444、445、494）。
+// - 退出时不碰工作树（决策 494）：收尾交给 /worktrees clean。
 // 会话记录、设置与记忆仍在主仓库根的 .pigeon（治理根是主仓库），工作区是工作树。
 import { execFile, execFileSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
