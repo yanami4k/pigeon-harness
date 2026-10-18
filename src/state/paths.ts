@@ -3,7 +3,7 @@
 // 纯路径计算，无 IO；用户主目录可注入（测试指到临时目录，不碰真实的 ~/.pigeon）。
 // - 人写的内容：.pigeon/settings.json（可提交）、.pigeon/skills、~/.pigeon/settings.json、~/.pigeon/skills、
 //   ~/.pigeon/AGENTS.md（用户级说明，决策 330），以及已退役的 .pigeon/verify.json（决策 322）。项目的说明是仓库里的 AGENTS.md，不在 .pigeon 下。
-// - 程序写的状态在 .pigeon/state/（不提交）：会话、学到的记忆（项目级）、worker 工作树、输入历史、终端界面日志、
+// - 程序写的状态在 .pigeon/state/（不提交）：会话、学到的记忆（项目级）、输入历史、终端界面日志、
 //   会话检索的缓存（search-cache，决策 339）、迁移命令的备份；
 //   用户级的程序状态（配置内容指纹、学到的记忆的用户级）在 ~/.pigeon/state/。
 // - 旧布局（迁移命令与启动检查用）：7 个旧配置文件、旧位置的程序状态、旧的学到的记忆、复盘配置与补做复盘记录、

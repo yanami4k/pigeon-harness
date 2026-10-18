@@ -22,7 +22,7 @@ function makeShell() {
     run: () => {
       pending = true;
       calls.push("run");
-      return "will remove 1 item: dirty\nremove? [y/N]";
+      return "will remove 1 item: dirty";
     },
     hasPending: () => pending,
     confirmPending: () => {

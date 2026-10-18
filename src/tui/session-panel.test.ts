@@ -856,3 +856,48 @@ test("决策 490：/take 不带参数把命令填进输入框、候选随即弹�
     cleanup();
   }
 });
+
+// 决策 490、489：会话池记着占位号到真会话号的映射，面板跟住刚派出的那张卡（开好之后显示名也换了）；卡上的工作区与当前会话相同则不写
+test("会话池换号之后面板照样选中刚派出的会话；卡上与当前会话相同的工作区不写", async () => {
+  let release: (() => void) | undefined;
+  const pool = new LocalSessionPool<Live>({
+    displayPath: (path) => path,
+    open: async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const handle: PooledRuntime<Live> = {
+        sessionId: "sess_real",
+        name: () => "myapp-real",
+        worktree: { path: "~/t/x", branch: "pigeon/x" },
+        run: async () => {},
+        interrupt: () => {},
+        isRunning: () => false,
+        transcript: () => [],
+        close: async () => {},
+        live: { subscribe: () => () => {}, subscribeStream: () => () => {} },
+      };
+      return handle;
+    },
+  });
+  let currentWorkspace = "~/myapp";
+  const panel = new SessionPanel({
+    height: () => 20,
+    cards: () => pool.list(),
+    peek: () => [],
+    currentId: (id) => pool.currentId(id),
+    currentWorkspace: () => currentWorkspace,
+  });
+  const card = await pool.spawn("干活");
+  panel.followSpawn(card.id);
+  assert.equal(panel.selected()?.id, card.id);
+  release?.();
+  for (let i = 0; i < 50 && pool.list()[0]?.id !== "sess_real"; i += 1) await settle(10);
+  assert.equal(panel.selected()?.id, "sess_real", "换号之后照样选中它");
+  assert.equal(panel.selected()?.name, "myapp-real");
+  const lines = () => withoutStyles(panel.render(100).join("\n"));
+  assert.match(lines(), /myapp-real ~\/t\/x/);
+  currentWorkspace = "~/t/x";
+  assert.doesNotMatch(lines(), /~\/t\/x/, "与当前会话相同的工作区不写");
+  await pool.closeAll();
+});

@@ -934,7 +934,8 @@ export class AgentHub {
       undefined,
       `To reply, use send_message to ${this.#addressOf(from)}.`
     );
-    target.deliver(wrapped, { from: this.#addressOf(from), to, kind: "message", text });
+    // 会话记录里的传话记显示名（回看历史时给人看）；给模型的地址在上面的消息头与回话说明里
+    target.deliver(wrapped, { from: from.name(), to: target.name(), kind: "message", text });
     return `Sent to ${to}.`;
   }
 

@@ -34,6 +34,7 @@ import {
   LocalSessionPool,
   type PooledHooks,
   type PooledRuntime,
+  type PooledSessionCard,
   readTakeBase,
   takePooledChanges,
 } from "../application/session-pool.ts";
@@ -522,6 +523,29 @@ export function pooledRuntimeOf(
       return result.text;
     },
   };
+}
+
+// 决策 486、490：会话的主 agent 用 take_changes 取面板里的会话——按全量会话号找（不按显示名），不取自己；在干活的、没开的、
+// 别的仓库的不取。面板里没有这个会话返回 undefined（调用方再说明找不到）
+export function takeFromPanel(input: {
+  cards: readonly PooledSessionCard[];
+  pool: LocalSessionPool<PooledLive>;
+  caller: SessionCore;
+  id: string;
+  into: string;
+}): string | undefined {
+  const { id, caller, pool } = input;
+  const card = input.cards.find((item) => item.id === id && item.id !== caller.sessionId);
+  if (card === undefined) return undefined;
+  if (card.state === "running" || card.state === "waiting" || card.state === "preparing") {
+    return `Error: session ${id} is still working; take its changes after it finishes`;
+  }
+  const target = pool.runtimeOf(card.id)?.live?.core;
+  if (target === undefined) return `Error: session ${id} isn't open`;
+  if (!sameDir(target.governanceRoot, caller.governanceRoot)) {
+    return `Error: ${id} is in another repository; nothing to take`;
+  }
+  return pool.takeInto(card.id, { workspace: input.into, root: caller.governanceRoot });
 }
 
 export function createSessionPool(context: SessionPoolContext): {

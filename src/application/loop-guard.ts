@@ -26,7 +26,7 @@ function clip(line: string): string {
     : `${chars.slice(0, RESULT_LINE_CHARS).join("")}…`;
 }
 
-// 调用的一行：参数用完整的英文说法（决策 428：提醒与 worker 失败原因给模型看；终端界面与 pigeon run 的叫停说明同一写法）
+// 调用的一行：参数用完整的英文说法（决策 428：提醒给模型看；终端界面与 pigeon run 的叫停说明同一写法）
 function callLine(call: ComparedRound["calls"][number]): string {
   return `${call.toolName} ${summarizeArgs(call.args, true)}`;
 }
@@ -67,7 +67,7 @@ function repeatLead(stop: Pick<LoopStop, "count" | "alternating">): string {
 
 const NO_NEW_INFORMATION = "Repeating the same calls will not bring any new information.";
 
-// 定稿文字：两版提醒、终端界面的叫停说明、worker 的打转原因、pigeon run 的收尾说明
+// 定稿文字：两版提醒、终端界面的叫停说明、子 agent 的打转原因、pigeon run 的收尾说明
 export const LOOP_GUARD_TEXTS = {
   remind: (stop: LoopStop) =>
     `${LOOP_REMINDER_PREFIX}${repeatLead(stop)}\n${patternDetail(stop)}\n` +

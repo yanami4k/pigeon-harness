@@ -6,7 +6,7 @@
 // 之间换手，审批的来源标记、卡片的等待标记与叫醒跟着角色走。
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { afterEach, test } from "vitest";
 import { reopenNamedWorktree } from "../application/named-worktree.ts";
 import { git, initRepo, routedModel, tempRoot } from "../application/tui-session-fixtures.ts";
@@ -23,6 +23,7 @@ import {
   type SessionCore,
   type SessionPoolContext,
   setCoreRole,
+  takeFromPanel,
 } from "./main-pool.ts";
 
 const cleanups: Array<() => Promise<unknown> | unknown> = [];
@@ -460,4 +461,79 @@ test("决策 484：会话核换手——在面板里审批写明来源、卡片�
   await until(() => requests.length === 3 && pool.list()[0]?.state === "idle", "第三轮跑完");
   assert.equal(requests[2]?.pooled?.name, pool.list()[0]?.name);
   assert.equal(states[2], "waiting");
+});
+
+function writingModel() {
+  return routedModel({
+    main: [
+      {
+        text: "写",
+        toolCalls: [{ name: "write_file", args: { path: "made.txt", content: "made\n" } }],
+      },
+      { text: "写好了" },
+    ],
+  }).streamFn;
+}
+
+function poolIn(root: string, home: string) {
+  return createSessionPool({
+    governanceRoot: root,
+    streamFn: writingModel(),
+    flags: { yolo: true, provider: "custom", modelId: "custom" } as never,
+    settings: () => loadSettings(root, { homeDir: home }),
+    warn: () => {},
+    homeDir: home,
+    createApprovalHandler: () => async () => ({ approved: true }),
+    mainWorkspace: () => root,
+    notice: () => {},
+  }).pool;
+}
+
+// 决策 486、490：take_changes 取面板里的会话按全量会话号找，不按显示名；不取自己、不取别的仓库的
+test("take_changes 取面板会话：按全量会话号取；显示名不认，自己不取，别的仓库不取", async () => {
+  const { root, cleanup } = tempRoot("pigeon-pool-panel-take-");
+  cleanups.push(cleanup);
+  const home = join(root, ".home");
+  mkdirSync(home);
+  initRepo(root, { "a.txt": "one\n" });
+  writeFileSync(join(root, ".gitignore"), ".pigeon/\n.home/\n");
+  const pool = poolIn(root, home);
+  cleanups.push(() => pool.closeAll());
+  await pool.spawn("建一个文件");
+  await until(() => pool.list()[0]?.state === "idle", "跑完空闲");
+  const card = pool.list()[0];
+  assert.ok(card !== undefined);
+  const caller = { sessionId: "sess_caller", governanceRoot: root } as unknown as SessionCore;
+  const take = (id: string, who = caller) =>
+    takeFromPanel({ cards: pool.list(), pool, caller: who, id, into: root });
+  assert.equal(take(card.name), undefined, "显示名不认");
+  assert.equal(
+    take(card.id, { ...caller, sessionId: card.id } as SessionCore),
+    undefined,
+    "不取自己"
+  );
+  assert.match(
+    take(card.id, { ...caller, governanceRoot: join(root, "elsewhere") } as SessionCore) ?? "",
+    /is in another repository; nothing to take/
+  );
+  assert.match(take(card.id) ?? "", /took 1 file: made\.txt/);
+});
+
+// 审计 9：面板派出的树名从缺省显示名派生时先按树名规则清洗——目录名 my.app 的项目照样派得出
+test("目录名带点的项目（my.app）：面板派出的树名清洗成 my-app-<尾号>，派得出、跑得完", async () => {
+  const { root: base, cleanup } = tempRoot("pigeon-pool-dotted-");
+  cleanups.push(cleanup);
+  const root = join(base, "my.app");
+  mkdirSync(root);
+  const home = join(base, ".home");
+  mkdirSync(home);
+  initRepo(root, { "a.txt": "one\n" });
+  writeFileSync(join(root, ".gitignore"), ".pigeon/\n");
+  const pool = poolIn(root, home);
+  cleanups.push(() => pool.closeAll());
+  await pool.spawn("建一个文件");
+  await until(() => pool.list()[0]?.state === "idle", "跑完空闲");
+  const card = pool.list()[0];
+  assert.match(basename(card?.worktree?.path ?? ""), /^my-app-[0-9a-z]{4}$/);
+  assert.equal(readFileSync(join(card?.worktree?.path ?? "", "made.txt"), "utf8"), "made\n");
 });

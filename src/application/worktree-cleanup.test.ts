@@ -168,7 +168,8 @@ test("终端界面 /worktrees：clean 先给清单并写明会丢的改动，问
   assert.doesNotMatch(face.run([]), /usage:/, "列表后不附删除用法");
   const plan = face.run(["clean", "dirty"]);
   assert.match(plan, /dirty \(pigeon\/dirty\): untaken changes: 1 file, lost on removal/);
-  assert.match(plan, /remove\? \[y\/N\]/);
+  // 问句只在状态行（界面那一侧），清单里不另写
+  assert.doesNotMatch(plan, /\[y\/N\]/);
   assert.equal(face.hasPending(), true);
   assert.ok(existsSync(f.dirty.path), "确认之前不删");
   face.run(["list"]);
@@ -258,7 +259,8 @@ test("按完整分支名点名可用；不认得的名字列为不删", () => {
 test("确认之后、删之前重新核一遍：期间又改了文件的剔除并说明", () => {
   const f = fixture();
   const face = createTuiWorktreesFace(f.scope);
-  assert.match(face.run(["clean"]), /remove\? \[y\/N\]/);
+  face.run(["clean"]);
+  assert.equal(face.hasPending(), true);
   writeFileSync(join(f.taken.path, "late.txt"), "late\n");
   const done = face.confirmPending();
   assert.match(done, /taken: changed since listing/);

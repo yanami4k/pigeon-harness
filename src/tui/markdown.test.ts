@@ -82,3 +82,27 @@ test("决策 500：金额、$HOME 与行内代码里的 $ 不受影响", () => {
   assert.match(out, /\$HOME/);
   assert.match(out, /echo \$x\$/);
 });
+
+// 决策 500：shell 变量里的 $ 不受影响——正文里两个 $ 之间没有空白、后一个 $ 紧跟字母或 { 的写法原样显示，公式照常渲染
+test("决策 500：小写变量写法（$src/$dest、$i/$n、带花括号的变量等）原样显示，公式照常渲染", () => {
+  // 带花括号的 shell 变量（$ 加 {a}）
+  const braced = (name: string) => ["$", "{", name, "}"].join("");
+  const cases: Array<[string, string]> = [
+    ["cp $src/$dest", "cp $src/$dest"],
+    ["$i/$n", "$i/$n"],
+    ["$x+$y", "$x+$y"],
+    ["PHP: $arr[$key]", "PHP: $arr[$key]"],
+    ["($HOME)/$PATH", "($HOME)/$PATH"],
+    [`${braced("a")}${braced("b")}`, `${braced("a")}${braced("b")}`],
+    [`${braced("a")}-${braced("b")}`, `${braced("a")}-${braced("b")}`],
+    ["$a/$b/$c", "$a/$b/$c"],
+  ];
+  for (const [input, shown] of cases) {
+    assert.ok(rendered(input).includes(shown), `${input} => ${rendered(input)}`);
+  }
+  // 公式不受影响
+  assert.match(rendered("矩阵是 $n\\times n$ 的"), /n\s*×\s*n/);
+  assert.match(rendered("$\\alpha$ 与 $\\beta$"), /α 与 β/);
+  // 代码与转义好的 $ 不动
+  assert.ok(rendered("`cp $src/$dest`").includes("cp $src/$dest"));
+});

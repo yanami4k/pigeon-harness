@@ -6,7 +6,6 @@
 //（先等还在开的开完，整体有时限）。
 import { existsSync } from "node:fs";
 import {
-  deleteSnapshotRef,
   readSnapshotRef,
   SNAPSHOT_REF_ROOT,
   snapshotWorkdir,
@@ -297,6 +296,13 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
     return this.#renamed.get(id) ?? id;
   }
 
+  // 会话离开面板（去掉、被取出）：它的占位号映射不再要了
+  #forget(id: string): void {
+    for (const [placeholder, real] of this.#renamed) {
+      if (real === id) this.#renamed.delete(placeholder);
+    }
+  }
+
   list(): PooledSessionCard[] {
     return [...this.#entries.values()]
       .map((entry) => entry.card)
@@ -500,6 +506,7 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
       return undefined;
     }
     this.#entries.delete(id);
+    this.#forget(id);
     // 不再归面板：挂着的审批落定、叫醒都不再改这张卡
     entry.removed = true;
     const inflight = entry.inflight;
@@ -629,6 +636,7 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
     entry.removed = true;
     entry.halted = true;
     this.#entries.delete(id);
+    this.#forget(id);
     this.#notify();
     const releasing = this.#release(entry);
     this.#releasing.add(releasing);
@@ -850,17 +858,4 @@ export function readTakeBase(
 // 从面板去掉时：上次完整取回之后工作树再没有改动（取回的就是全部）
 export function unchangedSinceTake(worktreePath: string, base: string): boolean {
   return workdirMatches(worktreePath, base);
-}
-
-// 从面板去掉时：起点前移留下的快照引用不再要了（不存在也算删掉；出错不管）
-export function dropTakeBase(
-  worktreePath: string,
-  worktreeName: string,
-  scope: "panel" | "agent" = "panel"
-): void {
-  try {
-    deleteSnapshotRef(worktreePath, takeBaseRef(worktreeName, scope));
-  } catch {
-    // 工作树已不在等：引用留着无害
-  }
 }

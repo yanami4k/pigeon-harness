@@ -515,7 +515,7 @@ export async function runWorktreesCommand(
   throw new Error(WORKTREES_COMMAND_USAGE);
 }
 
-// 终端界面的 /worktrees：list 列出；clean 先给出将删的清单，界面在状态行问一次 `remove? [y/N]`，答 y 才删
+// 终端界面的 /worktrees：list 列出；clean 先给出将删的清单，界面在状态行问一次 y/N（问句只在状态行，清单里不另写），答 y 才删
 //（答别的、按 Esc、或再打一条命令即作罢）；真删之前重新核一遍，期间变成在用或改动有变化的不删
 export interface TuiWorktreesFace {
   run(args: readonly string[]): string;
@@ -567,7 +567,7 @@ export function createTuiWorktreesFace(scope: WorktreeScope): TuiWorktreesFace {
           const text = formatCleanPlan(plan);
           if (plan.remove.length === 0) return text;
           pending = plan;
-          return `${text}\nremove? [y/N]`;
+          return text;
         }
         return WORKTREES_TUI_USAGE;
       });

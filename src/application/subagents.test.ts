@@ -213,9 +213,10 @@ test("续聊：给已干完的子 agent 发消息即叫它接着干，干完再�
   // 子 agent 发给派出方
   assert.equal(child?.spec.agents.send("main-session", "a question"), "Sent to main-session.");
   assert.match(delivered[2] ?? "", /From general-1 \(a sub-agent you started\)/);
+  // 会话记录里记显示名（回看给人看）；给模型的地址是会话号
   assert.deepEqual(sessionRecords.at(-1), {
     from: "general-1",
-    to: "main-session",
+    to: "main",
     kind: "message",
     text: "a question",
   });

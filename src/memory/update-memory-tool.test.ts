@@ -380,6 +380,25 @@ test("人改坏格式：拒绝写入并指出文件与行号，文件原样不�
     assert.equal(fx.read("project"), broken);
   }));
 
+// 决策 498：旧格式（431 之前：中文文件头、行末〔…〕尾巴）的记忆文件不再自动改写——照常可写，旧文件头与旧条目逐字留着，
+// 不报格式错误；新写的条目用新格式
+test("旧格式记忆文件：update_memory 照常新增，旧文件头与旧条目逐字保留，不报格式错误", () =>
+  withFixture(async (fx) => {
+    const file = fx.file("project");
+    mkdirSync(dirname(file), { recursive: true });
+    const old =
+      "# 学到的记忆（本项目）\n" +
+      "<!-- 由 Pigeon 的 update_memory 维护；也可以在终端界面用 /memory edit project 修改。 -->\n" +
+      "\n" +
+      "- [P1] 甲 〔2026-09-01 · 终端界面 · 会话 sess_old〕\n";
+    writeFileSync(file, old);
+    const result = await fx.call({ action: "add", content: "乙" });
+    assert.doesNotMatch(result.text, /malformed/);
+    const after = fx.read("project");
+    assert.ok(after.startsWith(old), "旧文件头与旧条目逐字留着");
+    assert.match(after, new RegExp(`- \\[P2\\] 乙${ORIGIN.replace(/[()]/g, "\\$&")}\\n$`));
+  }));
+
 test("Unicode 行分隔符也折叠：\\u2028 与 \\u2029 当换行并成一个空格", () =>
   withFixture(async (fx) => {
     await fx.call({ action: "add", content: "第一段\u2028第二段\u2029第三段" });
