@@ -86,6 +86,7 @@ import {
 import {
   type RunStartedPayload,
   RuntimeEventKind,
+  type ThinkingLevel,
   type ToolSettledPayload,
 } from "../state/runtime-events.ts";
 import {
@@ -1106,6 +1107,29 @@ export class PiRuntimeAdapter {
     return structuredClone(this.#agent.state.messages);
   }
 
+  // 决策 513：当前的思考强度（会话中途可切换）
+  thinkingLevel(): ThinkingLevel {
+    return this.#agent.state.thinkingLevel;
+  }
+
+  // 决策 513：切换思考强度——下一次请求起生效（进行中的 Run 在轮间换上，见 #compactBetweenTurns）；会话记录由装配层写。
+  // 已释放（重建换下来的旧运行面）时不改、返回 false：按键可能恰好落在换手的间隙里，不能因此抛错
+  setThinkingLevel(level: ThinkingLevel): boolean {
+    if (this.#disposed) return false;
+    this.#agent.state.thinkingLevel = level;
+    return true;
+  }
+
+  // 决策 513：本 Run 开始时的温度记法——请求了温度时，关思考记实际下发的温度，开思考记"未生效"（快照里的是装配时的）
+  #temperatureRecord(): Pick<RunStartedPayload["model"], "temperature" | "temperatureIgnored"> {
+    const model = this.#snapshot.model;
+    const requested = model.temperature ?? model.temperatureIgnored?.requested;
+    if (requested === undefined) return {};
+    return this.#agent.state.thinkingLevel === "off"
+      ? { temperature: requested }
+      : { temperatureIgnored: { requested, reason: "reasoning-enabled" } };
+  }
+
   // 续跑（决策 183）：以会话里还原出的消息作为 Agent 的对话上下文（深拷贝）。只在还没有跑过任何 Run、也没有进行中的 Run 时可用
   restoreMessages(messages: readonly AgentMessage[]): void {
     this.#assertUsable();
@@ -1298,12 +1322,17 @@ export class PiRuntimeAdapter {
     turn: PrepareNextTurnContext,
     signal?: AbortSignal
   ): Promise<AgentLoopTurnUpdate | undefined> {
-    const update = await this.#compactTurn(turn, signal);
+    const compacted = await this.#compactTurn(turn, signal);
+    // 决策 513：这一轮里切换了思考强度——下一次请求起按新档位（上游的循环配置在 Run 开始时取档位，轮间以这里给的为准）
+    const update: AgentLoopTurnUpdate = {
+      ...compacted,
+      thinkingLevel: this.#agent.state.thinkingLevel,
+    };
     const proceed = !this.#interruptRequested && this.#hookStopReason === undefined;
     // 压缩抹掉了此前的状态块：不论本轮有没有工具结果，下一次请求之前都重发完整块。上游在已有待交消息（通知、排队的输入）时
     // 压缩之后不再取 steer 队列，故直接放进压缩后的上下文末尾，并照常记进会话记录
     const injected =
-      update?.context !== undefined && proceed ? await this.#injectStatus(update.context) : false;
+      update.context !== undefined && proceed ? await this.#injectStatus(update.context) : false;
     if (this.#deliverAfterTurn) {
       this.#deliverAfterTurn = false;
       if (proceed) {
@@ -1467,7 +1496,8 @@ export class PiRuntimeAdapter {
   #requestOptions(): SimpleStreamOptions {
     const agent = this.#agent;
     const level = agent.state.thinkingLevel;
-    const temperature = this.#snapshot.model.temperature;
+    // 决策 513：温度按当前档位定（关思考才下发）
+    const temperature = this.#temperatureRecord().temperature;
     return {
       ...(level !== "off" ? { reasoning: level } : {}),
       ...(agent.sessionId !== undefined ? { sessionId: agent.sessionId } : {}),
@@ -1842,16 +1872,12 @@ export class PiRuntimeAdapter {
           model: {
             provider: snapshot.model.provider,
             id: snapshot.model.id,
-            thinkingLevel: snapshot.model.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
+            // 决策 513：本 Run 开始时的档位（会话中途可切换；快照里的是运行面装配时的值）
+            thinkingLevel: this.#agent.state.thinkingLevel,
             ...(snapshot.model.maxOutputTokens !== undefined
               ? { maxOutputTokens: snapshot.model.maxOutputTokens }
               : {}),
-            ...(snapshot.model.temperature !== undefined
-              ? { temperature: snapshot.model.temperature }
-              : {}),
-            ...(snapshot.model.temperatureIgnored !== undefined
-              ? { temperatureIgnored: { ...snapshot.model.temperatureIgnored } }
-              : {}),
+            ...this.#temperatureRecord(),
           },
           policy: {
             allow: [...snapshot.tools.policy.allow],

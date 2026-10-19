@@ -99,6 +99,8 @@ export interface CommandsHost {
   statusCommand?(): Promise<string>;
   // 决策 490：/take 不带参数时把命令填进输入框，参数由输入框下方的补全列表给
   beginTakePick?(): void;
+  // 决策 513：/effort [档位]——不带参数时列出档位供选；缺省 = 不可用
+  effortCommand?(arg: string | undefined): void;
   // 决策 458：当前会话的名字（/take 用到它时说明不用取回）
   currentSessionName?(): string | undefined;
 }
@@ -261,6 +263,11 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
     // 决策 442：/config 打开设置面板；/config 选项=值 直接改
     if (tokens[0] === "config" && host.configCommand !== undefined) {
       host.configCommand(value.trim().slice("/config".length).trim());
+      return;
+    }
+    // 决策 513：/effort [档位] 切换思考强度
+    if (tokens[0] === "effort" && host.effortCommand !== undefined) {
+      host.effortCommand(tokens[1]);
       return;
     }
     // 决策 456：/rename <名字> 改当前会话的名字：记进会话记录（续接后还在）

@@ -6,11 +6,14 @@
 import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { compactNumber } from "../application/format.ts";
 import type { CostTally } from "../application/session-cost.ts";
+import type { ThinkingLevel } from "../state/runtime-events.ts";
 import { secondary, warning } from "./style.ts";
 
 export interface StatusBarState {
   // 决策 469、499：当前会话的审批模式（写在最前面：ask 暗色、bypass 醒目）；缺省不写
   mode?: "prompt" | "yolo" | undefined;
+  // 决策 513：正在看的代理的思考强度（紧跟模式，暗色）；缺省不写
+  effort?: ThinkingLevel | undefined;
   context?: { tokens: number; contextWindow: number } | undefined;
   // 本会话累计的用量（记账在 application/session-cost.ts；这里只取其中的 token 数）
   cost: CostTally;
@@ -59,6 +62,7 @@ export function statusBarText(state: StatusBarState, width: number): string {
   const build = (short: boolean): string =>
     [
       modeLabel(state.mode),
+      state.effort !== undefined ? `effort ${state.effort}` : undefined,
       contextSegment(state.context, short),
       short ? tokens : `${tokens} tokens`,
     ]

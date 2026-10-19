@@ -38,6 +38,7 @@ function record(open: boolean): SubagentRecord {
                 configGrants: [],
                 settings: { grants: [] },
                 taskList: { items: () => [] },
+                thinking: { get: () => "high", set: () => {}, supported: true },
               },
             },
           },
@@ -76,7 +77,8 @@ test("/status 写这个子 agent 的名字、类型、状态、所属会话、�
   assert.match(text, /^session {2}proj-ab12 · sess_top$/m);
   assert.match(text, /^cwd {6}\.pigeon\/worktrees\/general-1$/m);
   assert.match(text, /^record {3}~[/\\]proj[/\\]\.pigeon[/\\]state[/\\]sessions[/\\]c\.jsonl$/m);
-  assert.match(text, /^model {4}deepseek-chat$/m);
+  // 决策 513：它的思考强度写在 model 行
+  assert.match(text, /^model {4}deepseek-chat · effort high$/m);
 });
 
 test("还没有运行面（续接认回、没重开）：没有命令面，/status 照写记得的；/compact 说明打不开", async () => {

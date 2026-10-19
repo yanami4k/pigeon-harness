@@ -31,6 +31,7 @@ import type {
   ApprovalModeData,
   CheckpointMarkData,
   HookRunData,
+  ThinkingLevelData,
 } from "../state/session-entries.ts";
 import {
   type StoreMessage,
@@ -50,6 +51,11 @@ import {
 function approvalModeLine(data: ApprovalModeData): string {
   const label = (mode: ApprovalModeData["to"]): string => (mode === "yolo" ? "yolo" : "ask");
   return `approval mode: ${label(data.from)} -> ${label(data.to)} at ${new Date(data.changedAt).toISOString().slice(11, 19)}(UTC)`;
+}
+
+// 决策 513：思考强度切换（时刻、从什么档到什么档）
+function thinkingLevelLine(data: ThinkingLevelData): string {
+  return `effort: ${data.from} -> ${data.to} at ${new Date(data.changedAt).toISOString().slice(11, 19)}(UTC)`;
 }
 
 function hookLine(data: HookRunData): string {
@@ -165,7 +171,8 @@ function renderRun(
   const injected = start.memory.filter((entry) => entry.included).length;
   const systemPromptHash = createHash("sha256").update(start.systemPrompt).digest("hex");
   lines.push(
-    `  start: model ${start.model.provider}/${start.model.id} | approval mode ${start.policy.approvalMode} | ` +
+    // 决策 513：本 Run 开始时的思考强度（旧记录没有即不写）
+    `  start: model ${start.model.provider}/${start.model.id}${start.model.thinkingLevel !== undefined ? ` | effort ${start.model.thinkingLevel}` : ""} | approval mode ${start.policy.approvalMode} | ` +
       `tools ${tools} | memory ${start.memory.length} (${injected} injected) | skills ${start.skills.length} | ` +
       `system prompt ${systemPromptHash.slice(0, 12)} | ${plural(run.turns.length, "model request")}`
   );
@@ -234,6 +241,8 @@ function renderRun(
       lines.push(`  ${requestRetryLine(item.data)}`);
     } else if (item.kind === "approval-mode") {
       lines.push(`  ${approvalModeLine(item.data)}`);
+    } else if (item.kind === "thinking-level") {
+      lines.push(`  ${thinkingLevelLine(item.data)}`);
     } else if (item.kind === "agent-message") {
       lines.push(`  ${agentMessageLine(item.data)}`);
     }
@@ -297,11 +306,19 @@ export function renderSessionTrace(
     }
     renderRun(view, run, lines, options);
   }
-  // 会话级的钩子运行（323：SessionStart / SessionEnd 等窗口外事件没有所属 Run）、Run 之外的审批模式切换（469）与
-  // agent 之间的传话（480：派出时交代的任务、空闲时收到的消息与结果）
+  // 会话级的钩子运行（323：SessionStart / SessionEnd 等窗口外事件没有所属 Run）、Run 之外的审批模式切换（469）、
+  // 思考强度切换（513）与 agent 之间的传话（480：派出时交代的任务、空闲时收到的消息与结果）
   const sessionEntries = view.sessionItems.filter(
-    (item): item is Extract<ViewItem, { kind: "hook" | "approval-mode" | "agent-message" }> =>
-      item.kind === "hook" || item.kind === "approval-mode" || item.kind === "agent-message"
+    (
+      item
+    ): item is Extract<
+      ViewItem,
+      { kind: "hook" | "approval-mode" | "thinking-level" | "agent-message" }
+    > =>
+      item.kind === "hook" ||
+      item.kind === "approval-mode" ||
+      item.kind === "thinking-level" ||
+      item.kind === "agent-message"
   );
   if (sessionEntries.length > 0) {
     lines.push("");
@@ -313,7 +330,9 @@ export function renderSessionTrace(
             ? hookLine(item.data)
             : item.kind === "approval-mode"
               ? approvalModeLine(item.data)
-              : agentMessageLine(item.data)
+              : item.kind === "thinking-level"
+                ? thinkingLevelLine(item.data)
+                : agentMessageLine(item.data)
         }`
       );
     }

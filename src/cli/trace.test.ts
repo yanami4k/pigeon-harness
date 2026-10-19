@@ -143,7 +143,7 @@ test("trace 报告（真实运行）：会话头、启动快照、逐轮 stopRea
     const hash = createHash("sha256").update(SYSTEM_PROMPT).digest("hex").slice(0, 12);
     assert.ok(
       output.includes(
-        `  start: model fake-provider/fake-model-1 | approval mode prompt | tools read_file, edit_file | memory 0 (0 injected) | skills 0 | system prompt ${hash} | 4 model requests`
+        `  start: model fake-provider/fake-model-1 | effort off | approval mode prompt | tools read_file, edit_file | memory 0 (0 injected) | skills 0 | system prompt ${hash} | 4 model requests`
       ),
       output
     );

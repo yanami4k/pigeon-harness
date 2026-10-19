@@ -47,6 +47,8 @@ export function agentCommandsFace(
         const list = bundle.taskList;
         return list !== undefined ? renderTaskList(list.items()) : undefined;
       },
+      // 决策 513
+      thinking: bundle.thinking,
     };
   };
   return {
@@ -84,7 +86,9 @@ export function agentCommandsFace(
         },
         cwd: statusCwd(project, workspace, home, treesHomeOf(project)),
         ...(file !== undefined ? { record: tildePath(file, home) } : {}),
-        ...(inspect !== undefined ? { model: inspect.modelId } : {}),
+        ...(inspect !== undefined
+          ? { model: inspect.modelId, effort: inspect.bundle.thinking.get() }
+          : {}),
         ...(tokens !== undefined
           ? {
               usage: {

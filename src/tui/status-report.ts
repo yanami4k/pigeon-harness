@@ -28,6 +28,8 @@ export interface StatusReport {
   settings: readonly StatusSettingsLayer[];
   // 内部值照旧是 prompt / yolo；决策 499：显示成 ask / bypass（同状态栏），不括注内部值
   mode: "prompt" | "yolo";
+  // 决策 513：思考强度（mode 行紧跟审批模式）
+  effort?: string;
   model?: string;
   usage?: { context?: { tokens: number; window: number } | undefined; tokens: number };
   git?: { branch?: string; commit: string; dirty: boolean };
@@ -122,10 +124,11 @@ export function statusReportText(report: StatusReport): string {
     )
   );
   if (report.usage !== undefined) lines.push(line("usage", usageText(report.usage)));
-  const mode =
-    report.model !== undefined
-      ? `${modeLabel(report.mode)} · model ${report.model}`
-      : modeLabel(report.mode);
+  const mode = [
+    modeLabel(report.mode),
+    ...(report.effort !== undefined ? [`effort ${report.effort}`] : []),
+    ...(report.model !== undefined ? [`model ${report.model}`] : []),
+  ].join(" · ");
   lines.push(line("mode", mode));
   return lines.join("\n");
 }
@@ -144,6 +147,8 @@ export interface AgentStatusReport {
   cwd: string;
   record?: string;
   model?: string;
+  // 决策 513：它的思考强度（写在 model 行）
+  effort?: string;
   usage?: StatusReport["usage"];
 }
 
@@ -159,7 +164,15 @@ export function agentStatusText(report: AgentStatusReport): string {
     line("cwd", report.cwd === "" ? "= project" : report.cwd),
   ];
   if (report.record !== undefined) lines.push(line("record", report.record));
-  lines.push(line("model", report.model ?? "—"));
+  lines.push(
+    line(
+      "model",
+      [
+        report.model ?? "—",
+        ...(report.effort !== undefined ? [`effort ${report.effort}`] : []),
+      ].join(" · ")
+    )
+  );
   if (report.usage !== undefined) lines.push(line("usage", usageText(report.usage)));
   return lines.join("\n");
 }

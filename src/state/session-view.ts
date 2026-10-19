@@ -32,6 +32,7 @@ import {
   SessionEntryType,
   type SessionHeaderMetadata,
   SessionHeaderMetadataSchema,
+  type ThinkingLevelData,
   type VerificationData,
 } from "./session-entries.ts";
 import {
@@ -133,6 +134,8 @@ export type ViewItem =
   | { kind: "request-retry"; entryId: string; timestamp: number; data: RequestRetryData }
   // 决策 469：会话中途切换审批模式
   | { kind: "approval-mode"; entryId: string; timestamp: number; data: ApprovalModeData }
+  // 决策 513：会话中途切换思考强度
+  | { kind: "thinking-level"; entryId: string; timestamp: number; data: ThinkingLevelData }
   // 决策 473：工作区的 git 分支（变了才记）
   | { kind: "git-head"; entryId: string; timestamp: number; data: GitHeadData }
   // 决策 480：agent 之间的一条传话（谁发给谁）
@@ -335,6 +338,7 @@ const CUSTOM_KINDS = {
   [SessionEntryType.BackgroundJob]: "background-job",
   [SessionEntryType.RequestRetry]: "request-retry",
   [SessionEntryType.ApprovalMode]: "approval-mode",
+  [SessionEntryType.ThinkingLevel]: "thinking-level",
   [SessionEntryType.GitHead]: "git-head",
   [SessionEntryType.AgentMessage]: "agent-message",
 } as const;

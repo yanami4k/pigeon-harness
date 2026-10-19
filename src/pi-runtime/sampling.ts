@@ -6,3 +6,12 @@ import type { StreamFn } from "@earendil-works/pi-agent-core";
 export function fixTemperature(streamFn: StreamFn, temperature: number): StreamFn {
   return (model, context, options) => streamFn(model, context, { ...options, temperature });
 }
+
+// 决策 513：思考强度会话中途可切换——温度按每次请求是否请求推理定：请求了推理（options.reasoning 在场）不下发，
+// 关思考时下发
+export function temperatureWhenNotReasoning(streamFn: StreamFn, temperature: number): StreamFn {
+  return (model, context, options) =>
+    options?.reasoning !== undefined
+      ? streamFn(model, context, options)
+      : streamFn(model, context, { ...options, temperature });
+}

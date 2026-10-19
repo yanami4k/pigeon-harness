@@ -16,7 +16,8 @@ import { restoreSessionContext } from "../pi-runtime/session-store.ts";
 import type { ActiveGrant } from "../state/grants.ts";
 import type { SessionId } from "../state/ids.ts";
 import type { LoopGuardSettings } from "../state/loop-guard-config.ts";
-import type { ThinkingLevel } from "../state/runtime-events.ts";
+import { isThinkingLevel, type ThinkingLevel } from "../state/runtime-events.ts";
+import { SessionEntryType } from "../state/session-entries.ts";
 import { emptySettingsSnapshot, mcpConfigOf, type SettingsSnapshot } from "../state/settings.ts";
 import type { WorkspaceHost } from "../tools/workspace-host.ts";
 import { previousJobsOfSession } from "./background-jobs.ts";
@@ -56,6 +57,27 @@ export interface SessionRuntimeFlags {
   pushedMemory?: boolean;
   // 决策 382：会话检索（日常入口的启动参数缺省开着；这里没给即开着；false 即不注册检索三件并记原因）
   sessionSearch?: boolean;
+}
+
+// 决策 513：重建换手的间隙里（新运行面已按旧的取过档位、还没换上）落在旧运行面上的切换，换上之后接过来（旧运行面已记过一条）
+export function carryThinking(from: RuntimeBundle, to: RuntimeBundle): void {
+  const chosen = from.thinking.chosen();
+  if (chosen !== undefined && chosen !== to.thinking.chosen()) to.thinking.adopt(chosen);
+}
+
+// 决策 513：会话记录主分支上最后一条思考强度切换的目标档位；没有切换过为 undefined
+export function thinkingLevelFromEntries(
+  entries: ReadonlyArray<{ type: string; customType?: unknown; data?: unknown }>
+): ThinkingLevel | undefined {
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index];
+    if (entry?.type !== "custom" || entry.customType !== SessionEntryType.ThinkingLevel) {
+      continue;
+    }
+    const to = (entry.data as { to?: unknown } | undefined)?.to;
+    return typeof to === "string" && isThinkingLevel(to) ? to : undefined;
+  }
+  return undefined;
 }
 
 // 决策 480：子 agent 续接时的放权——派出方此刻的（种子不落盘，续接时重新带上）加上它自己会话里给的，按放权号去重
@@ -255,6 +277,13 @@ export async function openSessionRuntime(
       : recorded !== undefined
         ? pruneSeedFromEntries(recorded.main)
         : undefined;
+  // 决策 513：会话里切换过的思考强度——/reload 沿用旧运行面切换过的，续跑取会话记录主分支最后一条切换
+  const sessionThinkingLevel =
+    request.reloadFrom !== undefined
+      ? request.reloadFrom.thinking.chosen()
+      : recorded !== undefined
+        ? thinkingLevelFromEntries(recorded.main)
+        : undefined;
   const learnedMemory = interactiveLearnedMemory(request.flags, request.memoryWrite);
   for (const note of describeMcpStartup(mcp)) {
     request.onMcpNote?.(note);
@@ -277,6 +306,7 @@ export async function openSessionRuntime(
       ...(request.flags.thinkingLevel !== undefined
         ? { thinkingLevel: request.flags.thinkingLevel }
         : {}),
+      ...(sessionThinkingLevel !== undefined ? { sessionThinkingLevel } : {}),
       ...(request.flags.maxOutputTokens !== undefined
         ? { maxOutputTokens: request.flags.maxOutputTokens }
         : {}),

@@ -75,6 +75,7 @@ import { subagentSessionsDirFor } from "../application/session-cost.ts";
 import { sessionOpenElsewhere } from "../application/session-holder.ts";
 import { sessionNameOf, validSessionName } from "../application/session-name.ts";
 import {
+  carryThinking,
   type OpenedSessionRuntime,
   openSessionRuntime,
   pushedMemoryRunOptions,
@@ -841,6 +842,7 @@ export async function main(argv: string[]): Promise<void> {
       ...(record !== undefined ? { record: tildePath(record, homedir()) } : {}),
       settings: layers,
       mode: core.modeCell.current,
+      ...(core.opened !== undefined ? { effort: core.opened.bundle.thinking.get() } : {}),
       ...(git !== undefined ? { git } : {}),
       ...(sandbox !== undefined
         ? {
@@ -992,6 +994,8 @@ export async function main(argv: string[]): Promise<void> {
     runtime: startBundle.adapter,
     // 决策 469：当前会话的审批模式（状态栏显示、Shift+Tab 切换）；重建运行面、换会话后取新的
     approvalMode: () => current.opened?.bundle.approvalMode,
+    // 决策 513：当前会话主代理的思考强度
+    thinking: () => current.opened?.bundle.thinking,
     // 决策 470：输入框为空时按两下 ← 打开会话面板（设置可关；/reload 后取新的）
     leftArrowOpensPanel: () => settingsOfCore(current).merged.tui?.leftArrowOpensPanel !== false,
     // 决策 506：滚轮一格滚几行
@@ -1147,6 +1151,8 @@ export async function main(argv: string[]): Promise<void> {
     core.detachGuard?.();
     core.detachGuard = undefined;
     await disposeRuntime(previous).catch(() => {});
+    // 决策 513：换手间隙里在旧运行面上切换的思考强度接过来
+    carryThinking(previous, reloaded.opened.bundle);
     core.opened = reloaded.opened;
     attachCoreRuntime(coreContext, core);
     shellHolder.current?.rebindSession(core.sessionId, bindingOf(core));
@@ -1219,6 +1225,7 @@ export async function main(argv: string[]): Promise<void> {
     core.detachGuard?.();
     core.detachGuard = undefined;
     await disposeRuntime(opened.bundle).catch(() => {});
+    carryThinking(opened.bundle, reloaded.opened.bundle);
     core.opened = reloaded.opened;
     attachCoreRuntime(coreContext, core);
     const report = await runSessionEvent(reloaded.opened.bundle, "SessionStart", "resume", {

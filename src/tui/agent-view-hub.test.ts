@@ -64,6 +64,7 @@ async function makeShell() {
         governanceRoot: root,
         modelId: "deepseek-chat",
         bundle: {
+          thinking: { get: () => "high", set: () => {}, supported: true },
           adapter: {
             contextUsage: () => ({ tokens: 1000, contextWindow: 100_000 }),
             compact: (focus?: string) =>

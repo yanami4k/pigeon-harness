@@ -21,6 +21,7 @@ declare module "@earendil-works/pi-tui" {
     "pigeon.toggleToolOutput": true;
     "pigeon.tree": true;
     "pigeon.toggleMode": true;
+    "pigeon.effortCycle": true;
     "pigeon.openPanel": true;
     "pigeon.resume.rename": true;
     "pigeon.dequeue": true;
@@ -58,6 +59,11 @@ export const PIGEON_KEYBINDINGS = {
   "pigeon.toggleMode": {
     defaultKeys: "shift+tab",
     description: "Switch the approval mode (ask / bypass)",
+  },
+  // 决策 513：在 off → low → medium → high → xhigh 之间轮换正在看的代理的思考强度
+  "pigeon.effortCycle": {
+    defaultKeys: "alt+t",
+    description: "Cycle the thinking effort (off, low, medium, high, xhigh)",
   },
   "pigeon.dequeue": {
     defaultKeys: ["alt+up", "alt+q"],

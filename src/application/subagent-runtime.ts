@@ -89,7 +89,14 @@ function insideDir(dir: string, path: string): boolean {
 export interface SubagentInspect {
   bundle: Pick<
     RuntimeBundle,
-    "adapter" | "grantStore" | "configGrants" | "settings" | "hooks" | "taskList" | "sessionStore"
+    | "adapter"
+    | "grantStore"
+    | "configGrants"
+    | "settings"
+    | "hooks"
+    | "taskList"
+    | "sessionStore"
+    | "thinking"
   >;
   governanceRoot: string;
   modelId: string;

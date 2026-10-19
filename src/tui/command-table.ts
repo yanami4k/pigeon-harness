@@ -153,6 +153,13 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     whileRunning: { allow: true },
     scope: "agent",
   },
+  // 决策 513：切换正在看的代理的思考强度（只改这个会话，下一次请求起生效），运行中可用
+  {
+    name: "effort",
+    usage: "/effort [level]",
+    whileRunning: { allow: true },
+    scope: "agent",
+  },
   // 只在沙箱会话里有（手动交回改动，决策 245）；沙箱不开子 agent，子 agent 视图里照常报未知命令
   {
     name: "export",

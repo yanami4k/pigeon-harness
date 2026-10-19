@@ -56,6 +56,7 @@ const ITEM_TYPE: Record<ViewItem["kind"], string> = {
   "background-job": "pigeon.background-job",
   "request-retry": "pigeon.request-retry",
   "approval-mode": "pigeon.approval-mode",
+  "thinking-level": "pigeon.thinking-level",
   "git-head": "pigeon.git-head",
   "agent-message": "pigeon.agent-message",
 };
@@ -68,7 +69,8 @@ function itemDetail(item: ViewItem): string {
       const tools = data.advertisedTools.length > 0 ? data.advertisedTools.join(", ") : "none";
       const hash = createHash("sha256").update(data.systemPrompt).digest("hex");
       return (
-        `run start | model ${data.model.provider}/${data.model.id} | ` +
+        // 决策 513：本 Run 开始时的思考强度（旧记录没有即不写）
+        `run start | model ${data.model.provider}/${data.model.id}${data.model.thinkingLevel !== undefined ? ` | effort ${data.model.thinkingLevel}` : ""} | ` +
         `approval mode ${data.policy.approvalMode} | tools ${tools} | ` +
         `memory ${data.memory.length} | skills ${data.skills.length} | ` +
         `system prompt ${hash.slice(0, 12)}`
@@ -162,6 +164,9 @@ function itemDetail(item: ViewItem): string {
       return agentMessageLine(item.data);
     case "approval-mode":
       return `approval mode ${item.data.from === "yolo" ? "yolo" : "ask"} -> ${item.data.to === "yolo" ? "yolo" : "ask"}`;
+    // 决策 513：会话中途切换思考强度
+    case "thinking-level":
+      return `effort ${item.data.from} -> ${item.data.to}`;
     case "background-job": {
       // 决策 365：后台作业的启动与结束；决策 409：会话结束时保留
       const data = item.data;

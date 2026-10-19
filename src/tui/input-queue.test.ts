@@ -160,6 +160,8 @@ test("命令放行表：只读类与 /quit 运行中可用，其余逐条说明�
     "panel",
     // 决策 456：改名只动会话记录里的名字
     "rename",
+    // 决策 513：思考强度从下一次请求起生效
+    "effort",
   ]);
   const rejected = SLASH_COMMANDS.filter((spec) => !spec.whileRunning.allow).map(
     (spec) => spec.name

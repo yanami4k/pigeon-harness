@@ -345,9 +345,10 @@ export function openSessionStoreWriter(options: SessionStoreWriterOptions): Sess
       enqueue(
         action,
         (session) => session.appendCustomEntry(entry.customType, data),
-        // 钩子运行记录、审批模式的切换（决策 469）与 git 分支（决策 473）不算会话内容：还没建文件时先留在内存里
+        // 钩子运行记录、审批模式与思考强度的切换（决策 469、513）与 git 分支（决策 473）不算会话内容：还没建文件时先留在内存里
         entry.customType === SessionEntryType.Hook ||
           entry.customType === SessionEntryType.ApprovalMode ||
+          entry.customType === SessionEntryType.ThinkingLevel ||
           entry.customType === SessionEntryType.GitHead
       );
     },

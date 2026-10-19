@@ -19,6 +19,7 @@ import {
   EvalVerdictSchema,
   GitObjectIdSchema,
   RunStartedPayloadSchema,
+  ThinkingLevelSchema,
   TurnUsageSchema,
 } from "./runtime-events.ts";
 import {
@@ -50,6 +51,7 @@ export const SessionEntryType = {
   Rewind: "pigeon.rewind",
   RewindStep: "pigeon.rewind-step",
   ApprovalMode: "pigeon.approval-mode",
+  ThinkingLevel: "pigeon.thinking-level",
   GitHead: "pigeon.git-head",
   AgentMessage: "pigeon.agent-message",
 } as const;
@@ -596,6 +598,15 @@ export const ApprovalModeDataSchema = Type.Object({
 });
 export type ApprovalModeData = Static<typeof ApprovalModeDataSchema>;
 
+// 决策 513：会话中途切换思考强度（/effort、Alt+T）：从什么到什么、何时。之后的请求按新档位发；续接按主分支最后一条恢复
+export const ThinkingLevelDataSchema = Type.Object({
+  version: VERSION,
+  from: ThinkingLevelSchema,
+  to: ThinkingLevelSchema,
+  changedAt: Type.Integer({ minimum: 0 }),
+});
+export type ThinkingLevelData = Static<typeof ThinkingLevelDataSchema>;
+
 // 决策 473：工作区当前的 git 分支（分离头指针时为短提交号），变了才记一条；/resume 列表取会话最后记的那条。非 git 目录不记
 export const GitHeadDataSchema = Type.Object({
   version: VERSION,
@@ -641,6 +652,7 @@ export type SessionCustomEntry =
   | { customType: typeof SessionEntryType.Rewind; data: RewindData }
   | { customType: typeof SessionEntryType.RewindStep; data: RewindStepData }
   | { customType: typeof SessionEntryType.ApprovalMode; data: ApprovalModeData }
+  | { customType: typeof SessionEntryType.ThinkingLevel; data: ThinkingLevelData }
   | { customType: typeof SessionEntryType.GitHead; data: GitHeadData }
   | { customType: typeof SessionEntryType.AgentMessage; data: AgentMessageData };
 
@@ -666,6 +678,7 @@ export const SESSION_ENTRY_SCHEMAS = {
   [SessionEntryType.Rewind]: RewindDataSchema,
   [SessionEntryType.RewindStep]: RewindStepDataSchema,
   [SessionEntryType.ApprovalMode]: ApprovalModeDataSchema,
+  [SessionEntryType.ThinkingLevel]: ThinkingLevelDataSchema,
   [SessionEntryType.GitHead]: GitHeadDataSchema,
   [SessionEntryType.AgentMessage]: AgentMessageDataSchema,
 } as const;

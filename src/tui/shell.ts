@@ -136,6 +136,7 @@ import {
   type TuiMemoryFace,
 } from "./commands.ts";
 import { ConfigPanel } from "./config-panel.ts";
+import { applyEffort, EFFORT_LEVELS, nextEffort, type ThinkingControl } from "./effort.ts";
 import type { TuiHooksFace } from "./hooks-view.ts";
 import {
   createPromptEditor,
@@ -262,6 +263,8 @@ export interface TuiShellOptions {
   welcome?: WelcomeInfo;
   // 决策 469：主会话的审批模式（每次现取：/reload 等重建运行面后换成新的）；缺省 = 状态栏不写模式、Shift+Tab 不做事
   approvalMode?: () => ApprovalModeControl | undefined;
+  // 决策 513：主代理的思考强度（每次现取：/reload 等重建运行面后换成新的）；缺省 = 状态栏不写档位、/effort 与 Alt+T 不可用
+  thinking?: () => ThinkingControl | undefined;
   // 决策 470：输入框为空时按两下 ← 打开会话面板（设置 tui.leftArrowOpensPanel，每次现取）；缺省开着
   leftArrowOpensPanel?: () => boolean;
   // 回答框（审批、确认设置）刚出现或刚换成另一条时，这么久（毫秒）之内不收回答键，防连按落到新出现的那一条上；
@@ -415,6 +418,8 @@ export interface TuiAgentCommands {
   hooks?: TuiHooksFace;
   // 任务清单（排好的文字）；undefined = 清单没开
   tasks(): string | undefined;
+  // 决策 513：它自己的思考强度（/effort 与 Alt+T 在它的视图里改的是它）
+  thinking?: ThinkingControl;
 }
 
 // 决策 433–438：终端界面的会话回退面（入口在 tui/main.ts，按当前运行面现取）
@@ -454,6 +459,7 @@ export const ANSWER_GUARD_MS = 300;
 // 决策 505：要它的运行面才能做的代理级命令（续接认回、还没重开运行面的子 agent 上回一句它没开着）
 const AGENT_RUNTIME_COMMANDS = new Set([
   "compact",
+  "effort",
   "rename",
   "tasks",
   "hooks",
@@ -722,7 +728,11 @@ export class PigeonTuiShell
         : {
             ...options.autocomplete,
             arguments: (command: string, prefix: string) =>
-              command === "take" ? this.takeArgumentItems(prefix) : null,
+              command === "take"
+                ? this.takeArgumentItems(prefix)
+                : command === "effort"
+                  ? this.effortArgumentItems(prefix)
+                  : null,
           };
     this.input = createPromptEditor(
       this.tui,
@@ -1611,6 +1621,9 @@ export class PigeonTuiShell
       ...(panelCommand !== undefined ? { panelCommand } : {}),
       statusCommand: () =>
         face?.status?.(record) ?? Promise.resolve("/status is not available here"),
+      // 决策 513：改的是这个子 agent 的思考强度
+      effortCommand: (arg) =>
+        this.runEffort(commands()?.thinking, arg, (line) => session.flow.addSystem(line)),
     };
   }
 
@@ -2781,6 +2794,61 @@ export class PigeonTuiShell
     return this.options.approvalMode?.();
   }
 
+  // 决策 513：正在看的代理的思考强度——子 agent 视图里是那个子 agent 的（还没有运行面的为 undefined），只看历史的视图里没有，
+  // 其余是主代理的
+  private viewThinking(): ThinkingControl | undefined {
+    if (this.view === "elsewhere") return undefined;
+    const agent = this.view === "agent" ? this.agentSession : undefined;
+    return agent !== undefined
+      ? this.options.agents?.commands?.(agent.record)?.thinking
+      : this.options.thinking?.();
+  }
+
+  // 决策 513：Alt+T 在 off → low → medium → high → xhigh 之间轮换；模型不支持推理时不切换（不提示）
+  private cycleEffort(): void {
+    const control = this.viewThinking();
+    if (control === undefined || !control.supported) return;
+    control.set(nextEffort(control.get()));
+    this.updateStatus();
+    this.tui.requestRender();
+  }
+
+  // 决策 513：/effort（主代理视图）
+  effortCommand(arg: string | undefined): void {
+    this.runEffort(this.options.thinking?.(), arg, (line) => this.flow.addSystem(line));
+  }
+
+  // 决策 513：/effort 不带参数时把命令填进输入框，档位由输入框下方的补全列表给（标出当前档位）；带参数即切换
+  private runEffort(
+    control: ThinkingControl | undefined,
+    arg: string | undefined,
+    say: (line: string) => void
+  ): void {
+    if (control === undefined) {
+      say("/effort is not available here");
+      return;
+    }
+    if (arg === undefined) {
+      this.input.setText("/effort ");
+      openArgumentCompletions(this.input);
+      this.tui.requestRender();
+      return;
+    }
+    say(applyEffort(control, arg));
+    this.updateStatus();
+    this.tui.requestRender();
+  }
+
+  // 决策 513：/effort 的档位候选（当前档位标 current）
+  private effortArgumentItems(prefix: string): AutocompleteItem[] {
+    const current = this.viewThinking()?.get();
+    return EFFORT_LEVELS.filter((level) => level.startsWith(prefix)).map((level) => ({
+      value: level,
+      label: level,
+      ...(level === current ? { description: "current" } : {}),
+    }));
+  }
+
   // Shift+Tab：在询问与放手之间切换，当场生效；挂着的审批不替人回答（挂着时按键归审批，到不了这里）
   private toggleApprovalMode(): void {
     const control = this.modeControl();
@@ -2804,6 +2872,11 @@ export class PigeonTuiShell
     if (isKey(data, "pigeon.toggleMode")) {
       // 决策 501：只看历史的视图不收任何输入（也不悄悄切当前会话的模式）
       if (this.view !== "elsewhere") this.toggleApprovalMode();
+      return { consume: true };
+    }
+    // 决策 513：切换正在看的代理的思考强度（只看历史的视图里没有可切的）
+    if (isKey(data, "pigeon.effortCycle")) {
+      this.cycleEffort();
       return { consume: true };
     }
     // 决策 442：设置面板开着时按键归它（方向键、Enter/空格改值、Esc 关）；审批挂着（含写拒绝理由）时不归它
@@ -2868,21 +2941,26 @@ export class PigeonTuiShell
   private applyStatusBar(): void {
     const agent = this.view === "agent" ? this.agentSession : undefined;
     const elsewhere = this.view === "elsewhere" ? this.elsewhereSession : undefined;
+    // 决策 513：模式之后是正在看的代理的思考强度
     if (agent !== undefined) {
+      const commands = this.options.agents?.commands?.(agent.record);
       this.statusBar.update({
         mode: this.modeControl()?.get(),
-        context: this.options.agents?.commands?.(agent.record)?.contextUsage(),
+        effort: commands?.thinking?.get(),
+        context: commands?.contextUsage(),
         cost: agent.cost,
       });
     } else if (elsewhere !== undefined) {
       this.statusBar.update({
         mode: elsewhere.status.mode,
+        effort: elsewhere.status.effort,
         context: elsewhere.status.context,
         cost: elsewhere.status.cost,
       });
     } else {
       this.statusBar.update({
         mode: this.modeControl()?.get(),
+        effort: this.options.thinking?.()?.get(),
         context: this.mainContext,
         cost: this.mainCost,
       });

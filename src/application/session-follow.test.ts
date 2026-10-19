@@ -66,12 +66,18 @@ test("模式、上下文与用量取自会话记录；之后切换过的模式�
       customType: SessionEntryType.ApprovalMode,
       data: { version: SESSION_ENTRY_VERSION, from: "prompt", to: "yolo", changedAt: Date.now() },
     });
+    // 决策 513：思考强度的切换同样取最后一次
+    record.writer.append({
+      customType: SessionEntryType.ThinkingLevel,
+      data: { version: SESSION_ENTRY_VERSION, from: "off", to: "xhigh", changedAt: Date.now() },
+    });
     record.assistant({ text: "又一段", usage: { input: 10_000, totalTokens: 10_000 } });
     await record.writer.flush();
     update = await follower.poll();
     assert.ok(update !== undefined);
     assert.equal(update.restarted, false);
     assert.equal(update.status.mode, "yolo");
+    assert.equal(update.status.effort, "xhigh");
     assert.equal(update.status.cost.unpricedTokens + update.status.cost.pricedTokens, 60_000);
   } finally {
     await cleanup();

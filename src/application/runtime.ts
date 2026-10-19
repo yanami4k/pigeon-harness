@@ -64,7 +64,7 @@ import {
   retriesObservable,
   withRequestRetries,
 } from "../pi-runtime/request-retry.ts";
-import { fixTemperature } from "../pi-runtime/sampling.ts";
+import { temperatureWhenNotReasoning } from "../pi-runtime/sampling.ts";
 import { INJECTION_SNAPSHOT_VERSION, type ToolPolicy } from "../pi-runtime/snapshot.ts";
 import {
   type LocalSkillScan,
@@ -285,6 +285,9 @@ export interface RuntimeDeps {
   // M5.5 S5（决策 050）：推理档位——入口传启动参数全局值。没给时取设置的 thinking 一节，
   // 设置也没写即按模型信息：支持推理的模型 high，不支持或不知道的 off（决策 390，见 state/thinking-config.ts）
   thinkingLevel?: ThinkingLevel;
+  // 决策 513：这个会话里切换过的思考强度（续接取会话记录主分支最后一条，/reload 沿用旧运行面的）——在场时优先于启动参数
+  // 与设置；模型不支持推理时生效的照旧是 off（选过的照样记着，换回支持推理的模型时用它）
+  sessionThinkingLevel?: ThinkingLevel;
   // M5.7 S3（决策 041 / 051 / 052）：已启动的 MCP 会话（入口在装配前异步启动；子 agent 用派出方的那一份）；
   // 缺省 = 本会话没有外部工具
   mcp?: McpSession;
@@ -457,6 +460,16 @@ export interface RuntimeBundle {
     get(): ApprovalMode;
     set(mode: ApprovalMode): void;
   };
+  // 决策 513：会话中途切换思考强度：切换写一条会话记录，下一次请求起按新档位。supported 为 false（已知模型不支持推理）时
+  // 固定 off、set 不改；chosen：这个会话选过的档位（续接或 /reload 沿用的也算；没选过为 undefined）；adopt：接过别处已记下的
+  // 选择（重建换手的间隙里落在旧运行面上的切换），不再记一条
+  thinking: {
+    get(): ThinkingLevel;
+    set(level: ThinkingLevel): void;
+    supported: boolean;
+    chosen(): ThinkingLevel | undefined;
+    adopt(level: ThinkingLevel): void;
+  };
   // 本会话的会话存储写者（决策 176）
   sessionStore: SessionStoreWriter;
   // M4 S6：grant 运行态（审批提示 [a]/[d] 与 /grants /revoke /grants save 共用同一存储）
@@ -554,12 +567,21 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
   });
   // 决策 422：压缩所用的窗口取自模型信息（运行参数显式给的优先）；配置畸形在打开会话文件之前响亮失败
   const compactionConfig = resolveCompactionConfig(deps.compaction, modelInfo.contextWindow);
-  // 决策 390：本运行面的推理档位——启动参数 > 设置 > 按模型信息的缺省（支持推理的 high，其余 off）
-  const thinkingLevel = resolveThinkingLevel({
-    requested: deps.thinkingLevel,
-    section: thinkingSectionOf(settings),
-    reasoning: modelInfo.reasoning.source === "unknown" ? undefined : modelInfo.reasoning.value,
-  });
+  // 决策 390：本运行面的推理档位——启动参数 > 设置 > 按模型信息的缺省（支持推理的 high，其余 off）。
+  // 决策 513：会话里切换过的优先；已知模型不支持推理时固定 off
+  const reasoningSupported = !(
+    modelInfo.reasoning.source !== "unknown" && modelInfo.reasoning.value === false
+  );
+  const thinkingLevel = !reasoningSupported
+    ? "off"
+    : (deps.sessionThinkingLevel ??
+      resolveThinkingLevel({
+        requested: deps.thinkingLevel,
+        section: thinkingSectionOf(settings),
+        reasoning: modelInfo.reasoning.source === "unknown" ? undefined : modelInfo.reasoning.value,
+      }));
+  // 决策 513：这个会话选过的思考强度（续接、/reload 时沿用）；没选过为 undefined
+  let thinkingChosen = deps.sessionThinkingLevel;
   // 推理开启时温度不生效：pi-ai 的 anthropic-messages 线路开思考时不发 temperature，DeepSeek 文档也写明思考模式下
   // 温度设了不报错但不生效。请求值如实记成"未生效"，也不再往下传；关思考（off）时温度照常下发
   const appliedTemperature = thinkingLevel !== "off" ? undefined : deps.temperature;
@@ -1250,8 +1272,9 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     },
     // 决策 063、347：配置了单轮输出上限才在装配层包装 streamFn 传入，上游与 provider 插件不改
     streamFn: withOutputLimit(
-      appliedTemperature !== undefined
-        ? fixTemperature(requestStreamFn, appliedTemperature)
+      // 决策 513：思考强度可中途切换，温度按每次请求是否请求推理定
+      deps.temperature !== undefined
+        ? temperatureWhenNotReasoning(requestStreamFn, deps.temperature)
         : requestStreamFn,
       maxOutputTokens
     ),
@@ -1528,6 +1551,25 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
           },
         }
       : {}),
+    thinking: {
+      get: () => adapter.thinkingLevel(),
+      set: (level: ThinkingLevel) => {
+        const from = adapter.thinkingLevel();
+        if (!reasoningSupported || level === from) return;
+        if (!adapter.setThinkingLevel(level)) return;
+        thinkingChosen = level;
+        sessionStore.append({
+          customType: SessionEntryType.ThinkingLevel,
+          data: { version: SESSION_ENTRY_VERSION, from, to: level, changedAt: Date.now() },
+        });
+      },
+      supported: reasoningSupported,
+      chosen: () => thinkingChosen,
+      adopt: (level: ThinkingLevel) => {
+        thinkingChosen = level;
+        if (reasoningSupported) adapter.setThinkingLevel(level);
+      },
+    },
     adapter,
     sessionStore,
     grantStore,

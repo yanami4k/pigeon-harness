@@ -63,7 +63,7 @@ test("会话摘要合计 token 与成本并在会话列表呈现；trace Run 头
     const prompt = createHash("sha256").update("系统提示").digest("hex").slice(0, 12);
     assert.ok(
       trace.includes(
-        `start: model kimi/k2 | approval mode prompt | tools read_file | memory 1 (1 injected) | skills 0 | system prompt ${prompt} | 2 model requests`
+        `start: model kimi/k2 | effort off | approval mode prompt | tools read_file | memory 1 (1 injected) | skills 0 | system prompt ${prompt} | 2 model requests`
       ),
       trace
     );

@@ -14,6 +14,7 @@ import {
 import { contextTokens } from "../pi-runtime/compaction.ts";
 import { sessionContextMessages } from "../pi-runtime/session-store.ts";
 import { sessionsDirOf, subagentSessionsDir } from "../state/paths.ts";
+import type { ThinkingLevel } from "../state/runtime-events.ts";
 import { buildSessionView } from "../state/session-view.ts";
 import { DEFAULT_HISTORY_ENTRY_CHARS, type HistoryLine, historyLinesOfView } from "./history.ts";
 import {
@@ -28,6 +29,8 @@ import {
 export interface RecordedStatus {
   // 最近一次运行开始时的审批模式，其后又切换过的取最后一次切换
   mode?: "prompt" | "yolo";
+  // 决策 513：最近一次运行开始时的思考强度，其后又切换过的取最后一次切换
+  effort?: ThinkingLevel;
   // 同运行面的口径：最后一条正常助手回复的用量加其后消息的估算；窗口取最近一次运行的压缩配置（没有即不写）
   context?: { tokens: number; contextWindow: number };
   // 会话自己连同它的子 agent 累计的用量（同续接时的起算）
@@ -166,13 +169,17 @@ export class SessionFollower {
     }
     const agents = this.subagentsCost();
     let mode: RecordedStatus["mode"];
+    let effort: RecordedStatus["effort"];
     let contextWindow: number | undefined;
     for (const item of view.items) {
       if (item.kind === "run-start") {
         mode = item.data.policy.approvalMode;
+        effort = item.data.model.thinkingLevel ?? effort;
         contextWindow = item.data.compaction?.contextWindow ?? contextWindow;
       } else if (item.kind === "approval-mode") {
         mode = item.data.to;
+      } else if (item.kind === "thinking-level") {
+        effort = item.data.to;
       }
     }
     const cost = emptyCostTally();
@@ -184,6 +191,7 @@ export class SessionFollower {
       lines: historyLinesOfView(view, this.entryChars),
       status: {
         ...(mode !== undefined ? { mode } : {}),
+        ...(effort !== undefined ? { effort } : {}),
         ...(contextWindow !== undefined
           ? {
               context: {
