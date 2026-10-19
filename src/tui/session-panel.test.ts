@@ -1025,3 +1025,178 @@ test("会话池换号之后面板照样选中刚派出的会话；卡上与当�
   assert.equal(pool.currentId(card.id), card.id, "映射已清");
   await pool.closeAll();
 });
+
+// 决策 509：经真实的进入面板会话路径（handOff 交出在跑的这一轮、switchSession 换过去）
+
+async function spawnAndFinish(term: MockTerminal, finishers: Array<(reply: string) => void>) {
+  term.input("/panel");
+  term.input("\r");
+  await settle();
+  term.input("修登录");
+  term.input("\r");
+  await settle();
+  finishers[0]?.("好了");
+  await settle();
+}
+
+test("决策 509：挂着审批、这一轮在跑时进入面板里的会话——审批留在原会话（交接在途工作），换回来照常能答", async () => {
+  const { shell, term, runtime, entered, finishers, cleanup } = makeShell({
+    sessionName: (id) => (id.startsWith("sess_pool") ? "s1" : "demo-main"),
+  });
+  try {
+    await settle();
+    const original = shell.sessionId();
+    await spawnAndFinish(term, finishers);
+    term.input(ESC);
+    await settle();
+    runtime.autoResolve = false;
+    term.input("跑一件");
+    term.input("\r");
+    await settle();
+    let decided: unknown;
+    void shell
+      .askApproval({
+        toolName: "run_command",
+        toolCallId: "m1",
+        args: { command: "npm test" },
+        sessionId: original,
+      })
+      .then((result) => {
+        decided = result;
+      });
+    await settle();
+    // 面板里选中 s1，回车进入（真实路径：交出在跑的这一轮，换到 s1）
+    shell.openPanel("sess_pool1");
+    await settle();
+    term.input("\r");
+    await settle();
+    assert.deepEqual(entered, ["sess_pool1"], screenText(term));
+    assert.equal(shell.sessionId(), "sess_pool1");
+    assert.doesNotMatch(screenText(term), /npm test/, "审批留在原会话，不在这里显示");
+    assert.equal(decided, undefined);
+    // 换回原会话：审批照常显示、能答
+    const handOff = shell.handOff();
+    shell.switchSession(original, { runtime }, handOff);
+    await settle();
+    assert.match(screenText(term), /npm test/);
+    term.input("y");
+    await settle();
+    assert.deepEqual(decided, { key: "y" });
+    runtime.finishAll();
+  } finally {
+    cleanup();
+  }
+});
+
+test("决策 509：写拒绝理由途中进入面板里别的会话——理由作废、从输入框收掉；换回来审批还在，按 r 重写", async () => {
+  const { shell, term, finishers, cleanup } = makeShell({
+    sessionName: (id) => (id.startsWith("sess_pool") ? "s1" : "demo-main"),
+  });
+  try {
+    await settle();
+    const original = shell.sessionId();
+    const originalRuntime = new ScriptedRuntime(original);
+    await spawnAndFinish(term, finishers);
+    term.input("\x1b");
+    await settle();
+    let decided: unknown;
+    void shell
+      .askApproval({
+        toolName: "run_command",
+        toolCallId: "m2",
+        args: { command: "rm -rf build" },
+        sessionId: original,
+      })
+      .then((result) => {
+        decided = result;
+      });
+    await settle();
+    term.input("r");
+    term.input("half a reason");
+    await settle();
+    assert.equal(shell.inputText(), "half a reason");
+    // 进入别的会话（真实路径）
+    shell.openPanel("sess_pool1");
+    await settle();
+    term.input("\x15");
+    term.input("\r");
+    await settle();
+    assert.equal(shell.sessionId(), "sess_pool1");
+    assert.equal(shell.inputText(), "", "理由从输入框收掉");
+    assert.equal(shell.reasonMode(), false);
+    // 在别的会话里回车不会拿半截理由去拒绝原会话的审批
+    term.input("在 s1 里说话");
+    term.input("\r");
+    await settle();
+    assert.equal(decided, undefined);
+    shell.switchSession(original, { runtime: originalRuntime }, shell.handOff());
+    await settle();
+    assert.match(screenText(term), /rm -rf build/);
+    term.input("r");
+    term.input("redo");
+    term.input("\r");
+    await settle();
+    assert.deepEqual(decided, { key: "r", reason: "redo" });
+  } finally {
+    cleanup();
+  }
+});
+
+test("决策 509：面板里对当前会话 Ctrl+X 中断这一轮时撤回它挂着的审批——卡片不再停在等待回应，留一行撤回的结论", async () => {
+  const { shell, term, runtime, cleanup } = makeShell({ sessionName: () => "demo-main" });
+  try {
+    await settle();
+    runtime.autoResolve = false;
+    term.input("跑一件");
+    term.input("\r");
+    await settle();
+    const answer = shell.askApproval({
+      toolName: "run_command",
+      toolCallId: "m3",
+      args: { command: "npm test" },
+      sessionId: shell.sessionId(),
+    });
+    await settle();
+    term.input("\x1b[D");
+    term.input("\x1b[D");
+    await settle();
+    assert.match(screenText(term), /demo-main current .*waiting: run_command/);
+    term.input("\x18");
+    const result = await answer;
+    assert.equal(result.key, "cancel");
+    await settle();
+    assert.equal(runtime.interrupts, 1);
+    assert.doesNotMatch(screenText(term), /waiting: run_command/);
+    runtime.finishAll();
+    await settle();
+    term.input("\r");
+    await settle();
+    assert.match(screenText(term), /withdrawn: run_command was stopped/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("决策 509：面板里会话的偷看按审批单写明在等什么（它在前台时提出的审批也算）", async () => {
+  const { shell, term, finishers, cleanup } = makeShell({
+    sessionName: (id) => (id.startsWith("sess_pool") ? "s1" : "demo-main"),
+  });
+  try {
+    await settle();
+    await spawnAndFinish(term, finishers);
+    void shell.askApproval({
+      toolName: "edit_file",
+      toolCallId: "p1",
+      args: { path: "a.ts" },
+      sessionId: "sess_pool1" as SessionId,
+    });
+    await settle();
+    shell.openPanel("sess_pool1");
+    await settle();
+    term.input(" ");
+    await settle();
+    assert.match(screenText(term), /waiting: edit_file/);
+  } finally {
+    cleanup();
+  }
+});

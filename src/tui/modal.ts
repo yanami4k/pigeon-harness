@@ -66,6 +66,8 @@ export interface ModalHost {
   outsideMainView?(): boolean;
   // 决策 509：不按会话分的模态挂着没有（确认设置只看它）；缺省按 pendingApproval
   modalBusy?(): boolean;
+  // 回答框刚出现或刚换成另一条时一小会儿之内为 false（不收回答键）；缺省随时都收
+  answerReady?(): boolean;
   // 决策 323、324：审批面板出现时的 Notification 钩子（只作副作用）——面板出现记 permission_prompt；缺省不通知
   notifyApprovalHook?(notificationType: string, message: string): void;
 }
@@ -255,6 +257,8 @@ export function handleModalKey(host: ModalHost, data: string): { consume: true }
       }
       return undefined;
     }
+    // 刚出现或刚换成另一条：一小会儿之内回答键不作数（吞掉，防连按落到新的那一条上）
+    if (host.answerReady?.() === false) return { consume: true };
     // 决策 485：确认别的工作区的设置：a 信任、s 这次不用，其余吞掉
     if (approval.trust !== undefined) {
       const choice =

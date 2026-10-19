@@ -161,6 +161,7 @@ import { askTrustPanel } from "./modal.ts";
 import { launchPlaceOf, newSessionPlace } from "./new-session-dir.ts";
 import { applyProjectUi } from "./project-ui.ts";
 import {
+  ANSWER_GUARD_MS,
   type NewSessionRequest,
   PigeonTuiShell,
   type TuiHandOff,
@@ -649,9 +650,12 @@ export async function main(argv: string[]): Promise<void> {
     );
     return [current, ...pooled];
   }
-  // 界面里确认别的项目的设置（与审批同一个排队；同启动时的确认，记在同一处）
+  // 界面里确认别的项目的设置（一次一项；同启动时的确认，记在同一处）。决策 509：这个视图里显示着审批时等它答完再出
   const askTrust = (root: string) => (entries: readonly TrustEntry[]) =>
-    approvalQueue.serial(() => askTrustPanel(shell, root, entries));
+    approvalQueue.serial(async () => {
+      await shell.approvalFree();
+      return askTrustPanel(shell, root, entries);
+    });
   // 同一个项目的设置同时只读一次（两个会话同时打开不弹两次确认）
   const readingSettings = new Map<string, Promise<SettingsSnapshot>>();
   async function settingsForProject(root: string): Promise<SettingsSnapshot | undefined> {
@@ -992,6 +996,8 @@ export async function main(argv: string[]): Promise<void> {
     leftArrowOpensPanel: () => settingsOfCore(current).merged.tui?.leftArrowOpensPanel !== false,
     // 决策 506：滚轮一格滚几行
     wheelScrollLines: () => wheelScrollLinesOf(settingsOfCore(current)),
+    // 回答框刚出现或换成另一条时一小会儿之内不收回答键
+    answerGuardMs: ANSWER_GUARD_MS,
     sessionId: startCore.sessionId,
     // 决策 325：终端界面日志在程序状态目录下
     logDir: tuiLogDirOf(governanceRoot),

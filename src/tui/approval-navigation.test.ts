@@ -172,7 +172,6 @@ test("子 agent 的审批：主代理视图与它自己的视图都显示（标�
   const { shell, term, sessionId, waiting, sent, cleanup } = makeShell();
   try {
     await settle();
-    waiting.add("general-1");
     const firstRequest = request("make build", { sessionId, subagent: { path: "general-1" } });
     const first = shell.askApproval(firstRequest);
     await settle();
@@ -475,6 +474,147 @@ test("决策 506：换项目与 /config、/reload 之后按新的设置快照重
     assert.equal(shell.wheelScrollLines(), 9);
   } finally {
     rmSync(root, { recursive: true, force: true });
+    rmSync(logDir, { recursive: true, force: true });
+  }
+});
+
+test("写拒绝理由途中显示的条目换了（另一项挂到前面）：理由作废、从输入框收掉，回车不拿它去拒绝原来那条", async () => {
+  const { shell, term, cleanup } = makeShell();
+  try {
+    await settle();
+    let decided: unknown;
+    void shell.askApproval(request("rm -rf build")).then((result) => {
+      decided = result;
+    });
+    await settle();
+    term.input("r");
+    term.input("half");
+    await settle();
+    // 一项不按会话分的确认挂到前面（显示的换成了它）
+    const trust = askTrustPanel(shell, "/work/other", [
+      { kind: "hook", id: "Stop:x", origin: "project", summary: "npm run lint", fingerprint: "f" },
+    ]);
+    await settle();
+    assert.equal(shell.reasonMode(), false);
+    assert.equal(shell.inputText(), "");
+    term.input("s");
+    assert.equal(await trust, "skip");
+    await settle();
+    term.input("\r");
+    await settle();
+    assert.equal(decided, undefined, "原来那条没被半截理由拒掉");
+    term.input("n");
+    await settle();
+    assert.deepEqual(decided, { key: "n" });
+  } finally {
+    cleanup();
+  }
+});
+
+test("写拒绝理由途中那条被撤回：理由作废、从输入框收掉，回车不作数", async () => {
+  const { shell, term, sessionId, cleanup } = makeShell();
+  try {
+    await settle();
+    const controller = new AbortController();
+    const answer = shell.askApproval(
+      request("make build", {
+        sessionId,
+        subagent: { path: "general-1" },
+        signal: controller.signal,
+      })
+    );
+    await settle();
+    term.input("r");
+    term.input("half");
+    controller.abort();
+    assert.equal((await answer).key, "cancel");
+    await settle();
+    assert.equal(shell.reasonMode(), false);
+    assert.equal(shell.inputText(), "");
+  } finally {
+    cleanup();
+  }
+});
+
+test("审批显示着时来了确认别的工作区的设置：按 a 只答审批，确认随后才出", async () => {
+  const { shell, term, cleanup } = makeShell();
+  try {
+    await settle();
+    const answer = shell.askApproval(request("npm test"));
+    await settle();
+    let trusted: unknown;
+    // 同 main.ts 的排法：等这个视图里显示着的审批答完再问
+    void shell
+      .approvalFree()
+      .then(() =>
+        askTrustPanel(shell, "/work/other", [
+          {
+            kind: "hook",
+            id: "Stop:y",
+            origin: "project",
+            summary: "npm run lint",
+            fingerprint: "g",
+          },
+        ])
+      )
+      .then((choice) => {
+        trusted = choice;
+      });
+    await settle();
+    assert.doesNotMatch(screenText(term), /a trust all/, "确认不盖住审批");
+    term.input("a");
+    assert.equal((await answer).key, "a", "a 答的是审批");
+    await settle();
+    assert.equal(trusted, undefined);
+    assert.match(screenText(term), /a trust all \| s skip this time/, "审批答完确认才出");
+    term.input("s");
+    await settle();
+    assert.equal(trusted, "skip");
+  } finally {
+    cleanup();
+  }
+});
+
+test("回答框刚出现的一小会儿里按的回答键不作数，过了才收", async () => {
+  const logDir = mkdtempSync(join(tmpdir(), "pigeon-answer-guard-"));
+  const term = new MockTerminal(100, 30);
+  const shell = new PigeonTuiShell({
+    terminal: term,
+    runtime: new ScriptedRuntime(newSessionId()),
+    sessionId: newSessionId(),
+    logDir,
+    answerGuardMs: 300,
+  });
+  shell.start();
+  try {
+    let decided: unknown;
+    void shell.askApproval(request("npm test")).then((result) => {
+      decided = result;
+    });
+    term.input("y");
+    await settle();
+    assert.equal(decided, undefined, "刚出现时按的 y 不作数");
+    assert.equal(shell.inputText(), "", "也不进输入框");
+    await settle(300);
+    term.input("y");
+    await settle();
+    assert.deepEqual(decided, { key: "y" });
+    // 确认设置同样
+    let trusted: unknown;
+    void askTrustPanel(shell, "/work/other", [
+      { kind: "hook", id: "Stop:z", origin: "project", summary: "x", fingerprint: "h" },
+    ]).then((choice) => {
+      trusted = choice;
+    });
+    term.input("a");
+    await settle();
+    assert.equal(trusted, undefined);
+    await settle(300);
+    term.input("a");
+    await settle();
+    assert.equal(trusted, "trust");
+  } finally {
+    shell.stop();
     rmSync(logDir, { recursive: true, force: true });
   }
 });
