@@ -1,5 +1,5 @@
 // 决策 442：/config 设置视图（整屏，见 464）。打开后列出各项（标签、用户级的值，下面常显说明、生效值与覆盖说明）；
-// Enter 在可选值间轮换，改一次即写用户级并按 /reload 重建、面板随后刷新；被项目覆盖的项改了另有提醒；/config 选项=值 直接改；
+// 决策 512：Enter 进入编辑、←/→ 切值或直接输入、Enter 保存（写用户级并按 /reload 重建、面板随后刷新，留在设置视图）、Esc 放弃；被项目覆盖的项改了另有提醒；/config 选项=值 直接改；
 // 值不合法如实报错不重建；Esc 关面板；运行中 /config 被拒。审查修正：重建进行中、有 worker 在跑时不改；读设置出错不崩；
 // 面板开着时 ↓ 不跳去 worker 面板；写拒绝理由时面板不收键；离开主视图即关面板；面板开着时排队的输入不发出。
 import assert from "node:assert/strict";
@@ -92,7 +92,7 @@ const DOWN = "\x1b[B";
 const RIGHT = "\x1b[C";
 const LEFT = "\x1b[D";
 
-test("/config 打开整屏的设置视图：每项下面常显说明、生效值与覆盖说明；Enter 轮换值即写用户级并重建，视图刷新；Esc 回主视图", async () => {
+test("/config 打开整屏的设置视图：每项下面常显说明、生效值与覆盖说明；Enter 进编辑、→ 切值、Enter 保存即写用户级并重建，视图刷新；Esc 回主视图", async () => {
   const { shell, term, writes, reloads, cleanup } = makeShell();
   try {
     await settle();
@@ -118,7 +118,9 @@ test("/config 打开整屏的设置视图：每项下面常显说明、生效值
     // 整屏：没有消息区的输入框
     assert.equal(term.screen.contentLines().filter((line) => /^-{20,}/.test(line)).length, 0);
     assert.doesNotMatch(screen, /·|→/);
-    // Enter 轮换到下一个值（default → off）
+    // 决策 512：Enter 进编辑，→ 切到下一个值（default → off），Enter 保存
+    term.input("\r");
+    term.input(RIGHT);
     term.input("\r");
     await settle();
     assert.deepEqual(writes, ["thinking.level=off"]);
@@ -287,15 +289,21 @@ test("重建还没完时连按 Enter：第二次不改、不并发重建；有 w
     term.input("\r");
     await settle();
     term.input("\r");
-    await settle();
+    term.input(RIGHT);
     term.input("\r");
     await settle();
-    assert.deepEqual(writes, ["thinking.level=off"], "第二次 Enter 在重建期间不改");
+    term.input("\r");
+    term.input(RIGHT);
+    term.input("\r");
+    await settle();
+    assert.deepEqual(writes, ["thinking.level=off"], "第二次保存在重建期间不改");
     assert.equal(reloads.length, 1);
     assert.match(screenText(term), /running; change settings later/);
     release?.();
     await settle();
     harness.busy = "workers are running";
+    term.input("\r");
+    term.input(RIGHT);
     term.input("\r");
     await settle();
     assert.deepEqual(writes, ["thinking.level=off"], "有 worker 在跑时不写");
@@ -446,6 +454,82 @@ test("决策 465：键位组——每个动作的生效键与缺省键；Enter �
     assert.equal(writes.at(-1), "keybindings:pigeon.cancel=default");
     screen = screenText(term);
     assert.match(screen, /pigeon\.approval\.approve/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("决策 512：Enter 进编辑——←/→ 在备选值间切换、不写文件，标出待保存；编辑中 ↑/↓ 不移动选项；Esc 放弃回原值；空格不再直接轮换", async () => {
+  const { term, writes, reloads, cleanup } = makeShell();
+  try {
+    await settle();
+    term.input("/config");
+    term.input("\r");
+    await settle();
+    term.input(" ");
+    await settle();
+    assert.deepEqual(writes, [], "空格不再直接轮换");
+    term.input("\r");
+    term.input(RIGHT);
+    term.input(RIGHT);
+    await settle();
+    assert.deepEqual(writes, [], "切值不写文件");
+    assert.match(screenText(term), /› thinking level +‹minimal› \(unsaved\)/);
+    term.input("\x1b[A");
+    term.input(DOWN);
+    await settle();
+    assert.match(screenText(term), /› thinking level +‹minimal›/, "编辑中 ↑/↓ 不移动选项");
+    term.input("\x1b[D");
+    await settle();
+    assert.match(screenText(term), /› thinking level +‹off›/, "← 往回切");
+    term.input("\x1b");
+    await settle();
+    assert.deepEqual(writes, []);
+    assert.deepEqual(reloads, []);
+    assert.match(screenText(term), /› thinking level +default/, "Esc 放弃回原值");
+    assert.doesNotMatch(screenText(term), /unsaved/);
+    // 切回原值再保存：与现在相同即不写
+    term.input("\r");
+    term.input(RIGHT);
+    term.input("\x1b[D");
+    term.input("\r");
+    await settle();
+    assert.deepEqual(writes, [], "与现在相同不写");
+  } finally {
+    cleanup();
+  }
+});
+
+test("决策 512：保存后经同一个会话的重建（同 /reload 的换绑）仍留在设置视图、光标停在该项；不在编辑时 ←/→ 照旧切组", async () => {
+  const holder: { shell?: PigeonTuiShell } = {};
+  const { shell, term, writes, cleanup } = makeShell({
+    reload: async () => {
+      // 同装配方 rebuildMain：按新快照重建运行面后换绑到同一个会话
+      const target = holder.shell;
+      if (target !== undefined) {
+        target.rebindSession(target.sessionId(), {
+          runtime: new ScriptedRuntime(target.sessionId()),
+        });
+      }
+      return [];
+    },
+  });
+  holder.shell = shell;
+  try {
+    await settle();
+    term.input("/config");
+    term.input("\r");
+    await settle();
+    term.input("\r");
+    term.input(RIGHT);
+    term.input("\r");
+    await settle();
+    assert.deepEqual(writes, ["thinking.level=off"]);
+    assert.equal(shell.currentView(), "config", "留在设置视图");
+    assert.match(screenText(term), /› thinking level +off/, "光标停在该项，值是新的");
+    term.input(RIGHT);
+    await settle();
+    assert.match(screenText(term), /model {2}\[web\]/, "不在编辑时 → 照旧切组");
   } finally {
     cleanup();
   }

@@ -3739,6 +3739,9 @@ export class PigeonTuiShell
     binding: TuiSessionBinding,
     options: { source?: "startup" | "resume"; resumed?: boolean } = {}
   ): void {
+    // 决策 512：设置视图里改了值、重建的是同一个会话：留在设置视图（光标停在那一项，由壳随后刷新面板）
+    const stayInConfig =
+      this.view === "config" && this.configPanel.isOpen() && sessionId === this.current.sessionId;
     // 决策 458：换到别的会话时当前会话卡的摘要（首条输入、最近回复、偷看）从新会话重新记（随后画的历史一并记下）。
     // 决策 496：旧会话留给下一条输入的程序说明不带进新会话（还在干活的已随 handOff 交走）
     if (sessionId !== this.current.sessionId) {
@@ -3754,7 +3757,14 @@ export class PigeonTuiShell
     };
     this.followWorkspace(binding);
     // 先换会话面再切视图（切视图时按新会话重画）
-    this.showView("main");
+    if (stayInConfig) {
+      this.refreshApprovalBox();
+      this.layout();
+      this.updateStatus();
+      this.tui.requestRender(true);
+    } else {
+      this.showView("main");
+    }
     // 决策 323、324：换到新会话——SessionStart（缺省 source "resume"；决策 496 的 /clear、/new 用 "startup"）补的上下文归新会话；
     // 旧会话的 SessionEnd 由装配方在释放旧运行面前跑
     void this.beginSession(options.source ?? "resume");

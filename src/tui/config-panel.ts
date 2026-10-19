@@ -1,8 +1,9 @@
 // /config 设置视图（决策 442；整屏与分组见 464、465）：和会话面板、树形视图同一种做法的整屏视图（不是浮层），Esc 回主视图。
 // 按组列出（模型、联网、上下文、工具、防打转与钩子、工作区、界面、键位），←/→ 或 Tab 切组。每项一行名字、用户级写的值
 // （default 即没写、取缺省）与缺省值，下面常显一行暗色的说明：选项名、一句说明，生效值与用户级写的不同时附上生效值；被项目层
-// 覆盖的在名字旁标注。↑/↓ 选项；开关与枚举按 Enter 或空格轮换；数字与字符串按 Enter 就地输入（Enter 写入、Esc 取消，清空即
-// 取缺省），非法时视图底部醒目地写原因、不写文件。键位组每个动作一行：当前生效的键与缺省键，与别的 Pigeon 动作冲突时标红；
+// 覆盖的在名字旁标注。↑/↓ 选项；决策 512：选中一项按 Enter 进入编辑——开关与枚举用 ←/→ 在备选值间切换（待保存的值与现在
+// 写的不同时标出），数字与字符串直接输入（Backspace 删字，清空即取缺省）；再按 Enter 保存（与现在相同即不写），Esc 放弃；
+// 编辑中 ↑/↓ 不移动选项。非法时视图底部醒目地写原因、不写文件。键位组每个动作一行：当前生效的键与缺省键，与别的 Pigeon 动作冲突时标红；
 // 选中按 Enter 进入"按下新键"，下一下按键即绑定（Esc 取消，Backspace 清空），Delete 恢复缺省。改动写用户级并重建运行面
 // （由壳做）。放不下时跟着选中项滚动。光标与提示只用 ASCII 与 "›"
 import {
@@ -72,8 +73,8 @@ export class ConfigPanel {
   private keys: () => readonly KeybindingRow[] = () => [];
   private groupIndex = 0;
   private cursors = new Map<GroupId, number>();
-  // 就地输入（数字与字符串）的内容；undefined = 不在输入
-  private editing: string | undefined;
+  // 决策 512：正在编辑的那一项——有备选值的在备选值间切换（choice），数字与字符串就地输入（text）；undefined = 不在编辑
+  private editing: { kind: "choice" | "text"; value: string } | undefined;
   // 等着按下新键
   private capturing = false;
   // 可用行数（整屏视图的高度，每次画时现取）
@@ -216,17 +217,15 @@ export class ConfigPanel {
       } else if (matchesKey(data, "delete")) {
         this.onChange?.(`${KEYBINDING_ID_PREFIX}${row.action}`, "default");
       }
-    } else if (matchesKey(data, "enter") || matchesKey(data, "space")) {
+    } else if (matchesKey(data, "enter")) {
+      // 决策 512：Enter 进入编辑（空格不再直接轮换）
       const item = this.groupItems()[this.cursor()];
       if (item === undefined) return;
-      const values = item.option.values;
-      if (values.length > 0) {
-        const next = values[(values.indexOf(item.user) + 1) % values.length];
-        if (next !== undefined) this.onChange?.(item.option.id, next);
-      } else if (matchesKey(data, "enter")) {
-        this.editing = item.user === "default" ? "" : item.user;
-        this.setNote("");
-      }
+      this.editing =
+        item.option.values.length > 0
+          ? { kind: "choice", value: item.user }
+          : { kind: "text", value: item.user === "default" ? "" : item.user };
+      this.setNote("");
     }
   }
 
@@ -236,20 +235,39 @@ export class ConfigPanel {
     this.setNote("");
   }
 
-  // 就地输入：可打印的字加进去，Backspace 删一个，Enter 写入（清空即取缺省），Esc 取消
+  // 决策 512：编辑中——Esc 放弃；Enter 保存（与现在写的相同即不写）；有备选值的 ←/→ 在备选值间切换，数字与字符串可打印的字
+  // 加进去、Backspace 删一个（清空即取缺省）；↑/↓ 等别的键不动
   private edit(data: string): void {
-    const text = this.editing ?? "";
+    const editing = this.editing;
+    const item = this.groupItems()[this.cursor()];
+    if (editing === undefined || item === undefined) {
+      this.editing = undefined;
+      return;
+    }
     if (matchesKey(data, "escape")) {
       this.editing = undefined;
     } else if (matchesKey(data, "enter")) {
-      const item = this.groupItems()[this.cursor()];
       this.editing = undefined;
-      if (item !== undefined)
-        this.onChange?.(item.option.id, text.trim() === "" ? "default" : text.trim());
+      const value =
+        editing.kind === "choice"
+          ? editing.value
+          : editing.value.trim() === ""
+            ? "default"
+            : editing.value.trim();
+      if (value !== item.user) this.onChange?.(item.option.id, value);
+    } else if (editing.kind === "choice") {
+      const values = item.option.values;
+      const step = matchesKey(data, "left") ? -1 : matchesKey(data, "right") ? 1 : 0;
+      if (step === 0 || values.length === 0) return;
+      const at = Math.max(0, values.indexOf(editing.value));
+      this.editing = {
+        kind: "choice",
+        value: values[(at + step + values.length) % values.length] ?? editing.value,
+      };
     } else if (matchesKey(data, "backspace")) {
-      this.editing = [...text].slice(0, -1).join("");
+      this.editing = { kind: "text", value: [...editing.value].slice(0, -1).join("") };
     } else if (data !== "" && printable(data)) {
-      this.editing = `${text}${data}`.slice(0, 200);
+      this.editing = { kind: "text", value: `${editing.value}${data}`.slice(0, 200) };
     }
   }
 
@@ -284,10 +302,16 @@ export class ConfigPanel {
       const selected = index === cursor;
       const label = clipToWidth(configLabel(item), labelWidth);
       const pad = " ".repeat(Math.max(0, labelWidth - visibleWidth(label)));
+      const editing = selected ? this.editing : undefined;
+      // 决策 512：编辑中的值——备选值写成 ‹值›，待保存的与现在写的不同时标 (unsaved)；输入的带光标
       const value =
-        selected && this.editing !== undefined
-          ? `${sanitizeTerminalText(this.editing)}_`
-          : sanitizeTerminalText(item.user);
+        editing === undefined
+          ? sanitizeTerminalText(item.user)
+          : editing.kind === "choice"
+            ? `‹${sanitizeTerminalText(editing.value)}›${
+                editing.value !== item.user ? ` ${warning("(unsaved)")}` : ""
+              }`
+            : `${sanitizeTerminalText(editing.value)}_`;
       const valuePad = " ".repeat(Math.max(0, valueWidth - visibleWidth(value)));
       const head = `${selected ? "›" : " "} ${label}${pad}   ${value}${valuePad}   ${secondary(`default ${item.option.defaultLabel}`)}`;
       const description = wrapTextWithAnsi(configDescription(item), Math.max(10, width - 4)).map(
