@@ -219,6 +219,12 @@ export class AgentPanel implements Component {
     this.cleared.set(record, record.updatedAt);
   }
 
+  // 决策 503：进入嵌套的子 agent 时停在它那一层（它的行在眼前、标亮）
+  reveal(record: SubagentRecord): void {
+    this.level = record.parent.kind === "agent" ? (record.parent as SubagentRecord) : undefined;
+    this.selectedRecord = undefined;
+  }
+
   // 换会话：回到最上层、不选中
   reset(): void {
     this.level = undefined;

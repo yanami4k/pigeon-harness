@@ -57,12 +57,19 @@ async function makeShell() {
   };
   const runtime = new ScriptedRuntime(newSessionId());
   const term = new MockTerminal(110, 30);
+  const mode = { current: "prompt" as "prompt" | "yolo" };
   const shell = new PigeonTuiShell({
     terminal: term,
     runtime,
     sessionId: newSessionId(),
     logDir,
     recordPollMs: 20,
+    approvalMode: () => ({
+      get: () => mode.current,
+      set: (next) => {
+        mode.current = next;
+      },
+    }),
     pool: {
       source,
       enter: async (id) => {
@@ -84,6 +91,7 @@ async function makeShell() {
     record,
     runtime,
     calls,
+    mode,
     cleanup: async () => {
       shell.stop();
       await record.close();
@@ -129,7 +137,7 @@ test("内容跟着它的会话记录更新，状态栏是它的模式、上下�
 });
 
 test("不收任何输入：消息与命令都回一行、不跳走；连按两下 ← 回面板，Esc 也回", async () => {
-  const { shell, term, runtime, calls, cleanup } = await makeShell();
+  const { shell, term, record, runtime, calls, mode, cleanup } = await makeShell();
   try {
     await settle();
     await openFar(term);
@@ -143,6 +151,16 @@ test("不收任何输入：消息与命令都回一行、不跳走；连按两�
     }
     assert.deepEqual(runtime.runs, []);
     assert.deepEqual(calls, []);
+    // Shift+Tab 也不收：当前会话的模式不被悄悄切换
+    term.input("\x1b[Z");
+    await settle();
+    assert.equal(mode.current, "prompt");
+    // 记录有追加、按记录重画之后，回过的提示照样在
+    record.assistant({ text: "那边又回了一段" });
+    await record.writer.flush();
+    await settle(200);
+    assert.match(screenText(term), /那边又回了一段/);
+    assert.match(screenText(term), /session far is open elsewhere/);
     term.input("\x15");
     term.input("\x1b[D");
     await settle();

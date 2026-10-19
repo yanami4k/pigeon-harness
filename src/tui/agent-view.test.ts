@@ -31,7 +31,7 @@ function record(name: string, state: SubagentRecord["state"]): SubagentRecord {
   } as unknown as SubagentRecord;
 }
 
-function makeShell() {
+function makeShell(open = true) {
   const root = mkdtempSync(join(tmpdir(), "pigeon-agent-view-"));
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-agent-view-log-"));
   const file = join(root, "a.txt");
@@ -47,18 +47,21 @@ function makeShell() {
     send: () => undefined,
     live: () => undefined,
     historyDir: () => undefined,
-    commands: () => ({
-      contextUsage: () => ({ tokens: 12_000, contextWindow: 100_000 }),
-      grants: { root, store, configRules: [] },
-      hooks: {
-        list: () => [],
-        disabled: true,
-        runEvent: async () => {
-          throw new Error("unused");
-        },
-      },
-      tasks: () => "tasks of general-1",
-    }),
+    commands: () =>
+      open
+        ? {
+            contextUsage: () => ({ tokens: 12_000, contextWindow: 100_000 }),
+            grants: { root, store, configRules: [] },
+            hooks: {
+              list: () => [],
+              disabled: true,
+              runEvent: async () => {
+                throw new Error("unused");
+              },
+            },
+            tasks: () => "tasks of general-1",
+          }
+        : undefined,
     status: async (target) => {
       calls.push(`status ${target.agentName}`);
       return `agent    ${target.displayName ?? target.agentName}`;
@@ -133,7 +136,7 @@ function makeShell() {
     pool: { source, enter: async () => undefined },
     config: {
       view: () => [],
-      set: () => undefined,
+      set: () => join(root, "settings.json"),
     },
   });
   shell.start();
@@ -245,6 +248,9 @@ test("程序级命令就地执行：输出写在子 agent 视图里；/config �
     await command(term, "/worktrees");
     assert.match(screenText(term), /no leftover worktrees/);
     assert.equal(shell.currentView(), "agent");
+    await command(term, "/config tui.leftArrowOpensPanel=false");
+    assert.match(screenText(term), /tui\.leftArrowOpensPanel = false \(written to user settings\)/);
+    assert.equal(shell.currentView(), "agent");
     await command(term, "/config");
     assert.equal(shell.currentView(), "config");
     term.input("\x1b");
@@ -255,6 +261,35 @@ test("程序级命令就地执行：输出写在子 agent 视图里；/config �
     assert.equal(shell.currentView(), "panel");
   } finally {
     cleanup();
+  }
+});
+
+test("决策 504：子 agent 视图里连按两下 Esc 不打开回退列表；还没开运行面的子 agent 上 /rename 先要它开起来", async () => {
+  const { shell, term, calls, cleanup } = makeShell();
+  try {
+    await settle();
+    await enterAgent(term);
+    term.input("\x1b");
+    term.input("\x1b");
+    await settle();
+    assert.equal(shell.currentView(), "agent");
+    assert.deepEqual(calls, [], "回退列表没开");
+  } finally {
+    cleanup();
+  }
+  const closed = makeShell(false);
+  try {
+    await settle();
+    await enterAgent(closed.term);
+    await command(closed.term, "/rename fixer");
+    assert.match(
+      screenText(closed.term),
+      /general-1 isn't open right now; send it a message first/
+    );
+    assert.deepEqual(closed.calls, []);
+    assert.equal(closed.agent.displayName, undefined);
+  } finally {
+    closed.cleanup();
   }
 });
 

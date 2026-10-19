@@ -1003,7 +1003,7 @@ export class AgentHub {
     }
   }
 
-  // 决策 505：改它的显示名（记进它自己的会话记录，续接后还在）；还没有运行面的（续接认回、没重开的）只改这一次进程里的
+  // 决策 505：改它的显示名（记进它自己的会话记录，续接后还在）；终端界面只在它开着运行面时调
   rename(record: SubagentRecord, name: string): void {
     if (name === record.agentName) delete record.displayName;
     else record.displayName = name;

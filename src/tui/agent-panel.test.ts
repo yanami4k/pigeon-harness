@@ -112,6 +112,17 @@ test("决策 503：子 agent 视图里正在看的那个加粗、一直列着，
   assert.ok(panel.render(80)[0]?.includes(`${BOLD}main`), "主视图里 main 加粗");
 });
 
+test("决策 503：进入嵌套的子 agent 时面板停在它那一层、它标亮", () => {
+  const { panel, add, view } = fixture();
+  const parent = add("general-1", "running", undefined);
+  const child = add("explore-1", "running", parent, "explore");
+  view(child);
+  panel.reveal(child);
+  const lines = panel.render(80);
+  assert.deepEqual(plain(lines), ["main › general-1", "  explore-1  explore · running"]);
+  assert.ok(lines[1]?.includes(`${BOLD}explore-1`));
+});
+
 test("决策 505：改过显示名的行写显示名", () => {
   const { panel, add } = fixture();
   const record = add("general-1", "running", undefined);

@@ -428,6 +428,7 @@ const PANEL_HINT = "press Left again to open the panel";
 // 决策 505：要它的运行面才能做的代理级命令（续接认回、还没重开的子 agent 先发一句话）
 const AGENT_RUNTIME_COMMANDS = new Set([
   "compact",
+  "rename",
   "tasks",
   "hooks",
   "grants",
@@ -446,6 +447,8 @@ interface ElsewhereSession {
   stamp?: string | undefined;
   status: RecordedStatus;
   timer?: ReturnType<typeof setInterval>;
+  // 回过的"不收输入"提示（按记录重画后补回）
+  refusals: string[];
 }
 // 决策 502：面板里派新会话的话至少几个字
 const MIN_SPAWN_CHARS = 3;
@@ -491,8 +494,6 @@ export class PigeonTuiShell
         live: boolean;
         // 决策 503：它的用量（状态栏）：进入时取它的会话记录，之后按每轮的用量累加
         cost: CostTally;
-        // 决策 505：/compact 正在压
-        compacting: boolean;
       }
     | undefined;
   // 决策 503：主视图的上下文与用量（状态栏按正在看的代理取）
@@ -934,7 +935,7 @@ export class PigeonTuiShell
       this.pendingApprovalState === null
     ) {
       const record = this.agentSession.record;
-      const state = this.agentSession.compacting ? "compacting" : agentStateWord(record.state);
+      const state = record.compacting === true ? "compacting" : agentStateWord(record.state);
       this.statusLine.setText(`sub-agent: ${agentLabel(record)} ${state}`);
       return;
     }
@@ -992,9 +993,9 @@ export class PigeonTuiShell
     }
     // 决策 485、501：别的 Pigeon 开着的会话不收任何输入（消息与命令都不收）
     if (this.view === "elsewhere" && this.elsewhereSession !== undefined) {
-      this.elsewhereSession.flow.addSystem(
-        `session ${this.elsewhereSession.card.name} is open elsewhere`
-      );
+      const refusal = `session ${this.elsewhereSession.card.name} is open elsewhere`;
+      this.elsewhereSession.flow.addSystem(refusal);
+      this.elsewhereSession.refusals.push(refusal);
       this.input.setText(value);
       this.tui.requestRender();
       return;
@@ -1367,10 +1368,10 @@ export class PigeonTuiShell
       unsubscribe: () => {},
       live: false,
       cost,
-      compacting: false,
     };
     this.attachAgentLive();
     this.showView("agent");
+    this.agentPanel.reveal(record);
   }
 
   // 进入时还没有运行面的子 agent（续接认回的、还在开的）：开好之后接上实时
@@ -1449,7 +1450,9 @@ export class PigeonTuiShell
     }
     // 代理级的看这个子 agent 在不在跑，程序级的与主视图一样看主代理
     const busy =
-      scope === "agent" ? agentActive(session.record) || session.compacting : this.isBusy();
+      scope === "agent"
+        ? agentActive(session.record) || session.record.compacting === true
+        : this.isBusy();
     const rejection = busy ? rejectWhileRunning(value) : undefined;
     if (rejection !== undefined) {
       keep(rejection);
@@ -1515,30 +1518,34 @@ export class PigeonTuiShell
       session.flow.addSystem("/compact is not available for this sub-agent");
       return;
     }
-    session.compacting = true;
-    this.updateStatus();
-    this.tui.requestRender();
+    const record = session.record;
     const settle = (line: string | undefined, failed: boolean): void => {
-      session.compacting = false;
+      // 结果写在它此刻的视图里（中途切走又切回来的照样看得到）
+      const flow = this.agentSession?.record === record ? this.agentSession.flow : session.flow;
       if (line !== undefined) {
-        if (failed) session.flow.addAlert(`[compact] ${line}`);
-        else session.flow.addSystem(`[compact] ${line}`);
+        if (failed) flow.addAlert(`[compact] ${line}`);
+        else flow.addSystem(`[compact] ${line}`);
       }
       this.updateStatus();
       this.tui.requestRender();
     };
-    compact(session.record, focus).then(
+    const pending = compact(record, focus);
+    this.updateStatus();
+    this.tui.requestRender();
+    pending.then(
       (outcome) => settle(manualCompactionText(outcome), outcome.kind === "failed"),
       (error: unknown) =>
         settle(`failed: ${error instanceof Error ? error.message : String(error)}`, true)
     );
   }
 
-  // 正在看的消息区（程序级命令就地执行时的输出落点）
+  // 正在看的消息区（程序级命令就地执行时的输出落点；Ctrl+O 展开收起的对象）
   private viewFlow(): MessageFlow {
-    return this.view === "agent" && this.agentSession !== undefined
-      ? this.agentSession.flow
-      : this.flow;
+    if (this.view === "agent" && this.agentSession !== undefined) return this.agentSession.flow;
+    if (this.view === "elsewhere" && this.elsewhereSession !== undefined) {
+      return this.elsewhereSession.flow;
+    }
+    return this.flow;
   }
 
   // 决策 297、480：通知（子 agent 的结果与消息等）到来时叫醒 agent——与排队输入同一个出口；在跑时不动，通知留在运行面上，下一轮或这一轮结束后再递
@@ -1584,7 +1591,7 @@ export class PigeonTuiShell
       }
       const assignment = parseConfigAssignment(args);
       if (assignment === undefined) {
-        this.flow.addSystem("usage: /config [key=value]");
+        this.viewFlow().addSystem("usage: /config [key=value]");
         this.tui.requestRender();
         return;
       }
@@ -1597,7 +1604,7 @@ export class PigeonTuiShell
     try {
       return this.options.config?.view();
     } catch (error) {
-      this.flow.addAlert(
+      this.viewFlow().addAlert(
         `reading settings failed: ${error instanceof Error ? error.message : String(error)}`
       );
       this.tui.requestRender();
@@ -1624,10 +1631,12 @@ export class PigeonTuiShell
     // 验收修改：在面板里改的，所有说明只写在面板的提示行（弱化样式），不往消息区写——面板上那一项的取值与生效值当场
     // 更新就是反馈；/config 选项=值 直接改（没开面板）的照旧写消息区
     const inPanel = this.configPanel.isOpen();
+    // 决策 505：子 agent 视图里 /config 选项=值 的结果写在那里
+    const target = this.viewFlow();
     // 这里说的都是改不成的原因（报错）
     const say = (line: string): void => {
       if (inPanel) this.configPanel.setNote(line, true);
-      else this.flow.addAlert(line);
+      else target.addAlert(line);
     };
     // 面板里上一次留下的报错：这次先清掉
     if (inPanel) this.configPanel.setNote("");
@@ -1659,12 +1668,12 @@ export class PigeonTuiShell
         : "";
     };
     if (file === undefined) {
-      if (!inPanel) this.flow.addSystem(`${id} is already ${value}${overridden()}`);
+      if (!inPanel) target.addSystem(`${id} is already ${value}${overridden()}`);
       this.tui.requestRender();
       return;
     }
     if (!inPanel) {
-      this.flow.addSystem(`${id} = ${value} (written to user settings${overridden()})`);
+      target.addSystem(`${id} = ${value} (written to user settings${overridden()})`);
     }
     const reload = this.options.reload;
     if (reload === undefined) {
@@ -1688,12 +1697,12 @@ export class PigeonTuiShell
           failed
         );
       } else if (failed) {
-        for (const line of lines) this.flow.addAlert(line);
+        for (const line of lines) target.addAlert(line);
       } else {
         // 重读设置的"已重读""没有变化"两句不写（上面那一行就是结果），别的提示照写
         for (const line of lines) {
           if (!line.startsWith(SETTINGS_RELOADED_PREFIX) && line !== SETTINGS_UNCHANGED) {
-            this.flow.addSystem(line);
+            target.addSystem(line);
           }
         }
       }
@@ -2081,6 +2090,7 @@ export class PigeonTuiShell
       ...(path !== undefined ? { path, stamp: recordStamp(path) } : {}),
       status:
         root !== undefined ? recordedSessionStatus(root, card.id) : { cost: emptyCostTally() },
+      refusals: [],
     };
     this.leaveElsewhere();
     this.elsewhereSession = session;
@@ -2102,6 +2112,7 @@ export class PigeonTuiShell
     session.stamp = stamp;
     session.flow.clear();
     this.renderHistoryInto(session.flow, session.card.id, undefined, session.root);
+    for (const line of session.refusals) session.flow.addSystem(line);
     if (session.root !== undefined) {
       session.status = recordedSessionStatus(session.root, session.card.id);
     }
@@ -2553,7 +2564,8 @@ export class PigeonTuiShell
       return { consume: true };
     }
     if (isKey(data, "pigeon.toggleMode")) {
-      this.toggleApprovalMode();
+      // 决策 501：只看历史的视图不收任何输入（也不悄悄切当前会话的模式）
+      if (this.view !== "elsewhere") this.toggleApprovalMode();
       return { consume: true };
     }
     // 决策 442：设置面板开着时按键归它（方向键、Enter/空格改值、Esc 关）；审批挂着（含写拒绝理由）时不归它
@@ -2569,13 +2581,14 @@ export class PigeonTuiShell
       return { consume: true };
     }
     if (isKey(data, "pigeon.toggleToolOutput")) {
-      const expanded = !this.flow.toolsExpandedState();
-      this.flow.setToolsExpanded(expanded);
+      // 决策 501、503：展开收起正在看的那个消息区
+      const flow = this.viewFlow();
+      flow.setToolsExpanded(!flow.toolsExpandedState());
       this.tui.requestRender();
       return { consume: true };
     }
-    // 决策 443：面板里不动当前会话排队的内容
-    if (isKey(data, "pigeon.dequeue") && this.queue.size() > 0 && this.view !== "panel") {
+    // 决策 443：面板里不动当前会话排队的内容（决策 503：子 agent 与只看历史的视图里也不动，排的是主代理的）
+    if (isKey(data, "pigeon.dequeue") && this.queue.size() > 0 && this.view === "main") {
       this.restoreQueueToEditor();
       return { consume: true };
     }
@@ -2687,7 +2700,7 @@ export class PigeonTuiShell
   openSessionPicker(): void {
     const root = this.options.resume !== undefined ? this.sessionsRoot() : undefined;
     if (root === undefined) {
-      this.flow.addSystem("/resume is not available in this session");
+      this.viewFlow().addSystem("/resume is not available in this session");
       this.tui.requestRender();
       return;
     }
@@ -2702,14 +2715,14 @@ export class PigeonTuiShell
           !pooled.has(session.sessionId)
       );
     } catch (error) {
-      this.flow.addAlert(
+      this.viewFlow().addAlert(
         `reading session list failed: ${error instanceof Error ? error.message : String(error)}`
       );
       this.tui.requestRender();
       return;
     }
     if (sessions.length === 0) {
-      this.flow.addSystem("no sessions to resume");
+      this.viewFlow().addSystem("no sessions to resume");
       this.tui.requestRender();
       return;
     }
@@ -2955,7 +2968,7 @@ export class PigeonTuiShell
     }
     const root = this.options.resume !== undefined ? this.sessionsRoot() : undefined;
     if (root !== undefined && isSandboxSession(root, arg)) {
-      this.flow.addSystem(sandboxResumeHint(arg));
+      this.viewFlow().addSystem(sandboxResumeHint(arg));
       return;
     }
     dispatchResumeCommand(this, arg);
@@ -3300,7 +3313,7 @@ export class PigeonTuiShell
         this.viewFlow().addSystem(face?.confirmPending() ?? "nothing pending to confirm");
       } else {
         face?.cancelPending();
-        this.flow.addSystem("cancelled");
+        this.viewFlow().addSystem("cancelled");
       }
       this.updateStatus();
       this.tui.requestRender();
@@ -3334,7 +3347,8 @@ export class PigeonTuiShell
       const handled = this.handleAgentPanelKey(data);
       if (handled !== undefined) return handled;
     }
-    if (this.view === "agent" && matchesKey(data, "escape")) {
+    const cancelKey = matchesKey(data, "escape") || isKey(data, "pigeon.cancel");
+    if (this.view === "agent" && cancelKey) {
       this.interruptViewedAgent();
       return { consume: true };
     }
@@ -3359,7 +3373,7 @@ export class PigeonTuiShell
     if (this.view === "panel") return this.handlePanelKey(data);
     // 决策 501：只看历史的视图里 Esc 也回面板
     if (this.view === "elsewhere") {
-      if (!matchesKey(data, "escape")) return undefined;
+      if (!cancelKey) return undefined;
       this.openPanel(this.elsewhereSession?.card.id);
       return { consume: true };
     }
