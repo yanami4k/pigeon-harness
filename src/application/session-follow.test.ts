@@ -190,6 +190,53 @@ test("子 agent 的用量在记录每次有变化时重算（只看它名下的 
   }
 });
 
+test("用量：复盘只在进入时算一次、别的会话名下的子 agent 不算；从头重读之后不重复计", async () => {
+  const { root, record, path, follower, cleanup } = await fixture();
+  const sessionsDir = sessionsDirOf(root);
+  const review = createFixtureSession({
+    sessionsDir,
+    cwd: root,
+    parentSessionId: record.sessionId,
+  });
+  const other = createFixtureSession({ sessionsDir, cwd: root });
+  const tokens = (update: Awaited<ReturnType<typeof follower.poll>>) =>
+    (update?.status.cost.unpricedTokens ?? 0) + (update?.status.cost.pricedTokens ?? 0);
+  try {
+    review.startRun({ task: "复盘", config: { memoryReview: { kind: "closing", template: "t" } } });
+    review.assistant({ text: "记下", usage: { input: 2000, totalTokens: 2000 } });
+    review.endRun();
+    await review.writer.flush();
+    other.startRun({ task: "别的会话" });
+    await other.writer.flush();
+    const otherPath = recordedSessionPath(root, other.sessionId);
+    assert.ok(otherPath !== undefined);
+    const stranger = createFixtureSession({
+      sessionsDir: subagentSessionsDir(otherPath, other.sessionId),
+      cwd: root,
+      parentSessionId: other.sessionId,
+    });
+    stranger.startRun({ task: "别人的子任务" });
+    stranger.assistant({ text: "别人的", usage: { input: 100_000, totalTokens: 100_000 } });
+    await stranger.close();
+    assert.equal(
+      tokens(await follower.poll()),
+      52_000,
+      "自己 5 万 + 复盘 2 千，别人的子 agent 不算"
+    );
+    // 换了一个文件（同样内容）：从头读，用量不翻倍
+    const content = readFileSync(path, "utf8");
+    writeFileSync(`${path}.new`, content);
+    renameSync(`${path}.new`, path);
+    const reread = await follower.poll();
+    assert.equal(reread?.restarted, true);
+    assert.equal(tokens(reread), 52_000);
+  } finally {
+    await review.close();
+    await other.close();
+    await cleanup();
+  }
+});
+
 test("文件没了：照常抛给调用方（调用方停在原样、下次再看）", async () => {
   const { path, follower, cleanup } = await fixture();
   try {

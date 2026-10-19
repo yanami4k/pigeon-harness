@@ -1,7 +1,9 @@
 // 决策 501：别的进程开着的会话在本进程里只看它的会话记录——跟着记录的追加更新内容与状态栏（模式、上下文与用量）。
 // 只读追加的部分：记住读到的偏移，新追加的整行喂进解析器（写了一半的末行留到下次）；文件变小、修改时刻倒退、或换了一个文件
-//（打开后的句柄上 dev:ino 变了）才从头重读。读文件是异步的，不卡界面。用量：复盘会话只在第一次读时扫一遍会话根；它的
-// 子 agent 在记录每次有变化时重算（只扫它自己名下的 subagents 文件夹）；会话自己的只从读进来的条目算（各分支，计过的不再计）
+//（打开后的句柄上 dev:ino 变了）才从头重读。记录本身异步读，不卡界面。用量：复盘会话只在第一次读时扫一遍会话根；它的
+// 子 agent 在记录每次有变化时重算（只扫它自己名下的 subagents 文件夹，大小与修改时刻没变的文件不再读）；会话自己的只从
+// 读进来的条目算（各分支，计过的不再计）
+import { statSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { listSessionRefs, sessionBranchViews } from "../persistence/session-catalog.ts";
 import {
@@ -20,7 +22,7 @@ import {
   emptyCostTally,
   mergeCostTally,
   reviewForksCost,
-  subagentsCostIn,
+  subagentFileCost,
 } from "./session-cost.ts";
 
 export interface RecordedStatus {
@@ -61,6 +63,8 @@ export class SessionFollower {
   private reviews: CostTally | undefined;
   private own: CostTally = emptyCostTally();
   private counted = new Set<string>();
+  // 子 agent 会话文件的花费，按文件的大小与修改时刻缓存（没变的不再读）
+  private readonly agentCosts = new Map<string, { stamp: string; tally: CostTally }>();
   // 累计读过的字节数（测试看只读了增量）
   readBytes = 0;
 
@@ -79,6 +83,32 @@ export class SessionFollower {
     this.reviews = undefined;
     this.own = emptyCostTally();
     this.counted = new Set<string>();
+  }
+
+  // 它名下 subagents 文件夹里各子 agent 的花费：只重读大小或修改时刻变了的文件；读不成的这次不计
+  private subagentsCost(): CostTally {
+    const tally = emptyCostTally();
+    let refs: ReturnType<typeof listSessionRefs>;
+    try {
+      refs = listSessionRefs(subagentSessionsDir(this.path, this.sessionId));
+    } catch {
+      return tally;
+    }
+    for (const ref of refs) {
+      try {
+        const info = statSync(ref.path);
+        const stamp = `${info.size}:${info.mtimeMs}`;
+        let known = this.agentCosts.get(ref.path);
+        if (known?.stamp !== stamp) {
+          known = { stamp, tally: subagentFileCost(ref) };
+          this.agentCosts.set(ref.path, known);
+        }
+        mergeCostTally(tally, known.tally);
+      } catch {
+        // 这个文件这次读不成：不计，下次再看
+      }
+    }
+    return tally;
   }
 
   // 看一次：没有新的整行为 undefined；读不到（文件没了、目录被删）照常抛，调用方停在原样、下次再看
@@ -134,12 +164,7 @@ export class SessionFollower {
     for (const branch of sessionBranchViews(file)) {
       mergeCostTally(this.own, costTallyOfView(branch, this.counted));
     }
-    let agents: CostTally;
-    try {
-      agents = subagentsCostIn(listSessionRefs(subagentSessionsDir(this.path, this.sessionId)));
-    } catch {
-      agents = emptyCostTally();
-    }
+    const agents = this.subagentsCost();
     let mode: RecordedStatus["mode"];
     let contextWindow: number | undefined;
     for (const item of view.items) {

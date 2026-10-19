@@ -158,28 +158,30 @@ export function isReviewForkOf(view: SessionView, sessionId: string): boolean {
 
 // 续接会话时的已有花费：会话自己 + 它的子 agent + 从它分叉出的复盘（旧 worker 会话不再计入，决策 457）
 export function accumulatedSessionCost(sessionsRoot: string, sessionId: string): CostTally {
-  const tally = subagentsCostIn(subagentSessionRefs(sessionsRoot, sessionId));
-  mergeCostTally(tally, sessionCostWith(sessionsRoot, sessionId, true));
-  return tally;
+  const tally = emptyCostTally();
+  for (const ref of subagentSessionRefs(sessionsRoot, sessionId)) {
+    mergeCostTally(tally, subagentFileCost(ref));
+  }
+  return sessionCostWith(tally, sessionsRoot, sessionId, true);
 }
 
-// 一批子 agent 会话文件的花费（各自全部分支）
-export function subagentsCostIn(refs: readonly SessionFileRef[]): CostTally {
-  const tally = emptyCostTally();
-  for (const ref of refs) {
-    mergeCostTally(tally, branchesCostTally(readSessionBranchViews(ref)));
-  }
-  return tally;
+// 一个子 agent 会话文件的花费（全部分支）
+export function subagentFileCost(ref: Pick<SessionFileRef, "path">): CostTally {
+  return branchesCostTally(readSessionBranchViews(ref));
 }
 
 // 决策 501：只算从它分叉出的复盘（扫整个会话根；会话自己与子 agent 的由调用方另算）
 export function reviewForksCost(sessionsRoot: string, sessionId: string): CostTally {
-  return sessionCostWith(sessionsRoot, sessionId, false);
+  return sessionCostWith(emptyCostTally(), sessionsRoot, sessionId, false);
 }
 
-// 会话根里它自己（own 时）与从它分叉出的复盘的花费
-function sessionCostWith(sessionsRoot: string, sessionId: string, own: boolean): CostTally {
-  const tally = emptyCostTally();
+// 会话根里它自己（own 时）与从它分叉出的复盘的花费，累加进 tally
+function sessionCostWith(
+  tally: CostTally,
+  sessionsRoot: string,
+  sessionId: string,
+  own: boolean
+): CostTally {
   for (const ref of listSessionRefs(sessionsRoot)) {
     if (ref.sessionId !== sessionId) {
       // 只有子会话才可能计入；先按文件名排除不了，读头部即读全文，这里一并投影
