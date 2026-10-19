@@ -2973,6 +2973,11 @@ export class PigeonTuiShell
     }
   }
 
+  // 输入框里现在的文字（测试与命令用）
+  inputText(): string {
+    return this.input.getText();
+  }
+
   // 当前视图（测试与命令用）
   currentView(): ShellView {
     return this.view;
@@ -3007,8 +3012,8 @@ export class PigeonTuiShell
   // 视图的按键。Ctrl+C 与审批挂起期间放给壳级键控；会话回退打开时按键全归它
   private handleScreenKey(data: string): { consume: true } | undefined {
     // 决策 492：/worktrees clean 的 y/N 问一次就作数——y 删、别的键作罢；排在别的按键之前。等着时来了审批，审批优先：
-    // 按键归审批，不当成 y/N 的回答（审批答完问句还在）。作罢的那个键照常生效（再打一条命令即作罢，命令的第一个字不丢），
-    // Esc 只作罢
+    // 按键归审批，不当成 y/N 的回答（审批答完问句还在）。y、n 与 Esc 只当回答、不进输入框；别的键作罢之后照常生效
+    //（再打一条命令即作罢，命令的第一个字不丢）
     if (this.cleanConfirm && this.pendingApprovalState === null) {
       this.cleanConfirm = false;
       const face = this.options.worktrees;
@@ -3021,7 +3026,9 @@ export class PigeonTuiShell
       }
       this.updateStatus();
       this.tui.requestRender();
-      if (yes || matchesKey(data, "escape")) return { consume: true };
+      if (yes || data === "n" || data === "N" || matchesKey(data, "escape")) {
+        return { consume: true };
+      }
     }
     // 决策 482：有子 agent 在跑时退出前的确认，排在审批、设置面板与别的按键之前：y 或 Enter 退出，别的键取消
     //（Ctrl+C 照旧归退出键）

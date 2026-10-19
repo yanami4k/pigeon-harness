@@ -67,8 +67,8 @@ test("/worktrees clean 之后按 y 才删；状态行先问一句", async () => 
   }
 });
 
-test("/worktrees clean 之后按别的键即作罢，不删", async () => {
-  const { term, calls, cleanup } = makeShell();
+test("/worktrees clean 之后按 n 即作罢，不删；n 只当回答，不进输入框", async () => {
+  const { shell, term, calls, cleanup } = makeShell();
   try {
     await settle();
     term.input("/worktrees clean");
@@ -77,6 +77,7 @@ test("/worktrees clean 之后按别的键即作罢，不删", async () => {
     term.input("n");
     await settle(200);
     assert.deepEqual(calls, ["run", "cancel"]);
+    assert.equal(shell.inputText(), "", "按 n 之后输入框为空");
     assert.equal((screenText(term).match(/cancelled/g) ?? []).length, 1, "cancelled 只写一次");
   } finally {
     cleanup();
@@ -142,6 +143,36 @@ test("等着 y/N 时再打一条命令即作罢，命令的第一个字不丢、
     const screen = screenText(term);
     assert.match(screen, /cancelled/);
     assert.match(screen, /\/status is not available in this session/, "按命令执行，不当成普通输入");
+  } finally {
+    cleanup();
+  }
+});
+
+test("y、N 与 Esc 同样只当回答，不进输入框；别的键作罢之后照常输入", async () => {
+  for (const key of ["y", "N", "\x1b"]) {
+    const { shell, term, cleanup } = makeShell();
+    try {
+      await settle();
+      term.input("/worktrees clean");
+      term.input("\r");
+      await settle(200);
+      term.input(key);
+      await settle(100);
+      assert.equal(shell.inputText(), "", JSON.stringify(key));
+    } finally {
+      cleanup();
+    }
+  }
+  const { shell, term, calls, cleanup } = makeShell();
+  try {
+    await settle();
+    term.input("/worktrees clean");
+    term.input("\r");
+    await settle(200);
+    term.input("h");
+    await settle(100);
+    assert.deepEqual(calls, ["run", "cancel"]);
+    assert.equal(shell.inputText(), "h", "作罢的那个键照常输入");
   } finally {
     cleanup();
   }

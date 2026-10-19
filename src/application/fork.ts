@@ -160,6 +160,7 @@ export async function prepareFork(request: ForkRequest): Promise<PreparedFork> {
     throw new ForkError(`writing the fork entry to session ${sourceSessionId} failed; not forked`);
   }
   let releaseInUse: () => void = () => {};
+  let prepared: PreparedFork;
   try {
     // c. 独立工作树：从分叉点之前最近的快照开出
     const name = `fork-${branchSessionId.slice(-8).toLowerCase()}`;
@@ -196,7 +197,7 @@ export async function prepareFork(request: ForkRequest): Promise<PreparedFork> {
         `creating the branch session file failed; worktree ${worktree.path} left in place`
       );
     }
-    return {
+    prepared = {
       branchSessionId,
       checkpoint,
       workspace,
@@ -207,11 +208,19 @@ export async function prepareFork(request: ForkRequest): Promise<PreparedFork> {
       releaseInUse,
     };
   } catch (error) {
+    // 准备失败：放掉在用标记，释放来源会话的写者（它再出错不盖过原来的错）
+    releaseInUse();
+    await storeFork.release().catch(() => {});
+    throw error;
+  }
+  // 释放来源会话的写者也可能抛错：已持有的在用标记一并放掉，不留到进程退出
+  try {
+    await storeFork.release();
+  } catch (error) {
     releaseInUse();
     throw error;
-  } finally {
-    await storeFork.release();
   }
+  return prepared;
 }
 
 // 分支续跑用的运行参数（与 headless 同一组；任务描述由分叉点决定）

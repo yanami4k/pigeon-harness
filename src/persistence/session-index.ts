@@ -118,6 +118,22 @@ export function addToSessionIndex(
   });
 }
 
+// 清单里那条跟着会话的工作目录走（移进工作树、续接回到别处）：只更新已在清单里的，不在的不加；没变即不写
+export function updateListedWorkspace(
+  sessionId: string,
+  workspaceRoot: string,
+  homeDir: string = homedir()
+): void {
+  const next = path.resolve(workspaceRoot);
+  const known = readEntries(sessionIndexPathOf(homeDir)).find(
+    (item) => item.sessionId === sessionId
+  );
+  if (known === undefined || known.workspaceRoot === next) return;
+  modify(homeDir, (entries) =>
+    entries.map((item) => (item.sessionId === sessionId ? { ...item, workspaceRoot: next } : item))
+  );
+}
+
 // 删出清单（不在也算删掉）
 export function removeFromSessionIndex(sessionId: string, homeDir: string = homedir()): void {
   if (!readEntries(sessionIndexPathOf(homeDir)).some((item) => item.sessionId === sessionId)) {

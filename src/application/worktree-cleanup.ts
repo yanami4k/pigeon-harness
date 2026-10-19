@@ -8,7 +8,8 @@
 // 删除缺省只删没有未取走改动的；点名或 --all 才删有改动的，并明说会丢。在用的一律不删。删之前重新核一遍：
 // 期间变成在用或改动有变化的剔除并说明；真删的那一刻再看一次在用标记。删除不跟随链接（worktree.ts 的 removeWorktree）。
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { homedir } from "node:os";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   branchCreationCommit,
   branchMovedSince,
@@ -22,7 +23,7 @@ import {
 } from "../orchestration/worktree.ts";
 import { type ListedSession, readableSessionIndex } from "../persistence/session-index.ts";
 import { worktreeInUse } from "../persistence/worktree-in-use.ts";
-import { pigeonRel, worktreesDirOf } from "../state/paths.ts";
+import { pigeonRel, sessionIndexPathOf, worktreesDirOf } from "../state/paths.ts";
 import { plural } from "./format.ts";
 import { namedWorktreeBase, namedWorktreeBranch } from "./named-worktree.ts";
 import { sessionNameOf } from "./session-name.ts";
@@ -144,6 +145,14 @@ function untakenFiles(
   }
 }
 
+// 主目录下的路径缩写成 ~ 开头（给人看的说明里用）
+function homePath(path: string, home: string): string {
+  const rel = relative(home, path);
+  if (rel === "") return "~";
+  if (rel.startsWith("..") || isAbsolute(rel)) return path;
+  return `~${sep}${rel}`;
+}
+
 // 决策 497：会话面板工作清单里挂着的会话（它们的工作目录）；清单文件在却读不成为 undefined（这时每棵树都按在用算，
 // 不因读不到清单就删了面板会话的树）
 function listedSessions(scope: WorktreeScope): ListedSession[] | undefined {
@@ -161,7 +170,12 @@ function inUseFacts(
   listed: readonly ListedSession[] | undefined
 ): { inUseReason?: string; panelSession?: string } {
   if (path === undefined) return {};
-  if (listed === undefined) return { inUseReason: "the session panel's work list can't be read" };
+  if (listed === undefined) {
+    const home = scope.homeDir ?? homedir();
+    return {
+      inUseReason: `the session panel's work list can't be read: ${homePath(sessionIndexPathOf(home), home)}`,
+    };
+  }
   const owner = listed.find(
     (entry) => samePath(resolve(entry.workspaceRoot), path) || isInside(path, entry.workspaceRoot)
   );

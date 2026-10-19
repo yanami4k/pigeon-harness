@@ -4,10 +4,14 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { afterEach, test } from "vitest";
 import { addWorktree } from "../orchestration/worktree.ts";
-import { addToSessionIndex } from "../persistence/session-index.ts";
+import {
+  addToSessionIndex,
+  listSessionIndex,
+  updateListedWorkspace,
+} from "../persistence/session-index.ts";
 import { holdWorktreeInUse } from "../persistence/worktree-in-use.ts";
 import { newSessionId } from "../state/ids.ts";
 import { SESSION_ENTRY_VERSION, SessionEntryType } from "../state/session-entries.ts";
@@ -372,7 +376,11 @@ test("面板清单里的会话在树的子目录里干活同样算；清单文�
   writeFileSync(join(other, ".pigeon", "state", "session-index.json"), "{ not json");
   const broken = listLeftoverWorktrees({ workspaceRoot: repo, homeDir: other });
   assert.equal(byName(broken, "nested").inUse, true);
-  assert.match(byName(broken, "nested").inUseReason ?? "", /work list can't be read/);
+  // 在用说明写出清单文件的路径（~ 缩写）
+  assert.equal(
+    byName(broken, "nested").inUseReason,
+    `the session panel's work list can't be read: ~${sep}${join(".pigeon", "state", "session-index.json")}`
+  );
   assert.deepEqual(planClean(broken, ["--all"]).remove, []);
 });
 
@@ -385,4 +393,26 @@ test("确认清单写真正要删的分支：目录已不在、登记在用户�
   const text = formatCleanPlan(planClean(listLeftoverWorktrees(scope), ["gone2"]));
   assert.match(text, /gone2 \(pigeon\/gone2\)/);
   assert.doesNotMatch(text, /my-work2/);
+});
+
+// 决策 497：清单里的会话的工作目录变了（例如用 enter_worktree 进了树 T），清单里那条跟着走——退出 Pigeon 之后裸 clean 不删 T，
+// 它原先记的位置不再算它的；没进过面板的会话不因此加进清单
+test("清单里的会话进了另一棵树：清单跟着改，裸 clean 不删新树、旧位置不再算它的；不在清单里的不加", async () => {
+  const repo = makeRepo();
+  const home = makeHome();
+  const scope = { workspaceRoot: repo, homeDir: home };
+  const before = addWorktree({ repoRoot: repo, sessionId: newSessionId(), name: "before" });
+  const tree = addWorktree({ repoRoot: repo, sessionId: newSessionId(), name: "tree-t" });
+  const sessionId = await listInPanel(repo, before.path, home);
+  // 会话移进 T（main.ts 的 worktreeSwitch.adopt / adoptWorkspace 都走这一步）
+  updateListedWorkspace(sessionId, tree.path, home);
+  const items = listLeftoverWorktrees(scope);
+  assert.match(byName(items, "tree-t").inUseReason ?? "", /session panel/);
+  assert.equal(byName(items, "before").inUse, false, "原先记的位置不再算它的");
+  const names = planClean(items, []).remove.map((item) => item.name);
+  assert.ok(names.includes("before"));
+  assert.ok(!names.includes("tree-t"), "裸 clean 不删 T");
+  // 没进过面板的会话：不加进清单
+  updateListedWorkspace(newSessionId(), tree.path, home);
+  assert.equal(listSessionIndex(home).length, 1);
 });

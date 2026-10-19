@@ -111,6 +111,7 @@ import {
   addToSessionIndex,
   type ListedSession,
   removeFromSessionIndex,
+  updateListedWorkspace,
 } from "../persistence/session-index.ts";
 import { holdWorktreeInUse } from "../persistence/worktree-in-use.ts";
 import type { TrustEntry } from "../state/config-trust.ts";
@@ -529,6 +530,19 @@ export async function main(argv: string[]): Promise<void> {
       core.releaseInUse = next !== undefined ? holdWorktreeInUse(next.path) : undefined;
     }
     core.worktree = next;
+    followListed(core);
+  }
+  // 决策 497：已在面板工作清单里的会话，清单里那条的工作目录跟着它走（/worktrees clean 据此认在用的树）；没进过面板的不加进清单
+  function followListed(core: SessionCore): void {
+    if (sandbox !== undefined) return;
+    try {
+      updateListedWorkspace(core.sessionId, core.workspaceRoot);
+    } catch (error) {
+      say(
+        `updating the work list failed: ${error instanceof Error ? error.message : String(error)}`,
+        true
+      );
+    }
   }
   // 决策 480：当前会话还有子 agent 在跑时不能改设置、重读设置、移进工作树
   const agentsBusy = (): string | undefined =>
@@ -899,10 +913,6 @@ export async function main(argv: string[]): Promise<void> {
       retireToPanel(previous, shell.handOff());
     } else {
       await closeCore(previous, { reason: "switch" });
-      const left = previous.worktree;
-      if (left !== undefined && left.path !== next.worktree?.path) {
-        shell.addSystem(`left worktree ${left.path} (kept; changes are there)`);
-      }
     }
     current = next;
     next.current = true;
@@ -1395,12 +1405,8 @@ export async function main(argv: string[]): Promise<void> {
         } else {
           // 换走的会话在本进程里到此结束：它派出的子 agent 停下并释放；决策 323、324：释放运行面之前跑它的 SessionEnd
           //（reason "switch"，记录落在旧会话文件）；壳 rebindSession 随后会为新会话跑 SessionStart（source "resume"）。
-          // 离开的独立工作树留着
+          // 离开的工作树留着（不另写一行）
           await closeCore(previous, { reason: "switch" });
-          const left = previous.worktree;
-          if (left !== undefined && left.path !== next.worktree?.path) {
-            shell.addSystem(`left worktree ${left.path} (kept; changes are there)`);
-          }
         }
         current = next;
         next.current = true;
@@ -1424,6 +1430,7 @@ export async function main(argv: string[]): Promise<void> {
       }
       core.worktree = worktree;
       recordWorktreeEntry(coreBundle(core).sessionStore, worktree);
+      followListed(core);
     },
     system: (line, alert) =>
       alert === true ? shellHolder.current?.addAlert(line) : shellHolder.current?.addSystem(line),
