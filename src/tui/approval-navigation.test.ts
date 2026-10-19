@@ -2,14 +2,21 @@
 // 与它自己的视图（标明是哪个子 agent），任一处答了两处都收；别的子 agent 视图、会话面板、只看历史的视图、别的会话都不显示，
 // 卡片与子 agent 面板那一行标等待；回答键只在显示着的视图里归审批；挂着审批也能离开去别的会话，回来再答
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
 import type { PooledSessionCard, SessionPanelSource } from "../application/session-pool.ts";
 import type { SubagentRecord } from "../application/subagents.ts";
+import { SessionGrantStore } from "../approvals/grant-store.ts";
 import type { ApprovalRequest } from "../approvals/handler.ts";
+import { loadSettings } from "../persistence/settings.ts";
+import type { TrustEntry } from "../state/config-trust.ts";
 import { newSessionId, type SessionId } from "../state/ids.ts";
+import { wheelScrollLinesOf } from "../state/settings.ts";
+import { createTuiApprovalHandler } from "./approval.ts";
+import { askTrustPanel } from "./modal.ts";
+import { applyProjectUi } from "./project-ui.ts";
 import { ScriptedRuntime } from "./runtime-fixtures.ts";
 import { PigeonTuiShell } from "./shell.ts";
 import { MockTerminal, screenText, settle } from "./testing.ts";
@@ -345,6 +352,129 @@ test("决策 506：滚轮一格滚几行按设置取，改了即生效（缺省 
     shell.applyWheelScroll();
     assert.equal(shell.wheelScrollLines(), 7);
   } finally {
+    rmSync(logDir, { recursive: true, force: true });
+  }
+});
+
+test("经真的审批 handler 撤回：只留一行 withdrawn 结论（不再跟一行 rejected）", async () => {
+  const { shell, term, sessionId, cleanup } = makeShell();
+  try {
+    await settle();
+    const handler = createTuiApprovalHandler(
+      new SessionGrantStore({ workspaceRoot: "/nonexistent" }),
+      () => shell
+    );
+    const controller = new AbortController();
+    const decision = handler(
+      request("make build", {
+        sessionId,
+        subagent: { path: "general-1" },
+        signal: controller.signal,
+      })
+    );
+    await settle();
+    controller.abort();
+    assert.equal((await decision).approved, false);
+    await settle();
+    const screen = screenText(term);
+    assert.equal(screen.split("withdrawn: general-1 was stopped").length - 1, 1);
+    assert.doesNotMatch(screen, /rejected run_command/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("审批显示着时确认别的工作区的设置照样问（不按跳过处理）；答完确认，审批还在、照常能答", async () => {
+  const { shell, term, cleanup } = makeShell();
+  try {
+    await settle();
+    const answer = shell.askApproval(request("npm test"));
+    await settle();
+    const entries: TrustEntry[] = [
+      {
+        kind: "hook",
+        id: "Stop:abc",
+        origin: "project",
+        summary: "npm run lint",
+        fingerprint: "f1",
+      },
+    ];
+    const trust = askTrustPanel(shell, "/work/other", entries);
+    await settle();
+    assert.match(screenText(term), /a trust all \| s skip this time/);
+    term.input("a");
+    assert.equal(await trust, "trust");
+    await settle();
+    assert.match(screenText(term), /npm test/, "审批还在");
+    term.input("y");
+    assert.equal((await answer).key, "y");
+  } finally {
+    cleanup();
+  }
+});
+
+test("壳停止：各会话挂着的审批全部按拒绝收口", async () => {
+  const { shell, sessionId, cleanup } = makeShell();
+  const own = shell.askApproval(request("npm test", { sessionId }));
+  const away = shell.askApproval(request("rm tmp", { sessionId: "sess_other" as SessionId }));
+  await settle();
+  cleanup();
+  assert.equal((await own).key, "cancel");
+  assert.equal((await away).key, "cancel");
+});
+
+test("别的会话的审批：permission_prompt 的说明写明是哪个会话在等", async () => {
+  const logDir = mkdtempSync(join(tmpdir(), "pigeon-approval-hook-"));
+  const messages: string[] = [];
+  const shell = new PigeonTuiShell({
+    terminal: new MockTerminal(100, 30),
+    runtime: new ScriptedRuntime(newSessionId()),
+    sessionId: newSessionId(),
+    logDir,
+    sessionName: (id) => (id === "sess_other" ? "other" : "demo-main"),
+    hooks: {
+      list: () => [],
+      disabled: false,
+      runEvent: async (_event, _target, fields) => {
+        messages.push(String(fields.message));
+        return { systemMessages: [], additionalContext: [], ran: true } as never;
+      },
+    },
+  });
+  shell.start();
+  try {
+    void shell.askApproval(request("rm tmp", { sessionId: "sess_other" as SessionId }));
+    await settle();
+    assert.match(messages[0] ?? "", /^source: session other\n/);
+  } finally {
+    shell.stop();
+    rmSync(logDir, { recursive: true, force: true });
+  }
+});
+
+test("决策 506：换项目与 /config、/reload 之后按新的设置快照重定滚轮行数（main.ts 用的同一步）", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pigeon-project-ui-"));
+  const logDir = mkdtempSync(join(tmpdir(), "pigeon-project-ui-log-"));
+  let snapshot = loadSettings(root, { homeDir: root });
+  const shell = new PigeonTuiShell({
+    terminal: new MockTerminal(80, 24),
+    runtime: new ScriptedRuntime(newSessionId()),
+    sessionId: newSessionId(),
+    logDir,
+    wheelScrollLines: () => wheelScrollLinesOf(snapshot),
+  });
+  try {
+    assert.equal(shell.wheelScrollLines(), 3, "没写：缺省");
+    mkdirSync(join(root, ".pigeon"), { recursive: true });
+    writeFileSync(
+      join(root, ".pigeon", "settings.json"),
+      JSON.stringify({ tui: { wheelScrollLines: 9 } })
+    );
+    snapshot = loadSettings(root, { homeDir: root });
+    applyProjectUi(shell, snapshot);
+    assert.equal(shell.wheelScrollLines(), 9);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
     rmSync(logDir, { recursive: true, force: true });
   }
 });

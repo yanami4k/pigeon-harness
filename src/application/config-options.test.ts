@@ -172,7 +172,7 @@ test("决策 506：滚轮一格滚几行 1–20 的整数，越界不收；设�
   assert.throws(() => loadSettings(root, { homeDir: home }), /wheelScrollLines/);
 });
 
-test("决策 506：终端界面取滚轮行数的那一处——启动时读设置、/config 改值后、/reload 重读后都按设置（没写即缺省）", () => {
+test("决策 506：滚轮行数从设置快照里取——没写为缺省；/config 写进去、改了文件重读之后都取到新值", () => {
   const { home, root } = setup();
   const file = join(home, ".pigeon", "settings.json");
   assert.equal(

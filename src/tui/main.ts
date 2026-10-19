@@ -159,6 +159,7 @@ import {
 import { type MainReloadContext, reopenMainSessionForReload } from "./main-reload.ts";
 import { askTrustPanel } from "./modal.ts";
 import { launchPlaceOf, newSessionPlace } from "./new-session-dir.ts";
+import { applyProjectUi } from "./project-ui.ts";
 import {
   type NewSessionRequest,
   PigeonTuiShell,
@@ -766,8 +767,7 @@ export async function main(argv: string[]): Promise<void> {
     memoryContext.limits = memoryLimitsOf(snapshot);
     loopGuard = loopGuardSettingsOf(snapshot);
     // 键位与滚轮速度跟着当前会话所在项目的设置
-    shellHolder.current?.applyKeybindings(keybindingsSectionOf(snapshot));
-    shellHolder.current?.applyWheelScroll();
+    applyProjectUi(shellHolder.current, snapshot);
   }
   const bundleOf = (): RuntimeBundle => coreBundle(current);
   const bindingOf = (core: SessionCore) => {
@@ -1131,8 +1131,7 @@ export async function main(argv: string[]): Promise<void> {
     // 决策 480：子 agent 的类型随 /reload 重读
     catalogs.delete(rootKey(core.governanceRoot));
     // 决策 439：键位随新快照重装；决策 506：滚轮速度同样
-    shellHolder.current?.applyKeybindings(keybindingsSectionOf(snapshot));
-    shellHolder.current?.applyWheelScroll();
+    applyProjectUi(shellHolder.current, snapshot);
     loopGuard = reloaded.loopGuard;
     // 决策 350：换走旧运行面之前先等它未完成的快照拍完（新运行面在同一工作区上接着改文件）
     await core.opened?.checkpoints?.settle();

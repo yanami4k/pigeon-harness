@@ -64,6 +64,8 @@ export interface ModalHost {
   settleApproval?(line: string): void;
   // 决策 301：当前不在主会话视图（审批块里给主会话的请求写明来源）；缺省即在
   outsideMainView?(): boolean;
+  // 决策 509：不按会话分的模态挂着没有（确认设置只看它）；缺省按 pendingApproval
+  modalBusy?(): boolean;
   // 决策 323、324：审批面板出现时的 Notification 钩子（只作副作用）——面板出现记 permission_prompt；缺省不通知
   notifyApprovalHook?(notificationType: string, message: string): void;
 }
@@ -141,7 +143,9 @@ export function askTrustPanel(
   root: string,
   entries: readonly TrustEntry[]
 ): Promise<"trust" | "skip"> {
-  if (!host.isStarted() || host.pendingApproval() !== null) return Promise.resolve("skip");
+  // 决策 509：审批各在各的会话里，只有另一项确认挂着才算忙（缺省按有没有挂着的）
+  const busy = host.modalBusy?.() ?? host.pendingApproval() !== null;
+  if (!host.isStarted() || busy) return Promise.resolve("skip");
   const lines: ApprovalBlockLine[] = [
     { kind: "title", text: TRUST_PROMPT_HEADER },
     { kind: "detail", text: root },

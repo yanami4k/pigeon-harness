@@ -20,9 +20,9 @@ export interface ApprovalRequest {
   // 本次调用所在 Run（M4 S6：审批提示 [a]/[d] 创建会话 grant 时写入 grant.created
   // 事件的出处 run——grant 在 Run 内出生，runId 恒在场）
   readonly runId?: RunId;
-  // M5.5（决策 040）：请求来源会话——别的会话的审批汇聚到同一面板时在场，面板据此区分来源；主会话自己的请求缺省
+  // M5.5（决策 040）：请求所属的会话；决策 509：终端界面按它把审批挂在所属会话里（只在它的视图里出现）
   readonly sessionId?: SessionId;
-  // 决策 443：会话面板派出的独立会话的审批汇到同一队列时在场（面板写明来源会话的名字）
+  // 决策 443：会话面板派出的独立会话的名字（来源行写明）；决策 509 起终端界面不再给（审批只在所属会话里出现）
   readonly pooled?: { readonly name: string };
   // 决策 480：子 agent 的审批汇到所属会话的队列时在场——从会话往下的名字路径（"general-1 › explore-2"）；
   // 这时放权只记在这个子 agent 自己的会话里，按键说明写 for this sub-agent

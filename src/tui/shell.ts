@@ -2944,8 +2944,14 @@ export class PigeonTuiShell
       return Promise.resolve({ key: "cancel", reason: APPROVAL_CANCEL_CLOSED });
     }
     const text = approvalBlockText(request, directoryGrant);
-    // 决策 323、324：审批面板出现（permission_prompt）
-    this.notifyApprovalHook("permission_prompt", text);
+    // 决策 323、324：审批面板出现（permission_prompt）；不是当前会话的写明是哪个会话在等
+    const owner = request.sessionId;
+    this.notifyApprovalHook(
+      "permission_prompt",
+      owner !== undefined && owner !== this.current.sessionId
+        ? `source: session ${this.options.sessionName?.(owner) ?? owner}\n${text}`
+        : text
+    );
     const { promise, resolve } = Promise.withResolvers<ApprovalPanelResult>();
     const path = request.subagent?.path;
     const subject = `${request.toolName} ${summarizeArgs(request.args)}`;
@@ -2981,6 +2987,8 @@ export class PigeonTuiShell
         this.approvals.splice(this.approvals.indexOf(entry), 1);
         this.answered.set(request, entry);
         this.noteApproval(withdrawnLine(request), request);
+        // 撤回已写了这一行：handler 收到取消后的那行结论不再写
+        this.answered.delete(request);
         this.refreshApprovalBox();
         this.updateStatus();
         this.tui.requestRender();
@@ -3052,11 +3060,14 @@ export class PigeonTuiShell
     // 不带请求（替身）：最近答掉的那一条
     const entry = request !== undefined ? this.answered.get(request) : this.lastAnswered;
     this.lastAnswered = undefined;
+    // 这条请求的结论已经写过（撤回）：不再写，也不去收别的挂着的块
+    if (entry === undefined && request !== undefined) return;
     if (entry === undefined) {
-      // 不按会话分的模态（确认设置、测试替身）：照旧收成主消息区里的一行
+      // 不按会话分的模态（测试替身直接挂的）：照旧收成主消息区里的一行
       this.settleApproval(line);
       return;
     }
+    this.answered.delete(entry.request);
     if (entry.sessionId === this.current.sessionId) {
       if (entry.path === undefined) {
         this.flow.addConclusion(one);
@@ -3144,6 +3155,11 @@ export class PigeonTuiShell
 
   pendingApproval(): PendingApproval | null {
     return this.pendingApprovalState;
+  }
+
+  // 决策 509：不按会话分的模态（确认别的工作区的设置）在挂着没有——审批各在各的会话里，不挡它
+  modalBusy(): boolean {
+    return this.modalPending !== null;
   }
 
   // 挂上不按会话分的模态，或答掉显示着的那一项（null）：不按会话分的先答；其次这个视图显示的审批，从它的会话里去掉

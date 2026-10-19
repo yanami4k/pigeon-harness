@@ -6,8 +6,8 @@
 // 之后再没有改动）即删、有改动保留（不问）。决策 457、480：面板里的会话同样在通讯录里登记、能派子 agent（子 agent 的审批写明
 // 所属会话与子 agent 的路径）；会话去掉时它派出的子 agent 一并停下。
 // 决策 484（所有会话一样）：每个会话一个"会话核"（运行面、名字、审批模式、工作区与工作树、通讯录登记），当前会话与面板里的
-// 会话是同一种；进入面板里的会话即与当前会话换手。审批的来源标记、要叫醒时找谁、打转检测挂在哪，都按会话核此刻是不是当前
-// 会话走：当前会话的审批照直上审批区、叫醒交给壳；面板里的写明来源、卡片标等待回应、叫醒交给会话池。
+// 会话是同一种；进入面板里的会话即与当前会话换手。要叫醒时找谁、打转检测挂在哪，按会话核此刻是不是当前会话走：当前会话
+// 叫醒交给壳，面板里的交给会话池。审批一律带上所属会话（决策 509：只在它的视图里出现），面板里的卡片标等待回应。
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import type { AgentTypeCatalog } from "../application/agent-types.ts";
@@ -661,7 +661,7 @@ export function createSessionPool(context: SessionPoolContext): {
           ...(context.webToolsFor?.(settings) ?? {}),
           hooksNotice: alert,
           onMcpNote: (note) => alert(`[mcp] ${note}`),
-          // 决策 443、484：审批汇到同一队列；在面板里时写明来源会话、挂着时卡片标等待回应
+          // 决策 443、484、509：审批带上所属会话（只在它的视图里出现）；在面板里时卡片标等待回应
           createApprovalHandler: coreApprovalHandler(context, core),
         });
       } catch (error) {
