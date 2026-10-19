@@ -1,5 +1,6 @@
-// 决策 508：审批挂着时只有回答键归审批，导航照常——连按两下 ← 开会话面板、↓ 进子 agent 面板、↑↓/Enter 切换视角、Esc 回输入框；
-// 审批框钉在各视图底部直到答完；输入框不收打字；当前会话的审批挂着时不换会话（审批区只有一个）
+// 决策 508、509：审批挂着时导航照常；审批只在它所属的会话里出现——主代理的出现在主代理视图，子 agent 的同时出现在主代理视图
+// 与它自己的视图（标明是哪个子 agent），任一处答了两处都收；别的子 agent 视图、会话面板、只看历史的视图、别的会话都不显示，
+// 卡片与子 agent 面板那一行标等待；回答键只在显示着的视图里归审批；挂着审批也能离开去别的会话，回来再答
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,30 +8,34 @@ import { join } from "node:path";
 import { test } from "vitest";
 import type { PooledSessionCard, SessionPanelSource } from "../application/session-pool.ts";
 import type { SubagentRecord } from "../application/subagents.ts";
+import type { ApprovalRequest } from "../approvals/handler.ts";
 import { newSessionId, type SessionId } from "../state/ids.ts";
 import { ScriptedRuntime } from "./runtime-fixtures.ts";
-import { APPROVAL_BEFORE_SWITCH, PigeonTuiShell } from "./shell.ts";
+import { PigeonTuiShell } from "./shell.ts";
 import { MockTerminal, screenText, settle } from "./testing.ts";
 
-function makeShell(runtime = new ScriptedRuntime(newSessionId())) {
-  const logDir = mkdtempSync(join(tmpdir(), "pigeon-approval-nav-"));
-  const term = new MockTerminal(110, 34);
-  const agent = {
+function agentRecord(name: string): SubagentRecord {
+  return {
     kind: "agent",
-    agentName: "general-1",
-    name: () => "general-1",
+    agentName: name,
+    name: () => name,
     type: { name: "general" },
-    path: "general-1",
+    path: name,
     parent: { kind: "session", name: () => "main" },
     state: "running",
     startedAt: Date.now(),
     updatedAt: Date.now(),
   } as unknown as SubagentRecord;
+}
+
+function makeShell(runtime = new ScriptedRuntime(newSessionId())) {
+  const logDir = mkdtempSync(join(tmpdir(), "pigeon-approval-nav-"));
+  const term = new MockTerminal(110, 40);
+  const agents = [agentRecord("general-1"), agentRecord("explore-1")];
+  const waiting = new Set<string>();
   const stopped: string[] = [];
+  const sent: Array<[string, string]> = [];
   const entered: string[] = [];
-  const spawned: string[] = [];
-  const peeked: string[] = [];
-  const halted: string[] = [];
   const other: PooledSessionCard = {
     id: "sess_other",
     name: "other",
@@ -43,33 +48,32 @@ function makeShell(runtime = new ScriptedRuntime(newSessionId())) {
   const source: SessionPanelSource = {
     list: () => [other],
     subscribe: () => () => {},
-    spawn: async (task) => {
-      spawned.push(task);
+    spawn: async () => {
       throw new Error("unused");
     },
     send: async () => undefined,
-    stop: async (id) => {
-      halted.push(id);
-    },
+    stop: async () => {},
     remove: async () => {},
-    peek: async (id) => {
-      peeked.push(id);
-      return [];
-    },
+    peek: async () => [],
   };
+  const sessionId = newSessionId();
   const shell = new PigeonTuiShell({
     terminal: term,
     runtime,
-    sessionId: newSessionId(),
+    sessionId,
     logDir,
-    sessionName: () => "demo-main",
+    sessionName: (id) => (id === "sess_other" ? "other" : "demo-main"),
     agents: {
-      list: () => [agent],
-      running: () => 1,
+      list: () => agents,
+      running: () => agents.length,
+      waiting: () => waiting,
       stop: async (record) => {
         stopped.push(record.agentName);
       },
-      send: () => undefined,
+      send: (record, text) => {
+        sent.push([record.agentName, text]);
+        return undefined;
+      },
       live: () => undefined,
       historyDir: () => undefined,
     },
@@ -85,11 +89,11 @@ function makeShell(runtime = new ScriptedRuntime(newSessionId())) {
   return {
     shell,
     term,
+    sessionId,
+    waiting,
     stopped,
+    sent,
     entered,
-    spawned,
-    peeked,
-    halted,
     cleanup: () => {
       shell.stop();
       rmSync(logDir, { recursive: true, force: true });
@@ -97,61 +101,147 @@ function makeShell(runtime = new ScriptedRuntime(newSessionId())) {
   };
 }
 
-test("审批挂着：打字不进输入框；↓ 进子 agent 面板并切到它的视图，审批框跟着钉在底部；Esc 不中断；两下 ← 开会话面板；换会话先要答完；y 照常回答", async () => {
-  const { shell, term, stopped, entered, cleanup } = makeShell();
+function request(command: string, extra: Partial<ApprovalRequest> = {}): ApprovalRequest {
+  return { toolName: "run_command", toolCallId: command, args: { command }, ...extra };
+}
+
+// 子 agent 面板里第 index 个子 agent（main 之后）
+async function enterAgent(term: MockTerminal, index: number): Promise<void> {
+  term.input("\x1b[B");
+  for (let step = 0; step < index; step++) term.input("\x1b[B");
+  term.input("\r");
+  await settle();
+}
+
+test("主代理的审批只在主代理视图里：打字不进输入框；子 agent 视图里不显示、照常给它打字；会话面板里不显示、卡片标等待；挂着也能进别的会话", async () => {
+  const { shell, term, sessionId, sent, entered, cleanup } = makeShell();
   try {
     await settle();
-    const answer = shell.askApproval({
-      toolName: "run_command",
-      toolCallId: "t1",
-      args: { command: "npm test" },
-    });
+    const answer = shell.askApproval(request("npm test", { sessionId }));
     await settle();
     assert.match(screenText(term), /npm test/);
     term.input("hello");
     await settle();
-    assert.equal(shell.inputText(), "", "输入框不收打字");
-    // ↓ 进子 agent 面板，Enter 切到它的视图
-    term.input("\x1b[B");
-    await settle();
-    assert.match(screenText(term), /› general-1/);
+    assert.equal(shell.inputText(), "", "显示着审批的视图里输入框不收打字");
+    // 子 agent 视图：主代理的审批不显示，打字照常发给它，y 不回答审批
+    await enterAgent(term, 0);
+    assert.equal(shell.currentView(), "agent");
+    assert.doesNotMatch(screenText(term), /npm test/);
+    term.input("yes go");
     term.input("\r");
     await settle();
-    assert.equal(shell.currentView(), "agent");
-    assert.match(screenText(term), /npm test/, "审批框在子 agent 视图里照样钉在底部");
-    term.input("\x1b");
-    await settle();
-    assert.deepEqual(stopped, [], "审批挂着时 Esc 不中断子 agent");
-    assert.equal(shell.currentView(), "agent");
-    // 面板里选 main 回主代理
+    assert.deepEqual(sent, [["general-1", "yes go"]]);
+    // 回主代理视图：审批照样在
     term.input("\x1b[B");
     term.input("\r");
     await settle();
     assert.equal(shell.currentView(), "main");
-    // 两下 ← 开会话面板，审批框还在
+    assert.match(screenText(term), /npm test/);
+    // 会话面板：审批不显示，当前会话的卡片标等待回应
     term.input("\x1b[D");
     term.input("\x1b[D");
     await settle();
     assert.equal(shell.currentView(), "panel");
-    assert.match(screenText(term), /npm test/);
-    // 光标移到别的会话、Enter：当前会话的审批还挂着，不换
+    const panel = screenText(term);
+    assert.doesNotMatch(panel, /approve once/);
+    assert.match(panel, /demo-main current .*waiting: run_command/);
+    // 挂着审批也能进别的会话
     term.input("\x1b[B");
-    await settle();
-    assert.match(screenText(term), /> other/);
-    term.input("\r");
-    await settle();
-    assert.deepEqual(entered, []);
-    assert.match(screenText(term), new RegExp(APPROVAL_BEFORE_SWITCH));
-    // 回答键照旧归审批
-    term.input("y");
-    const result = await answer;
-    assert.equal(result.key, "y");
-    shell.noteApproval("✓ approved run_command");
-    await settle();
-    // 答完之后再进：照常换过去
     term.input("\r");
     await settle();
     assert.deepEqual(entered, ["sess_other"]);
+    // 回到主代理视图答
+    term.input("\x1b");
+    await settle();
+    assert.equal(shell.currentView(), "main");
+    term.input("y");
+    assert.equal((await answer).key, "y");
+  } finally {
+    cleanup();
+  }
+});
+
+test("子 agent 的审批：主代理视图与它自己的视图都显示（标明是哪个子 agent），别的子 agent 视图不显示；在它的视图里答掉两处都收，结论只写在它的视图里；在主视图里答的主视图也留一行", async () => {
+  const { shell, term, sessionId, waiting, sent, cleanup } = makeShell();
+  try {
+    await settle();
+    waiting.add("general-1");
+    const firstRequest = request("make build", { sessionId, subagent: { path: "general-1" } });
+    const first = shell.askApproval(firstRequest);
+    await settle();
+    assert.match(screenText(term), /source: sub-agent general-1/);
+    assert.match(screenText(term), /make build/);
+    assert.match(screenText(term), /general-1 {2}general · waiting for approval/);
+    // 别的子 agent 的视图里不显示，照常打字
+    await enterAgent(term, 1);
+    assert.match(screenText(term), /sub-agent: explore-1/);
+    assert.doesNotMatch(screenText(term), /make build/);
+    term.input("go on");
+    term.input("\r");
+    await settle();
+    assert.deepEqual(sent, [["explore-1", "go on"]]);
+    // 切到它自己的视图：显示，答掉
+    term.input("\x1b[B");
+    term.input("\x1b[B");
+    term.input("\r");
+    await settle();
+    assert.equal(shell.currentView(), "agent");
+    assert.match(screenText(term), /make build/, "它自己的视图里显示");
+    term.input("y");
+    assert.equal((await first).key, "y");
+    // 替身里没有 handler：照 handler 的做法写结论
+    shell.noteApproval("✓ approved run_command: make build", firstRequest);
+    await settle();
+    assert.doesNotMatch(screenText(term), /approve once/, "它的视图里收了");
+    assert.match(screenText(term), /✓ approved run_command: make build/, "结论写在它的视图里");
+    // 回主视图：也收了；结论不写在主视图
+    term.input("\x1b[B");
+    term.input("\r");
+    await settle();
+    assert.equal(shell.currentView(), "main");
+    assert.doesNotMatch(screenText(term), /approve once/, "主视图里也收了");
+    assert.doesNotMatch(screenText(term), /✓ approved run_command: make build/);
+    // 第二条在主视图里答：主视图留一行
+    const secondRequest = request("make test", { sessionId, subagent: { path: "general-1" } });
+    const second = shell.askApproval(secondRequest);
+    await settle();
+    term.input("n");
+    assert.equal((await second).key, "n");
+    shell.noteApproval("✗ rejected run_command: make test", secondRequest);
+    await settle();
+    assert.match(screenText(term), /✗ rejected run_command: make test/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("别的会话的审批不在当前会话里弹出：按键照常、卡片标等待；换到那个会话即显示、照常能答；换走之后又不显示", async () => {
+  const { shell, term, cleanup } = makeShell();
+  try {
+    await settle();
+    const own = shell.sessionId();
+    const other = "sess_other" as SessionId;
+    const away = shell.askApproval(request("rm tmp", { sessionId: other }));
+    await settle();
+    assert.doesNotMatch(screenText(term), /rm tmp/);
+    term.input("y");
+    await settle();
+    assert.equal(shell.inputText(), "y", "按键照常进输入框");
+    term.input("\x15");
+    shell.openPanel();
+    await settle();
+    assert.match(screenText(term), /other .*waiting: run_command/, "那个会话的卡片标等待回应");
+    // 换到那个会话：显示、能答；换回原来的：又不显示
+    shell.rebindSession(other, { runtime: new ScriptedRuntime(other) });
+    await settle();
+    assert.match(screenText(term), /rm tmp/);
+    shell.rebindSession(own, { runtime: new ScriptedRuntime(own) });
+    await settle();
+    assert.doesNotMatch(screenText(term), /rm tmp/);
+    shell.rebindSession(other, { runtime: new ScriptedRuntime(other) });
+    await settle();
+    term.input("y");
+    assert.equal((await away).key, "y");
   } finally {
     cleanup();
   }
@@ -161,11 +251,7 @@ test("审批挂着：r 写拒绝理由时按键照旧交给输入区（方向键
   const { shell, term, cleanup } = makeShell();
   try {
     await settle();
-    const answer = shell.askApproval({
-      toolName: "run_command",
-      toolCallId: "t2",
-      args: { command: "rm -rf build" },
-    });
+    const answer = shell.askApproval(request("rm -rf build"));
     await settle();
     term.input("r");
     await settle();
@@ -176,72 +262,30 @@ test("审批挂着：r 写拒绝理由时按键照旧交给输入区（方向键
     assert.equal(shell.currentView(), "main", "理由行里 ← 是移光标");
     assert.equal(shell.inputText(), "too risky");
     term.input("\r");
-    const result = await answer;
-    assert.deepEqual(result, { key: "r", reason: "too risky" });
+    assert.deepEqual(await answer, { key: "r", reason: "too risky" });
   } finally {
     cleanup();
   }
 });
 
-test("审批是面板里别的会话的（写明来源）：同样先答完再换（换了当前会话，排在后面的审批会标错来源）", async () => {
-  const { shell, term, entered, cleanup } = makeShell();
-  try {
-    await settle();
-    void shell.askApproval({
-      toolName: "edit_file",
-      toolCallId: "t3",
-      args: { path: "a.ts" },
-      sessionId: "sess_other" as SessionId,
-      pooled: { name: "other" },
-    });
-    await settle();
-    term.input("\x1b[D");
-    term.input("\x1b[D");
-    await settle();
-    term.input("\x1b[B");
-    term.input("\r");
-    await settle();
-    assert.deepEqual(entered, []);
-    assert.match(screenText(term), new RegExp(APPROVAL_BEFORE_SWITCH));
-  } finally {
-    cleanup();
-  }
-});
-
-test("审批挂着、当前这一轮在跑：Esc 不中断这一轮；面板里空格、Ctrl+X 与带着字的 Enter 都归审批；子 agent 面板里 x 照常停下它", async () => {
+test("审批显示着、当前这一轮在跑：Esc 不中断这一轮，Ctrl+U 归审批；子 agent 面板里 x 照常停下它", async () => {
   const runtime = new ScriptedRuntime(newSessionId());
-  const { shell, term, stopped, spawned, peeked, halted, cleanup } = makeShell(runtime);
+  const { shell, term, cleanup } = makeShell(runtime);
   try {
     await settle();
     runtime.autoResolve = false;
     term.input("跑一件");
     term.input("\r");
     await settle();
-    // 审批来之前输入框里已经有字
     term.input("先打的字");
-    void shell.askApproval({
-      toolName: "run_command",
-      toolCallId: "t4",
-      args: { command: "npm test" },
-    });
+    void shell.askApproval(request("npm test"));
     await settle();
     term.input("\x1b");
     await settle();
     assert.equal(runtime.interrupts, 0, "Esc 不中断在跑的这一轮");
     term.input("\x15");
     await settle();
-    assert.equal(shell.inputText(), "先打的字", "Ctrl+U 也归审批，输入框不动");
-    // 回到空输入框的状态才能用两下 ← 与 ↓：用 /panel 前就有字的情况看 Enter
-    shell.openPanel();
-    await settle();
-    term.input("\x1b[B");
-    term.input("\r");
-    term.input(" ");
-    term.input("\x18");
-    await settle();
-    assert.deepEqual(spawned, [], "带着字的 Enter 不派会话");
-    assert.deepEqual(peeked, [], "空格不偷看");
-    assert.deepEqual(halted, [], "Ctrl+X 不停");
+    assert.equal(shell.inputText(), "先打的字", "Ctrl+U 归审批，输入框不动");
     runtime.finishAll();
   } finally {
     cleanup();
@@ -249,11 +293,7 @@ test("审批挂着、当前这一轮在跑：Esc 不中断这一轮；面板里�
   const second = makeShell();
   try {
     await settle();
-    void second.shell.askApproval({
-      toolName: "run_command",
-      toolCallId: "t5",
-      args: { command: "npm test" },
-    });
+    void second.shell.askApproval(request("npm test"));
     await settle();
     second.term.input("\x1b[B");
     await settle();
@@ -262,6 +302,30 @@ test("审批挂着、当前这一轮在跑：Esc 不中断这一轮；面板里�
     assert.deepEqual(second.stopped, ["general-1"], "子 agent 面板里 x 照常停下它");
   } finally {
     second.cleanup();
+  }
+});
+
+test("子 agent 被停下（请求撤回）：从它的会话里收掉、留一行结论，按取消收口", async () => {
+  const { shell, term, sessionId, cleanup } = makeShell();
+  try {
+    await settle();
+    const controller = new AbortController();
+    const answer = shell.askApproval(
+      request("make build", {
+        sessionId,
+        subagent: { path: "general-1" },
+        signal: controller.signal,
+      })
+    );
+    await settle();
+    assert.match(screenText(term), /make build/);
+    controller.abort();
+    assert.equal((await answer).key, "cancel");
+    await settle();
+    assert.doesNotMatch(screenText(term), /approve once/);
+    assert.match(screenText(term), /withdrawn: general-1 was stopped/);
+  } finally {
+    cleanup();
   }
 });
 

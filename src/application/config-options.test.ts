@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "vitest";
 import { loadSettings } from "../persistence/settings.ts";
+import { wheelScrollLinesOf } from "../state/settings.ts";
 import {
   CONFIG_GROUPS,
   CONFIG_OPTIONS,
@@ -169,6 +170,20 @@ test("决策 506：滚轮一格滚几行 1–20 的整数，越界不收；设�
   assert.equal(JSON.parse(readFileSync(file, "utf8")).tui.wheelScrollLines, 5, "越界的不写");
   writeFileSync(file, JSON.stringify({ tui: { wheelScrollLines: 30 } }));
   assert.throws(() => loadSettings(root, { homeDir: home }), /wheelScrollLines/);
+});
+
+test("决策 506：终端界面取滚轮行数的那一处——启动时读设置、/config 改值后、/reload 重读后都按设置（没写即缺省）", () => {
+  const { home, root } = setup();
+  const file = join(home, ".pigeon", "settings.json");
+  assert.equal(
+    wheelScrollLinesOf(loadSettings(root, { homeDir: home })),
+    undefined,
+    "没写：取缺省"
+  );
+  setUserConfig(root, "tui.wheelScrollLines", "6", home);
+  assert.equal(wheelScrollLinesOf(loadSettings(root, { homeDir: home })), 6, "/config 改值之后");
+  writeFileSync(file, JSON.stringify({ tui: { wheelScrollLines: 12 } }));
+  assert.equal(wheelScrollLinesOf(loadSettings(root, { homeDir: home })), 12, "/reload 重读之后");
 });
 
 test("用户级设置文件还没有时新建；/config 选项=值 的解析", () => {

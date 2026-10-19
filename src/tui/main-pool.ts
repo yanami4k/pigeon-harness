@@ -204,7 +204,7 @@ function markWaiting(core: SessionCore, text: string): () => void {
   return core.poolHooks?.waiting(text) ?? (() => {});
 }
 
-// 决策 443、483、484：主 agent 的审批 handler——当前会话的照直上审批区；面板里的写明来源会话、卡片标等待回应。
+// 决策 443、483、484、509：主 agent 的审批 handler——带上所属会话（审批只在它的视图里出现）；面板里的卡片标等待回应。
 // 都带上撤回信号（面板里停下、去掉即撤回）
 export function coreApprovalHandler(
   context: SessionPoolContext,
@@ -217,15 +217,11 @@ export function coreApprovalHandler(
         request.signal !== undefined
           ? AbortSignal.any([request.signal, core.approvals.signal])
           : core.approvals.signal;
-      if (core.current) return inner({ ...request, signal });
+      // 决策 509：审批带上所属会话——只在它的视图里出现，不在别的会话里弹出
+      if (core.current) return inner({ ...request, sessionId: core.sessionId, signal });
       const settled = markWaiting(core, `${request.toolName} ${summarizeArgs(request.args)}`);
       try {
-        return await inner({
-          ...request,
-          sessionId: core.sessionId,
-          pooled: { name: core.name },
-          signal,
-        });
+        return await inner({ ...request, sessionId: core.sessionId, signal });
       } finally {
         settled();
       }
@@ -275,22 +271,18 @@ export function registerCoreAgents(
           transcript: () => bundle.adapter.transcript(),
         };
       },
-      // 子 agent 的审批写明路径；所属会话在面板里时一并写明会话、卡片标等待回应
+      // 子 agent 的审批写明路径与所属会话；所属会话在面板里时卡片标等待回应
       createApprovalHandler: (grants, path) => {
         const inner = context.createApprovalHandler(grants);
         return async (request) => {
-          const pooled = !core.current;
           const settled = markWaiting(
             core,
             `${path}: ${request.toolName} ${summarizeArgs(request.args)}`
           );
           agents.waiting?.(path, true);
           try {
-            return await inner({
-              ...request,
-              ...(pooled ? { sessionId: core.sessionId, pooled: { name: core.name } } : {}),
-              subagent: { path },
-            });
+            // 决策 509：带上所属会话（只在它的主代理视图与这个子 agent 的视图里出现）
+            return await inner({ ...request, sessionId: core.sessionId, subagent: { path } });
           } finally {
             settled();
             agents.waiting?.(path, false);

@@ -574,6 +574,11 @@ export function keybindingsSectionOf(snapshot: SettingsSnapshot): KeybindingsSec
 }
 
 // 决策 445：独立工作树的起点档位（合并后的 worktree 一节；没写为 fresh）
+// 决策 506：滚轮一格滚几行（没写为 undefined，取缺省）
+export function wheelScrollLinesOf(snapshot: SettingsSnapshot): number | undefined {
+  return snapshot.merged.tui?.wheelScrollLines;
+}
+
 export function worktreeSectionOf(snapshot: SettingsSnapshot): WorktreeSection | undefined {
   return snapshot.merged.worktree;
 }

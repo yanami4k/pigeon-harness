@@ -1,4 +1,4 @@
-// 第二轮验收复查的修正（决策 460–462）：答完的审批收成一行时多行命令只取首行；[r] 写理由的提示在状态行、答完不留残行；另有审批挂着（BUSY）时不收别人的块。
+// 第二轮验收复查的修正（决策 460–462）：答完的审批收成一行时多行命令只取首行；[r] 写理由的提示在状态行、答完不留残行；决策 509：同一会话的审批按先后一条条显示。
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -99,7 +99,7 @@ test("[r] 写理由：提示在状态行，答完消息区只剩一行结论（�
   }
 });
 
-test("另有审批挂着（BUSY）时被拒的请求不去收起挂着的那一块；挂着的那一块答完收成它自己的一行", async () => {
+test("决策 509：同一会话里两条审批挂着——显示最早的那一条，答完换出下一条；各自答完收成自己的一行", async () => {
   const { shell, term, cleanup } = makeShell();
   try {
     shell.start();
@@ -114,20 +114,24 @@ test("另有审批挂着（BUSY）时被拒的请求不去收起挂着的那一�
       args: { path: "src/first.ts" },
     } as unknown as ApprovalRequest);
     await settle();
-    const second = await handler({
+    const second = handler({
       toolName: "edit_file",
       toolCallId: "tc-b",
       args: { path: "src/second.ts" },
     } as unknown as ApprovalRequest);
-    assert.equal(second.approved, false);
     await settle();
-    assert.match(screenText(term), /│ src\/first\.ts +│/, "挂着的那一块还在审批区里");
+    assert.match(screenText(term), /│ src\/first\.ts +│/, "显示最早的那一条");
     assert.doesNotMatch(screenFlat(term), /second\.ts/);
     term.input("y");
     assert.deepEqual(await first, { approved: true });
     await settle();
+    assert.match(screenText(term), /│ src\/second\.ts +│/, "答完换出下一条");
+    term.input("n");
+    assert.equal((await second).approved, false);
+    await settle();
     const flat = screenFlat(term);
     assert.match(flat, /✓ approved edit_file: src\/first\.ts/);
+    assert.match(flat, /✗ rejected edit_file: src\/second\.ts/);
     assert.doesNotMatch(flat, /rejected edit_file: src\/first\.ts/);
   } finally {
     cleanup();

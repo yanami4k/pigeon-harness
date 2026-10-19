@@ -126,6 +126,7 @@ import {
   memoryLimitsOf,
   type SettingsSnapshot,
   taskListEnabledOf,
+  wheelScrollLinesOf,
   withHooksDisabled,
   worktreeSectionOf,
 } from "../state/settings.ts";
@@ -278,10 +279,11 @@ export async function main(argv: string[]): Promise<void> {
   // S3 面板版审批 handler：face 晚绑定——buildRuntime 收 handler 工厂时壳尚未构造；
   // 壳未就位即收到审批请求属装配级故障，工厂内 fail-closed 按拒绝处理
   const faceHolder: { current: TuiApprovalFace | undefined } = { current: undefined };
-  // M5.5 S3：所有会话（含子 agent）的审批经同一队列，一次一个
+  // 决策 509：审批按所属会话显示（壳里各会话各自排着，视图只显示属于它的最早一条），不再全局一次一个；
+  // 确认别的工作区的设置照旧一次一个
   const approvalQueue = createApprovalQueue();
   const createHandler = (grants: SessionGrantStore) =>
-    approvalQueue.wrap(createTuiApprovalHandler(grants, () => faceHolder.current));
+    createTuiApprovalHandler(grants, () => faceHolder.current);
   // 壳晚于运行面构造，晚绑定
   const shellHolder: { current: PigeonTuiShell | undefined } = { current: undefined };
   // 决策 331：有人对话，带记忆工具（写入的内容在工具调用行里，消息区不另写一行）
@@ -989,7 +991,7 @@ export async function main(argv: string[]): Promise<void> {
     // 决策 470：输入框为空时按两下 ← 打开会话面板（设置可关；/reload 后取新的）
     leftArrowOpensPanel: () => settingsOfCore(current).merged.tui?.leftArrowOpensPanel !== false,
     // 决策 506：滚轮一格滚几行
-    wheelScrollLines: () => settingsOfCore(current).merged.tui?.wheelScrollLines,
+    wheelScrollLines: () => wheelScrollLinesOf(settingsOfCore(current)),
     sessionId: startCore.sessionId,
     // 决策 325：终端界面日志在程序状态目录下
     logDir: tuiLogDirOf(governanceRoot),

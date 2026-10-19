@@ -312,8 +312,8 @@ test("决策 483：Ctrl+X 第一下停下选中的会话（运行面不释放）
   }
 });
 
-test("面板里审批块照样显示并写明来源；审批挂着时按键归审批，字母不进输入框", async () => {
-  const { shell, term, cleanup } = makeShell();
+test("决策 509：会话面板里不显示审批——按键照常（字母进输入框），所属会话的卡片标等待回应；回到主视图才显示、照常能答", async () => {
+  const { shell, term, cleanup } = makeShell({ sessionName: () => "demo-main" });
   try {
     await settle();
     term.input("/panel");
@@ -325,8 +325,7 @@ test("面板里审批块照样显示并写明来源；审批挂着时按键归�
         toolName: "run_command",
         toolCallId: "c1",
         args: { command: "npm test" },
-        sessionId: "sess_pool9" as never,
-        pooled: { name: "s9" },
+        sessionId: shell.sessionId(),
       })
       .then((result) => {
         decided = result;
@@ -334,22 +333,28 @@ test("面板里审批块照样显示并写明来源；审批挂着时按键归�
     await settle();
     const screen = screenText(term);
     assert.match(screen, /== sessions panel/);
-    assert.match(screen, /source: session s9/);
+    assert.doesNotMatch(screen, /approve once/);
+    assert.match(screen, /demo-main current .*waiting: run_command/);
+    term.input("y");
+    await settle();
+    assert.equal(decided, undefined, "面板里 y 不回答审批");
+    assert.equal(shell.inputText(), "y", "字母照常进输入框");
+    term.input("\x15");
+    term.input("\x1b");
+    await settle();
+    assert.equal(shell.currentView(), "main");
+    assert.match(screenText(term), /npm test/);
     term.input("y");
     await settle();
     assert.deepEqual(decided, { key: "y" });
-    assert.doesNotMatch(screenText(term), /> y\b/);
   } finally {
     cleanup();
   }
 });
 
-test("矮窗口里面板来了很高的审批块：按 r 写理由时输入框仍在屏幕上（审批框照常可压缩，输入框不压缩）", async () => {
+test("矮窗口里来了很高的审批块：按 r 写理由时输入框仍在屏幕上（审批框照常可压缩，输入框不压缩）", async () => {
   const { shell, term, cleanup } = makeShell({}, 24);
   try {
-    await settle();
-    term.input("/panel");
-    term.input("\r");
     await settle();
     let decided: unknown;
     void shell
@@ -358,8 +363,6 @@ test("矮窗口里面板来了很高的审批块：按 r 写理由时输入框�
         toolCallId: "c2",
         args: { path: "big.txt", content: "x".repeat(3000) },
         diffPreview: Array.from({ length: 60 }, (_, index) => `+line ${index}`).join("\n"),
-        sessionId: "sess_pool9" as never,
-        pooled: { name: "s9" },
       })
       .then((result) => {
         decided = result;
@@ -529,12 +532,12 @@ test("决策 507：面板里对当前会话 Ctrl+X 第一下——在跑即中�
     await settle();
     assert.match(screenText(term), /^\s+waiting \(1\)$/m);
     assert.match(screenText(term), /demo-main current {2}跑一件 {2}\| waiting: run_command/);
-    term.input("y");
-    await settle();
-    // 空输入回车：回到主视图
+    // 空输入回车：回到主视图（决策 509：审批在主视图里答）
     term.input("\r");
     await settle();
     assert.equal(shell.currentView(), "main");
+    term.input("y");
+    await settle();
   } finally {
     cleanup();
   }

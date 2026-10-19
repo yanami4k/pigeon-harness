@@ -50,7 +50,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { compactionNoticeText, manualCompactionText } from "../application/compaction-text.ts";
 import { type ConfigItemView, parseConfigAssignment } from "../application/config-options.ts";
-import { failureLine, plural, workEndLine } from "../application/format.ts";
+import { failureLine, plural, summarizeArgs, workEndLine } from "../application/format.ts";
 import {
   DEFAULT_HISTORY_LIMIT,
   type HistoryLine,
@@ -93,6 +93,7 @@ import type { SubagentRecord } from "../application/subagents.ts";
 import { sessionsDirOf } from "../application/workspace.ts";
 import type { TuiWorktreesFace } from "../application/worktree-cleanup.ts";
 import type { ApprovalRequest } from "../approvals/handler.ts";
+import { APPROVAL_WITHDRAWN_REASON } from "../approvals/queue.ts";
 import { ensureStateDirOf } from "../persistence/settings.ts";
 import type {
   CompactionNotice,
@@ -111,7 +112,15 @@ import { DEFAULT_WHEEL_SCROLL_LINES } from "../state/settings.ts";
 import { toolResultModelUsage } from "../state/tool-usage.ts";
 import { AgentPanel, agentActive, agentLabel, agentStateWord, MAIN_ROW } from "./agent-panel.ts";
 import { openExternalUrl, PigeonAltScreen, TrimmedTranscript } from "./alt-screen.ts";
-import type { ApprovalBlockLine, ApprovalPanelResult, TuiApprovalFace } from "./approval.ts";
+import {
+  APPROVAL_CANCEL_CLOSED,
+  type ApprovalBlockLine,
+  type ApprovalPanelResult,
+  approvalBlockLines,
+  approvalBlockText,
+  type TuiApprovalFace,
+  withdrawnLine,
+} from "./approval.ts";
 import { ApprovalArea } from "./approval-area.ts";
 import {
   commandScope,
@@ -149,7 +158,6 @@ import {
   type VersionRow,
 } from "./message-tree.ts";
 import {
-  askApprovalPanel,
   closePendingModals,
   disarmExitOnInput,
   EXIT_HINT,
@@ -437,8 +445,6 @@ const APPROVAL_CHROME_ROWS = 10;
 
 // 决策 470：按 ← 打开面板的第一下在状态行的提示（ASCII：箭头字符在中文环境下宽度不定）
 const PANEL_HINT = "press Left again to open the panel";
-// 决策 508：当前会话的审批挂着时不换会话
-export const APPROVAL_BEFORE_SWITCH = "answer the pending approval before switching sessions";
 
 // 决策 505：要它的运行面才能做的代理级命令（续接认回、还没重开运行面的子 agent 上回一句它没开着）
 const AGENT_RUNTIME_COMMANDS = new Set([
@@ -450,6 +456,20 @@ const AGENT_RUNTIME_COMMANDS = new Set([
   "revoke",
   "grants save",
 ]);
+
+// 决策 509：一条挂着的审批
+interface ApprovalEntry {
+  request: ApprovalRequest;
+  // 所属会话与提出它的子 agent（主代理提出的没有）
+  sessionId: string;
+  path?: string;
+  lines: readonly ApprovalBlockLine[];
+  // 审批区里接在块后面的行
+  extra: string[];
+  pending: PendingApproval;
+  // 在哪个视图里答的（子 agent 的在主代理视图里答的，主视图也留一行结论）
+  answeredIn?: "main" | "agent";
+}
 
 // 决策 501：只看历史的会话
 interface ElsewhereSession {
@@ -535,6 +555,7 @@ export class PigeonTuiShell
   );
   // 挂着的审批块的收起函数（答完收成一行）
   private approvalSettlers: Array<(line: string) => void> = [];
+  // 审批区里接在审批块后面的行（撤回说明等）
   private readonly input: Editor;
   private readonly queue = new InputQueue();
   private readonly picker = new SessionPicker();
@@ -615,7 +636,14 @@ export class PigeonTuiShell
   private rewindTarget: RewindTarget | undefined;
   // S3 审批面板：挂起中的审批决议（resolve 四键或 cancel）；串行不变量（决策 002）下
   // 同时最多一个，非空即面板期间
-  private pendingApprovalState: PendingApproval | null = null;
+  // 决策 509：挂着的审批，按提出的先后；每条记着所属会话与（子 agent 提出的）路径。视图只显示属于它的最早一条
+  private approvals: ApprovalEntry[] = [];
+  // 答完之后结论写在哪里（按请求认）
+  private readonly answered = new WeakMap<ApprovalRequest, ApprovalEntry>();
+  private lastAnswered: ApprovalEntry | undefined;
+  // 不按会话分的模态：确认别的工作区的设置（决策 485），或直接经 askApprovalPanel 挂上的（测试替身）；挂着时各视图都显示
+  private modalPending: PendingApproval | null = null;
+  private modalLines: readonly ApprovalBlockLine[] | undefined;
   // 决策 066：理由行输入模式——[r] 打开后按键归输入区，回车提交理由，Esc 回面板（不算拒绝）
   private reasonModeOn = false;
   // S5 取消键：中断飞行中标记——interrupt 未决议期间重复 Esc 不再触发
@@ -686,7 +714,7 @@ export class PigeonTuiShell
     this.sessionPanel = new SessionPanel({
       // 标题、审批框、输入框（上下边框）与状态栏
       height: () => Math.max(3, this.options.terminal.rows - 6),
-      cards: () => this.options.pool?.source.list() ?? [],
+      cards: () => this.panelCards(),
       peek: (id) =>
         id === this.current.sessionId ? this.mainPeekLines() : (this.peekCache.get(id) ?? []),
       // 决策 458：当前窗口的主会话作为第一张卡
@@ -900,8 +928,11 @@ export class PigeonTuiShell
   }
 
   stop(): void {
-    // fail-closed（决策 029）：壳停止时挂起的审批按拒绝处理、恢复菜单按 EOF 语义回 null
+    // fail-closed（决策 029）：壳停止时挂起的审批按拒绝处理、恢复菜单按 EOF 语义回 null（决策 509：各会话挂着的全部）
     closePendingModals(this);
+    for (const entry of this.approvals.splice(0)) {
+      entry.pending.resolve({ key: "cancel", reason: APPROVAL_CANCEL_CLOSED });
+    }
     if (this.exitHintTimer !== undefined) {
       clearTimeout(this.exitHintTimer);
       this.exitHintTimer = undefined;
@@ -952,7 +983,7 @@ export class PigeonTuiShell
     // 决策 443：面板上的状态行（审批挂着时照常说明审批）
     if (this.view === "panel" && this.pendingApprovalState === null) {
       // 决策 458：当前会话也算一个
-      const cards = [this.mainCard(), ...(this.options.pool?.source.list() ?? [])];
+      const cards = [this.mainCard(), ...this.panelCards()];
       const waiting = cards.filter((card) => card.state === "waiting").length;
       this.statusLine.setText(
         `panel: ${plural(cards.length, "session")}${waiting > 0 ? `, ${waiting} waiting` : ""}`
@@ -995,7 +1026,7 @@ export class PigeonTuiShell
       const reason = value.trim();
       this.reasonModeOn = false;
       const approval = this.pendingApprovalState;
-      this.pendingApprovalState = null;
+      this.setPendingApproval(null);
       this.updateStatus();
       this.tui.requestRender();
       approval?.resolve({ key: "r", reason });
@@ -1840,7 +1871,7 @@ export class PigeonTuiShell
     const digest = this.flow.digest();
     // 决策 483：它自己的审批挂着，或它派出的子 agent 在等审批（排着的也算）
     const waiting =
-      this.pendingApprovalState?.mainWaiting ?? this.agentWaitingLine(this.current.sessionId);
+      this.waitingOf(this.current.sessionId) ?? this.agentWaitingLine(this.current.sessionId);
     const state: PooledSessionState =
       waiting !== undefined ? "waiting" : this.isBusy() ? "running" : "idle";
     return {
@@ -1868,7 +1899,7 @@ export class PigeonTuiShell
   // 决策 458：偷看当前会话——在等什么，加最近几条对话
   private mainPeekLines(): string[] {
     const waiting =
-      this.pendingApprovalState?.mainWaiting ?? this.agentWaitingLine(this.current.sessionId);
+      this.waitingOf(this.current.sessionId) ?? this.agentWaitingLine(this.current.sessionId);
     return [
       ...(waiting !== undefined ? [`waiting: ${waiting}`] : []),
       ...this.flow.digest().recent,
@@ -2279,12 +2310,6 @@ export class PigeonTuiShell
     const busy = this.handOffBlocked();
     if (busy !== undefined) {
       this.sessionPanel.setNote(busy);
-      return;
-    }
-    // 决策 508：有审批挂着（不论是哪个会话的）先答完再换会话。审批的来源标签、卡片的等待标记与结论行的去处都在请求时按
-    // 那时的当前会话定好；换了当前会话，挂着的与排在后面的审批就会标错来源（看着像别的会话的）
-    if (this.pendingApprovalState !== null) {
-      this.sessionPanel.setNote(APPROVAL_BEFORE_SWITCH);
       return;
     }
     this.sessionPanel.closePeek();
@@ -2910,23 +2935,147 @@ export class PigeonTuiShell
 
   // ---- S3 审批面板（TuiApprovalFace 实现；交互语义在 modal.ts）----
 
+  // 决策 509：审批挂在它所属的会话里——主代理视图显示本会话最早的一条（主代理或任一子 agent 的，标明是哪个子 agent），
+  // 子 agent 视图只显示它自己最早的一条；别的视图与别的会话都不显示（卡片与子 agent 面板那一行标等待）。不再一次一个：
+  // 别的会话、别的子 agent 的审批各自挂着
   askApproval(request: ApprovalRequest, directoryGrant?: boolean): Promise<ApprovalPanelResult> {
-    // 决策 301：就地弹出——在别的视图里时不切走，面板写明来源，答完仍留在原处
-    this.clearApprovalBox();
-    return askApprovalPanel(this, request, directoryGrant);
+    // 壳已停止：排着轮到的不再挂到已停的界面上（同停止时挂着的，fail-closed）
+    if (!this.started) {
+      return Promise.resolve({ key: "cancel", reason: APPROVAL_CANCEL_CLOSED });
+    }
+    const text = approvalBlockText(request, directoryGrant);
+    // 决策 323、324：审批面板出现（permission_prompt）
+    this.notifyApprovalHook("permission_prompt", text);
+    const { promise, resolve } = Promise.withResolvers<ApprovalPanelResult>();
+    const path = request.subagent?.path;
+    const subject = `${request.toolName} ${summarizeArgs(request.args)}`;
+    const entry: ApprovalEntry = {
+      request,
+      sessionId: request.sessionId ?? this.current.sessionId,
+      ...(path !== undefined ? { path } : {}),
+      lines: approvalBlockLines(request, directoryGrant),
+      extra: [],
+      pending: {
+        resolve,
+        ...(request.protectedPath !== undefined ? { protectedPath: true } : {}),
+        mainWaiting: path !== undefined ? `${path}: ${subject}` : subject,
+      },
+    };
+    this.approvals.push(entry);
+    this.refreshApprovalBox();
+    this.updateStatus();
+    this.tui.requestRender();
+    // 决策 480：请求方撤回（子 agent 被停下）——从它的会话里收掉、留一行结论，按取消收口
+    const signal = request.signal;
+    if (signal !== undefined) {
+      const withdraw = (): void => {
+        if (!this.approvals.includes(entry)) return;
+        if (this.shownEntry() === entry) {
+          // 正显示着：撤回的说明留在这个视图里（子 agent 的在主视图里显示着的，主视图也留一行）
+          entry.answeredIn = this.view === "agent" ? "agent" : "main";
+          if (this.reasonModeOn) {
+            this.reasonModeOn = false;
+            this.input.setText("");
+          }
+        }
+        this.approvals.splice(this.approvals.indexOf(entry), 1);
+        this.answered.set(request, entry);
+        this.noteApproval(withdrawnLine(request), request);
+        this.refreshApprovalBox();
+        this.updateStatus();
+        this.tui.requestRender();
+        resolve({ key: "cancel", reason: APPROVAL_WITHDRAWN_REASON });
+      };
+      if (signal.aborted) withdraw();
+      else {
+        signal.addEventListener("abort", withdraw, { once: true });
+        void promise.finally(() => signal.removeEventListener("abort", withdraw));
+      }
+    }
+    return promise;
   }
 
-  // 审批答完（handler 在决议后调用）：挂着的审批块收成这一行结论
-  noteApproval(line: string): void {
-    this.settleApproval(line);
+  // 这个视图显示的那条审批：主代理视图（及它的整屏视图：回退、设置、续接）是本会话最早的一条，子 agent 视图是它自己最早的
+  // 一条；会话面板、只看历史的视图不显示
+  private shownEntry(): ApprovalEntry | undefined {
+    const sessionId = this.current.sessionId;
+    if (this.view === "agent") {
+      const path = this.agentSession?.record.path;
+      return this.approvals.find((entry) => entry.sessionId === sessionId && entry.path === path);
+    }
+    if (this.view === "panel" || this.view === "elsewhere") return undefined;
+    return this.approvals.find((entry) => entry.sessionId === sessionId);
   }
 
-  // 挂着的审批块：显示在底部的审批区（决策 467，各视图都是），不进消息流；记下答完时写结论行的地方（主会话的消息流）
+  // 挂着的、显示着的那一项：不按会话分的模态优先，其次这个视图显示的审批
+  private get pendingApprovalState(): PendingApproval | null {
+    return this.modalPending ?? this.shownEntry()?.pending ?? null;
+  }
+
+  // 审批区跟着视图与挂着的审批走
+  private refreshApprovalBox(): void {
+    if (this.modalPending !== null) {
+      if (this.modalLines !== undefined) this.approvalBox.setBlock(this.modalLines);
+      return;
+    }
+    const entry = this.shownEntry();
+    if (entry === undefined) {
+      this.approvalBox.clear();
+      return;
+    }
+    this.approvalBox.setBlock(entry.lines);
+    for (const line of entry.extra) this.approvalBox.append(line);
+  }
+
+  // 某会话最早挂着的审批在等什么（会话面板的卡片与偷看用）；没有为 undefined
+  private waitingOf(sessionId: string): string | undefined {
+    if (sessionId === this.current.sessionId && this.modalPending?.mainWaiting !== undefined) {
+      return this.modalPending.mainWaiting;
+    }
+    return this.approvals.find((entry) => entry.sessionId === sessionId)?.pending.mainWaiting;
+  }
+
+  // 会话面板里的卡片：退到面板的会话有挂着的审批即标等待回应（审批在它自己的会话里等着）
+  private panelCards(): PooledSessionCard[] {
+    return (this.options.pool?.source.list() ?? []).map((card) => {
+      const waiting = this.waitingOf(card.id);
+      return waiting !== undefined && card.state !== "waiting"
+        ? { ...card, state: "waiting" as const, waiting }
+        : card;
+    });
+  }
+
+  // 审批答完（handler 在决议后调用）：结论写在提出它的那个代理的视图里——主代理的写在主代理视图；子 agent 的写在它的视图
+  //（开着时），在主代理视图里答的主视图也留一行；所属会话不是当前会话的不写（它的会话记录里有）
+  noteApproval(line: string, request?: ApprovalRequest): void {
+    const one = oneLineConclusion(line);
+    // 不带请求（替身）：最近答掉的那一条
+    const entry = request !== undefined ? this.answered.get(request) : this.lastAnswered;
+    this.lastAnswered = undefined;
+    if (entry === undefined) {
+      // 不按会话分的模态（确认设置、测试替身）：照旧收成主消息区里的一行
+      this.settleApproval(line);
+      return;
+    }
+    if (entry.sessionId === this.current.sessionId) {
+      if (entry.path === undefined) {
+        this.flow.addConclusion(one);
+      } else {
+        if (this.agentSession?.record.path === entry.path)
+          this.agentSession.flow.addConclusion(one);
+        if (entry.answeredIn === "main") this.flow.addConclusion(one);
+      }
+    }
+    this.refreshApprovalBox();
+    this.tui.requestRender();
+  }
+
+  // 挂着的审批块（不按会话分的模态用：确认别的工作区的设置）：显示在底部的审批区，答完收成主消息区里的一行
   addApprovalBlock(text: string, lines?: readonly ApprovalBlockLine[]): void {
     // 决策 472：分好类的各行由审批区上色画框；没给（替身等）即整块按细节显示
-    this.approvalBox.setBlock(
-      lines ?? text.split("\n").map((line) => ({ kind: "detail" as const, text: line }))
-    );
+    this.modalLines =
+      lines ?? text.split("\n").map((line) => ({ kind: "detail" as const, text: line }));
+    this.approvalBox.setBlock(this.modalLines);
     this.approvalSettlers = [(line: string) => this.flow.addConclusion(line)];
   }
 
@@ -2935,21 +3084,24 @@ export class PigeonTuiShell
     const settlers = this.approvalSettlers.splice(0);
     const one = oneLineConclusion(line);
     for (const settle of settlers) settle(one);
-    this.clearApprovalBox();
+    this.modalLines = undefined;
+    this.refreshApprovalBox();
     this.tui.requestRender();
   }
 
   // 决策 301：审批面板的其他行——审批挂着时接在审批区里；已收起时（扣住的消息被撤回等）写一行到消息流
   addApprovalLine(line: string): void {
-    if (this.pendingApprovalState !== null && !this.approvalBox.isEmpty()) {
+    const entry = this.modalPending === null ? this.shownEntry() : undefined;
+    if (entry !== undefined) {
+      entry.extra.push(line);
+      this.approvalBox.append(line);
+      return;
+    }
+    if (this.modalPending !== null && !this.approvalBox.isEmpty()) {
       this.approvalBox.append(line);
       return;
     }
     this.flow.addSystem(line);
-  }
-
-  private clearApprovalBox(): void {
-    this.approvalBox.clear();
   }
 
   outsideMainView(): boolean {
@@ -2994,13 +3146,27 @@ export class PigeonTuiShell
     return this.pendingApprovalState;
   }
 
+  // 挂上不按会话分的模态，或答掉显示着的那一项（null）：不按会话分的先答；其次这个视图显示的审批，从它的会话里去掉
   setPendingApproval(pending: PendingApproval | null): void {
-    this.pendingApprovalState = pending;
-    if (pending === null) {
-      this.clearApprovalBox();
-      // 审批答完：状态行回到它之前在说的（例如还在等的 y/N 问句）
-      this.updateStatus();
+    if (pending !== null) {
+      this.modalPending = pending;
+      return;
     }
+    if (this.modalPending !== null) {
+      this.modalPending = null;
+    } else {
+      const entry = this.shownEntry();
+      if (entry !== undefined) {
+        this.approvals.splice(this.approvals.indexOf(entry), 1);
+        // 子 agent 的审批在主代理视图里答的，主视图也留一行结论
+        entry.answeredIn = this.view === "agent" ? "agent" : "main";
+        this.answered.set(entry.request, entry);
+        this.lastAnswered = entry;
+      }
+    }
+    this.refreshApprovalBox();
+    // 审批答完：状态行回到它之前在说的（例如还在等的 y/N 问句）
+    this.updateStatus();
   }
 
   lastCtrlCAt(): number | null {
@@ -3511,6 +3677,8 @@ export class PigeonTuiShell
       );
     }
     this.title.setText(this.titleText());
+    // 决策 509：审批区显示属于这个视图的那条
+    this.refreshApprovalBox();
     this.layout();
     this.tui.setFocus(this.input);
     this.updateStatus();

@@ -50,7 +50,7 @@ function lockCount(home: string): number {
   return existsSync(dir) ? readdirSync(dir).length : 0;
 }
 
-test("派出的会话进自己的工作树改文件、持有在用锁；审批写明来源、挂着时在等待回应；/take 取回、起点前移；停下不释放、去掉才释放（取回之后没再改的工作树删掉）", async () => {
+test("派出的会话进自己的工作树改文件、持有在用锁；审批带上所属会话、挂着时在等待回应；/take 取回、起点前移；停下不释放、去掉才释放（取回之后没再改的工作树删掉）", async () => {
   const { root, cleanup } = tempRoot("pigeon-pool-");
   cleanups.push(cleanup);
   const home = join(root, ".home");
@@ -97,7 +97,8 @@ test("派出的会话进自己的工作树改文件、持有在用锁；审批�
   // 决策 490：缺省显示名是「目录名 + 会话号末 4 位」，工作树名跟着它
   assert.match(opened?.worktree?.path ?? "", new RegExp(`${opened?.name.toLowerCase()}-?`));
   assert.equal(lockCount(home), 1, "开着期间持有在用锁");
-  assert.equal(requests[0]?.pooled?.name, opened?.name);
+  // 决策 509：审批带上所属会话（只在它的视图里出现），不再写来源会话
+  assert.equal(requests[0]?.pooled, undefined);
   assert.equal(requests[0]?.sessionId, opened?.id);
   assert.deepEqual(states, ["waiting"]);
   assert.match(pool.list()[0]?.waiting ?? "", /^write_file/);
@@ -400,7 +401,7 @@ test("决策 459：不是 git 仓库时，派出的会话在当前目录里干�
   assert.equal(resolve(header.cwd ?? ""), resolve(root));
 });
 
-test("决策 484：会话核换手——在面板里审批写明来源、卡片标等待；成为当前会话后照直上审批区、叫醒交给壳；退回面板又写明来源", async () => {
+test("决策 484、509：会话核换手——审批一律带上所属会话；在面板里卡片标等待；成为当前会话后叫醒交给壳；退回面板又标等待", async () => {
   const { root, cleanup } = tempRoot("pigeon-pool-core-");
   cleanups.push(cleanup);
   initRepo(root, { "a.txt": "one\n" });
@@ -449,24 +450,26 @@ test("决策 484：会话核换手——在面板里审批写明来源、卡片�
   cleanups.push(() => pool.closeAll());
   await pool.spawn("写 a1");
   await until(() => pool.list()[0]?.state === "idle", "第一轮跑完");
-  assert.equal(requests[0]?.pooled?.name, pool.list()[0]?.name);
+  assert.equal(requests[0]?.sessionId, pool.list()[0]?.id);
+  assert.equal(requests[0]?.pooled, undefined);
   assert.deepEqual(states, ["waiting"]);
   const id = pool.list()[0]?.id ?? "";
-  // 取出、成为当前会话：审批不再写来源，打转检测挂到壳上
+  // 取出、成为当前会话：审批照样带所属会话，打转检测挂到壳上
   const detached = pool.detach(id);
   const core = detached?.runtime.live?.core;
   assert.ok(core !== undefined);
   setCoreRole(context, core, true);
   assert.equal(guards, 1);
   await coreBundle(core).adapter.run("写 a2");
+  assert.equal(requests[1]?.sessionId, core.sessionId);
   assert.equal(requests[1]?.pooled, undefined);
   assert.equal(states[1], "none", "当前会话不在面板上");
-  // 退回面板：又写明来源、卡片标等待
+  // 退回面板：卡片又标等待
   setCoreRole(context, core, false);
   pool.adopt(pooledRuntimeOf(context, core), { name: core.name, task: core.task });
   assert.equal(await pool.send(id, "写 a3"), undefined);
   await until(() => requests.length === 3 && pool.list()[0]?.state === "idle", "第三轮跑完");
-  assert.equal(requests[2]?.pooled?.name, pool.list()[0]?.name);
+  assert.equal(requests[2]?.sessionId, core.sessionId);
   assert.equal(states[2], "waiting");
 });
 

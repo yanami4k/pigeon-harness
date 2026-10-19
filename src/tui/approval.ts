@@ -71,8 +71,8 @@ export type ApprovalPanelResult =
 export interface TuiApprovalFace {
   // directoryGrant：审批块提供不提供 [d]（缺省按调用带不带 path 判定）
   askApproval(request: ApprovalRequest, directoryGrant?: boolean): Promise<ApprovalPanelResult>;
-  // 答完：把挂着的审批块收成这一行结论
-  noteApproval(line: string): void;
+  // 答完：把挂着的审批块收成这一行结论（决策 509：request 定结论写在哪个视图里）
+  noteApproval(line: string, request?: ApprovalRequest): void;
 }
 
 // 审批块文本（工具名 + exec 命令行 + pretty JSON 参数 + diff 预览 + 按键提示）；
@@ -297,19 +297,19 @@ export function createTuiApprovalHandler(
     if (result.key === "cancel") {
       // 另有审批挂着（BUSY）时这个请求的审批块根本没出现：不去收起别人的块
       if (result.reason !== APPROVAL_CANCEL_BUSY)
-        panel.noteApproval(rejectedLine(request, result.reason));
+        panel.noteApproval(rejectedLine(request, result.reason), request);
       return { approved: false, reason: cancelReasonForModel(result.reason) };
     }
     // 受保护路径：面板不收放权键；万一收到按批准一次处理，不建放权
     if (request.protectedPath !== undefined && (result.key === "a" || result.key === "d")) {
-      panel.noteApproval(approvedLine(request));
+      panel.noteApproval(approvedLine(request), request);
       return { approved: true };
     }
     if (result.key === "a" || result.key === "d") {
       // 放权作用域在 approvals/handler.ts（grantScopeFor）
       const scope = grantScopeFor(request, result.key, target);
       if (scope === null) {
-        panel.noteApproval(approvedLine(request, " (once: no command to grant)"));
+        panel.noteApproval(approvedLine(request, " (once: no command to grant)"), request);
         return { approved: true };
       }
       // 放权语义：grant.created 事件先于运行态（store.create fail-closed）
@@ -326,24 +326,25 @@ export function createTuiApprovalHandler(
           rejectedLine(
             request,
             `grant failed: ${error instanceof Error ? error.message : String(error)}`
-          )
+          ),
+          request
         );
         throw error;
       }
-      panel.noteApproval(grantedLine(request, scope));
+      panel.noteApproval(grantedLine(request, scope), request);
       return { approved: true };
     }
     if (result.key === "y") {
-      panel.noteApproval(approvedLine(request));
+      panel.noteApproval(approvedLine(request), request);
       return { approved: true };
     }
     // [r]（决策 066）：拒绝并说明——理由逐字回模型，记为人写
     if (result.key === "r") {
-      panel.noteApproval(rejectedLine(request, result.reason));
+      panel.noteApproval(rejectedLine(request, result.reason), request);
       return { approved: false, reason: result.reason, reasonSource: "human" };
     }
     // [n]：单按即拒绝，不带理由；治理层落默认文案「人工拒绝」并记为系统默认
-    panel.noteApproval(rejectedLine(request));
+    panel.noteApproval(rejectedLine(request), request);
     return { approved: false };
   };
 }
