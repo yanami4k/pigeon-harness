@@ -1,9 +1,9 @@
 // 工作树（决策 445、446、494）：pigeon --worktree <名字>、模型的 enter_worktree 工具与面板派出的会话共用。
-// - 位置 <主仓库根>/.pigeon/trees/<名字>，分支 pigeon/<名字>（与子 agent、/fork 的树同一种形状）。同名目录已在即打开它，不重建。
+// - 位置 <主仓库根>/.pigeon/worktrees/<名字>，分支 pigeon/<名字>（与子 agent、/fork 的树同一种形状）。同名目录已在即打开它，不重建。
 // - 起点缺省为远端默认分支（origin/HEAD 指向的分支）：远端引用超过 24 小时没取过就先 fetch，限时约 5 秒、不许交互；
 //   没有远端、取不到或超时即用当前 HEAD。设置 worktree.baseRef 为 "head" 时直接用当前 HEAD。
 // - 建立时按 .worktreeinclude 复制被忽略的文件（449，见 orchestration/worktree.ts 的 createWorktreeAt），并确保全局排除
-//   文件里有 **/.pigeon/trees/（444、445、494）。
+//   文件里有 **/.pigeon/worktrees/（444、445、494）。
 // - 退出时不碰工作树（决策 494）：收尾交给 /worktrees clean。
 // 会话记录、设置与记忆仍在主仓库根的 .pigeon（治理根是主仓库），工作区是工作树。
 import { execFile, execFileSync } from "node:child_process";
@@ -24,7 +24,7 @@ import { ensureGlobalIgnoreRulesOnce } from "../persistence/global-ignore.ts";
 import { worktreesDirOf } from "../state/paths.ts";
 import { GIT_HARDENING_CONFIG } from "../tools/git-hardening.ts";
 
-// 决策 494：工作树只有一种形状——目录 .pigeon/trees/<名字>、分支 pigeon/<名字>
+// 决策 494：工作树只有一种形状——目录 .pigeon/worktrees/<名字>、分支 pigeon/<名字>
 export const WORKTREE_BRANCH_PREFIX = "pigeon/";
 // 名字：小写字母或数字开头，小写字母、数字、下划线与连字符，最长 64（Windows 上分支引用不分大小写，只收小写免得撞名）
 const NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -210,7 +210,7 @@ export function resolveWorktreeBase(
 }
 
 // 决策 494：程序生成的名字撞了就让路——在 <名字>、<名字>-2… 里挑第一个目录与分支都不存在的
-// repoRoot 可以是仓库里的子目录（项目开在子目录里）：目录一律按主仓库根的 .pigeon/trees 查
+// repoRoot 可以是仓库里的子目录（项目开在子目录里）：目录一律按主仓库根的 .pigeon/worktrees 查
 export function availableWorktreeName(repoRoot: string, name: string): string {
   const dir = treesDirFor(repoRoot);
   for (let n = 1; n < 100; n += 1) {
@@ -230,7 +230,7 @@ export function availableWorktreeName(repoRoot: string, name: string): string {
   throw new NamedWorktreeError(`no free worktree name for ${name}`);
 }
 
-// 打开或新建 <主仓库根>/.pigeon/trees/<名字>
+// 打开或新建 <主仓库根>/.pigeon/worktrees/<名字>
 export function openNamedWorktree(input: {
   cwd: string;
   name: string;
@@ -329,7 +329,7 @@ export function namedWorktreeRepoRoot(cwd: string): string {
   }
 }
 
-// 路径在本仓库的工作树里（<主仓库根>/.pigeon/trees/<名字> 之下）；root 是项目根或主仓库根（决策 494：项目开在仓库子目录里时
+// 路径在本仓库的工作树里（<主仓库根>/.pigeon/worktrees/<名字> 之下）；root 是项目根或主仓库根（决策 494：项目开在仓库子目录里时
 // 工作树同样在主仓库根下）
 export function insideNamedWorktree(root: string, path: string): boolean {
   const rel = relative(treesDirFor(root), resolve(path));

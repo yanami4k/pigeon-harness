@@ -19,9 +19,9 @@ export const STATE_DIR = "state";
 // 设置文件名
 export const SETTINGS_FILE = "settings.json";
 export const LOCAL_SETTINGS_FILE = "settings.local.json";
-// 决策 494：工作树统一放在 .pigeon/trees/ 下（不再分保留型与随会话型，也没有 kind）。不用 worktrees——那是决策 325 之前
-// worker 工作树的旧位置，旧布局检查按"目录在即旧布局"处理它；旧位置留下的树一概不认
-export const WORKTREES_DIR = "trees";
+// 决策 494、511：工作树统一放在 .pigeon/worktrees/ 下（不再分保留型与随会话型，也没有 kind）。决策 325 之前 worker 工作树
+// 也在这个位置，那时的旧布局检查会把它当旧布局；494 删掉旧工作树迁移后旧布局检查已不认它（511 改回这个名字）
+export const WORKTREES_DIR = "worktrees";
 
 // 决策 444、445：写进使用者全局 git 排除文件的规则，与各自探测是否已被忽略的路径（相对治理根，正斜杠）
 export const GLOBAL_IGNORE_ENTRIES: readonly { rule: string; probe: string }[] = [

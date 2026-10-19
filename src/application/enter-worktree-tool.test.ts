@@ -64,7 +64,7 @@ test("工具：未绑定如实说明；建好后回调待移入（不在工具�
   writeFileSync(join(root, "new.txt"), "n\n");
   const result = await tool.execute("c1", { name: "feature" });
   const text = textOf(result);
-  const path = join(root, ".pigeon", "trees", "feature");
+  const path = join(root, ".pigeon", "worktrees", "feature");
   assert.match(text, /^Created the worktree .* on branch pigeon\/feature, starting from HEAD\./);
   assert.match(text, /The 2 uncommitted files in the current checkout were NOT carried over/);
   assert.match(text, /End this turn now with a brief reply/);
@@ -81,7 +81,7 @@ test("工具：未绑定如实说明；建好后回调待移入（不在工具�
   const blocked = await tool.execute("c1b", { name: "later" });
   assert.match(textOf(blocked), /^Not now: another move is pending/);
   assert.equal(blocked.details.rejected, "blocked");
-  assert.equal(existsSync(join(root, ".pigeon", "trees", "later")), false);
+  assert.equal(existsSync(join(root, ".pigeon", "worktrees", "later")), false);
   // 已在工作树里：拒绝
   slot.bind({
     governanceRoot: root,

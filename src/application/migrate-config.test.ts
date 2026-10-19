@@ -230,7 +230,7 @@ test("旧位置的程序状态挪进 .pigeon/state/；旧位置的工作树不�
   write(join(root, ".pigeon", "sessions", "enc", "s.jsonl"), "{}\n");
   write(join(root, ".pigeon", "learned", "MEMORY.md"), "- x\n");
   write(join(root, ".pigeon", "tui-history.json"), '{"version":1,"entries":[]}');
-  // 决策 494：旧位置的树一概不认，迁移命令不碰它
+  // 决策 494、511：迁移命令不碰工作树——决策 325 之前 worker 的树也在 .pigeon/worktrees 下，现在这就是工作树目录
   const legacyTree = join(root, ".pigeon", "worktrees", "sess-w1");
   git(root, "worktree", "add", "-q", "-b", "pigeon/w1", legacyTree);
   migrate(root, homeDir);
@@ -243,9 +243,8 @@ test("旧位置的程序状态挪进 .pigeon/state/；旧位置的工作树不�
     "旧学到的记忆原文进备份"
   );
   assert.ok(existsSync(promptHistoryPathOf(root)));
-  // 旧位置原样留着，也不出现在 /worktrees 的清单里（只认 .pigeon/trees）
-  assert.ok(existsSync(join(legacyTree, "a.txt")), "旧位置的树没被动过");
-  assert.equal(existsSync(worktreesDirOf(root)), false, "新目录不会被凭空建出来");
+  // 树原样留着；旧布局检查不把 .pigeon/worktrees 当旧布局（见下面的 findLegacyLayout）
+  assert.ok(existsSync(join(legacyTree, "a.txt")), "树没被动过");
   // 决策 444：不再写 .pigeon/.gitignore，忽略规则写进全局 git 排除文件（测试总装把它指到临时的 XDG 目录）
   assert.equal(existsSync(join(root, ".pigeon", ".gitignore")), false);
   assert.match(globalIgnoreText(), /\*\*\/\.pigeon\/state\//);
@@ -479,4 +478,12 @@ test("在主目录下运行：项目共享设置就是用户级设置（同一�
     trustedDirectories: [join(homeDir, "work")],
     loopGuard: { stopAt: 30 },
   });
+});
+
+test("决策 511：旧布局检查不把 .pigeon/worktrees 当旧布局（494 删掉旧工作树迁移之后它就是工作树目录）", () => {
+  const root = repo();
+  mkdirSync(join(root, ".pigeon", "worktrees", "feature"), { recursive: true });
+  writeFileSync(join(root, ".pigeon", "worktrees", "feature", "a.txt"), "x\n");
+  assert.deepEqual(findLegacyLayout(root), []);
+  assert.equal(worktreesDirOf(root), join(root, ".pigeon", "worktrees"));
 });

@@ -168,7 +168,7 @@ test("回看历史：后台作业通知与 [Pigeon] 附注显示成系统行", (
   const worktree = {
     name: "wt",
     repoRoot: "/repo",
-    path: "/repo/.pigeon/trees/wt",
+    path: "/repo/.pigeon/worktrees/wt",
     branch: "pigeon/wt",
     baseLabel: "HEAD",
     created: true,
@@ -181,7 +181,7 @@ test("回看历史：后台作业通知与 [Pigeon] 附注显示成系统行", (
     assert.deepEqual(messageLines(message(text)), [{ kind: "notice", text }]);
   }
   // 随人的下一条输入前缀给模型的附注（没移进工作树的说明）：附注是系统行，人的话照旧带 > 前缀
-  const note = `${PROGRAM_NOTE_PREFIX}The session did not move into the worktree /repo/.pigeon/trees/wt: the turn was interrupted.`;
+  const note = `${PROGRAM_NOTE_PREFIX}The session did not move into the worktree /repo/.pigeon/worktrees/wt: the turn was interrupted.`;
   assert.deepEqual(messageLines(message(`${note}\n\n接着改`)), [
     { kind: "notice", text: note },
     { kind: "user", text: "> 接着改" },

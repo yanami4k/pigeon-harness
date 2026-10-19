@@ -1,4 +1,4 @@
-// 模型自己建工作树的工具 enter_worktree（决策 446）：按 445 同一套建立（.pigeon/trees/<名字>、分支 pigeon/<名字>、
+// 模型自己建工作树的工具 enter_worktree（决策 446）：按 445 同一套建立（.pigeon/worktrees/<名字>、分支 pigeon/<名字>、
 // 起点缺省为远端默认分支、.worktreeinclude 复制、全局排除规则），在会话里记一条 pigeon.worktree 条目，由终端界面在本轮结束后
 // 按 /reload 的先建后换把会话移进去，并自动递一条通知让 agent 接着做。普通会话只在使用者明确要求时用（工具说明写明）；
 // 只给终端界面的主会话注册（pigeon run、沙箱都不注册）。写档：建目录与分支，按本会话的审批模式请示。
@@ -164,7 +164,7 @@ export function enterWorktreeRegistration(): ToolRegistration {
       "create a worktree and move the session into it after this turn (only when the user asks)",
     parameters: EnterWorktreeParamsSchema,
     tier: "write",
-    // 参数是名字不是路径：位置由工具自己定在主仓库的 .pigeon/trees 下
+    // 参数是名字不是路径：位置由工具自己定在主仓库的 .pigeon/worktrees 下
     pathConfinement: { kind: "none" },
     executionMode: "sequential",
   };

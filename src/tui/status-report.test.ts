@@ -46,7 +46,7 @@ test("格式化：工作目录与项目根相同时写 = project，没有的那�
 test("格式化：工作目录相对项目写；沙箱与子 agent 有值时逐项列出；用量与模型跟上", () => {
   const text = statusReportText({
     ...BASE,
-    cwd: ".pigeon/trees/feature-x",
+    cwd: ".pigeon/worktrees/feature-x",
     mode: "prompt",
     model: "deepseek-chat",
     usage: { context: { tokens: 46_000, window: 200_000 }, tokens: 1_200_000 },
@@ -54,7 +54,7 @@ test("格式化：工作目录相对项目写；沙箱与子 agent 有值时逐�
     sandbox: { image: "pigeon-sandbox:abc", network: "on", approval: "yolo" },
     agents: { count: 2, names: ["general-1", "explore-1"] },
   });
-  assert.match(text, /cwd {6}\.pigeon\/trees\/feature-x/);
+  assert.match(text, /cwd {6}\.pigeon\/worktrees\/feature-x/);
   assert.match(text, /git {6}bf30f761 · dirty/);
   assert.match(text, /sandbox {2}pigeon-sandbox:abc · network on · approval bypass/);
   assert.match(text, /agents {3}2 running · general-1, explore-1/);
@@ -68,8 +68,8 @@ test("statusCwd：与项目根相同为空串，树里与子目录写相对路�
   const project = join(home, "myapp");
   assert.equal(statusCwd(project, project, home), "");
   assert.equal(
-    statusCwd(project, join(project, ".pigeon", "trees", "feature-x"), home),
-    ".pigeon/trees/feature-x"
+    statusCwd(project, join(project, ".pigeon", "worktrees", "feature-x"), home),
+    ".pigeon/worktrees/feature-x"
   );
   assert.equal(statusCwd(project, join(project, "packages", "web"), home), "packages/web");
   // 名字以 .. 开头的子目录仍在项目里
@@ -78,7 +78,10 @@ test("statusCwd：与项目根相同为空串，树里与子目录写相对路�
   // 决策 494：项目开在仓库子目录里，工作树在主仓库根下——树里的工作目录相对主仓库根写
   const repo = join(home, "repo");
   const sub = join(repo, "packages", "web");
-  assert.equal(statusCwd(sub, join(repo, ".pigeon", "trees", "x"), home, repo), ".pigeon/trees/x");
+  assert.equal(
+    statusCwd(sub, join(repo, ".pigeon", "worktrees", "x"), home, repo),
+    ".pigeon/worktrees/x"
+  );
   assert.equal(statusCwd(sub, join(sub, "src"), home, repo), "src");
   if (process.platform === "win32") {
     // Windows 上路径不分大小写：只是大小写不同的仍算同一处

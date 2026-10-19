@@ -25,7 +25,7 @@ function record(open: boolean): SubagentRecord {
     ...(open
       ? {
           runtime: {
-            workspaceRoot: () => join(PROJECT, ".pigeon", "trees", "general-1"),
+            workspaceRoot: () => join(PROJECT, ".pigeon", "worktrees", "general-1"),
             inspect: {
               governanceRoot: PROJECT,
               modelId: "deepseek-chat",
@@ -74,7 +74,7 @@ test("/status 写这个子 agent 的名字、类型、状态、所属会话、�
   const text = await commands.status(target);
   assert.match(text, /^agent {4}fixer \(general-1\) · general · done$/m);
   assert.match(text, /^session {2}proj-ab12 · sess_top$/m);
-  assert.match(text, /^cwd {6}\.pigeon\/trees\/general-1$/m);
+  assert.match(text, /^cwd {6}\.pigeon\/worktrees\/general-1$/m);
   assert.match(text, /^record {3}~[/\\]proj[/\\]\.pigeon[/\\]state[/\\]sessions[/\\]c\.jsonl$/m);
   assert.match(text, /^model {4}deepseek-chat$/m);
 });

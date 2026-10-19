@@ -48,14 +48,14 @@ function makeRepo(): { repo: string; cleanup: () => void } {
   return { repo, cleanup: () => rmSync(repo, { recursive: true, force: true }) };
 }
 
-// 决策 494：工作树只有一种形状——目录 .pigeon/trees/<名字>、分支 pigeon/<名字>
-test("工作树：目录在 .pigeon/trees/<名字>、分支 pigeon/<名字>，隔离写入，移除后清单不再列出", () => {
+// 决策 494：工作树只有一种形状——目录 .pigeon/worktrees/<名字>、分支 pigeon/<名字>
+test("工作树：目录在 .pigeon/worktrees/<名字>、分支 pigeon/<名字>，隔离写入，移除后清单不再列出", () => {
   const { repo, cleanup } = makeRepo();
   try {
     const sessionId = newSessionId();
     const handle = addWorktree({ repoRoot: repo, sessionId, name: "fix-a" });
     const branch = "pigeon/fix-a";
-    assert.equal(handle.path, join(repo, ".pigeon", "trees", "fix-a"));
+    assert.equal(handle.path, join(repo, ".pigeon", "worktrees", "fix-a"));
     assert.equal(handle.branch, branch);
     assert.equal(branch, "pigeon/fix-a");
     assert.equal(readFileSync(join(handle.path, "a.txt"), "utf8"), "alpha\n");
@@ -88,7 +88,7 @@ test("工作树：名字即位置，同名再建即失败；显式给的已存�
     const sessionId = newSessionId();
     assert.equal(worktreePathFor(repo, "x"), worktreePathFor(repo, "x"));
     const a = addWorktree({ repoRoot: repo, sessionId, name: "x" });
-    assert.equal(a.path, join(repo, ".pigeon", "trees", "x"));
+    assert.equal(a.path, join(repo, ".pigeon", "worktrees", "x"));
     assert.throws(() => addWorktree({ repoRoot: repo, sessionId, name: "x" }), WorktreeError);
     assert.throws(
       () => addWorktree({ repoRoot: repo, sessionId, name: "y", branch: a.branch }),
@@ -393,8 +393,8 @@ test(".worktreeinclude 按仓库顶层：会话在子目录时，规则读顶层
       name: "sub",
     });
     assert.equal(readFileSync(join(w.path, "pkg", ".env"), "utf8"), "PKG=1\n");
-    // 决策 494：从仓库子目录建树也落在主仓库根的 .pigeon/trees 下
-    assert.equal(w.path, join(repo, ".pigeon", "trees", "sub"));
+    // 决策 494：从仓库子目录建树也落在主仓库根的 .pigeon/worktrees 下
+    assert.equal(w.path, join(repo, ".pigeon", "worktrees", "sub"));
     assert.equal(existsSync(join(w.path, ".env")), false);
   } finally {
     cleanup();

@@ -1,5 +1,5 @@
 // 决策 495、496：新会话开在哪里。/clear 工作目录不变；/new 不给 path 即项目根（主检出）；/new <path> 与在那里启动 pigeon
-// 同一套认法（launchPlaceOf，启动时也走它）：path 在某个仓库的工作树（.pigeon/trees/<名字>，含子目录）里即归那个仓库的
+// 同一套认法（launchPlaceOf，启动时也走它）：path 在某个仓库的工作树（.pigeon/worktrees/<名字>，含子目录）里即归那个仓库的
 // 主检出这个项目、工作目录是 path；否则项目根就是那个目录。path 先剥掉补全加的成对引号、展开 ~、相对当前工作目录解析；
 // 不存在或不是目录即报错（不建目录）
 import { statSync } from "node:fs";

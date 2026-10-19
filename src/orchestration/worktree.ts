@@ -1,5 +1,5 @@
 // 工作树管理（M5.5 S1，决策 040）：隔离工作区为 git 工作树。
-// 目录 <主仓库根>/.pigeon/trees/<name>（决策 494：工作树只有一种形状），分支 pigeon/<名字>。git 经参数数组直接调用，不经 shell；
+// 目录 <主仓库根>/.pigeon/worktrees/<name>（决策 494：工作树只有一种形状），分支 pigeon/<名字>。git 经参数数组直接调用，不经 shell；
 // 名字先按白名单校验再进参数，杜绝被当成选项或路径穿越。合并由人用 git 完成，本模块不合并。
 // 决策 449：建好后把项目根 .worktreeinclude 列出、又被 git 忽略的文件从来源工作目录复制进去。
 import { execFileSync } from "node:child_process";
@@ -56,7 +56,7 @@ export function worktreePathFor(repoRoot: string, name: string): string {
 }
 
 // 决策 494：工作树所在的根——项目所在仓库的主仓库根（项目开在仓库的子目录里也一样：所有工作树都在主仓库根的
-// .pigeon/trees 下，建与认都按它）；不是 git 仓库时就是它本身
+// .pigeon/worktrees 下，建与认都按它）；不是 git 仓库时就是它本身
 export function treesHomeOf(root: string): string {
   try {
     return mainRepoRoot(root);
@@ -65,7 +65,7 @@ export function treesHomeOf(root: string): string {
   }
 }
 
-// 工作树目录（<主仓库根>/.pigeon/trees）
+// 工作树目录（<主仓库根>/.pigeon/worktrees）
 export function treesDirFor(root: string): string {
   return worktreesDirOf(treesHomeOf(root));
 }
@@ -100,7 +100,7 @@ function assertExplicitBranch(branch: string): void {
 }
 
 export interface AddWorktreeInput {
-  // 仓库根（可以是仓库里的子目录）：工作树与分支建在它所在的仓库上，目录在主仓库根的 .pigeon/trees 下（决策 494）
+  // 仓库根（可以是仓库里的子目录）：工作树与分支建在它所在的仓库上，目录在主仓库根的 .pigeon/worktrees 下（决策 494）
   repoRoot: string;
   sessionId: SessionId;
   name: string;

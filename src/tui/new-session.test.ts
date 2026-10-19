@@ -201,7 +201,7 @@ test("新会话的位置：/clear 工作目录不变；/new 不给 path 即项�
     writeFileSync(join(repo, "a.txt"), "a\n");
     git(repo, ["add", "."]);
     git(repo, ["-c", "user.email=t@e.invalid", "-c", "user.name=t", "commit", "-q", "-m", "init"]);
-    const tree = join(repo, ".pigeon", "trees", "feature-x");
+    const tree = join(repo, ".pigeon", "worktrees", "feature-x");
     git(repo, ["worktree", "add", "-q", "-b", "pigeon/feature-x", tree]);
     mkdirSync(join(tree, "packages", "web"), { recursive: true });
     const previous = { root: repo, workspace: tree };

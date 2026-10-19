@@ -95,10 +95,10 @@ function plainRepo(): string {
   return repo;
 }
 
-test("位置 .pigeon/trees/<名字>、分支 pigeon/<名字>；起点缺省为远端默认分支，远端引用过期就先取", () => {
+test("位置 .pigeon/worktrees/<名字>、分支 pigeon/<名字>；起点缺省为远端默认分支，远端引用过期就先取", () => {
   const { repo, remoteTip } = cloned();
   const wt = openNamedWorktree({ cwd: repo, name: "feat-x" });
-  assert.equal(wt.path, join(repo, ".pigeon", "trees", "feat-x"));
+  assert.equal(wt.path, join(repo, ".pigeon", "worktrees", "feat-x"));
   assert.equal(wt.branch, "pigeon/feat-x");
   assert.equal(wt.created, true);
   assert.equal(wt.base, remoteTip, "克隆之后从未取过：先取，起点是远端最新");
@@ -106,7 +106,7 @@ test("位置 .pigeon/trees/<名字>、分支 pigeon/<名字>；起点缺省为�
   assert.equal(git(wt.path, ["rev-parse", "HEAD"]), remoteTip);
   assert.equal(git(wt.path, ["branch", "--show-current"]), "pigeon/feat-x");
   // 全局排除规则（临时 XDG）里有工作树一行，主检出的 git status 不列 .pigeon
-  assert.match(readFileSync(globalExcludesFile(repo) ?? "", "utf8"), /\*\*\/\.pigeon\/trees\//);
+  assert.match(readFileSync(globalExcludesFile(repo) ?? "", "utf8"), /\*\*\/\.pigeon\/worktrees\//);
   assert.equal(git(repo, ["status", "--porcelain", "--untracked-files=all"]), "");
 });
 
@@ -141,7 +141,7 @@ test("同名目录已在即打开（不重建），起点取分支建立时的�
   assert.equal(again.path, first.path);
   assert.equal(again.base, first.base);
   assert.ok(existsSync(join(again.path, "work.txt")), "没有重建");
-  mkdirSync(join(repo, ".pigeon", "trees", "stray"), { recursive: true });
+  mkdirSync(join(repo, ".pigeon", "worktrees", "stray"), { recursive: true });
   assert.throws(() => openNamedWorktree({ cwd: repo, name: "stray" }), NamedWorktreeError);
   for (const bad of ["", "-x", "a/b", "../x", "a b", "Feat", "x".repeat(65)]) {
     assert.throws(() => assertWorktreeName(bad), NamedWorktreeError, bad);
@@ -189,7 +189,7 @@ test("建立时按 .worktreeinclude 复制被忽略的文件；主检出里未�
   assert.equal(existsSync(join(wt.path, "b.txt")), false);
 });
 
-test("工作树在 .pigeon/trees 下，不触发旧布局检查；旧位置 .pigeon/worktrees 也不再按旧布局拦（决策 494）", () => {
+test("工作树在 .pigeon/worktrees 下，不触发旧布局检查；旧位置 .pigeon/worktrees 也不再按旧布局拦（决策 494）", () => {
   const repo = plainRepo();
   openNamedWorktree({ cwd: repo, name: "keep-me" });
   assert.deepEqual(findLegacyLayout(repo), []);

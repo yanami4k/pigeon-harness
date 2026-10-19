@@ -563,7 +563,7 @@ test("决策 486：take_changes 把子 agent 工作树里的改动（含新建�
   }
 });
 
-// 决策 494：项目开在仓库子目录里时，经派出流程（createSubagentOpener）建的子 agent 临时工作树也在主仓库根的 .pigeon/trees 下，
+// 决策 494：项目开在仓库子目录里时，经派出流程（createSubagentOpener）建的子 agent 临时工作树也在主仓库根的 .pigeon/worktrees 下，
 // 从子目录项目跑 /worktrees 列得出
 test("子目录项目派出带工作树的子 agent：树建在主仓库根下，/worktrees 从子目录列得出", async () => {
   const root = repo();
@@ -599,7 +599,7 @@ test("子目录项目派出带工作树的子 agent：树建在主仓库根下�
     const [writer] = hub.agentsOf(sessionId);
     const wt = writer?.worktree;
     assert.ok(wt !== undefined);
-    assert.equal(dirname(wt.path), join(root.dir, ".pigeon", "trees"), "树在主仓库根下");
+    assert.equal(dirname(wt.path), join(root.dir, ".pigeon", "worktrees"), "树在主仓库根下");
     const items = listLeftoverWorktrees({ workspaceRoot: project, homeDir: root.home });
     assert.ok(items.some((item) => item.path !== undefined && samePath(item.path, wt.path)));
     await hub.close();

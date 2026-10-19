@@ -134,7 +134,7 @@ test("上一棵同名的树被人手删、留下了取回起点与起点引用�
   closeAgentWorktree(tree, false);
 });
 
-// 决策 494：项目开在仓库子目录里时，子 agent 的树也建在主仓库根的 .pigeon/trees 下，/worktrees（从子目录项目跑）列得出、清得掉
+// 决策 494：项目开在仓库子目录里时，子 agent 的树也建在主仓库根的 .pigeon/worktrees 下，/worktrees（从子目录项目跑）列得出、清得掉
 test("子目录项目派出的子 agent：树在主仓库根下，从子目录跑 /worktrees 列得出", () => {
   const root = repo();
   const home = temp("pigeon-agent-home-");

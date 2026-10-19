@@ -340,7 +340,7 @@ test("决策 444：第一条消息建会话文件时才建 .pigeon/state/，忽�
     for (const rule of [
       "**/.pigeon/state/",
       "**/.pigeon/settings.local.json",
-      "**/.pigeon/trees/",
+      "**/.pigeon/worktrees/",
     ]) {
       assert.ok(text.split("\n").includes(rule), text);
     }

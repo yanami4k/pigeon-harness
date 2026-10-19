@@ -1,5 +1,5 @@
 // 留下的工作树的列出与删除（决策 448、494）：终端界面的 /worktrees 与命令行的 pigeon worktrees list|clean 共用。
-// 列出四类：.pigeon/trees/ 下 git 登记的工作树、登记还在而目录已不在的、没有工作树的 pigeon/ 分支、该目录下 git 不认的残留目录。
+// 列出四类：.pigeon/worktrees/ 下 git 登记的工作树、登记还在而目录已不在的、没有工作树的 pigeon/ 分支、该目录下 git 不认的残留目录。
 // 每项给是否在用、未取走的改动（相对起点改过、内容又与主检出不同的文件数）与占用大小。
 // - 比较的基准一律是主检出（不是当前目录）；当前目录在这些工作树里时拒绝列出与删除。
 // - 起点取建立时记在仓库配置里的那个；取不到记为"不明"，按有改动对待。
@@ -23,7 +23,7 @@ import {
 } from "../orchestration/worktree.ts";
 import { type ListedSession, readableSessionIndex } from "../persistence/session-index.ts";
 import { worktreeInUse } from "../persistence/worktree-in-use.ts";
-import { pigeonRel, sessionIndexPathOf, worktreesDirOf } from "../state/paths.ts";
+import { pigeonRel, sessionIndexPathOf, WORKTREES_DIR, worktreesDirOf } from "../state/paths.ts";
 import { plural, tildePath } from "./format.ts";
 import { namedWorktreeBase, namedWorktreeBranch } from "./named-worktree.ts";
 import { sessionNameOf } from "./session-name.ts";
@@ -184,13 +184,13 @@ function inUseFacts(
   return {};
 }
 
-// 当前目录在 .pigeon/trees 之下的工作树里时拒绝：比较与删除都要从主检出做
+// 当前目录在 .pigeon/worktrees 之下的工作树里时拒绝：比较与删除都要从主检出做
 function assertNotInWorktree(scope: WorktreeScope, governanceRoot: string): void {
   const here = realOrResolved(scope.workspaceRoot);
   const treesDir = realOrResolved(worktreesDirOf(governanceRoot));
   if (isInside(treesDir, here) || samePath(treesDir, here)) {
     throw new WorktreeCleanupError(
-      `not available inside a worktree under ${pigeonRel("trees")}; run from the main checkout`
+      `not available inside a worktree under ${pigeonRel(WORKTREES_DIR)}; run from the main checkout`
     );
   }
 }

@@ -1,5 +1,5 @@
 // 路径模块（决策 325、494）：程序状态在 .pigeon/state/ 下、用户主目录可注入、快照与叠加只排除程序状态与个人设置、
-// 工作树统一在 .pigeon/trees/ 下（旧位置一概不认，没有映射）。
+// 工作树统一在 .pigeon/worktrees/ 下（旧位置一概不认，没有映射）。
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "vitest";
@@ -17,7 +17,7 @@ import {
 
 test("位置：程序状态在 .pigeon/state/ 下；用户级在注入的主目录下", () => {
   assert.equal(sessionsDirOf("/p"), join("/p", ".pigeon", "state", "sessions"));
-  assert.equal(worktreesDirOf("/p"), join("/p", ".pigeon", "trees"));
+  assert.equal(worktreesDirOf("/p"), join("/p", ".pigeon", "worktrees"));
   assert.equal(sessionSearchCacheDirOf("/p"), join("/p", ".pigeon", "state", "search-cache"));
   assert.equal(projectLocalSettingsPath("/p"), join("/p", ".pigeon", "settings.local.json"));
   assert.equal(userSettingsPath("/h"), join("/h", ".pigeon", "settings.json"));
@@ -45,8 +45,8 @@ test("快照与叠加排除的只是程序状态与个人设置；可提交的�
   assert.equal(isUnderPigeonDir("src/.pigeon/x"), false);
 });
 
-test("工作树目录只有一处：.pigeon/trees/（决策 494）", () => {
-  assert.equal(worktreesDirOf("/p"), join("/p", ".pigeon", "trees"));
+test("工作树目录只有一处：.pigeon/worktrees/（决策 494）", () => {
+  assert.equal(worktreesDirOf("/p"), join("/p", ".pigeon", "worktrees"));
   // 工作树目录属于程序状态：快照与叠加一律排除
-  assert.equal(isProgramOwnedPath(".pigeon/trees/feat"), true);
+  assert.equal(isProgramOwnedPath(".pigeon/worktrees/feat"), true);
 });

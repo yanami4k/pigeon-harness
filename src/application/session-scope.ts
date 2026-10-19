@@ -35,7 +35,7 @@ export function sessionRuntimeScope(
   };
 }
 
-// 决策 445、446、494：会话开在工作树（.pigeon/trees/<名字>）里时，续接回到那里——主分支上最后一条 pigeon.worktree 条目
+// 决策 445、446、494：会话开在工作树（.pigeon/worktrees/<名字>）里时，续接回到那里——主分支上最后一条 pigeon.worktree 条目
 //（enter_worktree 移进去的）优先，其次会话文件头记的工作目录（pigeon --worktree、/clear 开的）；工作树已不在即回到治理根
 //（主检出），不报错
 function mainSessionWorkspace(
@@ -43,7 +43,7 @@ function mainSessionWorkspace(
   cwd: string,
   entries: readonly StoredEntry[]
 ): string {
-  // 决策 494：项目开在仓库子目录里时，工作树照样在主仓库根的 .pigeon/trees 下（用到时才问 git）
+  // 决策 494：项目开在仓库子目录里时，工作树照样在主仓库根的 .pigeon/worktrees 下（用到时才问 git）
   let dir: string | undefined;
   const usable = (path: string): boolean => {
     if (path === governanceRoot || !existsSync(path)) return false;

@@ -241,7 +241,7 @@ test("分叉续跑：来源先记分叉条目，从分叉点前最近的快照�
       "分支自己的消息（改文件、工具结果、收尾回复）全部写进分支文件"
     );
     // 决策 494：退出不删工作树，分叉出来的树留着（收尾交给 /worktrees clean）
-    assert.equal(existsSync(join(dir, ".pigeon", "trees")), true);
+    assert.equal(existsSync(join(dir, ".pigeon", "worktrees")), true);
   } finally {
     cleanup();
   }

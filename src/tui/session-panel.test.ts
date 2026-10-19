@@ -915,10 +915,10 @@ test("决策 489：共用目录的会话在卡上写它用的工作区，不再�
   // 拿不到工作区时退回旧说法
   assert.match(sessionCardText(base), /shared dir/);
   // 决策 489：每张卡都写它干活的目录；与当前会话的工作区相同则不写
-  const tree = { ...base, sharedDir: false, workspace: "~/myapp/.pigeon/trees/x" };
-  assert.match(withoutStyles(sessionCardText(tree)), /s1 ~\/myapp\/\.pigeon\/trees\/x/);
+  const tree = { ...base, sharedDir: false, workspace: "~/myapp/.pigeon/worktrees/x" };
+  assert.match(withoutStyles(sessionCardText(tree)), /s1 ~\/myapp\/\.pigeon\/worktrees\/x/);
   assert.doesNotMatch(
-    withoutStyles(sessionCardText(tree, [], undefined, "~/myapp/.pigeon/trees/x")),
+    withoutStyles(sessionCardText(tree, [], undefined, "~/myapp/.pigeon/worktrees/x")),
     /trees/
   );
 });

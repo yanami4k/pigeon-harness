@@ -91,7 +91,7 @@ function fixture() {
   const releaseBusy = holdWorktreeInUse(busy.path, home);
   releases.push(releaseBusy);
   // 4. 分支被人换掉的工作树（不在自己的分支上）：改动按"不明"
-  const movedPath = join(repo, ".pigeon", "trees", "moved");
+  const movedPath = join(repo, ".pigeon", "worktrees", "moved");
   git(repo, ["worktree", "add", "-q", "-b", "pigeon/moved", movedPath]);
   git(movedPath, ["switch", "-q", "-c", "moved-elsewhere"]);
   // 5. 只剩分支：旧分支（无提交）与有新提交的
@@ -103,8 +103,8 @@ function fixture() {
   git(repo, ["commit", "-q", "-m", "ahead"]);
   git(repo, ["checkout", "-q", "main"]);
   // 6. git 不认的残留目录
-  mkdirSync(join(repo, ".pigeon", "trees", "junk"), { recursive: true });
-  writeFileSync(join(repo, ".pigeon", "trees", "junk", "x"), "12345");
+  mkdirSync(join(repo, ".pigeon", "worktrees", "junk"), { recursive: true });
+  writeFileSync(join(repo, ".pigeon", "worktrees", "junk", "x"), "12345");
   const scope: WorktreeScope = { workspaceRoot: repo, homeDir: home };
   return { repo, home, scope, dirty, taken, busy, releaseBusy, movedPath };
 }
@@ -115,7 +115,7 @@ function byName(items: readonly LeftoverWorktree[], name: string): LeftoverWorkt
   return item;
 }
 
-// 决策 494：一棵树 = .pigeon/trees/<名字> + 分支 pigeon/<名字>，没有"独立/内部"之分
+// 决策 494：一棵树 = .pigeon/worktrees/<名字> + 分支 pigeon/<名字>，没有"独立/内部"之分
 test("列出：一棵树、只剩分支、残留目录；未取走的改动、在用与占用", () => {
   const f = fixture();
   const items = listLeftoverWorktrees(f.scope);
@@ -209,7 +209,7 @@ test("命令行 pigeon worktrees：list 列出；clean 没有终端时不删、�
   assert.match(done, /removed 6 items/);
   assert.equal(existsSync(f.dirty.path), false);
   assert.ok(existsSync(f.busy.path), "--all 也不删在用的");
-  assert.equal(existsSync(join(f.repo, ".pigeon", "trees", "junk")), false);
+  assert.equal(existsSync(join(f.repo, ".pigeon", "worktrees", "junk")), false);
   await assert.rejects(runWorktreesCommand(["nope"], scope), /usage/);
 });
 
