@@ -58,10 +58,15 @@ export function openAgentWorktree(input: {
   let repoRoot: string;
   try {
     repoRoot = mainRepoRoot(input.parentWorkspace);
-  } catch {
-    throw new Error(
-      `a worktree needs this session's project to be a git repository; ${input.parentWorkspace} is not in one`
-    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // 只在 git 明说不是仓库时这么写；别的失败（没装 git、safe.directory 拒绝等）照原样带出
+    if (/not a git repository/i.test(message)) {
+      throw new Error(
+        `a worktree needs this session's project to be a git repository; ${input.parentWorkspace} is not in one`
+      );
+    }
+    throw new Error(`a worktree can't be created here: ${message}`);
   }
   // 决策 494：程序起的名字撞了（上一棵同名的树还留着、别的会话的同名子 agent 在跑）就让路；起点引用与树同名
   const name = availableWorktreeName(repoRoot, worktreeSafeName(input.name));

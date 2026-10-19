@@ -301,10 +301,29 @@ test("决策 510：子 agent 视图里的转圈跟着正在看的那个子 agent
     assert.ok(spinning(), "它在跑：转");
     const viewed = agents[0];
     assert.ok(viewed !== undefined);
+    // 它的审批显示着：让位；答完回来
+    const answer = shell.askApproval({
+      toolName: "run_command",
+      toolCallId: "s1",
+      args: { command: "ls" },
+      sessionId: shell.sessionId(),
+      subagent: { path: viewed.path },
+    });
+    await settle();
+    assert.ok(!spinning(), "审批显示着：不转");
+    term.input("y");
+    await answer;
+    await settle();
+    assert.ok(spinning(), "答完回来");
     viewed.state = "idle";
     shell.agentsChanged();
     await settle();
     assert.ok(!spinning(), "它停了：不转");
+    // 使用者在它的视图里 /compact：压的期间算在干活
+    viewed.compacting = true;
+    shell.agentsChanged();
+    await settle();
+    assert.ok(spinning(), "压缩中：转");
   } finally {
     cleanup();
   }

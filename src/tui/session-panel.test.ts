@@ -676,6 +676,8 @@ test("决策 507：下一个会话进不去（停下了等）——改开一个�
     assert.deepEqual(requests, [{ kind: "new" }]);
     assert.equal(shell.sessionId(), fresh);
     assert.deepEqual(removed, [before]);
+    assert.equal(shell.currentView(), "panel", "仍留在面板");
+    assert.match(screenText(term), /> \S+ current/, "光标停在新的当前会话上");
   } finally {
     cleanup();
   }
@@ -709,6 +711,7 @@ test("决策 507：面板里没有别的会话时去掉当前会话——开一�
     assert.deepEqual(requests, [{ kind: "new" }]);
     assert.equal(shell.sessionId(), fresh);
     assert.equal(shell.currentView(), "panel", "仍留在面板");
+    assert.match(screenText(term), /> \S+ current/, "光标停在新的当前会话上");
     assert.deepEqual(removed, [before]);
   } finally {
     cleanup();
@@ -1203,5 +1206,73 @@ test("决策 509：面板里会话的偷看按壳里的审批单写明在等什�
     assert.match(screenText(term), /waiting: edit_file/);
   } finally {
     cleanup();
+  }
+});
+
+test("决策 507：去掉当前会话、换上来的会话带着退回来的排队内容——留在面板时不放进面板的输入框，回到主视图才放进去", async () => {
+  const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-panel-held-"));
+  const term = new MockTerminal(110, 40);
+  const other = {
+    id: "sess_other",
+    name: "other",
+    state: "idle" as const,
+    task: "别的任务",
+    summary: "",
+    startedAt: 0,
+    updatedAt: 0,
+  };
+  const holder: { shell?: PigeonTuiShell } = {};
+  const shell = new PigeonTuiShell({
+    terminal: term,
+    runtime: new ScriptedRuntime(newSessionId()),
+    sessionId: newSessionId(),
+    logDir,
+    sessionName: (id) => (id === "sess_other" ? "other" : "demo-main"),
+    pool: {
+      source: {
+        list: () => [other],
+        subscribe: () => () => {},
+        spawn: async () => {
+          throw new Error("unused");
+        },
+        send: async () => undefined,
+        stop: async () => {},
+        remove: async () => {},
+        peek: async () => [],
+      },
+      // 同装配方：交出当前这一轮，换到它，接过它退回来的排队内容
+      enter: async (id) => {
+        const target = holder.shell;
+        if (target === undefined) return "can't open";
+        target.handOff();
+        target.switchSession(
+          id as SessionId,
+          { runtime: new ScriptedRuntime(id as SessionId) },
+          { held: ["排着的那条"] }
+        );
+        return undefined;
+      },
+    },
+  });
+  holder.shell = shell;
+  shell.start();
+  try {
+    await settle();
+    term.input("/panel");
+    term.input("\r");
+    await settle();
+    term.input("\x18");
+    term.input("\x18");
+    await settle();
+    assert.equal(shell.sessionId(), "sess_other");
+    assert.equal(shell.currentView(), "panel");
+    assert.equal(shell.inputText(), "", "不放进面板的输入框");
+    term.input("\x1b");
+    await settle();
+    assert.equal(shell.currentView(), "main");
+    assert.equal(shell.inputText(), "排着的那条", "回到主视图才放进去");
+  } finally {
+    shell.stop();
+    rmSync(logDir, { recursive: true, force: true });
   }
 });

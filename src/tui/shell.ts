@@ -661,6 +661,8 @@ export class PigeonTuiShell
   private modalLines: readonly ApprovalBlockLine[] | undefined;
   // 写拒绝理由时针对的是哪一条（按 r 时显示着的）；它不再显示即作废理由
   private reasonTarget: PendingApproval | null = null;
+  // 决策 507：去掉当前会话后换到下一个会话、留在面板的这一下——它退回来的排队内容等真回到主视图时才放进输入框
+  private stayingInPanel = false;
   // 上一次显示着的回答框与它出现的时刻之后多久才收回答键
   private lastShown: PendingApproval | null = null;
   private answerReadyAt = 0;
@@ -2172,8 +2174,10 @@ export class PigeonTuiShell
     }
     this.sessionPanel.closePeek();
     // 下一个会话进不去（停下了、开不成等）：开一个新的空会话
+    this.stayingInPanel = true;
     enter(next.id).then(
       (refusal) => {
+        this.stayingInPanel = false;
         if (refusal !== undefined) fresh();
         else {
           this.dropFromPanel(card);
@@ -2182,6 +2186,7 @@ export class PigeonTuiShell
         this.tui.requestRender();
       },
       () => {
+        this.stayingInPanel = false;
         fresh();
         this.tui.requestRender();
       }
@@ -3816,7 +3821,7 @@ export class PigeonTuiShell
     if (view !== "resume" && this.picker.isOpen()) this.picker.close();
     this.view = view;
     // 决策 458：在面板里中断主会话时留着的排队内容，回到主视图时放进输入框（排队在前、草稿在后）
-    if (view === "main" && this.heldQueue.length > 0) {
+    if (view === "main" && this.heldQueue.length > 0 && !this.stayingInPanel) {
       this.input.setText(
         [...this.heldQueue.splice(0), this.input.getText()]
           .filter((text) => text.trim() !== "")
