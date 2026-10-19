@@ -1007,7 +1007,8 @@ export class AgentHub {
       return await work();
     } finally {
       record.compacting = false;
-      // 它让出名额：它自己与因名额等着的都看一遍
+      // 压完的这个先接着干（压的期间收到的话排着），再看因名额等着的
+      this.#startIfRoom(record);
       this.#pump();
     }
   }

@@ -2208,11 +2208,6 @@ export class PigeonTuiShell
     this.elsewhereSession = undefined;
   }
 
-  // 决策 501：只看历史的视图还在跟着记录（测试看离开之后定时器已清掉）
-  followingElsewhere(): boolean {
-    return this.elsewhereSession?.timer !== undefined;
-  }
-
   // 决策 484：进入会话面板里的一个会话——它成为当前会话（换手由装配方做），原来的当前会话退到面板接着跑
   private enterPooled(card: PooledSessionCard): void {
     const enter = this.options.pool?.enter;

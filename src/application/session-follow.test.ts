@@ -9,12 +9,13 @@ import {
   rmSync,
   statSync,
   truncateSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
-import { sessionsDirOf } from "../state/paths.ts";
+import { sessionsDirOf, subagentSessionsDir } from "../state/paths.ts";
 import { SESSION_ENTRY_VERSION, SessionEntryType } from "../state/session-entries.ts";
 import { historyDelta, recordedSessionPath, SessionFollower } from "./session-follow.ts";
 import { createFixtureSession } from "./session-store-fixtures.ts";
@@ -100,9 +101,29 @@ test("大文件追加时只读增量：写了一半的末行等补齐再算；�
       delta.added.map((line) => line.text),
       ["新的一段"]
     );
-    // 写了一半的一行：先不算，补齐之后才出来
-    appendFileSync(path, '{"kind":"entry","seq":999999,');
-    assert.equal(await follower.poll(), undefined);
+    // 写了一半的一行：先不算，补齐之后才出来（照最后一条助手消息造一条新的）
+    const lines = readFileSync(path, "utf8").trimEnd().split("\n");
+    const last = JSON.parse(lines.at(-1) ?? "{}");
+    const added = {
+      ...last,
+      seq: last.seq + 1000,
+      id: `${last.id}x`,
+      parentId: last.id,
+      message: { ...last.message, content: [{ type: "text", text: "补齐的一段" }] },
+    };
+    const text = `${JSON.stringify(added)}\n`;
+    const cut = Math.floor(text.length / 2);
+    appendFileSync(path, text.slice(0, cut));
+    assert.equal(await follower.poll(), undefined, "半行先不算");
+    appendFileSync(path, text.slice(cut));
+    const completed = await follower.poll();
+    assert.ok(completed !== undefined);
+    assert.equal(completed.restarted, false);
+    assert.deepEqual(
+      historyDelta(next.lines, completed.lines)?.added.map((line) => line.text),
+      ["补齐的一段"],
+      "补齐之后出来"
+    );
     truncateSync(path, grown - 10);
     const reread = await follower.poll();
     assert.ok(reread !== undefined);
@@ -126,6 +147,45 @@ test("换了一个文件（更大、更新）：认出来从头读，不当成�
     assert.ok(next !== undefined);
     assert.equal(next.restarted, true);
   } finally {
+    await cleanup();
+  }
+});
+
+test("修改时刻倒退（大小不变）：从头重读", async () => {
+  const { path, follower, cleanup } = await fixture();
+  try {
+    await follower.poll();
+    const info = statSync(path);
+    utimesSync(path, info.atime, new Date(info.mtimeMs - 60_000));
+    const next = await follower.poll();
+    assert.ok(next !== undefined);
+    assert.equal(next.restarted, true);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("子 agent 的用量在记录每次有变化时重算（只看它名下的 subagents 文件夹）", async () => {
+  const { root, record, path, follower, cleanup } = await fixture();
+  const child = createFixtureSession({
+    sessionsDir: subagentSessionsDir(path, record.sessionId),
+    cwd: root,
+    parentSessionId: record.sessionId,
+  });
+  try {
+    child.startRun({ task: "子任务" });
+    child.assistant({ text: "子回复", usage: { input: 7000, totalTokens: 7000 } });
+    await child.writer.flush();
+    const tokens = (update: Awaited<ReturnType<typeof follower.poll>>) =>
+      (update?.status.cost.unpricedTokens ?? 0) + (update?.status.cost.pricedTokens ?? 0);
+    assert.equal(tokens(await follower.poll()), 57_000);
+    child.assistant({ text: "子又回了", usage: { input: 3000, totalTokens: 3000 } });
+    await child.writer.flush();
+    record.assistant({ text: "主这边也动了" });
+    await record.writer.flush();
+    assert.equal(tokens(await follower.poll()), 60_000, "子 agent 新增的用量算进来了");
+  } finally {
+    await child.close();
     await cleanup();
   }
 });

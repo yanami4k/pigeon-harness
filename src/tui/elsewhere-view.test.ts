@@ -147,12 +147,6 @@ test("内容跟着它的会话记录更新，状态栏是它的模式、上下�
     await settle(200);
     assert.equal(shell.currentView(), "elsewhere");
     assert.match(screenText(term), /第二段回复/);
-    // 离开视图：跟随的定时器真的清掉了
-    assert.equal(shell.followingElsewhere(), true);
-    term.input("\x1b");
-    await settle();
-    assert.equal(shell.currentView(), "panel");
-    assert.equal(shell.followingElsewhere(), false);
   } finally {
     await cleanup();
   }
@@ -245,35 +239,44 @@ test("离开视图清掉跟随的定时器（开的那一个）", async () => {
   }
 });
 
-test("跟着记录：工具行先出调用、结果到了原地补上；折叠过的历史照样补对行，超出上限一倍即重新折叠", async () => {
+test("跟着记录：打开前就挂着的工具调用画在折叠过的历史里，结果到了原地补上（行号映射对）；之后的调用同样补上；超出上限一倍即重新折叠", async () => {
   const { term, record, cleanup } = await makeShell(4);
   try {
     for (let index = 1; index <= 4; index++) record.assistant({ text: `早先的第 ${index} 段` });
+    // 打开视图之前就有一条还没出结果的工具调用
+    record.assistant({ toolCalls: [{ name: "read_file", args: { path: "a.ts" }, id: "tc-a" }] });
     await record.writer.flush();
     await settle();
     await openFar(term);
     let screen = screenText(term);
-    assert.match(screen, /\[2 earlier lines not shown\]/, "开头折叠了");
-    assert.doesNotMatch(screen, /第一段回复/);
-    record.assistant({ toolCalls: [{ name: "read_file", args: { path: "a.ts" }, id: "tc-a" }] });
-    await record.writer.flush();
-    await settle(200);
-    screen = screenText(term);
+    assert.match(screen, /\[3 earlier lines not shown\]/, "开头折叠了");
+    assert.doesNotMatch(screen, /早先的第 1 段/);
     assert.match(screen, /\$ read_file \{"path":"a\.ts"\}/);
     assert.doesNotMatch(screen, /-> ok/);
     record.toolResult({ toolCallId: "tc-a", toolName: "read_file", text: "内容" });
     await record.writer.flush();
     await settle(200);
     screen = screenText(term);
-    assert.match(screen, /\$ read_file \{"path":"a\.ts"\} -> ok/, "结果原地补上");
+    assert.match(screen, /\$ read_file \{"path":"a\.ts"\} -> ok/, "折叠过的那一行原地补上");
     assert.equal(screen.split("$ read_file").length - 1, 1, "没有多出一行");
+    // 打开之后才来的调用：先出调用，结果到了同样原地补上
+    record.assistant({ toolCalls: [{ name: "grep", args: { pattern: "x" }, id: "tc-b" }] });
+    await record.writer.flush();
+    await settle(200);
+    assert.match(screenText(term), /\$ grep \{"pattern":"x"\}$/m);
+    record.toolResult({ toolCallId: "tc-b", toolName: "grep", text: "无" });
+    await record.writer.flush();
+    await settle(200);
+    screen = screenText(term);
+    assert.match(screen, /\$ grep \{"pattern":"x"\} -> ok/);
+    assert.equal(screen.split("$ grep").length - 1, 1);
     // 接着长：画出来的超出上限一倍（8 行）即重新折叠
     for (let index = 1; index <= 6; index++) record.assistant({ text: `之后的第 ${index} 段` });
     await record.writer.flush();
     await settle(200);
     screen = screenText(term);
     assert.match(screen, /\[\d+ earlier lines not shown\]/);
-    assert.doesNotMatch(screen, /\[2 earlier lines not shown\]/, "按新的行数重新折叠");
+    assert.doesNotMatch(screen, /\[3 earlier lines not shown\]/, "按新的行数重新折叠");
     assert.match(screen, /之后的第 6 段/);
   } finally {
     await cleanup();

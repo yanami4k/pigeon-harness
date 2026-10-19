@@ -390,3 +390,21 @@ test("决策 505：子 agent 视图里 /resume 续接成了——续接时的说
     cleanup();
   }
 });
+
+test("决策 505：子 agent 视图里 /resume 没成——续接时的说明连同报错写回这个子 agent 视图", async () => {
+  const { shell, term, brokenSessionId, calls, cleanup } = await makeShell();
+  try {
+    await settle();
+    await enterAgent(term);
+    await command(term, `/resume ${brokenSessionId}`);
+    await settle();
+    assert.deepEqual(calls, ["rebind"]);
+    assert.equal(shell.currentView(), "agent");
+    const screen = screenText(term);
+    assert.match(screen, /1 tool call interrupted, results unknown: run_command/);
+    assert.match(screen, /resume failed: unused/);
+    assert.match(screen, /sub-agent: general-1 done/);
+  } finally {
+    cleanup();
+  }
+});

@@ -1,9 +1,9 @@
 // 决策 501：别的进程开着的会话在本进程里只看它的会话记录——跟着记录的追加更新内容与状态栏（模式、上下文与用量）。
 // 只读追加的部分：记住读到的偏移，新追加的整行喂进解析器（写了一半的末行留到下次）；文件变小、修改时刻倒退、或换了一个文件
-//（inode 或创建时刻变了）才从头重读。读文件是异步的，不卡界面。子会话与复盘的花费只在第一次读时扫一遍项目；会话自己的
-// 用量只从读进来的条目算（各分支，按条目计过的不再计）
-import { open, stat } from "node:fs/promises";
-import { sessionBranchViews } from "../persistence/session-catalog.ts";
+//（打开后的句柄上 dev:ino 变了）才从头重读。读文件是异步的，不卡界面。用量：复盘会话只在第一次读时扫一遍会话根；它的
+// 子 agent 在记录每次有变化时重算（只扫它自己名下的 subagents 文件夹）；会话自己的只从读进来的条目算（各分支，计过的不再计）
+import { open } from "node:fs/promises";
+import { listSessionRefs, sessionBranchViews } from "../persistence/session-catalog.ts";
 import {
   branchEntries,
   locateSessionFile,
@@ -11,15 +11,16 @@ import {
 } from "../persistence/session-reader.ts";
 import { contextTokens } from "../pi-runtime/compaction.ts";
 import { sessionContextMessages } from "../pi-runtime/session-store.ts";
-import { sessionsDirOf } from "../state/paths.ts";
+import { sessionsDirOf, subagentSessionsDir } from "../state/paths.ts";
 import { buildSessionView } from "../state/session-view.ts";
 import { DEFAULT_HISTORY_ENTRY_CHARS, type HistoryLine, historyLinesOfView } from "./history.ts";
 import {
   type CostTally,
-  childSessionsCost,
   costTallyOfView,
   emptyCostTally,
   mergeCostTally,
+  reviewForksCost,
+  subagentsCostIn,
 } from "./session-cost.ts";
 
 export interface RecordedStatus {
@@ -56,7 +57,9 @@ export class SessionFollower {
   private identity = "";
   // 写了一半的末行（字节，等下次补齐）
   private tail: Buffer = Buffer.alloc(0);
-  private cost: CostTally | undefined;
+  // 复盘会话的花费（第一次读时算）与会话自己的累计（按条目，计过的不再计）
+  private reviews: CostTally | undefined;
+  private own: CostTally = emptyCostTally();
   private counted = new Set<string>();
   // 累计读过的字节数（测试看只读了增量）
   readBytes = 0;
@@ -73,33 +76,40 @@ export class SessionFollower {
     this.parser = new SessionFileParser(this.path);
     this.offset = 0;
     this.tail = Buffer.alloc(0);
-    this.cost = undefined;
+    this.reviews = undefined;
+    this.own = emptyCostTally();
     this.counted = new Set<string>();
   }
 
   // 看一次：没有新的整行为 undefined；读不到（文件没了、目录被删）照常抛，调用方停在原样、下次再看
   async poll(): Promise<FollowUpdate | undefined> {
-    const info = await stat(this.path);
-    const identity = `${info.ino}:${info.birthtimeMs}`;
-    const first = this.offset === 0 && this.cost === undefined;
-    const restarted =
-      first || info.size < this.offset || info.mtimeMs < this.mtimeMs || identity !== this.identity;
-    if (restarted && !first) this.restart();
-    if (!restarted && info.size === this.offset) return undefined;
-    const length = info.size - this.offset;
-    const chunk = Buffer.alloc(length);
     const handle = await open(this.path, "r");
-    let read: number;
+    let chunk: Buffer;
+    let restarted: boolean;
     try {
-      ({ bytesRead: read } = await handle.read(chunk, 0, length, this.offset));
+      // 在打开的这个文件上取样子：换了文件按 dev:ino 认（创建时刻在没有 statx 的系统上随每次追加变，不用）
+      const info = await handle.stat();
+      const identity = `${info.dev}:${info.ino}`;
+      const first = this.offset === 0 && this.reviews === undefined;
+      restarted =
+        first ||
+        info.size < this.offset ||
+        info.mtimeMs < this.mtimeMs ||
+        identity !== this.identity;
+      if (restarted && !first) this.restart();
+      this.mtimeMs = info.mtimeMs;
+      this.identity = identity;
+      if (!restarted && info.size === this.offset) return undefined;
+      const length = info.size - this.offset;
+      const buffer = Buffer.alloc(length);
+      const { bytesRead } = await handle.read(buffer, 0, length, this.offset);
+      chunk = buffer.subarray(0, bytesRead);
     } finally {
       await handle.close();
     }
-    this.readBytes += read;
-    this.offset += read;
-    this.mtimeMs = info.mtimeMs;
-    this.identity = identity;
-    const data = Buffer.concat([this.tail, chunk.subarray(0, read)]);
+    this.readBytes += chunk.length;
+    this.offset += chunk.length;
+    const data = Buffer.concat([this.tail, chunk]);
     const end = data.lastIndexOf(0x0a);
     if (end < 0) {
       this.tail = data;
@@ -112,16 +122,23 @@ export class SessionFollower {
     if (file === undefined) return undefined;
     const entries = branchEntries(file, file.lanes.get("main") ?? null);
     const view = buildSessionView({ header: file.header, entries });
-    // 用量：子会话与复盘只在第一次读时扫一遍项目（同续接时的起算）；会话自己的从读进来的各分支算，计过的条目不再计
-    if (this.cost === undefined) {
+    // 用量（同续接时的起算）：复盘只在第一次读时扫一遍会话根；子 agent 每次重算（只扫它名下的文件夹）；会话自己的
+    // 从读进来的各分支算，计过的条目不再计
+    if (this.reviews === undefined) {
       try {
-        this.cost = childSessionsCost(sessionsDirOf(this.root), this.sessionId);
+        this.reviews = reviewForksCost(sessionsDirOf(this.root), this.sessionId);
       } catch {
-        this.cost = emptyCostTally();
+        this.reviews = emptyCostTally();
       }
     }
     for (const branch of sessionBranchViews(file)) {
-      mergeCostTally(this.cost, costTallyOfView(branch, this.counted));
+      mergeCostTally(this.own, costTallyOfView(branch, this.counted));
+    }
+    let agents: CostTally;
+    try {
+      agents = subagentsCostIn(listSessionRefs(subagentSessionsDir(this.path, this.sessionId)));
+    } catch {
+      agents = emptyCostTally();
     }
     let mode: RecordedStatus["mode"];
     let contextWindow: number | undefined;
@@ -134,7 +151,9 @@ export class SessionFollower {
       }
     }
     const cost = emptyCostTally();
-    mergeCostTally(cost, this.cost);
+    mergeCostTally(cost, this.reviews);
+    mergeCostTally(cost, this.own);
+    mergeCostTally(cost, agents);
     return {
       restarted,
       lines: historyLinesOfView(view, this.entryChars),

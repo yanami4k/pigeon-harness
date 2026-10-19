@@ -470,6 +470,34 @@ test("决策 505：并发上限占满时，压缩中的子 agent 照样收使用
   assert.match(child.inputs[1] ?? "", /now fix it/);
 });
 
+test("决策 505：上限 1、压缩中收了话、另有排着等名额的：压完的这个先接着干", async () => {
+  const { hub, host, agents } = harness({ maxConcurrent: 1, maxDepth: 3 });
+  await host.spawn({ task: "first", type: "explore" });
+  await tick();
+  agents[0]?.finish("one");
+  await tick();
+  await host.spawn({ task: "second", type: "explore" });
+  await tick();
+  agents[1]?.finish("two");
+  await tick();
+  const [waiting, compacting] = hub.agentsOf("main-session");
+  const waitingFake = agents[0];
+  const compactingFake = agents[1];
+  assert.ok(waiting !== undefined && compacting !== undefined);
+  assert.ok(waitingFake !== undefined && compactingFake !== undefined);
+  const gate = Promise.withResolvers<string>();
+  const compacted = hub.compacting(compacting, () => gate.promise);
+  // 压的期间：它收了使用者的话；另一个有一条待递的通知、等名额
+  assert.equal(hub.sendFromUser(compacting, "now fix it"), undefined);
+  waitingFake.notices.push("a job finished");
+  gate.resolve("compacted");
+  await compacted;
+  await tick();
+  assert.equal(compacting.state, "running", "压完的先接着干");
+  assert.match(compactingFake.inputs.at(-1) ?? "", /now fix it/);
+  assert.equal(waiting.state, "idle", "名额占满，排着的接着等");
+});
+
 test("决策 505：x 与子 agent 视图里的 Esc 能中断压缩：中断它的运行面，状态回到压缩前", async () => {
   const { hub, host, agents } = harness();
   await host.spawn({ task: "find the parser", type: "explore" });
