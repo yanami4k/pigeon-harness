@@ -451,8 +451,8 @@ test("决策 505：/compact 只在停着时压；压的期间来的话排着、�
   assert.match(child.inputs[1] ?? "", /now fix it/);
 });
 
-test("决策 505：x 与子 agent 视图里的 Esc 能中断压缩：中断它的运行面，状态回到压缩前", async () => {
-  const { hub, host, agents } = harness();
+test("决策 505：并发上限占满时，压缩中的子 agent 照样收使用者的话（不挡自己），压完即接着干", async () => {
+  const { hub, host, agents } = harness({ maxConcurrent: 1, maxDepth: 3 });
   await host.spawn({ task: "find the parser", type: "explore" });
   await tick();
   const record = hub.agentsOf("main-session")[0];
@@ -462,12 +462,37 @@ test("决策 505：x 与子 agent 视图里的 Esc 能中断压缩：中断它�
   await tick();
   const gate = Promise.withResolvers<string>();
   const compacted = hub.compacting(record, () => gate.promise);
+  assert.equal(hub.sendFromUser(record, "now fix it"), undefined, "不挡自己");
+  gate.resolve("compacted");
+  await compacted;
+  await tick();
+  assert.equal(record.state, "running");
+  assert.match(child.inputs[1] ?? "", /now fix it/);
+});
+
+test("决策 505：x 与子 agent 视图里的 Esc 能中断压缩：中断它的运行面，状态回到压缩前", async () => {
+  const { hub, host, agents } = harness();
+  await host.spawn({ task: "find the parser", type: "explore" });
+  await tick();
+  const record = hub.agentsOf("main-session")[0];
+  const child = agents[0];
+  assert.ok(record !== undefined && child !== undefined);
+  child.finish("found it");
+  await tick();
+  // 它下面有一个在跑的子 agent：中断压缩不停它
+  await child.spec.agents.spawn({ task: "dig deeper", type: "explore" });
+  await tick();
+  const grandchild = hub.agentsOf("main-session")[1];
+  assert.equal(grandchild?.state, "running");
+  const gate = Promise.withResolvers<string>();
+  const compacted = hub.compacting(record, () => gate.promise);
   await hub.stop(record);
   assert.equal(child.interrupted, 1, "中断了它的运行面（压缩跟着取消）");
+  assert.equal(grandchild?.state, "running", "它下面在跑的照跑");
   assert.equal(record.state, "idle", "不标停下");
   assert.notEqual(record.dormant, true);
   gate.resolve("cancelled");
   await compacted;
   assert.equal(record.compacting, false);
-  assert.equal(hub.busyUnder("main-session"), 0);
+  assert.equal(hub.busyUnder("main-session"), 1, "只剩它下面在跑的那个");
 });

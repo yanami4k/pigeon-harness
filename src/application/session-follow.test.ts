@@ -1,7 +1,16 @@
 // 决策 501：只看历史的视图跟着会话记录——状态取自记录（模式、上下文与用量）；只读追加的部分，写了一半的末行等补齐，
 // 文件变小即从头重读；新的历史行与已画的比出增量
 import assert from "node:assert/strict";
-import { appendFileSync, mkdtempSync, rmSync, statSync, truncateSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  truncateSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
@@ -98,6 +107,24 @@ test("大文件追加时只读增量：写了一半的末行等补齐再算；�
     const reread = await follower.poll();
     assert.ok(reread !== undefined);
     assert.equal(reread.restarted, true, "变小了：从头重读");
+  } finally {
+    await cleanup();
+  }
+});
+
+test("换了一个文件（更大、更新）：认出来从头读，不当成追加", async () => {
+  const { path, follower, cleanup } = await fixture();
+  try {
+    const first = await follower.poll();
+    assert.ok(first !== undefined);
+    const content = readFileSync(path, "utf8");
+    const replacement = `${path}.new`;
+    // 同一份内容再接一遍正文：更大、更新，但是另一个文件
+    writeFileSync(replacement, `${content}${content.split("\n").slice(1).join("\n")}`);
+    renameSync(replacement, path);
+    const next = await follower.poll();
+    assert.ok(next !== undefined);
+    assert.equal(next.restarted, true);
   } finally {
     await cleanup();
   }

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { recordedSessionPath } from "../application/session-follow.ts";
 import type { PooledSessionCard, SessionPanelSource } from "../application/session-pool.ts";
 import { createFixtureSession } from "../application/session-store-fixtures.ts";
@@ -14,7 +14,7 @@ import { ScriptedRuntime } from "./runtime-fixtures.ts";
 import { PigeonTuiShell } from "./shell.ts";
 import { MockTerminal, screenText, settle } from "./testing.ts";
 
-async function makeShell() {
+async function makeShell(historyLimit?: number) {
   const root = mkdtempSync(join(tmpdir(), "pigeon-elsewhere-"));
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-elsewhere-log-"));
   const record = createFixtureSession({ sessionsDir: sessionsDirOf(root), cwd: root });
@@ -67,6 +67,7 @@ async function makeShell() {
     sessionId: newSessionId(),
     logDir,
     recordPollMs: 20,
+    ...(historyLimit !== undefined ? { historyLimit } : {}),
     approvalMode: () => ({
       get: () => mode.current,
       set: (next) => {
@@ -146,7 +147,7 @@ test("内容跟着它的会话记录更新，状态栏是它的模式、上下�
     await settle(200);
     assert.equal(shell.currentView(), "elsewhere");
     assert.match(screenText(term), /第二段回复/);
-    // 离开视图：定时器清掉
+    // 离开视图：跟随的定时器真的清掉了
     assert.equal(shell.followingElsewhere(), true);
     term.input("\x1b");
     await settle();
@@ -204,6 +205,76 @@ test("不收任何输入：消息与命令都回一行、不跳走；连按两�
     term.input("\x1b");
     await settle();
     assert.equal(shell.currentView(), "panel");
+  } finally {
+    await cleanup();
+  }
+});
+
+test("离开视图清掉跟随的定时器（开的那一个）", async () => {
+  const opened: unknown[] = [];
+  const cleared: unknown[] = [];
+  const realSet = globalThis.setInterval;
+  const set = vi.spyOn(globalThis, "setInterval").mockImplementation(((
+    handler: () => void,
+    ms?: number
+  ) => {
+    const timer = realSet(handler, ms);
+    if (ms === 20) opened.push(timer);
+    return timer;
+  }) as typeof setInterval);
+  const realClear = globalThis.clearInterval;
+  const clear = vi.spyOn(globalThis, "clearInterval").mockImplementation(((
+    timer?: ReturnType<typeof setInterval>
+  ) => {
+    cleared.push(timer);
+    realClear(timer);
+  }) as typeof clearInterval);
+  const { shell, term, cleanup } = await makeShell();
+  try {
+    await settle();
+    await openFar(term);
+    assert.equal(opened.length, 1);
+    term.input("\x1b");
+    await settle();
+    assert.equal(shell.currentView(), "panel");
+    assert.ok(cleared.includes(opened[0]), "开的那个定时器清掉了");
+  } finally {
+    set.mockRestore();
+    clear.mockRestore();
+    await cleanup();
+  }
+});
+
+test("跟着记录：工具行先出调用、结果到了原地补上；折叠过的历史照样补对行，超出上限一倍即重新折叠", async () => {
+  const { term, record, cleanup } = await makeShell(4);
+  try {
+    for (let index = 1; index <= 4; index++) record.assistant({ text: `早先的第 ${index} 段` });
+    await record.writer.flush();
+    await settle();
+    await openFar(term);
+    let screen = screenText(term);
+    assert.match(screen, /\[2 earlier lines not shown\]/, "开头折叠了");
+    assert.doesNotMatch(screen, /第一段回复/);
+    record.assistant({ toolCalls: [{ name: "read_file", args: { path: "a.ts" }, id: "tc-a" }] });
+    await record.writer.flush();
+    await settle(200);
+    screen = screenText(term);
+    assert.match(screen, /\$ read_file \{"path":"a\.ts"\}/);
+    assert.doesNotMatch(screen, /-> ok/);
+    record.toolResult({ toolCallId: "tc-a", toolName: "read_file", text: "内容" });
+    await record.writer.flush();
+    await settle(200);
+    screen = screenText(term);
+    assert.match(screen, /\$ read_file \{"path":"a\.ts"\} -> ok/, "结果原地补上");
+    assert.equal(screen.split("$ read_file").length - 1, 1, "没有多出一行");
+    // 接着长：画出来的超出上限一倍（8 行）即重新折叠
+    for (let index = 1; index <= 6; index++) record.assistant({ text: `之后的第 ${index} 段` });
+    await record.writer.flush();
+    await settle(200);
+    screen = screenText(term);
+    assert.match(screen, /\[\d+ earlier lines not shown\]/);
+    assert.doesNotMatch(screen, /\[2 earlier lines not shown\]/, "按新的行数重新折叠");
+    assert.match(screen, /之后的第 6 段/);
   } finally {
     await cleanup();
   }

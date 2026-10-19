@@ -158,6 +158,15 @@ export function isReviewForkOf(view: SessionView, sessionId: string): boolean {
 
 // 续接会话时的已有花费：会话自己 + 它的子 agent + 从它分叉出的复盘（旧 worker 会话不再计入，决策 457）
 export function accumulatedSessionCost(sessionsRoot: string, sessionId: string): CostTally {
+  return sessionCostWith(sessionsRoot, sessionId, true);
+}
+
+// 决策 501：只算它的子 agent 与从它分叉出的复盘（会话自己的由调用方从已读的记录算）
+export function childSessionsCost(sessionsRoot: string, sessionId: string): CostTally {
+  return sessionCostWith(sessionsRoot, sessionId, false);
+}
+
+function sessionCostWith(sessionsRoot: string, sessionId: string, own: boolean): CostTally {
   const tally = emptyCostTally();
   for (const ref of subagentSessionRefs(sessionsRoot, sessionId)) {
     mergeCostTally(tally, branchesCostTally(readSessionBranchViews(ref)));
@@ -174,7 +183,7 @@ export function accumulatedSessionCost(sessionsRoot: string, sessionId: string):
       }
       continue;
     }
-    mergeCostTally(tally, branchesCostTally(readSessionBranchViews(ref)));
+    if (own) mergeCostTally(tally, branchesCostTally(readSessionBranchViews(ref)));
   }
   return tally;
 }

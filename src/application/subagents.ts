@@ -937,7 +937,7 @@ export class AgentHub {
       }
       // 停着的叫不起来（撞了并发上限）：如实说，不排队
       const limit = record.top.endpoint.limits().maxConcurrent;
-      if (!this.#active(record) && this.runningUnder(record.top.endpoint.sessionId) >= limit) {
+      if (!this.#working(record) && this.runningUnder(record.top.endpoint.sessionId) >= limit) {
         return `Error: concurrent sub-agent limit reached (${limit} running); ${to} can't start now. Try again when one finishes.`;
       }
     }
@@ -987,11 +987,10 @@ export class AgentHub {
     }
   }
 
-  // 使用者在界面里停下（x、子 agent 视图里 Esc）；同叫停。决策 505：正在压的中断压缩，它回到压缩前的样子（状态不变）
+  // 使用者在界面里停下（x、子 agent 视图里 Esc）；同叫停。决策 505：正在压的只中断压缩，它回到压缩前的样子（状态不变，
+  // 它下面在跑的照跑）
   async stop(record: SubagentRecord): Promise<void> {
     if (record.compacting === true) {
-      const children = this.#agents.filter((agent) => agent.parent === record);
-      await Promise.all(children.map((child) => this.#halt(child, "stopped")));
       void record.runtime?.interrupt().catch(() => {});
       return;
     }
@@ -1008,7 +1007,8 @@ export class AgentHub {
       return await work();
     } finally {
       record.compacting = false;
-      this.#startIfRoom(record);
+      // 它让出名额：它自己与因名额等着的都看一遍
+      this.#pump();
     }
   }
 
@@ -1057,7 +1057,7 @@ export class AgentHub {
       return `${record.agentName} can't be reached`;
     }
     const limit = record.top.endpoint.limits().maxConcurrent;
-    if (!this.#active(record) && this.runningUnder(record.top.endpoint.sessionId) >= limit) {
+    if (!this.#working(record) && this.runningUnder(record.top.endpoint.sessionId) >= limit) {
       return `concurrent sub-agent limit reached (${limit} running)`;
     }
     if (record.runtime !== undefined) {

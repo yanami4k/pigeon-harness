@@ -1,7 +1,9 @@
 // 决策 501：别的进程开着的会话在本进程里只看它的会话记录——跟着记录的追加更新内容与状态栏（模式、上下文与用量）。
-// 只读追加的部分：记住读到的偏移，新追加的整行喂进解析器（写了一半的末行留到下次）；文件变小或修改时刻倒退（被截断、换了）
-// 才从头重读。读文件是异步的，不卡界面。子会话与复盘的花费只在第一次读时扫一遍项目，之后只累加这个文件新增的用量
+// 只读追加的部分：记住读到的偏移，新追加的整行喂进解析器（写了一半的末行留到下次）；文件变小、修改时刻倒退、或换了一个文件
+//（inode 或创建时刻变了）才从头重读。读文件是异步的，不卡界面。子会话与复盘的花费只在第一次读时扫一遍项目；会话自己的
+// 用量只从读进来的条目算（各分支，按条目计过的不再计）
 import { open, stat } from "node:fs/promises";
+import { sessionBranchViews } from "../persistence/session-catalog.ts";
 import {
   branchEntries,
   locateSessionFile,
@@ -13,8 +15,8 @@ import { sessionsDirOf } from "../state/paths.ts";
 import { buildSessionView } from "../state/session-view.ts";
 import { DEFAULT_HISTORY_ENTRY_CHARS, type HistoryLine, historyLinesOfView } from "./history.ts";
 import {
-  accumulatedSessionCost,
   type CostTally,
+  childSessionsCost,
   costTallyOfView,
   emptyCostTally,
   mergeCostTally,
@@ -50,6 +52,8 @@ export class SessionFollower {
   private parser: SessionFileParser;
   private offset = 0;
   private mtimeMs = 0;
+  // 读的是哪一个文件（换了文件即从头读）
+  private identity = "";
   // 写了一半的末行（字节，等下次补齐）
   private tail: Buffer = Buffer.alloc(0);
   private cost: CostTally | undefined;
@@ -76,8 +80,10 @@ export class SessionFollower {
   // 看一次：没有新的整行为 undefined；读不到（文件没了、目录被删）照常抛，调用方停在原样、下次再看
   async poll(): Promise<FollowUpdate | undefined> {
     const info = await stat(this.path);
+    const identity = `${info.ino}:${info.birthtimeMs}`;
     const first = this.offset === 0 && this.cost === undefined;
-    const restarted = first || info.size < this.offset || info.mtimeMs < this.mtimeMs;
+    const restarted =
+      first || info.size < this.offset || info.mtimeMs < this.mtimeMs || identity !== this.identity;
     if (restarted && !first) this.restart();
     if (!restarted && info.size === this.offset) return undefined;
     const length = info.size - this.offset;
@@ -92,6 +98,7 @@ export class SessionFollower {
     this.readBytes += read;
     this.offset += read;
     this.mtimeMs = info.mtimeMs;
+    this.identity = identity;
     const data = Buffer.concat([this.tail, chunk.subarray(0, read)]);
     const end = data.lastIndexOf(0x0a);
     if (end < 0) {
@@ -105,16 +112,16 @@ export class SessionFollower {
     if (file === undefined) return undefined;
     const entries = branchEntries(file, file.lanes.get("main") ?? null);
     const view = buildSessionView({ header: file.header, entries });
-    // 用量：第一次读时连同子会话与复盘扫一遍项目（同续接时的起算），这个文件里已有的条目记为计过；之后只累加新增的
-    const own = costTallyOfView(view, this.counted);
+    // 用量：子会话与复盘只在第一次读时扫一遍项目（同续接时的起算）；会话自己的从读进来的各分支算，计过的条目不再计
     if (this.cost === undefined) {
       try {
-        this.cost = accumulatedSessionCost(sessionsDirOf(this.root), this.sessionId);
+        this.cost = childSessionsCost(sessionsDirOf(this.root), this.sessionId);
       } catch {
-        this.cost = own;
+        this.cost = emptyCostTally();
       }
-    } else {
-      mergeCostTally(this.cost, own);
+    }
+    for (const branch of sessionBranchViews(file)) {
+      mergeCostTally(this.cost, costTallyOfView(branch, this.counted));
     }
     let mode: RecordedStatus["mode"];
     let contextWindow: number | undefined;

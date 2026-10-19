@@ -51,7 +51,12 @@ import {
 import { compactionNoticeText, manualCompactionText } from "../application/compaction-text.ts";
 import { type ConfigItemView, parseConfigAssignment } from "../application/config-options.ts";
 import { failureLine, plural, workEndLine } from "../application/format.ts";
-import { type HistoryLine, limitHistory, loadSessionHistory } from "../application/history.ts";
+import {
+  DEFAULT_HISTORY_LIMIT,
+  type HistoryLine,
+  limitHistory,
+  loadSessionHistory,
+} from "../application/history.ts";
 import type { HookEventReport } from "../application/hooks.ts";
 import type { PromptHistoryStore } from "../application/prompt-history.ts";
 import { listRecentMainSessions } from "../application/recent-sessions.ts";
@@ -450,6 +455,8 @@ interface ElsewhereSession {
   // 已画的全部历史行（不折叠）与其中画出来的工具行的组件（按行号）
   drawn: HistoryLine[];
   tools: Map<number, HistoryToolLine>;
+  // 画在消息区里的历史行数（跟着记录接在后面的也算）
+  shown: number;
   status: RecordedStatus;
   timer?: ReturnType<typeof setInterval>;
   // 上一次看还没回来
@@ -2109,6 +2116,7 @@ export class PigeonTuiShell
         : {}),
       drawn: [],
       tools: new Map(),
+      shown: 0,
       status: { cost: emptyCostTally() },
       polling: false,
       refusals: [],
@@ -2153,7 +2161,12 @@ export class PigeonTuiShell
           delta.added,
           session.flow.addHistory(delta.added)
         );
+        session.shown += delta.added.length;
         session.drawn = update.lines;
+        // 一直跟着时消息区不无限变长：画出来的超出上限一倍即整份重画（读进来的已在内存里，不再读文件）
+        if (session.shown > 2 * (this.options.historyLimit ?? DEFAULT_HISTORY_LIMIT)) {
+          this.redrawElsewhere(session, update.lines);
+        }
       }
       session.status = update.status;
       this.updateStatus();
@@ -2170,6 +2183,7 @@ export class PigeonTuiShell
     session.flow.clear();
     session.tools.clear();
     const shown = limitHistory(lines, this.options.historyLimit);
+    session.shown = shown.length;
     // 折叠了的第一行是提示，其后与 lines 的末段一一对应：shown 的第 k 行即 lines 的第 (lines.length - shown.length + k) 行
     this.trackTools(session, lines.length - shown.length, shown, session.flow.addHistory(shown));
     for (const line of session.refusals) session.flow.addSystem(line);
@@ -2979,30 +2993,46 @@ export class PigeonTuiShell
     if (this.view === "panel") this.sessionPanel.setNote(line);
   }
 
-  // 决策 505：/resume 的宿主——说明与报错写在正在看的视图里（子 agent 视图里敲的写在那里；换到新会话之后即主视图）
+  // 决策 505：/resume 的宿主。主视图等处敲的照旧写当前会话的消息区；子 agent 视图里敲的：开始续接之前的说明（用法、已在这个
+  // 会话里等）写在那里，续接期间的说明先攒着——换绑成了即写进新会话的主视图（接在历史之前，同主视图里续接），没成即连同报错
+  // 写回那个子 agent 视图
   private resumeHost(): ResumeViewHost<TuiSessionBinding> {
+    if (this.view !== "agent") return this;
+    const held: Array<{ line: string; alert: boolean }> = [];
+    let holding = false;
     const say = (line: string, alert: boolean): void => {
-      if (this.view !== "agent") {
-        if (alert) this.addAlert(line);
-        else this.addSystem(line);
-      } else if (alert) {
-        this.viewFlow().addAlert(line);
-      } else {
-        this.viewFlow().addSystem(line);
-      }
+      const flow = this.viewFlow();
+      if (alert) flow.addAlert(line);
+      else flow.addSystem(line);
+    };
+    const write = (line: string, alert: boolean): void => {
+      if (holding) held.push({ line, alert });
+      else say(line, alert);
+    };
+    const release = (): void => {
+      holding = false;
+      for (const item of held.splice(0)) say(item.line, item.alert);
     };
     return {
       isStarted: () => this.isStarted(),
-      addSystem: (line) => say(line, false),
-      addAlert: (line) => say(line, true),
+      addSystem: (line) => write(line, false),
+      addAlert: (line) => write(line, true),
       addHistoryLines: (lines) => this.addHistoryLines(lines),
       render: () => this.render(),
       updateStatus: () => this.updateStatus(),
-      setResuming: (resuming) => this.setResuming(resuming),
+      setResuming: (resuming) => {
+        if (resuming) holding = true;
+        else release();
+        this.setResuming(resuming);
+      },
       sessionId: () => this.sessionId(),
       resumeOptions: () => this.resumeOptions(),
       historyLimit: () => this.historyLimit(),
-      rebindSession: (sessionId, binding) => this.rebindSession(sessionId, binding),
+      rebindSession: (sessionId, binding) => {
+        this.rebindSession(sessionId, binding);
+        // 换到了新会话的主视图：攒着的说明写在这里
+        release();
+      },
       pooledSessionIds: () => this.pooledSessionIds(),
     };
   }

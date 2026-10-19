@@ -33,7 +33,7 @@ function record(name: string, state: SubagentRecord["state"]): SubagentRecord {
   } as unknown as SubagentRecord;
 }
 
-async function makeShell(open = true) {
+async function makeShell(open = true, resumable = false) {
   const root = mkdtempSync(join(tmpdir(), "pigeon-agent-view-"));
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-agent-view-log-"));
   const file = join(root, "a.txt");
@@ -86,6 +86,11 @@ async function makeShell(open = true) {
   old.assistant({ text: "旧的回复" });
   old.endRun();
   await old.close();
+  // 一个中途被打断的会话（续接时报"工具调用中断"）
+  const broken = createFixtureSession({ sessionsDir: sessionsDirOf(root), cwd: root });
+  broken.startRun({ task: "跑一半" });
+  broken.assistant({ toolCalls: [{ name: "run_command", args: { command: "make" } }] });
+  await broken.close();
   const source: SessionPanelSource = {
     list: () => [],
     subscribe: () => () => {},
@@ -105,9 +110,10 @@ async function makeShell(open = true) {
     agents: face,
     resume: {
       root,
-      rebind: () => {
+      rebind: (id) => {
         calls.push("rebind");
-        throw new Error("unused");
+        if (!resumable) throw new Error("unused");
+        return { runtime: new ScriptedRuntime(id), root };
       },
     },
     grants: { root, store: new SessionGrantStore({ workspaceRoot: root }), configRules: [] },
@@ -161,6 +167,7 @@ async function makeShell(open = true) {
     term,
     agent,
     mainSessionId,
+    brokenSessionId: broken.sessionId,
     root,
     store,
     calls,
@@ -358,6 +365,27 @@ test("决策 505：子 agent 视图里 /resume、/new 的说明与报错写在�
     await settle();
     assert.equal(shell.currentView(), "agent", "关掉列表回到打开它的子 agent 视图");
     assert.match(screenText(term), /sub-agent: general-1 done/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("决策 505：子 agent 视图里 /resume 续接成了——续接时的说明写进新会话的主视图（接在历史之前），不随子 agent 视图丢掉", async () => {
+  const { shell, term, brokenSessionId, calls, cleanup } = await makeShell(true, true);
+  try {
+    await settle();
+    await enterAgent(term);
+    await command(term, `/resume ${brokenSessionId}`);
+    await settle();
+    assert.deepEqual(calls, ["rebind"]);
+    assert.equal(shell.currentView(), "main");
+    const screen = screenText(term);
+    assert.match(screen, /1 tool call interrupted, results unknown: run_command/);
+    assert.match(screen, /--- resumed ---/);
+    assert.ok(
+      screen.indexOf("tool call interrupted") < screen.indexOf("--- resumed ---"),
+      "说明在历史之前"
+    );
   } finally {
     cleanup();
   }

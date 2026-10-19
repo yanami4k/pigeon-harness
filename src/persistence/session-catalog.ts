@@ -12,6 +12,7 @@ import {
   listSessionFiles,
   readSessionFile,
   type SessionFileRef,
+  type SessionFileView,
 } from "./session-reader.ts";
 
 const PIGEON_SESSION_ID = /^sess_[0-9A-HJKMNP-TV-Z]{26}$/;
@@ -57,9 +58,11 @@ export function readSessionView(ref: Pick<SessionFileRef, "path">): SessionView 
 // 各视图从根到各自的叶子，共有的前段在每个视图里都有，按条目号去重由调用方做
 export function readSessionBranchViews(ref: Pick<SessionFileRef, "path">): SessionView[] {
   const file = readSessionFile(ref.path);
-  if (file === undefined) {
-    return [];
-  }
+  return file === undefined ? [] : sessionBranchViews(file);
+}
+
+// 同上，取已经读好（或逐行解析到此为止）的会话文件
+export function sessionBranchViews(file: SessionFileView): SessionView[] {
   const main = file.lanes.get("main") ?? null;
   const parents = new Set<string>();
   for (const entry of file.entries) {
