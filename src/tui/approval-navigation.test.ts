@@ -12,7 +12,7 @@ import { ScriptedRuntime } from "./runtime-fixtures.ts";
 import { APPROVAL_BEFORE_SWITCH, PigeonTuiShell } from "./shell.ts";
 import { MockTerminal, screenText, settle } from "./testing.ts";
 
-function makeShell() {
+function makeShell(runtime = new ScriptedRuntime(newSessionId())) {
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-approval-nav-"));
   const term = new MockTerminal(110, 34);
   const agent = {
@@ -28,6 +28,9 @@ function makeShell() {
   } as unknown as SubagentRecord;
   const stopped: string[] = [];
   const entered: string[] = [];
+  const spawned: string[] = [];
+  const peeked: string[] = [];
+  const halted: string[] = [];
   const other: PooledSessionCard = {
     id: "sess_other",
     name: "other",
@@ -40,17 +43,23 @@ function makeShell() {
   const source: SessionPanelSource = {
     list: () => [other],
     subscribe: () => () => {},
-    spawn: async () => {
+    spawn: async (task) => {
+      spawned.push(task);
       throw new Error("unused");
     },
     send: async () => undefined,
-    stop: async () => {},
+    stop: async (id) => {
+      halted.push(id);
+    },
     remove: async () => {},
-    peek: async () => [],
+    peek: async (id) => {
+      peeked.push(id);
+      return [];
+    },
   };
   const shell = new PigeonTuiShell({
     terminal: term,
-    runtime: new ScriptedRuntime(newSessionId()),
+    runtime,
     sessionId: newSessionId(),
     logDir,
     sessionName: () => "demo-main",
@@ -78,6 +87,9 @@ function makeShell() {
     term,
     stopped,
     entered,
+    spawned,
+    peeked,
+    halted,
     cleanup: () => {
       shell.stop();
       rmSync(logDir, { recursive: true, force: true });
@@ -171,7 +183,7 @@ test("审批挂着：r 写拒绝理由时按键照旧交给输入区（方向键
   }
 });
 
-test("审批是面板里别的会话的（写明来源）：换会话不拦", async () => {
+test("审批是面板里别的会话的（写明来源）：同样先答完再换（换了当前会话，排在后面的审批会标错来源）", async () => {
   const { shell, term, entered, cleanup } = makeShell();
   try {
     await settle();
@@ -189,9 +201,67 @@ test("审批是面板里别的会话的（写明来源）：换会话不拦", as
     term.input("\x1b[B");
     term.input("\r");
     await settle();
-    assert.deepEqual(entered, ["sess_other"]);
+    assert.deepEqual(entered, []);
+    assert.match(screenText(term), new RegExp(APPROVAL_BEFORE_SWITCH));
   } finally {
     cleanup();
+  }
+});
+
+test("审批挂着、当前这一轮在跑：Esc 不中断这一轮；面板里空格、Ctrl+X 与带着字的 Enter 都归审批；子 agent 面板里 x 照常停下它", async () => {
+  const runtime = new ScriptedRuntime(newSessionId());
+  const { shell, term, stopped, spawned, peeked, halted, cleanup } = makeShell(runtime);
+  try {
+    await settle();
+    runtime.autoResolve = false;
+    term.input("跑一件");
+    term.input("\r");
+    await settle();
+    // 审批来之前输入框里已经有字
+    term.input("先打的字");
+    void shell.askApproval({
+      toolName: "run_command",
+      toolCallId: "t4",
+      args: { command: "npm test" },
+    });
+    await settle();
+    term.input("\x1b");
+    await settle();
+    assert.equal(runtime.interrupts, 0, "Esc 不中断在跑的这一轮");
+    term.input("\x15");
+    await settle();
+    assert.equal(shell.inputText(), "先打的字", "Ctrl+U 也归审批，输入框不动");
+    // 回到空输入框的状态才能用两下 ← 与 ↓：用 /panel 前就有字的情况看 Enter
+    shell.openPanel();
+    await settle();
+    term.input("\x1b[B");
+    term.input("\r");
+    term.input(" ");
+    term.input("\x18");
+    await settle();
+    assert.deepEqual(spawned, [], "带着字的 Enter 不派会话");
+    assert.deepEqual(peeked, [], "空格不偷看");
+    assert.deepEqual(halted, [], "Ctrl+X 不停");
+    runtime.finishAll();
+  } finally {
+    cleanup();
+  }
+  const second = makeShell();
+  try {
+    await settle();
+    void second.shell.askApproval({
+      toolName: "run_command",
+      toolCallId: "t5",
+      args: { command: "npm test" },
+    });
+    await settle();
+    second.term.input("\x1b[B");
+    await settle();
+    second.term.input("x");
+    await settle();
+    assert.deepEqual(second.stopped, ["general-1"], "子 agent 面板里 x 照常停下它");
+  } finally {
+    second.cleanup();
   }
 });
 

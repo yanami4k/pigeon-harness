@@ -1921,6 +1921,8 @@ export class PigeonTuiShell
   private approvalNavigation(data: string): boolean {
     const pending = this.pendingApprovalState;
     if (pending === null || pending.trust !== undefined || this.reasonModeOn) return false;
+    // 决策 508 列的视图：主代理、子 agent、会话面板、只看历史的（回退列表、设置与续接列表照旧归审批）
+    if (!["main", "agent", "panel", "elsewhere"].includes(this.view)) return false;
     const keys = ["up", "down", "left", "right", "escape"] as const;
     if (keys.some((key) => matchesKey(data, key))) return true;
     if (matchesKey(data, "enter")) return this.input.getText() === "";
@@ -2075,21 +2077,27 @@ export class PigeonTuiShell
       (other) => other.elsewhere !== true && !other.id.startsWith("pending:")
     );
     const enter = this.options.pool?.enter;
+    // 换到新的空会话：被去掉的会话退回来的排队内容不带过去
+    const fresh = (): void =>
+      this.startNewSession({ kind: "new" }, () => this.dropFromPanel(card), {
+        before: () => {
+          this.heldQueue.length = 0;
+        },
+      });
     if (next === undefined || enter === undefined) {
-      this.startNewSession({ kind: "new" }, () => this.dropFromPanel(card));
+      fresh();
       return;
     }
     this.sessionPanel.closePeek();
+    // 下一个会话进不去（停下了、开不成等）：开一个新的空会话
     enter(next.id).then(
       (refusal) => {
-        if (refusal !== undefined) this.sessionPanel.setNote(refusal);
+        if (refusal !== undefined) fresh();
         else this.dropFromPanel(card);
         this.tui.requestRender();
       },
-      (error: unknown) => {
-        this.sessionPanel.setNote(
-          `opening ${next.name} failed: ${error instanceof Error ? error.message : String(error)}`
-        );
+      () => {
+        fresh();
         this.tui.requestRender();
       }
     );
@@ -2273,8 +2281,9 @@ export class PigeonTuiShell
       this.sessionPanel.setNote(busy);
       return;
     }
-    // 决策 508：当前会话（连同它的子 agent）的审批挂着：先答完再换会话（审批区只有一个，换走它就没处答了）
-    if (this.pendingApprovalState?.mainWaiting !== undefined) {
+    // 决策 508：有审批挂着（不论是哪个会话的）先答完再换会话。审批的来源标签、卡片的等待标记与结论行的去处都在请求时按
+    // 那时的当前会话定好；换了当前会话，挂着的与排在后面的审批就会标错来源（看着像别的会话的）
+    if (this.pendingApprovalState !== null) {
       this.sessionPanel.setNote(APPROVAL_BEFORE_SWITCH);
       return;
     }
@@ -3169,18 +3178,33 @@ export class PigeonTuiShell
     this.startNewSession(request);
   }
 
-  // 开一个新会话并换过去；换成了之后调 after（决策 507：去掉当前会话之后补一个空会话）
-  private startNewSession(request: NewSessionRequest, after?: () => void): void {
+  // 开一个新会话并换过去；before 在换过去之前、after 在换成了之后调（决策 507：去掉当前会话之后补一个空会话）
+  private startNewSession(
+    request: NewSessionRequest,
+    after?: () => void,
+    hooks: { before?: () => void } = {}
+  ): void {
+    // 说明写在正在看的地方（子 agent 视图里即那里，会话面板上另写在面板的说明行）
+    const say = (line: string, alert = false): void => {
+      if (this.view === "agent") {
+        if (alert) this.viewFlow().addAlert(line);
+        else this.viewFlow().addSystem(line);
+      } else if (alert) {
+        this.addAlert(line);
+      } else {
+        this.addSystem(line);
+      }
+    };
     // 决策 484：换会话与 /resume、进入面板里的会话同一道守卫（收尾、回退、重读设置、压缩进行中不给换）
     const blocked = this.handOffBlocked();
     if (blocked !== undefined) {
-      this.viewFlow().addSystem(blocked);
+      say(blocked);
       return;
     }
     const create = this.options.newSession?.create;
     const command = request.kind === "clear" ? "clear" : "new";
     if (create === undefined) {
-      this.viewFlow().addSystem(`/${command} is not available in this session`);
+      say(`/${command} is not available in this session`);
       return;
     }
     // 换手期间与 /resume 同样占住输入
@@ -3189,12 +3213,13 @@ export class PigeonTuiShell
     this.render();
     const finish = (error?: unknown): void => {
       this.setResuming(false);
-      if (error !== undefined) this.viewFlow().addAlert(failureLine(command, error));
+      if (error !== undefined) say(failureLine(command, error), true);
       this.updateStatus();
       this.render();
     };
     void create(request).then(
       (created) => {
+        hooks.before?.();
         // 新会话的 SessionStart 按 startup（不是续跑），花费从零起算
         this.rebindSession(created.sessionId, created.binding, {
           source: "startup",
@@ -3533,7 +3558,11 @@ export class PigeonTuiShell
     // 决策 442：设置面板开着时它独占方向键与回车
     if (this.configPanel.isOpen()) return undefined;
     // 有一方接管了 Esc（/memory edit 排队保存时）：Esc 归它，排在视图与取消键之前
-    if (this.escapeCapture !== undefined && matchesKey(data, "escape")) {
+    if (
+      this.escapeCapture !== undefined &&
+      matchesKey(data, "escape") &&
+      this.pendingApprovalState === null
+    ) {
       this.escapeCapture();
       return { consume: true };
     }

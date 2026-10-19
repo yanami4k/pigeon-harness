@@ -633,6 +633,50 @@ test("决策 507：当前会话两秒内第二下 Ctrl+X 从面板去掉——�
   }
 });
 
+test("决策 507：下一个会话进不去（停下了等）——改开一个新的空会话，再去掉原来的", async () => {
+  const requests: unknown[] = [];
+  const fresh = newSessionId();
+  const { shell, term, pool, finishers, cleanup } = makeShell({
+    sessionName: () => "demo-main",
+    newSession: {
+      create: async (request) => {
+        requests.push(request);
+        return { sessionId: fresh, binding: { runtime: new ScriptedRuntime(fresh) } };
+      },
+    },
+  });
+  const removed: string[] = [];
+  const remove = pool.remove.bind(pool);
+  pool.remove = async (id) => {
+    removed.push(id);
+    await remove(id);
+  };
+  try {
+    await settle();
+    const before = shell.sessionId();
+    term.input("/panel");
+    term.input("\r");
+    await settle();
+    term.input("修登录");
+    term.input("\r");
+    await settle();
+    finishers[0]?.("好了");
+    await settle();
+    // 让面板里那个会话进不去：从池子里取走
+    pool.detach("sess_pool1");
+    shell.openPanel(before);
+    await settle();
+    term.input(CTRL_X);
+    term.input(CTRL_X);
+    await settle();
+    assert.deepEqual(requests, [{ kind: "new" }]);
+    assert.equal(shell.sessionId(), fresh);
+    assert.deepEqual(removed, [before]);
+  } finally {
+    cleanup();
+  }
+});
+
 test("决策 507：面板里没有别的会话时去掉当前会话——开一个新的空会话（同不带路径的 /new）", async () => {
   const requests: unknown[] = [];
   const fresh = newSessionId();
