@@ -1088,8 +1088,8 @@ test("决策 509：挂着审批、这一轮在跑时进入面板里的会话—�
   }
 });
 
-test("决策 509：写拒绝理由途中进入面板里别的会话——理由作废、从输入框收掉；换回来审批还在，按 r 重写", async () => {
-  const { shell, term, finishers, cleanup } = makeShell({
+test("决策 509：写拒绝理由途中换到别的会话——理由作废、从输入框收掉；换回来审批还在，按 r 重写", async () => {
+  const { shell, term, pool, finishers, cleanup } = makeShell({
     sessionName: (id) => (id.startsWith("sess_pool") ? "s1" : "demo-main"),
   });
   try {
@@ -1115,11 +1115,14 @@ test("决策 509：写拒绝理由途中进入面板里别的会话——理由�
     term.input("half a reason");
     await settle();
     assert.equal(shell.inputText(), "half a reason");
-    // 进入别的会话（真实路径）
-    shell.openPanel("sess_pool1");
-    await settle();
-    term.input("\x15");
-    term.input("\r");
+    // 写理由时按键都归输入区，换会话只能由程序做（进入面板里会话的同一条路：取出、交出这一轮、换过去）
+    const out = pool.detach("sess_pool1");
+    assert.ok(out !== undefined);
+    shell.switchSession(
+      "sess_pool1" as SessionId,
+      { runtime: new ScriptedRuntime("sess_pool1" as SessionId) },
+      shell.handOff()
+    );
     await settle();
     assert.equal(shell.sessionId(), "sess_pool1");
     assert.equal(shell.inputText(), "", "理由从输入框收掉");
@@ -1177,7 +1180,7 @@ test("决策 509：面板里对当前会话 Ctrl+X 中断这一轮时撤回它�
   }
 });
 
-test("决策 509：面板里会话的偷看按审批单写明在等什么（它在前台时提出的审批也算）", async () => {
+test("决策 509：面板里会话的偷看按壳里的审批单写明在等什么（不靠会话池记的等待）", async () => {
   const { shell, term, finishers, cleanup } = makeShell({
     sessionName: (id) => (id.startsWith("sess_pool") ? "s1" : "demo-main"),
   });

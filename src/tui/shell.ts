@@ -945,6 +945,8 @@ export class PigeonTuiShell
     for (const entry of this.approvals.splice(0)) {
       entry.pending.resolve({ key: "cancel", reason: APPROVAL_CANCEL_CLOSED });
     }
+    // 排在审批后面等着的确认：放行（壳已停，它随即按这次不用收口）
+    for (const resolve of this.approvalFreeWaiters.splice(0)) resolve();
     if (this.exitHintTimer !== undefined) {
       clearTimeout(this.exitHintTimer);
       this.exitHintTimer = undefined;
@@ -3086,9 +3088,10 @@ export class PigeonTuiShell
 
   // 面板里别的会话的偷看：它有挂着的审批即写明在等什么（审批单现算，在前台时提出的也算）
   private pooledPeekLines(id: string): string[] {
-    const lines = this.peekCache.get(id) ?? [];
+    // 取来的那份里的等待说明可能已经过时（撤回、答了）：一律去掉，按审批单现算
+    const lines = (this.peekCache.get(id) ?? []).filter((line) => !line.startsWith("waiting: "));
     const waiting = this.waitingOf(id);
-    if (waiting === undefined || lines.some((line) => line.startsWith("waiting: "))) return lines;
+    if (waiting === undefined) return lines;
     return [...lines.slice(0, 1), `waiting: ${waiting}`, ...lines.slice(1)];
   }
 

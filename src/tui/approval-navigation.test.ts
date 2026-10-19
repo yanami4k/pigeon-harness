@@ -169,7 +169,7 @@ test("主代理的审批只在主代理视图里：打字不进输入框；子 a
 });
 
 test("子 agent 的审批：主代理视图与它自己的视图都显示（标明是哪个子 agent），别的子 agent 视图不显示；在它的视图里答掉两处都收，结论只写在它的视图里；在主视图里答的主视图也留一行", async () => {
-  const { shell, term, sessionId, waiting, sent, cleanup } = makeShell();
+  const { shell, term, sessionId, sent, cleanup } = makeShell();
   try {
     await settle();
     const firstRequest = request("make build", { sessionId, subagent: { path: "general-1" } });
@@ -531,6 +531,10 @@ test("写拒绝理由途中那条被撤回：理由作废、从输入框收掉�
     await settle();
     assert.equal(shell.reasonMode(), false);
     assert.equal(shell.inputText(), "");
+    // 回车不作数：没有可拒的，也不把空行当成别的输入
+    term.input("\r");
+    await settle();
+    assert.equal(shell.reasonMode(), false);
   } finally {
     cleanup();
   }
