@@ -221,6 +221,18 @@ export class SessionPanel implements Component {
     this.note = "";
   }
 
+  // 决策 507：面板里它下面的那张卡（没有即上面的）；usable 不认的跳过（准备中、别的进程开着的等）
+  neighborOf(
+    id: string,
+    usable: (card: PooledSessionCard) => boolean
+  ): PooledSessionCard | undefined {
+    const cards = this.ordered();
+    const index = cards.findIndex((card) => card.id === id);
+    const below = cards.slice(index + 1).find(usable);
+    if (below !== undefined) return below;
+    return cards.slice(0, Math.max(0, index)).reverse().find(usable);
+  }
+
   // 决策 490：刚派出的会话——按占位的会话号选中，开好之后会话号换了按 currentId 找回
   followSpawn(id: string): void {
     this.selectedId = id;

@@ -763,8 +763,9 @@ export async function main(argv: string[]): Promise<void> {
     memoryContext.governanceRoot = current.governanceRoot;
     memoryContext.limits = memoryLimitsOf(snapshot);
     loopGuard = loopGuardSettingsOf(snapshot);
-    // 键位跟着当前会话所在项目的设置
+    // 键位与滚轮速度跟着当前会话所在项目的设置
     shellHolder.current?.applyKeybindings(keybindingsSectionOf(snapshot));
+    shellHolder.current?.applyWheelScroll();
   }
   const bundleOf = (): RuntimeBundle => coreBundle(current);
   const bindingOf = (core: SessionCore) => {
@@ -987,6 +988,8 @@ export async function main(argv: string[]): Promise<void> {
     approvalMode: () => current.opened?.bundle.approvalMode,
     // 决策 470：输入框为空时按两下 ← 打开会话面板（设置可关；/reload 后取新的）
     leftArrowOpensPanel: () => settingsOfCore(current).merged.tui?.leftArrowOpensPanel !== false,
+    // 决策 506：滚轮一格滚几行
+    wheelScrollLines: () => settingsOfCore(current).merged.tui?.wheelScrollLines,
     sessionId: startCore.sessionId,
     // 决策 325：终端界面日志在程序状态目录下
     logDir: tuiLogDirOf(governanceRoot),
@@ -1125,8 +1128,9 @@ export async function main(argv: string[]): Promise<void> {
     setProjectSettings(core.governanceRoot, snapshot);
     // 决策 480：子 agent 的类型随 /reload 重读
     catalogs.delete(rootKey(core.governanceRoot));
-    // 决策 439：键位随新快照重装
+    // 决策 439：键位随新快照重装；决策 506：滚轮速度同样
     shellHolder.current?.applyKeybindings(keybindingsSectionOf(snapshot));
+    shellHolder.current?.applyWheelScroll();
     loopGuard = reloaded.loopGuard;
     // 决策 350：换走旧运行面之前先等它未完成的快照拍完（新运行面在同一工作区上接着改文件）
     await core.opened?.checkpoints?.settle();

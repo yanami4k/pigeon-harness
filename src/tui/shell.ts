@@ -107,6 +107,7 @@ import type { RunId, SessionId } from "../state/ids.ts";
 import type { TurnCompletedPayload } from "../state/runtime-events.ts";
 import { RuntimeEventKind } from "../state/runtime-events.ts";
 import type { RewindMode, RunStopCause } from "../state/session-entries.ts";
+import { DEFAULT_WHEEL_SCROLL_LINES } from "../state/settings.ts";
 import { toolResultModelUsage } from "../state/tool-usage.ts";
 import { AgentPanel, agentActive, agentLabel, agentStateWord, MAIN_ROW } from "./agent-panel.ts";
 import { openExternalUrl, PigeonAltScreen, TrimmedTranscript } from "./alt-screen.ts";
@@ -255,6 +256,8 @@ export interface TuiShellOptions {
   approvalMode?: () => ApprovalModeControl | undefined;
   // 决策 470：输入框为空时按两下 ← 打开会话面板（设置 tui.leftArrowOpensPanel，每次现取）；缺省开着
   leftArrowOpensPanel?: () => boolean;
+  // 决策 506：滚轮一格滚几行（设置 tui.wheelScrollLines，现取；缺省 3）
+  wheelScrollLines?: () => number | undefined;
   // 决策 501：只看历史的会话多久看一次它的会话记录有没有追加（毫秒；缺省 1000，测试改小）
   recordPollMs?: number;
   // 决策 286：主 agent 的模型接入（DeepSeek 回复自带价格为 0 时按官方人民币价目计会话花费）；缺省不另计价
@@ -434,6 +437,8 @@ const APPROVAL_CHROME_ROWS = 10;
 
 // 决策 470：按 ← 打开面板的第一下在状态行的提示（ASCII：箭头字符在中文环境下宽度不定）
 const PANEL_HINT = "press Left again to open the panel";
+// 决策 508：当前会话的审批挂着时不换会话
+export const APPROVAL_BEFORE_SWITCH = "answer the pending approval before switching sessions";
 
 // 决策 505：要它的运行面才能做的代理级命令（续接认回、还没重开运行面的子 agent 上回一句它没开着）
 const AGENT_RUNTIME_COMMANDS = new Set([
@@ -517,7 +522,7 @@ export class PigeonTuiShell
   private exitConfirmed = false;
   private agentRetainTimer: ReturnType<typeof setTimeout> | undefined;
   // 决策 458：对当前会话的两次 Ctrl+X 须落在同一次工作上（work 为那次工作的开始时刻）
-  private lastPanelStop: { id: string; at: number; work?: number | null | undefined } | undefined;
+  private lastPanelStop: { id: string; at: number } | undefined;
 
   // 决策 458：在面板里中断主会话时留着的排队内容（回到主视图时放进输入框）
   private heldQueue: string[] = [];
@@ -654,6 +659,8 @@ export class PigeonTuiShell
       openUrl: (url) => {
         (this.options.openUrl ?? openExternalUrl)(url);
       },
+      // 决策 506
+      wheelScrollLines: options.wheelScrollLines?.() ?? DEFAULT_WHEEL_SCROLL_LINES,
     });
     // 决策 490：`/take ` 的参数候选由输入框的补全列表给（pi-tui 的 getArgumentCompletions），
     // 不再另开一个整屏列表
@@ -789,6 +796,16 @@ export class PigeonTuiShell
   // 决策 439：/reload 之后按新快照重装键位表
   applyKeybindings(section: Record<string, string | string[]> | undefined): void {
     for (const line of installKeybindings(section)) this.flow.addSystem(line);
+  }
+
+  // 决策 506：按设置重定滚轮一格滚几行（/config 改了、/reload、换到别的项目的会话之后）
+  applyWheelScroll(): void {
+    this.tui.setWheelScrollLines(this.options.wheelScrollLines?.() ?? DEFAULT_WHEEL_SCROLL_LINES);
+  }
+
+  // 滚轮一格现在滚几行（测试用）
+  wheelScrollLines(): number {
+    return this.tui.wheelLines();
   }
 
   // 决策 441：Ctrl+C 在有拖选的选区时复制选区（不计退出布防）
@@ -1899,6 +1916,17 @@ export class PigeonTuiShell
     this.tui.requestRender();
   }
 
+  // 决策 508：审批挂着时照常可用的导航键——方向键、Esc、输入框为空时的 Enter、子 agent 面板里的 x；写拒绝理由时与确认别的
+  // 工作区的设置时不算（按键照旧归它们）
+  private approvalNavigation(data: string): boolean {
+    const pending = this.pendingApprovalState;
+    if (pending === null || pending.trust !== undefined || this.reasonModeOn) return false;
+    const keys = ["up", "down", "left", "right", "escape"] as const;
+    if (keys.some((key) => matchesKey(data, key))) return true;
+    if (matchesKey(data, "enter")) return this.input.getText() === "";
+    return this.agentPanel.isFocused() && (data === "x" || data === "X");
+  }
+
   // 决策 470、503：会话视图（主代理、子 agent、只看历史的）里输入框为空时按 ←：第一下在状态行提示，短时间内再按一下
   // 才打开面板并选中刚才所在的会话（照 Claude Code，防误触）。没有面板（沙箱等）或设置关掉时不做事、不吞键
   private leftOpensPanel(data: string): boolean {
@@ -1987,60 +2015,84 @@ export class PigeonTuiShell
     const pool = this.options.pool;
     const card = this.sessionPanel.selected();
     if (pool === undefined || card === undefined) return;
-    // 决策 458：当前会话的"停止"是中断它这一轮，不是退出程序
     const main = this.sessionPanel.isMain(card);
-    if (main && !this.running) {
-      this.sessionPanel.setNote(`${card.name} is not running`);
-      return;
-    }
     const now = Date.now();
-    // 决策 483：别的会话——第一下停下（运行面留着，它派出的子 agent 接着跑），两秒内再按一下从面板去掉（子 agent 一并停下，
-    // 会话记录保留）；已停下的第一下只等第二下
-    if (!main) {
-      const last = this.lastPanelStop;
-      if (last !== undefined && last.id === card.id && now - last.at <= PANEL_STOP_CONFIRM_MS) {
-        this.lastPanelStop = undefined;
-        this.sessionPanel.setNote("");
-        pool.source.remove(card.id).then(
-          () => this.tui.requestRender(),
-          (error: unknown) => {
-            this.sessionPanel.setNote(
-              `removing ${card.name} failed: ${error instanceof Error ? error.message : String(error)}`
-            );
-            this.tui.requestRender();
-          }
-        );
-        return;
-      }
-      this.lastPanelStop = { id: card.id, at: now };
-      if (card.state !== "stopped") {
-        pool.source.stop(card.id).then(
-          () => this.tui.requestRender(),
-          (error: unknown) => {
-            this.sessionPanel.setNote(
-              `stopping ${card.name} failed: ${error instanceof Error ? error.message : String(error)}`
-            );
-            this.tui.requestRender();
-          }
-        );
-      }
-      return;
-    }
+    // 决策 483、507：所有会话一样（当前会话也是）——第一下在跑即中断这一轮（别的会话停下，运行面留着、它派出的子 agent
+    // 接着跑），没在跑只等第二下；两秒内再按一下从面板去掉（子 agent 一并停下，会话记录保留）
     const last = this.lastPanelStop;
-    const work = main ? this.workStartedAt : undefined;
-    if (
-      last !== undefined &&
-      last.id === card.id &&
-      now - last.at <= PANEL_STOP_CONFIRM_MS &&
-      last.work === work
-    ) {
+    if (last !== undefined && last.id === card.id && now - last.at <= PANEL_STOP_CONFIRM_MS) {
       this.lastPanelStop = undefined;
       this.sessionPanel.setNote("");
-      this.requestInterrupt();
+      if (main) {
+        this.removeCurrentFromPanel(card);
+        return;
+      }
+      this.dropFromPanel(card);
       return;
     }
-    this.lastPanelStop = { id: card.id, at: now, work };
-    this.sessionPanel.setNote(`press Ctrl+X again to interrupt ${card.name}`);
+    this.lastPanelStop = { id: card.id, at: now };
+    if (main) {
+      if (this.running) this.requestInterrupt();
+      return;
+    }
+    if (card.state !== "stopped") {
+      pool.source.stop(card.id).then(
+        () => this.tui.requestRender(),
+        (error: unknown) => {
+          this.sessionPanel.setNote(
+            `stopping ${card.name} failed: ${error instanceof Error ? error.message : String(error)}`
+          );
+          this.tui.requestRender();
+        }
+      );
+    }
+  }
+
+  // 从面板去掉一个会话（运行面释放、子 agent 一并停下、删出工作清单；会话记录保留）
+  private dropFromPanel(card: PooledSessionCard): void {
+    this.options.pool?.source.remove(card.id).then(
+      () => this.tui.requestRender(),
+      (error: unknown) => {
+        this.sessionPanel.setNote(
+          `removing ${card.name} failed: ${error instanceof Error ? error.message : String(error)}`
+        );
+        this.tui.requestRender();
+      }
+    );
+  }
+
+  // 决策 507：去掉当前会话——先换到面板里的下一个会话（它下面的那张，没有取上面的；准备中的与别的进程开着的不算），
+  // 面板里没有别的即开一个新的空会话（同不带路径的 /new）；换过去之后再把它从面板与工作清单里去掉（它退到面板接着跑的
+  // 一并停下、释放）
+  private removeCurrentFromPanel(card: PooledSessionCard): void {
+    const blocked = this.handOffBlocked();
+    if (blocked !== undefined) {
+      this.sessionPanel.setNote(blocked);
+      return;
+    }
+    const next = this.sessionPanel.neighborOf(
+      card.id,
+      (other) => other.elsewhere !== true && !other.id.startsWith("pending:")
+    );
+    const enter = this.options.pool?.enter;
+    if (next === undefined || enter === undefined) {
+      this.startNewSession({ kind: "new" }, () => this.dropFromPanel(card));
+      return;
+    }
+    this.sessionPanel.closePeek();
+    enter(next.id).then(
+      (refusal) => {
+        if (refusal !== undefined) this.sessionPanel.setNote(refusal);
+        else this.dropFromPanel(card);
+        this.tui.requestRender();
+      },
+      (error: unknown) => {
+        this.sessionPanel.setNote(
+          `opening ${next.name} failed: ${error instanceof Error ? error.message : String(error)}`
+        );
+        this.tui.requestRender();
+      }
+    );
   }
 
   // 会话面板里的输入：偷看时发给选中的会话（回复），否则派新会话；进入的会话里发给它
@@ -2219,6 +2271,11 @@ export class PigeonTuiShell
     const busy = this.handOffBlocked();
     if (busy !== undefined) {
       this.sessionPanel.setNote(busy);
+      return;
+    }
+    // 决策 508：当前会话（连同它的子 agent）的审批挂着：先答完再换会话（审批区只有一个，换走它就没处答了）
+    if (this.pendingApprovalState?.mainWaiting !== undefined) {
+      this.sessionPanel.setNote(APPROVAL_BEFORE_SWITCH);
       return;
     }
     this.sessionPanel.closePeek();
@@ -3109,6 +3166,11 @@ export class PigeonTuiShell
   }
 
   newSessionCommand(request: NewSessionRequest): void {
+    this.startNewSession(request);
+  }
+
+  // 开一个新会话并换过去；换成了之后调 after（决策 507：去掉当前会话之后补一个空会话）
+  private startNewSession(request: NewSessionRequest, after?: () => void): void {
     // 决策 484：换会话与 /resume、进入面板里的会话同一道守卫（收尾、回退、重读设置、压缩进行中不给换）
     const blocked = this.handOffBlocked();
     if (blocked !== undefined) {
@@ -3139,6 +3201,7 @@ export class PigeonTuiShell
           resumed: false,
         });
         finish();
+        after?.();
       },
       (error: unknown) => finish(error)
     );
@@ -3463,7 +3526,10 @@ export class PigeonTuiShell
       }
       return { consume: true };
     }
-    if (data === "\x03" || this.pendingApprovalState !== null) return undefined;
+    // 决策 508：审批挂着时只有导航键照常进视图（开会话面板、进子 agent 面板、切换），别的键归审批
+    if (data === "\x03" || (this.pendingApprovalState !== null && !this.approvalNavigation(data))) {
+      return undefined;
+    }
     // 决策 442：设置面板开着时它独占方向键与回车
     if (this.configPanel.isOpen()) return undefined;
     // 有一方接管了 Esc（/memory edit 排队保存时）：Esc 归它，排在视图与取消键之前
@@ -3477,7 +3543,8 @@ export class PigeonTuiShell
       if (handled !== undefined) return handled;
     }
     const cancelKey = matchesKey(data, "escape") || isKey(data, "pigeon.cancel");
-    if (this.view === "agent" && cancelKey) {
+    // 决策 508：审批挂着时 Esc 只作导航，不中断
+    if (this.view === "agent" && cancelKey && this.pendingApprovalState === null) {
       this.interruptViewedAgent();
       return { consume: true };
     }

@@ -22,6 +22,17 @@ export class PigeonAltScreen extends TuiAltScreen {
     }
     this.requestRender();
   }
+
+  // 决策 506：滚轮一格滚几行——pi-tui 只在构造时收这个值、每次滚轮现取，改了即生效
+  setWheelScrollLines(lines: number): void {
+    if (!Reflect.has(this, "wheelScrollLines")) return;
+    Reflect.set(this, "wheelScrollLines", Math.max(1, Math.floor(lines)));
+  }
+
+  wheelLines(): number {
+    const value: unknown = Reflect.get(this, "wheelScrollLines");
+    return typeof value === "number" ? value : 1;
+  }
 }
 
 // 点链接：只开 http、https 与 file，用系统缺省方式（Windows 的 url.dll 协议处理、macOS open、其他 xdg-open），参数固定、不经 shell

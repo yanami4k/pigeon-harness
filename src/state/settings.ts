@@ -95,11 +95,17 @@ export const SETTINGS_LAYER_LABELS: Readonly<Record<SettingsLayer, string>> = {
   local: "project local settings",
 };
 
-// 决策 470：终端界面的操作习惯——输入框为空时按两下 ← 打开会话面板（缺省开着）
+// 决策 470：终端界面的操作习惯——输入框为空时按两下 ← 打开会话面板（缺省开着）。决策 506：滚轮一格滚几行（1–20，缺省 3）
 export const TuiSectionSchema = Type.Object(
-  { leftArrowOpensPanel: Type.Optional(Type.Boolean()) },
+  {
+    leftArrowOpensPanel: Type.Optional(Type.Boolean()),
+    wheelScrollLines: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
+  },
   { additionalProperties: false }
 );
+
+// 决策 506：滚轮一格缺省滚的行数
+export const DEFAULT_WHEEL_SCROLL_LINES = 3;
 export type TuiSection = Static<typeof TuiSectionSchema>;
 
 // 各节：节名 → schema（节名 camelCase）

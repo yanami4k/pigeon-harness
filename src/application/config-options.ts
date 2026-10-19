@@ -588,6 +588,16 @@ export const CONFIG_OPTIONS: readonly ConfigOption[] = [
     "left arrow opens panel",
     "press Left twice on an empty input to open the session panel"
   ),
+  // 决策 506
+  int(
+    "tui.wheelScrollLines",
+    "interface",
+    "wheel scroll lines",
+    "lines moved per mouse-wheel step (1-20)",
+    "3",
+    1,
+    20
+  ),
 ];
 
 export interface ConfigItemView {

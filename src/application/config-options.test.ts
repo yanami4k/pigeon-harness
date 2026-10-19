@@ -88,6 +88,7 @@ test("清单：按组列出各项；结构复杂的、权限类、即将删除�
     "sandbox.memory",
     "sandbox.cpus",
     "tui.leftArrowOpensPanel",
+    "tui.wheelScrollLines",
   ]) {
     assert.ok(ids.includes(expected), expected);
   }
@@ -155,6 +156,19 @@ test("写用户级：保留其余内容；default 删键、节空了一并删；
   writeFileSync(file, "{ not json");
   assert.throws(() => setUserConfig(root, "web.enabled", "false", home), /is not valid JSON/);
   assert.equal(readFileSync(file, "utf8"), "{ not json", "坏文件原样不动");
+});
+
+test("决策 506：滚轮一格滚几行 1–20 的整数，越界不收；设置文件里写越界的值报错", () => {
+  const { home, root } = setup();
+  const file = join(home, ".pigeon", "settings.json");
+  setUserConfig(root, "tui.wheelScrollLines", "5", home);
+  assert.equal(JSON.parse(readFileSync(file, "utf8")).tui.wheelScrollLines, 5);
+  for (const bad of ["0", "21", "2.5", "fast"]) {
+    assert.throws(() => setUserConfig(root, "tui.wheelScrollLines", bad, home), ConfigError, bad);
+  }
+  assert.equal(JSON.parse(readFileSync(file, "utf8")).tui.wheelScrollLines, 5, "越界的不写");
+  writeFileSync(file, JSON.stringify({ tui: { wheelScrollLines: 30 } }));
+  assert.throws(() => loadSettings(root, { homeDir: home }), /wheelScrollLines/);
 });
 
 test("用户级设置文件还没有时新建；/config 选项=值 的解析", () => {

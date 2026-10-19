@@ -486,7 +486,7 @@ test("决策 458：当前会话是面板的第一张卡（标 current、状态�
   }
 });
 
-test("决策 458：在面板里对当前会话按两次 Ctrl+X 是中断它这一轮（不退出），没在跑时说明；空输入回车回到主视图；它自己的审批挂着时卡片写等待回应", async () => {
+test("决策 507：面板里对当前会话 Ctrl+X 第一下——在跑即中断这一轮（不退出），没在跑不做事；空输入回车回到主视图；它自己的审批挂着时卡片写等待回应", async () => {
   const { shell, term, runtime, cleanup } = makeShell({ sessionName: () => "demo-main" });
   try {
     await settle();
@@ -495,10 +495,12 @@ test("决策 458：在面板里对当前会话按两次 Ctrl+X 是中断它这�
     await settle();
     term.input(CTRL_X);
     await settle();
-    assert.match(screenText(term), /demo-main is not running/);
-    // 跑起来再停：两次 Ctrl+X 中断这一轮
+    assert.equal(runtime.interrupts, 0, "没在跑：不做事");
+    assert.equal(shell.currentView(), "panel");
+    assert.match(screenText(term), /demo-main current/, "还在面板里");
+    // 等过两秒的确认窗口再来（不算第二下）
     term.input(ESC);
-    await settle();
+    await settle(2100);
     runtime.autoResolve = false;
     term.input("跑一件");
     term.input("\r");
@@ -506,19 +508,14 @@ test("决策 458：在面板里对当前会话按两次 Ctrl+X 是中断它这�
     term.input("/panel");
     term.input("\r");
     await settle();
-    term.input(CTRL_X);
-    await settle();
-    assert.match(screenText(term), /press Ctrl\+X again to interrupt demo-main/);
     // 真实运行面的中断等这一轮停下才返回：这里挂起来，看中断途中的卡片
     const { promise: stopped, resolve: stop } = Promise.withResolvers<void>();
     const interrupt = runtime.interrupt.bind(runtime);
     runtime.interrupt = () => interrupt().then(() => stopped);
     term.input(CTRL_X);
     await settle();
-    assert.equal(runtime.interrupts, 1);
+    assert.equal(runtime.interrupts, 1, "在跑：第一下即中断这一轮");
     assert.equal(shell.currentView(), "panel", "没有退出程序，也没离开面板");
-    // 已请求中断、这一轮还没停下：卡上带 cancelling 临时标签，"再按一次"的提示不留着
-    assert.doesNotMatch(screenText(term), /press Ctrl\+X again/);
     assert.match(screenText(term), /demo-main current · cancelling/);
     stop();
     runtime.finishAll();
@@ -600,37 +597,70 @@ test("决策 458 复查：在面板里中断主会话时，排队的话不退进
   }
 });
 
-test("决策 458 复查：对当前会话的两次 Ctrl+X 须落在同一次工作上——中间换了一次工作即重新要求确认", async () => {
-  let clock = 1_000_000;
-  const { term, runtime, cleanup } = makeShell({
+test("决策 507：当前会话两秒内第二下 Ctrl+X 从面板去掉——先换到面板里的下一个会话，再把它删出面板与工作清单", async () => {
+  const { shell, term, pool, entered, finishers, cleanup } = makeShell({
     sessionName: () => "demo-main",
-    now: () => clock,
   });
+  const removed: string[] = [];
+  const remove = pool.remove.bind(pool);
+  pool.remove = async (id) => {
+    removed.push(id);
+    await remove(id);
+  };
   try {
     await settle();
-    runtime.autoResolve = false;
-    term.input("第一件");
+    const before = shell.sessionId();
+    term.input("/panel");
     term.input("\r");
     await settle();
+    term.input("修登录");
+    term.input("\r");
+    await settle();
+    finishers[0]?.("好了");
+    await settle();
+    // 光标回到当前会话那张卡
+    shell.openPanel(before);
+    await settle();
+    term.input(CTRL_X);
+    term.input(CTRL_X);
+    await settle();
+    assert.deepEqual(entered, ["sess_pool1"], "换到了面板里的下一个会话");
+    assert.equal(shell.sessionId(), "sess_pool1");
+    assert.equal(shell.currentView(), "main");
+    assert.deepEqual(removed, [before], "原来的当前会话删出面板与工作清单");
+  } finally {
+    cleanup();
+  }
+});
+
+test("决策 507：面板里没有别的会话时去掉当前会话——开一个新的空会话（同不带路径的 /new）", async () => {
+  const requests: unknown[] = [];
+  const fresh = newSessionId();
+  const { shell, term, pool, cleanup } = makeShell({
+    sessionName: () => "demo-main",
+    newSession: {
+      create: async (request) => {
+        requests.push(request);
+        return { sessionId: fresh, binding: { runtime: new ScriptedRuntime(fresh) } };
+      },
+    },
+  });
+  const removed: string[] = [];
+  pool.remove = async (id) => {
+    removed.push(id);
+  };
+  try {
+    await settle();
+    const before = shell.sessionId();
     term.input("/panel");
     term.input("\r");
     await settle();
     term.input(CTRL_X);
-    await settle();
-    runtime.finishAll();
-    await settle();
-    // 偷看着发出下一件（新的一次工作），再按一次 Ctrl+X：不中断，重新要求确认
-    clock += 10;
-    term.input(" ");
-    term.input("第二件");
-    term.input("\r");
-    await settle();
     term.input(CTRL_X);
     await settle();
-    assert.equal(runtime.interrupts, 0);
-    assert.match(screenText(term), /press Ctrl\+X again to interrupt demo-main/);
-    runtime.finishAll();
-    await settle();
+    assert.deepEqual(requests, [{ kind: "new" }]);
+    assert.equal(shell.sessionId(), fresh);
+    assert.deepEqual(removed, [before]);
   } finally {
     cleanup();
   }
