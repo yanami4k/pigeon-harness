@@ -184,6 +184,8 @@ async function makeShell(open = true, resumable = false) {
 async function enterAgent(term: MockTerminal): Promise<void> {
   term.input("\x1b[B");
   term.input("\r");
+  // 决策 503：切过去之后焦点留在面板，Esc 回输入框
+  term.input("\x1b");
   await settle();
 }
 
@@ -257,6 +259,8 @@ test("/clear、/rewind、/fork、/take 在子 agent 视图里直接拒绝：主�
     // 回到主代理：主视图里没有这几条命令的痕迹
     term.input("\x1b[B");
     term.input("\r");
+    // 决策 503：切过去之后焦点留在面板，Esc 回输入框
+    term.input("\x1b");
     await settle();
     assert.equal(shell.currentView(), "main");
     assert.doesNotMatch(screenText(term), /\/clear|\/rewind|\/fork|\/take/);
@@ -305,6 +309,8 @@ test("决策 504：子 agent 视图里连按两下 Esc 不打开回退列表（�
     // 面板里选 main 回主代理：同样连按两下 Esc 即打开回退列表
     term.input("\x1b[B");
     term.input("\r");
+    // 决策 503：切过去之后焦点留在面板，Esc 回输入框
+    term.input("\x1b");
     await settle();
     assert.equal(shell.currentView(), "main");
     term.input("\x1b");

@@ -9,6 +9,7 @@ import { afterEach, test } from "vitest";
 import { holdWorktreeInUse } from "../persistence/worktree-in-use.ts";
 import { newSessionId } from "../state/ids.ts";
 import { worktreesDirOf } from "../state/paths.ts";
+import { spawnAgentDescription } from "./agent-tools.ts";
 import { agentWorktreeAt, closeAgentWorktree, openAgentWorktree } from "./agent-worktree.ts";
 import { assertWorktreeName, worktreeNameFrom } from "./named-worktree.ts";
 import { defaultSessionName } from "./session-name.ts";
@@ -150,4 +151,21 @@ test("子目录项目派出的子 agent：树在主仓库根下，从子目录�
   const items = listLeftoverWorktrees({ workspaceRoot: project, homeDir: home });
   assert.ok(items.some((item) => item.name === "sub" && item.kind === "worktree"));
   assert.equal(closeAgentWorktree(tree, false), false);
+});
+
+test("会话所在的项目不是 git 仓库：临时工作树开不成，报错写明原因；spawn_agent 的说明写明这一条", () => {
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "pigeon-no-git-")));
+  try {
+    assert.throws(
+      () =>
+        openAgentWorktree({ parentWorkspace: dir, sessionId: newSessionId(), name: "general-1" }),
+      /^Error: a worktree needs this session's project to be a git repository; .* is not in one$/
+    );
+    assert.match(
+      spawnAgentDescription({ types: [], problems: [] }),
+      /needs your session's project to be a git repository, otherwise the spawn fails/
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

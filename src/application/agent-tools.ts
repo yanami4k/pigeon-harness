@@ -32,7 +32,7 @@ export function spawnAgentDescription(catalog: AgentTypeCatalog): string {
       "By default it starts with a blank context, so the task must say everything it needs to know; set inherit_context to start it with a copy of this conversation instead. " +
       "By default it runs in the background: you keep working, and its final reply arrives later as a message (don't wait or poll for it). " +
       "Set background to false when you need the result before you can go on; the call then returns the reply. " +
-      "Set worktree to true to have it work in a temporary git worktree (git repositories only); a worktree with changes is kept and reported back, one without changes is removed. " +
+      "Set worktree to true to have it work in a temporary git worktree; this needs your session's project to be a git repository, otherwise the spawn fails. A worktree with changes is kept and reported back, one without changes is removed. " +
       "Use send_message with its name to give it more instructions or continue it after it finishes, and stop_agent to stop it.",
     "",
     "Agent types:",

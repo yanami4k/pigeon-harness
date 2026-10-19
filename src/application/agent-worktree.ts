@@ -59,7 +59,9 @@ export function openAgentWorktree(input: {
   try {
     repoRoot = mainRepoRoot(input.parentWorkspace);
   } catch {
-    throw new Error("a worktree needs a git repository");
+    throw new Error(
+      `a worktree needs this session's project to be a git repository; ${input.parentWorkspace} is not in one`
+    );
   }
   // 决策 494：程序起的名字撞了（上一棵同名的树还留着、别的会话的同名子 agent 在跑）就让路；起点引用与树同名
   const name = availableWorktreeName(repoRoot, worktreeSafeName(input.name));

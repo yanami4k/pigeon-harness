@@ -154,8 +154,13 @@ export class AgentPanel implements Component {
     if (rows.length === 0) return false;
     this.focused = true;
     // 决策 503：进来时选中第一个不是正在看的（主视图里即第一个子 agent，子 agent 视图里即 main）
-    if (this.selectedRecord === undefined || !rows.includes(this.selectedRecord)) {
-      const viewing = this.viewing() ?? MAIN_ROW;
+    const viewing = this.viewing() ?? MAIN_ROW;
+    // 上次停的那一行就是正在看的（Enter 切过去之后回了输入框）：照样先选第一个不是正在看的
+    if (
+      this.selectedRecord === undefined ||
+      !rows.includes(this.selectedRecord) ||
+      this.selectedRecord === viewing
+    ) {
       this.selectedRecord = rows.find((row) => row !== viewing) ?? rows[0];
     }
     return true;
@@ -218,6 +223,17 @@ export class AgentPanel implements Component {
   // x 清掉已结束的一行（在跑的由壳先停下）
   clear(record: SubagentRecord): void {
     this.cleared.set(record, record.updatedAt);
+  }
+
+  // 决策 503：Enter 切过去之后焦点留在这一行（换视图会把面板复位，这里接回来）
+  focusOn(row: AgentRow): void {
+    if (row !== MAIN_ROW) {
+      this.level = row.parent.kind === "agent" ? (row.parent as SubagentRecord) : undefined;
+    } else {
+      this.level = undefined;
+    }
+    this.selectedRecord = row;
+    this.focused = this.rows().includes(row);
   }
 
   // 决策 503：进入嵌套的子 agent 时停在它那一层（它的行在眼前、标亮）

@@ -173,7 +173,7 @@ test("拖选出选区后 Ctrl+C 复制选区（写出 OSC 52），不清输入�
   }
 });
 
-test("等模型时转圈（ASCII 帧）：一轮开始即出现，第一段输出到来即收起，跑完不留", async () => {
+test("决策 510：干活时转圈（ASCII 帧）——从发出到这一轮彻底收尾都转（模型输出、两轮之间执行工具也转），审批显示着时让位、答完回来，跑完不留", async () => {
   const { shell, term, runtime, cleanup } = makeShell(80, 20);
   try {
     shell.start();
@@ -188,10 +188,25 @@ test("等模型时转圈（ASCII 帧）：一轮开始即出现，第一段输�
     assert.doesNotMatch(screenText(term), /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]|waiting for model/);
     runtime.emit(RuntimeEventKind.TurnStarted, {});
     await settle();
-    assert.ok(spinning(), "新的一轮开始仍在等");
+    assert.ok(spinning(), "新的一轮开始仍在转");
     runtime.emitDelta("text", "答");
     await settle();
-    assert.ok(!spinning(), screenText(term));
+    assert.ok(spinning(), "模型输出时照样转");
+    runtime.emit(RuntimeEventKind.TurnCompleted, {});
+    await settle();
+    assert.ok(spinning(), "两轮之间（执行工具）照样转");
+    // 审批显示着：让位给审批框；答完回来
+    const answer = shell.askApproval({
+      toolName: "run_command",
+      toolCallId: "t1",
+      args: { command: "ls" },
+    });
+    await settle();
+    assert.ok(!spinning(), "审批显示着时不转");
+    term.input("y");
+    await answer;
+    await settle();
+    assert.ok(spinning(), "答完回来");
     runtime.finishAll();
     await settle();
     assert.ok(!spinning(), screenText(term));

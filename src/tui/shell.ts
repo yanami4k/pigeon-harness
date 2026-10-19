@@ -610,10 +610,20 @@ export class PigeonTuiShell
   private set running(value: boolean) {
     if (value === this.runningState) return;
     this.runningState = value;
-    this.setWaiting(value);
+    this.syncLoader();
   }
-  // 决策 439：等模型时的转圈（一轮开始到第一段输出之间；ASCII 帧）
+  // 决策 439、510：干活时的转圈（ASCII 帧）。主代理视图按这个会话在跑（从发出消息到这一轮彻底收尾：模型输出、执行工具、
+  // 等子 agent、续跑都算），子 agent 视图按正在看的那个子 agent 在干活（starting、running、compacting）；当前视图显示着
+  // 审批时让位给审批框，答完回来
   private loader: Loader | undefined;
+  private syncLoader(): void {
+    const busy =
+      this.pendingApprovalState === null &&
+      (this.view === "agent"
+        ? this.agentSession !== undefined && agentActive(this.agentSession.record)
+        : this.view === "main" && this.running);
+    this.setWaiting(busy);
+  }
   private setWaiting(on: boolean): void {
     if (on && this.loader === undefined && this.started) {
       this.loader = new Loader(this.tui, identity, identity, "", {
@@ -778,6 +788,7 @@ export class PigeonTuiShell
                 ? [
                     // 决策 503：子 agent 视图没有标题行，输入框下方照样是子 agent 面板
                     fill(this.agentSession.flow.view),
+                    ...(this.loader !== undefined ? [this.loader] : []),
                     keep(this.approvalBox),
                     ...status,
                     keep(this.input),
@@ -975,6 +986,7 @@ export class PigeonTuiShell
 
   updateStatus(): void {
     this.applyStatusBar();
+    this.syncLoader();
     // 决策 482：有子 agent 在跑时退出先问一句
     if (this.exitConfirmOn) {
       this.statusLine.setText(EXIT_CONFIRM);
@@ -1346,6 +1358,8 @@ export class PigeonTuiShell
   agentsChanged(): void {
     this.scheduleAgentRetain();
     this.attachAgentLive();
+    // 决策 510：子 agent 视图的转圈跟着它的状态
+    this.syncLoader();
     if (this.agentCostTimer === undefined) {
       this.agentCostTimer = setTimeout(() => {
         this.agentCostTimer = undefined;
@@ -1398,13 +1412,14 @@ export class PigeonTuiShell
     } else if (matchesKey(data, "left")) {
       panel.drillOut();
     } else if (matchesKey(data, "enter")) {
+      // 决策 503：切过去之后焦点留在面板里那一行（↑↓ 接着选；打普通字符即回输入框）
       const record = panel.selected();
-      panel.blur();
       if (record === MAIN_ROW) {
         if (this.view === "agent") this.backFromAgentSession();
       } else if (record !== undefined && record !== this.agentSession?.record) {
         this.openAgentSession(record);
       }
+      if (record !== undefined) panel.focusOn(record);
     } else if (data === "x" || data === "X") {
       const record = panel.selected();
       if (record !== undefined && record !== MAIN_ROW && face !== undefined) {
@@ -2133,12 +2148,24 @@ export class PigeonTuiShell
     );
     const enter = this.options.pool?.enter;
     // 换到新的空会话：被去掉的会话退回来的排队内容不带过去
+    // 决策 507：换过去之后留在面板，光标停在新的当前会话上（不进入它的视图）
+    const stay = (): void => {
+      this.sessionPanel.selectId(this.current.sessionId);
+      this.showView("panel");
+    };
     const fresh = (): void =>
-      this.startNewSession({ kind: "new" }, () => this.dropFromPanel(card), {
-        before: () => {
-          this.heldQueue.length = 0;
+      this.startNewSession(
+        { kind: "new" },
+        () => {
+          this.dropFromPanel(card);
+          stay();
         },
-      });
+        {
+          before: () => {
+            this.heldQueue.length = 0;
+          },
+        }
+      );
     if (next === undefined || enter === undefined) {
       fresh();
       return;
@@ -2148,7 +2175,10 @@ export class PigeonTuiShell
     enter(next.id).then(
       (refusal) => {
         if (refusal !== undefined) fresh();
-        else this.dropFromPanel(card);
+        else {
+          this.dropFromPanel(card);
+          stay();
+        }
         this.tui.requestRender();
       },
       () => {
@@ -4070,7 +4100,6 @@ export class PigeonTuiShell
   private handleDelta(delta: StreamTextDelta): void {
     // 024：增量只认 runId 出处——非本 Run 的迟到/幽灵增量不进消息区
     if (this.activeRunId === null || delta.runId !== this.activeRunId) return;
-    this.setWaiting(false);
     // M5 S2（决策 045）：thinking 增量单独一段弱化渲染，正文增量照常生长
     if (delta.kind === "thinking") {
       this.flow.appendThinkingDelta(delta.delta);
@@ -4085,11 +4114,9 @@ export class PigeonTuiShell
     if (event.kind === RuntimeEventKind.TurnStarted) {
       this.activeRunId = event.runId;
       this.turnStartedAt = event.timestamp;
-      if (this.running) this.setWaiting(true);
     }
     projectRuntimeEvent(this.flow, event);
     if (event.kind === RuntimeEventKind.TurnCompleted) {
-      this.setWaiting(false);
       const payload = event.payload as TurnCompletedPayload;
       // 286：主 agent 每轮的用量与价格计入本会话花费；上下文用量按最近一次回复重算
       if (payload.usage !== undefined) {

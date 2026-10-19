@@ -117,6 +117,8 @@ async function enterAgent(term: MockTerminal, index: number): Promise<void> {
   term.input("\x1b[B");
   for (let step = 0; step < index; step++) term.input("\x1b[B");
   term.input("\r");
+  // 决策 503：切过去之后焦点留在面板，Esc 回输入框
+  term.input("\x1b");
   await settle();
 }
 
@@ -141,6 +143,8 @@ test("主代理的审批只在主代理视图里：打字不进输入框；子 a
     // 回主代理视图：审批照样在
     term.input("\x1b[B");
     term.input("\r");
+    // 决策 503：切过去之后焦点留在面板，Esc 回输入框
+    term.input("\x1b");
     await settle();
     assert.equal(shell.currentView(), "main");
     assert.match(screenText(term), /npm test/);
@@ -190,6 +194,8 @@ test("子 agent 的审批：主代理视图与它自己的视图都显示（标�
     term.input("\x1b[B");
     term.input("\x1b[B");
     term.input("\r");
+    // 决策 503：切过去之后焦点留在面板，Esc 回输入框
+    term.input("\x1b");
     await settle();
     assert.equal(shell.currentView(), "agent");
     assert.match(screenText(term), /make build/, "它自己的视图里显示");
@@ -203,6 +209,8 @@ test("子 agent 的审批：主代理视图与它自己的视图都显示（标�
     // 回主视图：也收了；结论不写在主视图
     term.input("\x1b[B");
     term.input("\r");
+    // 决策 503：切过去之后焦点留在面板，Esc 回输入框
+    term.input("\x1b");
     await settle();
     assert.equal(shell.currentView(), "main");
     assert.doesNotMatch(screenText(term), /approve once/, "主视图里也收了");

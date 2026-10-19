@@ -600,7 +600,7 @@ test("决策 458 复查：在面板里中断主会话时，排队的话不退进
   }
 });
 
-test("决策 507：当前会话两秒内第二下 Ctrl+X 从面板去掉——先换到面板里的下一个会话，再把它删出面板与工作清单", async () => {
+test("决策 507：当前会话两秒内第二下 Ctrl+X 从面板去掉——留在面板，下一个会话成为当前会话、光标停在它上面；原来的删出面板与工作清单", async () => {
   const { shell, term, pool, entered, finishers, cleanup } = makeShell({
     sessionName: () => "demo-main",
   });
@@ -627,9 +627,10 @@ test("决策 507：当前会话两秒内第二下 Ctrl+X 从面板去掉——�
     term.input(CTRL_X);
     term.input(CTRL_X);
     await settle();
-    assert.deepEqual(entered, ["sess_pool1"], "换到了面板里的下一个会话");
+    assert.deepEqual(entered, ["sess_pool1"], "下一个会话成为当前会话");
     assert.equal(shell.sessionId(), "sess_pool1");
-    assert.equal(shell.currentView(), "main");
+    assert.equal(shell.currentView(), "panel", "留在面板，不进入它的视图");
+    assert.match(screenText(term), /> \S+ current/, "光标停在新的当前会话上");
     assert.deepEqual(removed, [before], "原来的当前会话删出面板与工作清单");
   } finally {
     cleanup();
@@ -680,7 +681,7 @@ test("决策 507：下一个会话进不去（停下了等）——改开一个�
   }
 });
 
-test("决策 507：面板里没有别的会话时去掉当前会话——开一个新的空会话（同不带路径的 /new）", async () => {
+test("决策 507：面板里没有别的会话时去掉当前会话——开一个新的空会话作为当前会话（同不带路径的 /new），仍留在面板", async () => {
   const requests: unknown[] = [];
   const fresh = newSessionId();
   const { shell, term, pool, cleanup } = makeShell({
@@ -707,6 +708,7 @@ test("决策 507：面板里没有别的会话时去掉当前会话——开一�
     await settle();
     assert.deepEqual(requests, [{ kind: "new" }]);
     assert.equal(shell.sessionId(), fresh);
+    assert.equal(shell.currentView(), "panel", "仍留在面板");
     assert.deepEqual(removed, [before]);
   } finally {
     cleanup();

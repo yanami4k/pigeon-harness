@@ -48,6 +48,11 @@ function record(name: string, state: SubagentRecord["state"]): SubagentRecord {
   } as unknown as SubagentRecord;
 }
 
+function makeShellWithCleanup() {
+  const made = makeShell();
+  return { ...made, cleanup: () => made.shell.stop() };
+}
+
 function makeShell() {
   const term = new MockTerminal(90, 24);
   const agents = [record("general-1", "running"), record("explore-1", "running")];
@@ -277,4 +282,59 @@ test("决策 483：当前会话派出的子 agent 在等审批，会话面板里
   await settle();
   assert.match(screenText(term), /waiting: general-1: approval/);
   shell.stop();
+});
+
+test("决策 510：子 agent 视图里的转圈跟着正在看的那个子 agent——在跑即转，停下即收", async () => {
+  const { shell, term, agents, cleanup } = makeShellWithCleanup();
+  try {
+    shell.start();
+    await settle();
+    term.input("\x1b[B");
+    term.input("\r");
+    term.input("\x1b");
+    await settle();
+    assert.equal(shell.currentView(), "agent");
+    const spinning = () =>
+      screenText(term)
+        .split("\n")
+        .some((line) => /^\s*[-\\|/]\s*$/.test(line));
+    assert.ok(spinning(), "它在跑：转");
+    const viewed = agents[0];
+    assert.ok(viewed !== undefined);
+    viewed.state = "idle";
+    shell.agentsChanged();
+    await settle();
+    assert.ok(!spinning(), "它停了：不转");
+  } finally {
+    cleanup();
+  }
+});
+
+test("决策 503：Enter 切过去之后焦点留在面板那一行，↑↓ 接着选；打普通字符即回输入框且字符不丢；x 仍是停下", async () => {
+  const { shell, term, sent, stopped, cleanup } = makeShellWithCleanup();
+  try {
+    shell.start();
+    await settle();
+    term.input("\x1b[B");
+    term.input("\r");
+    await settle();
+    assert.equal(shell.currentView(), "agent");
+    assert.match(screenText(term), /› general-1/, "焦点还在面板里那一行");
+    term.input("\x1b[B");
+    await settle();
+    assert.match(screenText(term), /› explore-1/, "↓ 接着选");
+    term.input("x");
+    await settle();
+    assert.deepEqual(stopped, ["explore-1"], "x 仍是停下");
+    term.input("h");
+    term.input("i");
+    await settle();
+    assert.equal(shell.inputText(), "hi", "打字回输入框，第一个字不丢");
+    assert.doesNotMatch(screenText(term), /› /, "面板不再有焦点");
+    term.input("\r");
+    await settle();
+    assert.deepEqual(sent, [["general-1", "hi"]]);
+  } finally {
+    cleanup();
+  }
 });
