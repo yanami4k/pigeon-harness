@@ -55,6 +55,12 @@ import { loadSessionHistory } from "../application/history.ts";
 import type { HookEventReport } from "../application/hooks.ts";
 import type { PromptHistoryStore } from "../application/prompt-history.ts";
 import { listRecentMainSessions } from "../application/recent-sessions.ts";
+import {
+  type RecordedStatus,
+  recordedSessionPath,
+  recordedSessionStatus,
+  recordStamp,
+} from "../application/recorded-status.ts";
 import type {
   CodeCheck,
   PreparedRewind,
@@ -69,6 +75,7 @@ import {
   type CostTally,
   emptyCostTally,
   mergeCostTally,
+  sessionCostTally,
 } from "../application/session-cost.ts";
 import type {
   PooledSessionCard,
@@ -96,11 +103,16 @@ import type { TurnCompletedPayload } from "../state/runtime-events.ts";
 import { RuntimeEventKind } from "../state/runtime-events.ts";
 import type { RewindMode, RunStopCause } from "../state/session-entries.ts";
 import { toolResultModelUsage } from "../state/tool-usage.ts";
-import { AgentPanel, agentActive, agentStateWord } from "./agent-panel.ts";
+import { AgentPanel, agentActive, agentLabel, agentStateWord, MAIN_ROW } from "./agent-panel.ts";
 import { openExternalUrl, PigeonAltScreen, TrimmedTranscript } from "./alt-screen.ts";
 import type { ApprovalBlockLine, ApprovalPanelResult, TuiApprovalFace } from "./approval.ts";
 import { ApprovalArea } from "./approval-area.ts";
-import { isGlobalCommand, rejectWhileRunning } from "./command-table.ts";
+import {
+  commandScope,
+  lookupSlashCommand,
+  rejectWhileRunning,
+  slashTokens,
+} from "./command-table.ts";
 import {
   type CommandsHost,
   handleSlashCommand as dispatchSlashCommand,
@@ -233,6 +245,8 @@ export interface TuiShellOptions {
   approvalMode?: () => ApprovalModeControl | undefined;
   // 决策 470：输入框为空时按两下 ← 打开会话面板（设置 tui.leftArrowOpensPanel，每次现取）；缺省开着
   leftArrowOpensPanel?: () => boolean;
+  // 决策 501：只看历史的会话多久看一次它的会话记录有没有追加（毫秒；缺省 1000，测试改小）
+  recordPollMs?: number;
   // 决策 286：主 agent 的模型接入（DeepSeek 回复自带价格为 0 时按官方人民币价目计会话花费）；缺省不另计价
   provider?: string;
   // 决策 286：输入历史的跨启动存储（按项目）；缺省只在本次启动内保留
@@ -360,6 +374,23 @@ export interface TuiAgentsFace {
     | undefined;
   // 它的会话所在的会话根（渲染历史用）
   historyDir(record: SubagentRecord): string | undefined;
+  // 决策 505：子 agent 视图里代理级命令的面（它自己的上下文、放权、钩子与任务清单）；还没有运行面的为 undefined
+  commands?(record: SubagentRecord): TuiAgentCommands | undefined;
+  // 决策 505：/status 的文本
+  status?(record: SubagentRecord): Promise<string>;
+  // 决策 505：/compact（压的期间不起新的一轮）
+  compact?(record: SubagentRecord, focus: string | undefined): Promise<ManualCompactionOutcome>;
+  // 决策 505：/rename 只改显示名；返回落消息区的一行
+  rename?(record: SubagentRecord, name: string): string;
+}
+
+// 决策 505：子 agent 视图里代理级命令作用的那个子 agent 的面
+export interface TuiAgentCommands {
+  contextUsage(): { tokens: number; contextWindow: number } | undefined;
+  grants: TuiGrantsContext;
+  hooks?: TuiHooksFace;
+  // 任务清单（排好的文字）；undefined = 清单没开
+  tasks(): string | undefined;
 }
 
 // 决策 433–438：终端界面的会话回退面（入口在 tui/main.ts，按当前运行面现取）
@@ -394,6 +425,31 @@ const APPROVAL_CHROME_ROWS = 10;
 // 决策 470：按 ← 打开面板的第一下在状态行的提示（ASCII：箭头字符在中文环境下宽度不定）
 const PANEL_HINT = "press Left again to open the panel";
 
+// 决策 505：要它的运行面才能做的代理级命令（续接认回、还没重开的子 agent 先发一句话）
+const AGENT_RUNTIME_COMMANDS = new Set([
+  "compact",
+  "tasks",
+  "hooks",
+  "grants",
+  "revoke",
+  "grants save",
+]);
+
+// 决策 501：只看历史的会话
+interface ElsewhereSession {
+  card: PooledSessionCard;
+  flow: MessageFlow;
+  // 它所在项目的根与会话记录文件
+  root?: string;
+  path?: string;
+  // 记录文件上次看时的大小与修改时刻
+  stamp?: string | undefined;
+  status: RecordedStatus;
+  timer?: ReturnType<typeof setInterval>;
+}
+// 决策 502：面板里派新会话的话至少几个字
+const MIN_SPAWN_CHARS = 3;
+
 // 决策 435：双击 Esc 的间隔
 const DOUBLE_ESCAPE_MS = 500;
 
@@ -422,7 +478,8 @@ export class PigeonTuiShell
   // 决策 490：输入框补全用的那一份（带 /take 的参数候选）；换会话时也用它重建
   private promptAutocomplete: PromptAutocomplete | undefined;
   // 决策 485：别的 Pigeon 开着的会话（只看历史）
-  private elsewhereSession: { card: PooledSessionCard; flow: MessageFlow } | undefined;
+  // 决策 501：只看历史的会话——内容与状态栏都取自它的会话记录，记录有追加即重画
+  private elsewhereSession: ElsewhereSession | undefined;
   // 决策 482：输入框下方的子 agent 面板、进入的子 agent（回去时回到哪个视图）、退出前等确认、保留期满撤行的定时
   private readonly agentPanel: AgentPanel;
   private agentSession:
@@ -432,8 +489,15 @@ export class PigeonTuiShell
         unsubscribe: () => void;
         // 已接上实时订阅
         live: boolean;
+        // 决策 503：它的用量（状态栏）：进入时取它的会话记录，之后按每轮的用量累加
+        cost: CostTally;
+        // 决策 505：/compact 正在压
+        compacting: boolean;
       }
     | undefined;
+  // 决策 503：主视图的上下文与用量（状态栏按正在看的代理取）
+  private mainContext: { tokens: number; contextWindow: number } | undefined;
+  private mainCost: CostTally = emptyCostTally();
   private exitConfirmOn = false;
   private exitConfirmed = false;
   private agentRetainTimer: ReturnType<typeof setTimeout> | undefined;
@@ -616,6 +680,7 @@ export class PigeonTuiShell
       agents: () => this.options.agents?.list(this.agentTopSessionId()) ?? [],
       sessionName: () => this.agentTopName(),
       waiting: () => this.options.agents?.waiting?.() ?? new Set<string>(),
+      viewing: () => (this.view === "agent" ? this.agentSession?.record : undefined),
       now: () => Date.now(),
     });
     // 决策 451：欢迎头放在对话流最上方
@@ -649,11 +714,12 @@ export class PigeonTuiShell
                 ]
               : this.view === "agent" && this.agentSession !== undefined
                 ? [
-                    this.title,
+                    // 决策 503：子 agent 视图没有标题行，输入框下方照样是子 agent 面板
                     fill(this.agentSession.flow.view),
                     keep(this.approvalBox),
                     ...status,
                     keep(this.input),
+                    ...agents,
                     this.statusBar,
                   ]
                 : this.view === "elsewhere" && this.elsewhereSession !== undefined
@@ -816,6 +882,7 @@ export class PigeonTuiShell
       clearTimeout(this.agentRetainTimer);
       this.agentRetainTimer = undefined;
     }
+    this.leaveElsewhere();
     this.leaveAgentSession();
     for (const dispose of this.disposers.splice(0)) dispose();
     for (const dispose of this.runtimeDisposers.splice(0)) dispose();
@@ -830,7 +897,7 @@ export class PigeonTuiShell
   }
 
   updateStatus(): void {
-    this.statusBar.update({ mode: this.modeControl()?.get() });
+    this.applyStatusBar();
     // 决策 482：有子 agent 在跑时退出先问一句
     if (this.exitConfirmOn) {
       this.statusLine.setText(EXIT_CONFIRM);
@@ -867,7 +934,8 @@ export class PigeonTuiShell
       this.pendingApprovalState === null
     ) {
       const record = this.agentSession.record;
-      this.statusLine.setText(`sub-agent: ${record.agentName} ${agentStateWord(record.state)}`);
+      const state = this.agentSession.compacting ? "compacting" : agentStateWord(record.state);
+      this.statusLine.setText(`sub-agent: ${agentLabel(record)} ${state}`);
       return;
     }
     // 状态行纯 ASCII，只写状态词（空闲与审批挂着时不写：审批框就在眼前）；审批期间输入归模态键控，运行中与 resume 期间
@@ -904,15 +972,12 @@ export class PigeonTuiShell
     // 历史（286）：发出的与排队的都进历史；拒绝理由不进
     this.input.addToHistory(value);
     this.options.promptHistory?.add(value);
-    // 决策 482：进入的子 agent 里的输入是使用者亲手打给它的话。决策 484：管整个程序的斜杠命令照样能用（回到主视图执行），
-    // 作用于会话的不收
-    if (this.view === "agent" && this.agentSession !== undefined && isGlobalCommand(value)) {
-      this.backFromAgentSession();
-    } else if (this.view === "agent" && this.agentSession !== undefined) {
+    // 决策 482：子 agent 视图里的输入是使用者亲手打给它的话。决策 505：斜杠命令就地执行——代理级的作用于这个子 agent，
+    // 程序级的与主视图一样，只对主代理的直接拒绝
+    if (this.view === "agent" && this.agentSession !== undefined) {
       const session = this.agentSession;
       if (value.startsWith("/")) {
-        session.flow.addSystem("not available in a sub-agent's session");
-        this.input.setText(value);
+        this.agentCommand(session, value);
       } else {
         const refusal = this.options.agents?.send(session.record, value);
         if (refusal !== undefined) {
@@ -925,12 +990,8 @@ export class PigeonTuiShell
       this.tui.requestRender();
       return;
     }
-    // 决策 485：别的 Pigeon 开着的会话里发不了话；斜杠命令回到主视图执行
-    if (
-      this.view === "elsewhere" &&
-      this.elsewhereSession !== undefined &&
-      !value.startsWith("/")
-    ) {
+    // 决策 485、501：别的 Pigeon 开着的会话不收任何输入（消息与命令都不收）
+    if (this.view === "elsewhere" && this.elsewhereSession !== undefined) {
       this.elsewhereSession.flow.addSystem(
         `session ${this.elsewhereSession.card.name} is open elsewhere`
       );
@@ -938,7 +999,6 @@ export class PigeonTuiShell
       this.tui.requestRender();
       return;
     }
-    if (this.view === "elsewhere") this.showView("main");
     // 决策 443：会话面板里的输入归会话面板（与当前会话是否在跑无关）。决策 484：斜杠命令作用于当前会话（回到主视图执行）
     if (this.view === "panel" && value.startsWith("/")) {
       this.sessionPanel.closePeek();
@@ -1224,8 +1284,8 @@ export class PigeonTuiShell
     return this.currentSessionName() ?? "session";
   }
 
-  // 决策 482：子 agent 面板的按键（输入框为空时 ↓ 进来）：↑↓ 选，→ 进下层，← 回上层（最上层即回输入框），Enter 进入它的
-  // 会话，x 停下在跑的、清掉已结束的，Esc 回输入框；别的键回输入框照常打字
+  // 决策 482、503：子 agent 面板的按键（输入框为空时 ↓ 进来）：↑↓ 选，→ 进下层，← 回上层（最上层即回输入框），Enter 切到
+  // 选中的代理（main 即主代理），x 停下在跑的、清掉已结束的，Esc 回输入框；别的键回输入框照常打字
   private handleAgentPanelKey(data: string): { consume: true } | undefined {
     const panel = this.agentPanel;
     const face = this.options.agents;
@@ -1247,10 +1307,14 @@ export class PigeonTuiShell
     } else if (matchesKey(data, "enter")) {
       const record = panel.selected();
       panel.blur();
-      if (record !== undefined) this.openAgentSession(record);
+      if (record === MAIN_ROW) {
+        if (this.view === "agent") this.backFromAgentSession();
+      } else if (record !== undefined && record !== this.agentSession?.record) {
+        this.openAgentSession(record);
+      }
     } else if (data === "x" || data === "X") {
       const record = panel.selected();
-      if (record !== undefined && face !== undefined) {
+      if (record !== undefined && record !== MAIN_ROW && face !== undefined) {
         if (agentActive(record)) void face.stop(record);
         else panel.clear(record);
       }
@@ -1263,10 +1327,12 @@ export class PigeonTuiShell
     return { consume: true };
   }
 
-  // 决策 482：进入子 agent 的会话：消息区换成它的对话（历史取自它的会话记录，之后实时），输入是使用者亲手打给它的话
+  // 决策 482：进入子 agent 的会话：消息区换成它的对话（历史取自它的会话记录，之后实时），输入是使用者亲手打给它的话。
+  // 决策 503：从一个子 agent 直接切到另一个
   private openAgentSession(record: SubagentRecord): void {
     const face = this.options.agents;
     if (face === undefined) return;
+    this.leaveAgentSession();
     const flow = new MessageFlow();
     flow.setToolsExpanded(this.flow.toolsExpandedState());
     const dir = face.historyDir(record);
@@ -1287,11 +1353,21 @@ export class PigeonTuiShell
         );
       }
     }
+    let cost = emptyCostTally();
+    if (record.sessionId !== undefined && dir !== undefined) {
+      try {
+        cost = sessionCostTally(dir, record.sessionId);
+      } catch {
+        // 读不成即从零记
+      }
+    }
     this.agentSession = {
       record,
       flow,
       unsubscribe: () => {},
       live: false,
+      cost,
+      compacting: false,
     };
     this.attachAgentLive();
     this.showView("agent");
@@ -1307,6 +1383,16 @@ export class PigeonTuiShell
     const disposers = [
       live.subscribe((event) => {
         projectRuntimeEvent(flow, event, { turnErrors: true });
+        // 决策 503：状态栏显示它的上下文与用量
+        if (event.kind === RuntimeEventKind.TurnCompleted) {
+          const usage = (event.payload as TurnCompletedPayload).usage;
+          if (usage !== undefined) {
+            addUsage(session.cost, usage, {
+              ...(this.options.provider !== undefined ? { provider: this.options.provider } : {}),
+              endMs: event.timestamp,
+            });
+          }
+        }
         this.updateStatus();
         this.tui.requestRender();
       }),
@@ -1340,6 +1426,121 @@ export class PigeonTuiShell
     this.showView("main");
   }
 
+  // 决策 504：子 agent 视图里 Esc 中断它的这一轮（同面板里 x 停下在跑的；打字或别的代理发消息即接着干）
+  private interruptViewedAgent(): void {
+    const session = this.agentSession;
+    const face = this.options.agents;
+    if (session === undefined || face === undefined || !agentActive(session.record)) return;
+    void face.stop(session.record);
+  }
+
+  // 决策 505：子 agent 视图里的斜杠命令
+  private agentCommand(session: NonNullable<PigeonTuiShell["agentSession"]>, value: string): void {
+    const scope = commandScope(value);
+    const name = lookupSlashCommand(slashTokens(value))?.name;
+    const keep = (line: string): void => {
+      session.flow.addSystem(line);
+      this.input.setText(value);
+    };
+    // 改写它的历史或手上工作的四条只对主代理
+    if (scope === "main") {
+      keep(`/${name} only works in the main agent's view`);
+      return;
+    }
+    // 代理级的看这个子 agent 在不在跑，程序级的与主视图一样看主代理
+    const busy =
+      scope === "agent" ? agentActive(session.record) || session.compacting : this.isBusy();
+    const rejection = busy ? rejectWhileRunning(value) : undefined;
+    if (rejection !== undefined) {
+      keep(rejection);
+      return;
+    }
+    if (
+      scope === "agent" &&
+      AGENT_RUNTIME_COMMANDS.has(name ?? "") &&
+      this.options.agents?.commands?.(session.record) === undefined
+    ) {
+      keep(`${agentLabel(session.record)} isn't open right now; send it a message first`);
+      return;
+    }
+    session.flow.addUserEcho(value);
+    dispatchSlashCommand(this.agentCommandsHost(session), value);
+  }
+
+  // 决策 505：子 agent 视图的命令宿主——代理级命令接到这个子 agent 上，程序级的交给壳（输出落在子 agent 视图里）
+  private agentCommandsHost(session: NonNullable<PigeonTuiShell["agentSession"]>): CommandsHost {
+    const face = this.options.agents;
+    const record = session.record;
+    const commands = () => face?.commands?.(record);
+    const configCommand = this.configCommand;
+    const reloadCommand = this.reloadCommand;
+    const panelCommand = this.panelCommand;
+    return {
+      addSystem: (line) => session.flow.addSystem(line),
+      addAlert: (line) => session.flow.addAlert(line),
+      render: () => this.tui.requestRender(),
+      requestExit: () => this.requestExit(),
+      sessionId: () => (record.sessionId ?? "") as SessionId,
+      grants: () => commands()?.grants,
+      resumeConfigured: () => this.resumeConfigured(),
+      resumeCommand: (arg) => this.resumeCommand(arg),
+      newSessionCommand: (request) => this.newSessionCommand(request),
+      compactCommand: (focus) => this.compactAgent(session, focus),
+      ...(reloadCommand !== undefined ? { reloadCommand } : {}),
+      tasks: () => commands()?.tasks(),
+      hooksView: () => commands()?.hooks,
+      memory: () => this.memory(),
+      captureEscape: (onEscape) => this.captureEscape(onEscape),
+      beginCleanConfirm: () => this.beginCleanConfirm(),
+      worktrees: () => this.worktrees(),
+      renameSession: (name) => {
+        const reply = face?.rename?.(record, name) ?? "/rename is not available here";
+        this.updateStatus();
+        return reply;
+      },
+      ...(configCommand !== undefined ? { configCommand } : {}),
+      ...(panelCommand !== undefined ? { panelCommand } : {}),
+      statusCommand: () =>
+        face?.status?.(record) ?? Promise.resolve("/status is not available here"),
+    };
+  }
+
+  // 决策 505：子 agent 视图里的 /compact——压它自己的上下文；压的期间它不起新的一轮（来的消息排着）
+  private compactAgent(
+    session: NonNullable<PigeonTuiShell["agentSession"]>,
+    focus: string | undefined
+  ): void {
+    const compact = this.options.agents?.compact;
+    if (compact === undefined) {
+      session.flow.addSystem("/compact is not available for this sub-agent");
+      return;
+    }
+    session.compacting = true;
+    this.updateStatus();
+    this.tui.requestRender();
+    const settle = (line: string | undefined, failed: boolean): void => {
+      session.compacting = false;
+      if (line !== undefined) {
+        if (failed) session.flow.addAlert(`[compact] ${line}`);
+        else session.flow.addSystem(`[compact] ${line}`);
+      }
+      this.updateStatus();
+      this.tui.requestRender();
+    };
+    compact(session.record, focus).then(
+      (outcome) => settle(manualCompactionText(outcome), outcome.kind === "failed"),
+      (error: unknown) =>
+        settle(`failed: ${error instanceof Error ? error.message : String(error)}`, true)
+    );
+  }
+
+  // 正在看的消息区（程序级命令就地执行时的输出落点）
+  private viewFlow(): MessageFlow {
+    return this.view === "agent" && this.agentSession !== undefined
+      ? this.agentSession.flow
+      : this.flow;
+  }
+
   // 决策 297、480：通知（子 agent 的结果与消息等）到来时叫醒 agent——与排队输入同一个出口；在跑时不动，通知留在运行面上，下一轮或这一轮结束后再递
   runNotices(): void {
     this.drainQueue();
@@ -1364,12 +1565,15 @@ export class PigeonTuiShell
       if (args === "") {
         const items = this.configItems();
         if (items === undefined) return;
-        // 整屏的设置视图；Esc 回主视图（斜杠命令只在主视图里用），把视图开着期间排下的输入与通知发出去
+        // 整屏的设置视图；Esc 回打开它的视图（决策 505：子 agent 视图里打开的回那个子 agent），把视图开着期间排下的输入与
+        // 通知发出去
+        const back = this.view === "agent" ? this.agentSession?.record : undefined;
         this.configPanel.open(
           items,
           (id, value) => this.applyConfig(id, value),
           () => {
-            this.showView("main");
+            if (back !== undefined) this.openAgentSession(back);
+            else this.showView("main");
             this.drainQueue();
           },
           () => Math.max(1, this.options.terminal.rows - CONFIG_CHROME_ROWS),
@@ -1657,7 +1861,7 @@ export class PigeonTuiShell
     const pool = this.options.pool;
     if (pool === undefined) return;
     // 决策 485：从主视图离开的当前会话记进工作清单；清单在打开面板时重读
-    if (this.view === "main") pool.left?.();
+    if (this.view === "main" || this.view === "agent") pool.left?.();
     pool.source.refresh?.();
     // 决策 458：打开时从不偷看开始（输入框里的话派新会话，不会悄悄发给上次偷看的会话）
     this.sessionPanel.closePeek();
@@ -1666,11 +1870,11 @@ export class PigeonTuiShell
     this.tui.requestRender();
   }
 
-  // 决策 470：主视图里输入框为空时按 ←：第一下在状态行提示，短时间内再按一下才打开面板并选中刚才所在的
-  // 会话（照 Claude Code，防误触）。没有面板（沙箱等）或设置关掉时不做事、不吞键
+  // 决策 470、503：会话视图（主代理、子 agent、只看历史的）里输入框为空时按 ←：第一下在状态行提示，短时间内再按一下
+  // 才打开面板并选中刚才所在的会话（照 Claude Code，防误触）。没有面板（沙箱等）或设置关掉时不做事、不吞键
   private leftOpensPanel(data: string): boolean {
     if (
-      this.view !== "main" ||
+      (this.view !== "main" && this.view !== "agent" && this.view !== "elsewhere") ||
       this.options.pool === undefined ||
       this.options.leftArrowOpensPanel?.() === false ||
       !isKey(data, "pigeon.openPanel") ||
@@ -1683,7 +1887,11 @@ export class PigeonTuiShell
     const first = this.panelLeftAt;
     this.clearPanelHint();
     if (first !== undefined && now - first <= this.exitWindowMs()) {
-      this.openPanel(this.current.sessionId);
+      this.openPanel(
+        this.view === "elsewhere"
+          ? (this.elsewhereSession?.card.id ?? this.current.sessionId)
+          : this.current.sessionId
+      );
       return true;
     }
     this.panelLeftAt = now;
@@ -1834,6 +2042,12 @@ export class PigeonTuiShell
       });
       return;
     }
+    // 决策 502：去掉首尾空白后少于 3 个字（按字符计，中文每字一个）不派新会话——多半是误触；字留在输入框
+    if ([...value.trim()].length < MIN_SPAWN_CHARS) {
+      this.input.setText(value);
+      this.sessionPanel.setNote("too short to start a session");
+      return;
+    }
     pool.source.spawn(value).then(
       (card) => {
         this.sessionPanel.followSpawn(card.id);
@@ -1851,14 +2065,54 @@ export class PigeonTuiShell
     );
   }
 
-  // 决策 485：进入别的 Pigeon 开着的会话：整屏只看它的历史（取自它的会话记录），Esc 回面板
+  // 决策 485、501：进入别的 Pigeon 开着的会话：整屏看它的历史（取自它的会话记录，记录有追加即重画），状态栏是它的模式、
+  // 上下文与用量；不收输入，Esc 或连按两下 ← 回面板
   private openElsewhere(card: PooledSessionCard): void {
     const flow = new MessageFlow();
     flow.setToolsExpanded(this.flow.toolsExpandedState());
-    this.renderHistoryInto(flow, card.id, undefined, card.root);
+    const root = card.root ?? this.sessionsRoot();
+    this.renderHistoryInto(flow, card.id, undefined, root);
     this.sessionPanel.closePeek();
-    this.elsewhereSession = { card, flow };
+    const path = root !== undefined ? recordedSessionPath(root, card.id) : undefined;
+    const session: ElsewhereSession = {
+      card,
+      flow,
+      ...(root !== undefined ? { root } : {}),
+      ...(path !== undefined ? { path, stamp: recordStamp(path) } : {}),
+      status:
+        root !== undefined ? recordedSessionStatus(root, card.id) : { cost: emptyCostTally() },
+    };
+    this.leaveElsewhere();
+    this.elsewhereSession = session;
+    if (path !== undefined) {
+      session.timer = setInterval(
+        () => this.followElsewhere(session),
+        this.options.recordPollMs ?? 1000
+      );
+      session.timer.unref?.();
+    }
     this.showView("elsewhere");
+  }
+
+  // 决策 501：它的会话记录有追加（文件的大小或修改时刻变了）即按记录重画，状态栏跟着
+  private followElsewhere(session: ElsewhereSession): void {
+    if (this.elsewhereSession !== session || session.path === undefined) return;
+    const stamp = recordStamp(session.path);
+    if (stamp === session.stamp) return;
+    session.stamp = stamp;
+    session.flow.clear();
+    this.renderHistoryInto(session.flow, session.card.id, undefined, session.root);
+    if (session.root !== undefined) {
+      session.status = recordedSessionStatus(session.root, session.card.id);
+    }
+    this.updateStatus();
+    this.tui.requestRender();
+  }
+
+  private leaveElsewhere(): void {
+    const timer = this.elsewhereSession?.timer;
+    if (timer !== undefined) clearInterval(timer);
+    this.elsewhereSession = undefined;
   }
 
   // 决策 484：进入会话面板里的一个会话——它成为当前会话（换手由装配方做），原来的当前会话退到面板接着跑
@@ -2222,11 +2476,7 @@ export class PigeonTuiShell
   }
 
   private titleText(): string {
-    // 验收修改：主视图不显示标题行；子 agent 的会话里留一行很短的弱化说明——在哪、怎么回去
-    if (this.view === "agent" && this.agentSession !== undefined) {
-      return secondary(`sub-agent ${this.agentSession.record.path} · esc to go back`);
-    }
-    // 决策 485：别的 Pigeon 开着的会话只看历史
+    // 验收修改：主视图不显示标题行（决策 503：子 agent 视图也不显示）。决策 485：别的 Pigeon 开着的会话只看历史
     if (this.view === "elsewhere" && this.elsewhereSession !== undefined) {
       return secondary(
         `session ${this.elsewhereSession.card.name} · open elsewhere · esc to go back`
@@ -2351,15 +2601,41 @@ export class PigeonTuiShell
   }
 
   private refreshContext(): void {
-    const usage = this.current.runtime.contextUsage?.();
-    this.statusBar.update(usage !== undefined ? { context: usage } : { context: undefined });
+    this.mainContext = this.current.runtime.contextUsage?.();
+    this.applyStatusBar();
   }
 
   private refreshCost(): void {
     const total = emptyCostTally();
     mergeCostTally(total, this.costBase);
     mergeCostTally(total, this.costLive);
-    this.statusBar.update({ cost: total });
+    this.mainCost = total;
+    this.applyStatusBar();
+  }
+
+  // 决策 501、503：状态栏是正在看的代理（只看历史的视图里是那个会话）的模式、上下文与用量
+  private applyStatusBar(): void {
+    const agent = this.view === "agent" ? this.agentSession : undefined;
+    const elsewhere = this.view === "elsewhere" ? this.elsewhereSession : undefined;
+    if (agent !== undefined) {
+      this.statusBar.update({
+        mode: this.modeControl()?.get(),
+        context: this.options.agents?.commands?.(agent.record)?.contextUsage(),
+        cost: agent.cost,
+      });
+    } else if (elsewhere !== undefined) {
+      this.statusBar.update({
+        mode: elsewhere.status.mode,
+        context: elsewhere.status.context,
+        cost: elsewhere.status.cost,
+      });
+    } else {
+      this.statusBar.update({
+        mode: this.modeControl()?.get(),
+        context: this.mainContext,
+        cost: this.mainCost,
+      });
+    }
   }
 
   // 打开或续接会话时重置花费：续接从会话记录累计已有花费（会话自己、它的子 agent 与复盘）
@@ -2670,7 +2946,7 @@ export class PigeonTuiShell
     // 决策 484：换会话与进入面板里的会话同一道守卫
     const blocked = this.handOffBlocked();
     if (blocked !== undefined) {
-      this.flow.addSystem(blocked);
+      this.viewFlow().addSystem(blocked);
       return;
     }
     if (arg === undefined) {
@@ -2694,13 +2970,13 @@ export class PigeonTuiShell
     // 决策 484：换会话与 /resume、进入面板里的会话同一道守卫（收尾、回退、重读设置、压缩进行中不给换）
     const blocked = this.handOffBlocked();
     if (blocked !== undefined) {
-      this.flow.addSystem(blocked);
+      this.viewFlow().addSystem(blocked);
       return;
     }
     const create = this.options.newSession?.create;
     const command = request.kind === "clear" ? "clear" : "new";
     if (create === undefined) {
-      this.flow.addSystem(`/${command} is not available in this session`);
+      this.viewFlow().addSystem(`/${command} is not available in this session`);
       return;
     }
     // 换手期间与 /resume 同样占住输入
@@ -2731,14 +3007,16 @@ export class PigeonTuiShell
     const reload = this.options.reload;
     if (reload === undefined) return undefined;
     return (args) => {
+      // 决策 505：子 agent 视图里就地执行，结果写在那里
+      const target = this.viewFlow();
       this.running = true;
       this.updateStatus();
       this.tui.requestRender();
       const finish = (lines: readonly string[], failed = false): void => {
         this.running = false;
         for (const line of lines) {
-          if (failed) this.flow.addAlert(line);
-          else this.flow.addSystem(line);
+          if (failed) target.addAlert(line);
+          else target.addSystem(line);
         }
         this.updateStatus();
         this.tui.requestRender();
@@ -2986,7 +3264,7 @@ export class PigeonTuiShell
   // 切换视图：重排组件、标题与状态行跟着变；消息区整体换掉，强制全量重绘
   private showView(view: ShellView): void {
     if (view !== "agent") this.leaveAgentSession();
-    if (view !== "elsewhere") this.elsewhereSession = undefined;
+    if (view !== "elsewhere") this.leaveElsewhere();
     // 换了视图，面板回到最上层、不选中
     this.agentPanel.reset();
     // 决策 442：离开设置视图即关它（它不可见时不能再吞键）
@@ -3019,7 +3297,7 @@ export class PigeonTuiShell
       const face = this.options.worktrees;
       const yes = data === "y" || data === "Y";
       if (yes) {
-        this.flow.addSystem(face?.confirmPending() ?? "nothing pending to confirm");
+        this.viewFlow().addSystem(face?.confirmPending() ?? "nothing pending to confirm");
       } else {
         face?.cancelPending();
         this.flow.addSystem("cancelled");
@@ -3051,18 +3329,18 @@ export class PigeonTuiShell
       this.escapeCapture();
       return { consume: true };
     }
-    // 决策 482：子 agent 面板（输入框为空时 ↓ 进入）与进入的子 agent（Esc 回去）
+    // 决策 482：子 agent 面板（输入框为空时 ↓ 进入）。决策 504：子 agent 视图里 Esc 中断它的这一轮
     if (this.agentPanel.isFocused()) {
       const handled = this.handleAgentPanelKey(data);
       if (handled !== undefined) return handled;
     }
-    if (this.view === "agent") {
-      if (!matchesKey(data, "escape")) return undefined;
-      this.backFromAgentSession();
+    if (this.view === "agent" && matchesKey(data, "escape")) {
+      this.interruptViewedAgent();
       return { consume: true };
     }
+    // 决策 503：主视图与子 agent 视图都有子 agent 面板
     if (
-      this.view === "main" &&
+      (this.view === "main" || this.view === "agent") &&
       this.options.agents !== undefined &&
       matchesKey(data, "down") &&
       this.input.getText() === "" &&
@@ -3071,7 +3349,7 @@ export class PigeonTuiShell
       this.tui.requestRender();
       return { consume: true };
     }
-    // 决策 470：输入框为空时按两下 ← 打开会话面板（主视图里）；别的键撤掉第一下
+    // 决策 470、503：输入框为空时按两下 ← 打开会话面板（任何会话视图里）；别的键撤掉第一下
     if (this.leftOpensPanel(data)) return { consume: true };
     if (this.panelLeftAt !== undefined) {
       this.clearPanelHint();
@@ -3079,6 +3357,7 @@ export class PigeonTuiShell
     }
     // 决策 443：会话面板与进入的会话（Esc 回面板）
     if (this.view === "panel") return this.handlePanelKey(data);
+    // 决策 501：只看历史的视图里 Esc 也回面板
     if (this.view === "elsewhere") {
       if (!matchesKey(data, "escape")) return undefined;
       this.openPanel(this.elsewhereSession?.card.id);

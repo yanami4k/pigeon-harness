@@ -1,6 +1,6 @@
-// 子 agent 面板在终端界面里（决策 482）：输入框下方列一层、输入框为空时 ↓ 进入、Enter 进入它的会话（打的字是使用者的话；
-// 决策 484：管整个程序的斜杠命令照用，作用于会话的不收）、Esc 回去、x 停下在跑的；有子 agent 在跑时 /exit 先问一句
-//（y 退出，别的键取消）
+// 子 agent 面板在终端界面里（决策 482、503、504）：输入框下方列一层、第一行 main、输入框为空时 ↓ 进入、Enter 切到选中的代理
+//（打的字是使用者的话）、子 agent 视图里面板照样在、Esc 中断它这一轮、x 停下在跑的；有子 agent 在跑时 /exit 先问一句
+//（y 退出，别的键取消）。子 agent 视图里的斜杠命令见 agent-view.test.ts
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -81,16 +81,17 @@ function makeShell() {
   return { shell, term, agents, sent, stopped, exits: () => exits };
 }
 
-test("面板在输入框下方；↓ 进入、Enter 进入子 agent 的会话，打的字发给它，作用于会话的斜杠命令不收、管整个程序的照用；Esc 回主视图；x 停下在跑的", async () => {
+test("面板在输入框下方、第一行 main；↓ 进入、Enter 切到子 agent，打的字发给它；子 agent 视图没有标题行、面板照样在、正在看的加粗；Esc 中断它这一轮、不回主视图；面板里选 main 回主代理；x 停下在跑的", async () => {
   const { shell, term, sent, stopped } = makeShell();
   shell.start();
   await settle();
   const screen = screenText(term);
+  assert.match(screen, /^ {2}main$/m);
   assert.match(screen, /general-1 {2}general · running/);
   assert.match(screen, /explore-1 {2}general · running/);
   term.input("\x1b[B");
   await settle();
-  assert.match(screenText(term), /› general-1/);
+  assert.match(screenText(term), /› general-1/, "主视图里进来先选第一个子 agent");
   term.input("\x1b[B");
   await settle();
   assert.match(screenText(term), /› explore-1/);
@@ -101,28 +102,50 @@ test("面板在输入框下方；↓ 进入、Enter 进入子 agent 的会话，
   term.input("\r");
   await settle();
   assert.equal(shell.currentView(), "agent");
-  assert.match(screenText(term), /sub-agent general-1 · esc to go back/);
+  const inAgent = screenText(term);
+  assert.doesNotMatch(inAgent, /esc to go back/, "决策 503：子 agent 视图没有标题行");
+  assert.match(inAgent, /^ {2}main$/m, "子 agent 视图里照样有面板");
+  assert.ok(term.writes.join("").includes("\x1b[1mgeneral-1"), "正在看的那个加粗");
   term.input("check the tests");
   term.input("\r");
   await settle();
   assert.deepEqual(sent, [["general-1", "check the tests"]]);
-  term.input("/compact");
-  term.input("\r");
-  await settle();
-  assert.match(screenText(term), /not available in a sub-agent's session/);
-  term.input("\x15");
+  // 决策 504：Esc 中断它这一轮，留在它的视图里
   term.input("\x1b");
   await settle();
+  assert.equal(shell.currentView(), "agent");
+  assert.deepEqual(stopped, ["explore-1", "general-1"]);
+  term.input("\x1b");
+  await settle();
+  assert.equal(shell.currentView(), "agent", "已停下的再按 Esc 也不回主视图");
+  assert.deepEqual(stopped, ["explore-1", "general-1"]);
+  // 回主代理：面板里选 main（子 agent 视图里进来先选 main）
+  term.input("\x1b[B");
+  await settle();
+  assert.match(screenText(term), /› main/);
+  term.input("\r");
+  await settle();
   assert.equal(shell.currentView(), "main");
-  // 管整个程序的命令：回到主视图执行
+  shell.stop();
+});
+
+test("决策 503：子 agent 视图里在面板上直接切到另一个子 agent", async () => {
+  const { shell, term } = makeShell();
+  shell.start();
+  await settle();
   term.input("\x1b[B");
   term.input("\r");
   await settle();
   assert.equal(shell.currentView(), "agent");
-  term.input("/panel");
+  term.input("\x1b[B");
+  term.input("\x1b[B");
+  term.input("\x1b[B");
+  await settle();
+  assert.match(screenText(term), /› explore-1/);
   term.input("\r");
   await settle();
-  assert.notEqual(shell.currentView(), "agent");
+  assert.equal(shell.currentView(), "agent");
+  assert.match(screenText(term), /sub-agent: explore-1 running/);
   shell.stop();
 });
 

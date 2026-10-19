@@ -130,6 +130,7 @@ import {
   worktreeSectionOf,
 } from "../state/settings.ts";
 import { worktreeBaseModeOf } from "../state/worktree-config.ts";
+import { agentCommandsFace } from "./agent-commands.ts";
 import { createTuiApprovalHandler, type TuiApprovalFace } from "./approval.ts";
 import { readWindowsClipboard } from "./clipboard.ts";
 import { KEYBINDING_ID_PREFIX } from "./config-panel.ts";
@@ -909,6 +910,12 @@ export async function main(argv: string[]): Promise<void> {
     return { sessionId: id, binding: bindingOf(next) };
   }
 
+  // 子 agent 的会话所在的会话根（在它所属会话名下）
+  const agentHistoryDir = (record: SubagentRecord): string | undefined =>
+    subagentSessionsDirFor(
+      sessionsDirOf(rootOfSession(record.top.endpoint.sessionId)),
+      record.top.endpoint.sessionId
+    );
   const shell = new PigeonTuiShell({
     terminal: new ProcessTerminal(),
     // 决策 482：子 agent 面板与进入子 agent（沙箱、--no-subagents 没有）
@@ -921,11 +928,13 @@ export async function main(argv: string[]): Promise<void> {
             stop: (record: SubagentRecord) => agentHub.stop(record),
             send: (record: SubagentRecord, text: string) => agentHub.sendFromUser(record, text),
             live: (record: SubagentRecord) => record.runtime?.live,
-            historyDir: (record: SubagentRecord) =>
-              subagentSessionsDirFor(
-                sessionsDirOf(rootOfSession(record.top.endpoint.sessionId)),
-                record.top.endpoint.sessionId
-              ),
+            historyDir: agentHistoryDir,
+            // 决策 505：子 agent 视图里的代理级命令作用于这个子 agent
+            ...agentCommandsFace({
+              hub: agentHub,
+              historyDir: agentHistoryDir,
+              projectOf: (record) => rootOfSession(record.top.endpoint.sessionId),
+            }),
           },
         }
       : {}),

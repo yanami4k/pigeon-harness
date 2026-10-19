@@ -34,7 +34,7 @@ import { disposeRuntime } from "./runtime.ts";
 import { accumulatedSessionCost, sessionCostTally } from "./session-cost.ts";
 import { openSessionRuntime } from "./session-runtime.ts";
 import { agentMessageEntry } from "./session-store.ts";
-import { createSubagentOpener, restoredAgentsOf } from "./subagent-runtime.ts";
+import { createSubagentOpener, inspectSubagent, restoredAgentsOf } from "./subagent-runtime.ts";
 import { AGENT_TRUST_SENTENCE, AgentHub, type AgentToolsHost } from "./subagents.ts";
 import { takeFromAgent } from "./take-changes.ts";
 import { listLeftoverWorktrees } from "./worktree-cleanup.ts";
@@ -336,6 +336,46 @@ test("带上下文起步：复制派出方截到这一轮之前的对话（文�
       })),
       [{ name: "general-1", type: "general", parent: sessionId, interrupted: false }]
     );
+  } finally {
+    await disposeRuntime(opened.bundle).catch(() => {});
+    root.cleanup();
+  }
+});
+
+test("决策 505：子 agent 的运行面给命令用的那一面——它自己的放权、上下文与手动压缩；改名记进它的会话记录，续接认回显示名", async () => {
+  const root = repo();
+  const delivered: string[] = [];
+  const { streamFn } = routed(
+    [
+      {
+        text: "",
+        toolCalls: [{ name: "spawn_agent", args: { task: "carry on", background: false } }],
+      },
+      { text: "done" },
+    ],
+    [{ text: "child reply", contextTokens: 7 }]
+  );
+  const { hub, sessionId, opened } = await openTop(root, streamFn, delivered);
+  try {
+    await opened.bundle.adapter.run("spawn one");
+    const [record] = hub.agentsOf(sessionId);
+    const inspect = inspectSubagent(record?.runtime);
+    assert.ok(record !== undefined && inspect !== undefined);
+    assert.equal(inspect.governanceRoot, root.dir);
+    assert.notEqual(inspect.bundle.grantStore, opened.bundle.grantStore, "放权是它自己的");
+    assert.ok(inspect.bundle.adapter.contextUsage() !== undefined, "上下文用量");
+    const outcome = await hub.compacting(record, () => inspect.bundle.adapter.compact());
+    assert.ok(["compacted", "skipped", "failed"].includes(outcome.kind));
+    hub.rename(record, "carrier");
+    await inspect.bundle.sessionStore.flush();
+    await opened.bundle.sessionStore.flush();
+    const topFile = await opened.bundle.sessionStore.filePath();
+    assert.ok(topFile !== undefined);
+    assert.deepEqual(
+      restoredAgentsOf(topFile, sessionId).map((agent) => [agent.name, agent.displayName]),
+      [["general-1", "carrier"]]
+    );
+    await hub.close();
   } finally {
     await disposeRuntime(opened.bundle).catch(() => {});
     root.cleanup();

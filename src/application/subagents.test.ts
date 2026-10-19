@@ -23,6 +23,8 @@ interface FakeAgent {
   finish(reply: string, status?: string): void;
   interrupted: number;
   closed: boolean;
+  // 决策 505：记进它会话记录的显示名
+  names: string[];
 }
 
 function harness(
@@ -44,6 +46,7 @@ function harness(
       notices: [],
       interrupted: 0,
       closed: false,
+      names: [],
       finish: (text, status = "completed") => {
         reply = text;
         const done = pending;
@@ -81,6 +84,9 @@ function harness(
         : {}),
       record: (entry) => {
         fake.records.push(entry);
+      },
+      setName: (name) => {
+        fake.names.push(name);
       },
       close: async () => {
         fake.closed = true;
@@ -395,4 +401,48 @@ test("list_agents：会话带全量会话号，子 agent 照旧按名字", async
   const text = renderAgentList(host.list());
   assert.match(text, /^main: session main-session$/m);
   assert.match(text, /^general-1: general, /m);
+});
+
+test("决策 505：/rename 只改显示名——记进它的会话记录，list_agents 两个名字都列，地址不变；改回原名即去掉显示名", async () => {
+  const { hub, host, agents } = harness();
+  await host.spawn({ task: "find the parser", type: "explore" });
+  await tick();
+  const record = hub.agentsOf("main-session")[0];
+  assert.ok(record !== undefined);
+  hub.rename(record, "parser-hunt");
+  assert.equal(record.displayName, "parser-hunt");
+  assert.equal(record.agentName, "explore-1");
+  assert.deepEqual(agents[0]?.names, ["parser-hunt"]);
+  assert.match(renderAgentList(host.list()), /^explore-1 \(shown as parser-hunt\): explore, /m);
+  assert.doesNotMatch(host.send("explore-1", "status?"), /^Error/, "地址仍是派出时的名字");
+  hub.rename(record, "explore-1");
+  assert.equal(record.displayName, undefined);
+  assert.doesNotMatch(renderAgentList(host.list()), /shown as/);
+});
+
+test("决策 505：/compact 只在停着时压；压的期间来的话排着、不起新的一轮，压完再叫它接着干", async () => {
+  const { hub, host, agents } = harness();
+  await host.spawn({ task: "find the parser", type: "explore" });
+  await tick();
+  const record = hub.agentsOf("main-session")[0];
+  const child = agents[0];
+  assert.ok(record !== undefined && child !== undefined);
+  await assert.rejects(
+    hub.compacting(record, async () => "unused"),
+    /can't compact explore-1 while it's running/
+  );
+  child.finish("found it");
+  await tick();
+  assert.equal(record.state, "idle");
+  const gate = Promise.withResolvers<string>();
+  const compacted = hub.compacting(record, () => gate.promise);
+  assert.equal(hub.sendFromUser(record, "now fix it"), undefined);
+  await tick();
+  assert.equal(child.inputs.length, 1, "压的期间不起新的一轮");
+  assert.equal(record.state, "idle");
+  gate.resolve("compacted");
+  assert.equal(await compacted, "compacted");
+  await tick();
+  assert.equal(record.state, "running", "压完即接着干");
+  assert.match(child.inputs[1] ?? "", /now fix it/);
 });

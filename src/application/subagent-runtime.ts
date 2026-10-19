@@ -85,6 +85,22 @@ function insideDir(dir: string, path: string): boolean {
   return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
+// 决策 505：子 agent 视图里代理级命令要的——它自己的运行面、放权、钩子、任务清单与会话记录（按运行面登记，不进通讯录）
+export interface SubagentInspect {
+  bundle: Pick<
+    RuntimeBundle,
+    "adapter" | "grantStore" | "configGrants" | "settings" | "hooks" | "taskList" | "sessionStore"
+  >;
+  governanceRoot: string;
+  modelId: string;
+}
+
+const inspections = new WeakMap<SubagentRuntime, SubagentInspect>();
+
+export function inspectSubagent(runtime: SubagentRuntime | undefined): SubagentInspect | undefined {
+  return runtime !== undefined ? inspections.get(runtime) : undefined;
+}
+
 // 续接所属会话时认回它的子 agent：读它名下 subagents 文件夹里的会话（最后一个 Run 没收尾的算没干完）
 export function restoredAgentsOf(topSessionFile: string, topSessionId: string): RestoredAgent[] {
   const agents: RestoredAgent[] = [];
@@ -102,6 +118,8 @@ export function restoredAgentsOf(topSessionFile: string, topSessionId: string): 
       interrupted: last !== undefined && last.end === undefined,
       ...(view.cwd !== undefined ? { workspace: view.cwd } : {}),
       ...(agent.model !== undefined ? { model: agent.model } : {}),
+      // 决策 505：/rename 改过的显示名
+      ...(view.name !== undefined && view.name !== agent.name ? { displayName: view.name } : {}),
       startedAt: view.createdAt,
       updatedAt: last?.end?.endedAt ?? last?.start.startedAt ?? view.createdAt,
     });
@@ -357,6 +375,8 @@ export function createSubagentOpener(base: SubagentOpenerBase): SubagentOpener {
         : {}),
       // 决策 486：它的工作目录（取它自己子 agent 的改动时的落点）
       workspaceRoot: () => opened.scope.workspaceRoot,
+      // 决策 505：/rename 改的显示名记进它自己的会话记录
+      setName: (name) => bundle.sessionStore.setName(name),
       close: async (options) => {
         detachLoopGuard();
         contexts.delete(sessionId);
@@ -367,6 +387,11 @@ export function createSubagentOpener(base: SubagentOpenerBase): SubagentOpener {
         releaseResumed?.();
       },
     };
+    inspections.set(runtime, {
+      bundle,
+      governanceRoot: base.governanceRoot,
+      modelId: spec.model ?? parent.modelId,
+    });
     return runtime;
   };
 }

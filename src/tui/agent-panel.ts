@@ -1,13 +1,14 @@
-// 子 agent 面板（决策 457、482）：输入框下方，列当前会话派出的子 agent，一次只列一层；还有下层的行标 (+N)；钻进下层时
-// 第一行写回到会话的路径（"main › general-1"）。在跑的、已中断的（续接后没干完的）一直列着，干完、失败、停下的保留约
-// 30 秒（按 x 提前清掉）。没有可列的行即不占地方。按键由壳路由：输入框为空时 ↓ 进入面板，↑↓ 选，→ 进下层，← 回上层
-//（最上层即回输入框），Enter 进入它的会话，x 停下在跑的或清掉已结束的，Esc 回输入框。只写状态，不写按键说明。
+// 子 agent 面板（决策 457、482、503）：输入框下方，列当前会话派出的子 agent，一次只列一层；还有下层的行标 (+N)；钻进下层时
+// 第一行写回到会话的路径（"main › general-1"）。最上层的第一行是 `main`（主代理），正在看的那个（主代理或子 agent）加粗。
+// 在跑的、已中断的（续接后没干完的）一直列着，干完、失败、停下的保留约 30 秒（按 x 提前清掉），正在看的一直列着。没有可列的
+// 子 agent 即不占地方。按键由壳路由：输入框为空时 ↓ 进入面板，↑↓ 选，→ 进下层，← 回上层（最上层即回输入框），Enter 切到
+// 选中的代理，x 停下在跑的或清掉已结束的，Esc 回输入框。只写状态，不写按键说明。
 // 名字与类型来自模型与类型文件（半信任）：显示前一律净化、压成一行。
 import type { Component } from "@earendil-works/pi-tui";
 import { sanitizeTerminalText } from "../application/format.ts";
 import type { AgentState, SubagentRecord } from "../application/subagents.ts";
 import { clipToWidth } from "./status-bar.ts";
-import { secondary } from "./style.ts";
+import { bold, secondary } from "./style.ts";
 
 // 已结束的行保留多久
 export const AGENT_ROW_RETAIN_MS = 30_000;
@@ -33,6 +34,15 @@ export function agentActive(record: Pick<SubagentRecord, "state">): boolean {
   return record.state === "starting" || record.state === "running";
 }
 
+// 决策 503：最上层的第一行——主代理
+export const MAIN_ROW = "main";
+export type AgentRow = SubagentRecord | typeof MAIN_ROW;
+
+// 决策 505：改过的显示名（派出时的名字仍是它的地址）
+export function agentLabel(record: Pick<SubagentRecord, "agentName" | "displayName">): string {
+  return record.displayName ?? record.agentName;
+}
+
 export interface AgentPanelSource {
   // 当前会话（连同各层）的全部子 agent
   agents(): readonly SubagentRecord[];
@@ -40,6 +50,8 @@ export interface AgentPanelSource {
   sessionName(): string;
   // 在等审批的子 agent（路径）
   waiting?(): ReadonlySet<string>;
+  // 决策 503：正在看的子 agent（undefined 即主代理）
+  viewing?(): SubagentRecord | undefined;
   now(): number;
 }
 
@@ -47,7 +59,7 @@ export class AgentPanel implements Component {
   private readonly source: AgentPanelSource;
   // 当前列的是谁的下层；undefined 为会话这一层
   private level: SubagentRecord | undefined;
-  private selectedRecord: SubagentRecord | undefined;
+  private selectedRecord: AgentRow | undefined;
   private focused = false;
   // x 清掉的行与清掉时它最后的变化时刻（之后又有变化即重新列出）
   private readonly cleared = new WeakMap<SubagentRecord, number>();
@@ -62,6 +74,7 @@ export class AgentPanel implements Component {
   }
 
   private shown(record: SubagentRecord): boolean {
+    if (record === this.source.viewing?.()) return true;
     if (this.isCleared(record)) return false;
     if (agentActive(record) || record.state === "interrupted") return true;
     if (this.source.now() - record.updatedAt < AGENT_ROW_RETAIN_MS) return true;
@@ -83,9 +96,12 @@ export class AgentPanel implements Component {
   private descendants(record: SubagentRecord): number {
     let count = 0;
     for (const child of this.source.agents()) {
-      if (child.parent !== record || this.isCleared(child)) continue;
+      if (child.parent !== record || (this.isCleared(child) && child !== this.viewing())) {
+        continue;
+      }
       const below = this.descendants(child);
       const visible =
+        child === this.viewing() ||
         agentActive(child) ||
         child.state === "interrupted" ||
         this.source.now() - child.updatedAt < AGENT_ROW_RETAIN_MS ||
@@ -95,13 +111,19 @@ export class AgentPanel implements Component {
     return count;
   }
 
-  rows(): SubagentRecord[] {
+  private viewing(): SubagentRecord | undefined {
+    return this.source.viewing?.();
+  }
+
+  rows(): AgentRow[] {
     // 所在的那一层没有可列的了：回到上层
     while (this.level !== undefined && this.childrenOf(this.level).length === 0) {
       this.level =
         this.level.parent.kind === "agent" ? (this.level.parent as SubagentRecord) : undefined;
     }
-    return this.childrenOf(this.level);
+    const children = this.childrenOf(this.level);
+    // 决策 503：最上层有子 agent 可列时第一行是主代理
+    return this.level === undefined && children.length > 0 ? [MAIN_ROW, ...children] : children;
   }
 
   // 有没有可列的（没有即不占地方）
@@ -130,8 +152,10 @@ export class AgentPanel implements Component {
     const rows = this.rows();
     if (rows.length === 0) return false;
     this.focused = true;
+    // 决策 503：进来时选中第一个不是正在看的（主视图里即第一个子 agent，子 agent 视图里即 main）
     if (this.selectedRecord === undefined || !rows.includes(this.selectedRecord)) {
-      this.selectedRecord = rows[0];
+      const viewing = this.viewing() ?? MAIN_ROW;
+      this.selectedRecord = rows.find((row) => row !== viewing) ?? rows[0];
     }
     return true;
   }
@@ -140,7 +164,7 @@ export class AgentPanel implements Component {
     this.focused = false;
   }
 
-  selected(): SubagentRecord | undefined {
+  selected(): AgentRow | undefined {
     const rows = this.rows();
     if (this.selectedRecord !== undefined && rows.includes(this.selectedRecord)) {
       return this.selectedRecord;
@@ -152,7 +176,7 @@ export class AgentPanel implements Component {
   // ↑：第一行再往上即回输入框（返回 false）
   up(): boolean {
     const rows = this.rows();
-    const index = rows.indexOf(this.selected() as SubagentRecord);
+    const index = rows.indexOf(this.selected() as AgentRow);
     if (index <= 0) {
       this.focused = false;
       return false;
@@ -163,14 +187,16 @@ export class AgentPanel implements Component {
 
   down(): void {
     const rows = this.rows();
-    const index = rows.indexOf(this.selected() as SubagentRecord);
+    const index = rows.indexOf(this.selected() as AgentRow);
     if (index >= 0 && index < rows.length - 1) this.selectedRecord = rows[index + 1];
   }
 
   // →：选中的有下层即钻进去
   drillIn(): boolean {
     const record = this.selected();
-    if (record === undefined || this.childrenOf(record).length === 0) return false;
+    if (record === undefined || record === MAIN_ROW || this.childrenOf(record).length === 0) {
+      return false;
+    }
     this.level = record;
     this.selectedRecord = this.childrenOf(record)[0];
     return true;
@@ -213,13 +239,21 @@ export class AgentPanel implements Component {
     }
     const waiting = this.source.waiting?.() ?? new Set<string>();
     const selected = this.focused ? this.selected() : undefined;
+    const viewing = this.viewing() ?? MAIN_ROW;
     for (const record of rows) {
+      const cursor = record === selected ? "› " : "  ";
+      // 决策 503：正在看的那个加粗
+      const mark = (text: string) => (record === viewing ? bold(text) : text);
+      if (record === MAIN_ROW) {
+        lines.push(clipToWidth(`${cursor}${mark(MAIN_ROW)}`, width));
+        continue;
+      }
       const below = this.descendants(record);
       const state = waiting.has(record.path) ? "waiting for approval" : STATE_WORD[record.state];
       const detail =
         record.state === "failed" && record.error !== undefined ? `: ${oneLine(record.error)}` : "";
       const text =
-        `${record === selected ? "› " : "  "}${oneLine(record.agentName)}  ` +
+        `${cursor}${mark(oneLine(agentLabel(record)))}  ` +
         secondary(`${oneLine(record.type.name)} · ${state}${detail}`) +
         (below > 0 ? secondary(` (+${below})`) : "");
       lines.push(clipToWidth(text, width));

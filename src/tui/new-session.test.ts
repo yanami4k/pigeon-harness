@@ -53,16 +53,16 @@ function makeShell(extra: Partial<TuiShellOptions> = {}) {
   };
 }
 
-test("命令表：/clear 与 /new [path] 运行中可用、作用于当前会话", () => {
-  for (const [name, usage] of [
-    ["clear", "/clear"],
-    ["new", "/new [path]"],
+test("命令表：/clear 与 /new [path] 运行中可用；决策 505：/clear 只对主代理，/new 在哪都一样", () => {
+  for (const [name, usage, scope] of [
+    ["clear", "/clear", "main"],
+    ["new", "/new [path]", "program"],
   ] as const) {
     const spec = SLASH_COMMANDS.find((entry) => entry.name === name);
     assert.ok(spec !== undefined, `/${name} 应在命令表里`);
     assert.equal(spec.usage, usage);
     assert.equal(spec.whileRunning.allow, true);
-    assert.equal(spec.scope, "session");
+    assert.equal(spec.scope, scope);
   }
   assert.equal(
     SLASH_COMMANDS.some((entry) => entry.name === "move"),

@@ -160,6 +160,40 @@ function makeShell(extra: Partial<TuiShellOptions> = {}, rows = 40) {
 const ESC = "\x1b";
 const CTRL_X = "\x18";
 
+test("决策 502：面板里去掉首尾空白后少于 3 个字不派新会话，字留在输入框、提示行写明；偷看时发话不受限", async () => {
+  const { shell, term, runs, finishers, cleanup } = makeShell();
+  try {
+    await settle();
+    term.input("/panel");
+    term.input("\r");
+    await settle();
+    for (const text of ["ab", "  修好  "]) {
+      term.input("\x15");
+      term.input(text);
+      term.input("\r");
+      await settle();
+      assert.deepEqual(runs, [], `${JSON.stringify(text)} 不派`);
+      assert.equal(shell.inputText(), text.trim(), "字留在输入框");
+      assert.match(screenText(term), /too short to start a session/);
+    }
+    term.input("\x15");
+    term.input("修登录");
+    term.input("\r");
+    await settle();
+    assert.deepEqual(runs, ["s1:修登录"], "中文三个字即可");
+    finishers[0]?.("修好了");
+    await settle();
+    term.input(" ");
+    await settle();
+    term.input("好");
+    term.input("\r");
+    await settle();
+    assert.deepEqual(runs, ["s1:修登录", "s1:好"], "偷看时发给它的话照旧，不看长短");
+  } finally {
+    cleanup();
+  }
+});
+
 test("/panel 打开面板；输入框里的话派新会话；按状态分组，等待回应在前；卡片文字经净化", async () => {
   const { term, runs, finishers, pool, cleanup } = makeShell();
   try {
@@ -198,7 +232,7 @@ test("空格偷看，偷看时输入发给选中的会话；决策 484：空输�
     term.input("/panel");
     term.input("\r");
     await settle();
-    term.input("一");
+    term.input("任务一");
     term.input("\r");
     await settle();
     finishers[0]?.("一做完了");
@@ -210,7 +244,7 @@ test("空格偷看，偷看时输入发给选中的会话；决策 484：空输�
     term.input("接着做二");
     term.input("\r");
     await settle();
-    assert.deepEqual(runs, ["s1:一", "s1:接着做二"]);
+    assert.deepEqual(runs, ["s1:任务一", "s1:接着做二"]);
     term.input(ESC);
     await settle();
     assert.doesNotMatch(screenText(term), /-- peek --/);
@@ -246,7 +280,7 @@ test("决策 483：Ctrl+X 第一下停下选中的会话（运行面不释放）
     term.input("/panel");
     term.input("\r");
     await settle();
-    term.input("一");
+    term.input("任务一");
     term.input("\r");
     await settle();
     term.input(CTRL_X);
@@ -378,7 +412,7 @@ test("/resume 不能换到面板里还开着的会话", async () => {
     term.input("/panel");
     term.input("\r");
     await settle();
-    term.input("一");
+    term.input("任务一");
     term.input("\r");
     await settle();
     term.input(ESC);
@@ -816,7 +850,7 @@ test("决策 490：/take 不带参数把命令填进输入框、候选随即弹�
     term.input("/panel");
     term.input("\r");
     await settle();
-    term.input("干活");
+    term.input("干活了");
     term.input("\r");
     await settle();
     term.input("还在干");

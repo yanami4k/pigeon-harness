@@ -129,3 +129,37 @@ export function statusReportText(report: StatusReport): string {
   lines.push(line("mode", mode));
   return lines.join("\n");
 }
+
+// 决策 505：子 agent 视图里的 /status——作用于正在看的这个子 agent
+export interface AgentStatusReport {
+  // 派出时的名字（它的地址）与改过的显示名
+  name: string;
+  displayName?: string;
+  type: string;
+  // 状态词（同子 agent 面板）
+  state: string;
+  // 所属会话：名字与会话号
+  session: { id: string; name?: string };
+  // 同 StatusReport.cwd（相对项目写）
+  cwd: string;
+  record?: string;
+  model?: string;
+  usage?: StatusReport["usage"];
+}
+
+export function agentStatusText(report: AgentStatusReport): string {
+  const name =
+    report.displayName !== undefined ? `${report.displayName} (${report.name})` : report.name;
+  const session = [report.session.name, report.session.id]
+    .filter((part): part is string => part !== undefined && part !== "")
+    .join(" · ");
+  const lines = [
+    line("agent", [name, report.type, report.state].join(" · ")),
+    line("session", session),
+    line("cwd", report.cwd === "" ? "= project" : report.cwd),
+  ];
+  if (report.record !== undefined) lines.push(line("record", report.record));
+  lines.push(line("model", report.model ?? "—"));
+  if (report.usage !== undefined) lines.push(line("usage", usageText(report.usage)));
+  return lines.join("\n");
+}

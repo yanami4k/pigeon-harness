@@ -116,7 +116,7 @@ export function renderAgentList(items: readonly AgentListing[]): string {
     .map((item) =>
       item.kind === "session"
         ? `${item.name}: session ${item.sessionId ?? "(unknown ID)"}`
-        : `${item.name}: ${item.type ?? "agent"}, ${item.state ?? "unknown"}, started by ${item.parent ?? "unknown"}`
+        : `${item.name}${item.displayName !== undefined ? ` (shown as ${item.displayName})` : ""}: ${item.type ?? "agent"}, ${item.state ?? "unknown"}, started by ${item.parent ?? "unknown"}`
     )
     .join("\n");
 }

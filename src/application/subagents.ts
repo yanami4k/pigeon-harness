@@ -81,6 +81,8 @@ export interface SubagentRuntime {
   worktreeBase?(): string | undefined;
   // 决策 486：它的工作目录（在临时工作树里干活的即工作树；它取自己子 agent 的改动时作落点）
   workspaceRoot?(): string;
+  // 决策 505：改显示名（记进它自己的会话记录）
+  setName?(name: string): void;
 }
 
 // 派一个子 agent 要的一切（交给入口装配运行面）
@@ -120,6 +122,8 @@ export interface RestoredAgent {
   workspace?: string;
   // 派出时指定的模型
   model?: string;
+  // 决策 505：/rename 改过的显示名（记在它自己的会话记录里）
+  displayName?: string;
   startedAt: number;
   updatedAt: number;
 }
@@ -155,6 +159,8 @@ export interface AgentListing {
   // 派出它的（会话或子 agent 的名字）
   parent?: string;
   path?: string;
+  // 决策 505：使用者改的显示名（地址仍是 name）
+  displayName?: string;
 }
 
 export interface SpawnRequest {
@@ -202,6 +208,8 @@ interface SessionNode extends AgentNode {
 export interface SubagentRecord extends AgentNode {
   readonly kind: "agent";
   readonly agentName: string;
+  // 决策 505：使用者在它的视图里 /rename 改的显示名（只改显示；派出时的名字仍是它的地址）
+  displayName?: string;
   readonly type: AgentType;
   readonly path: string;
   readonly parent: AgentNode;
@@ -228,6 +236,8 @@ export interface SubagentRecord extends AgentNode {
   dormant?: boolean;
   // 一次干活还没收尾（叫停之后这一轮还在退出的路上）：这期间不另起一次
   activating?: boolean;
+  // 决策 505：使用者在它的视图里 /compact 正在压：这期间来的消息排着，压完再叫它接着干
+  compacting?: boolean;
   // 还没有运行面时收到的（续接认回的、或撞上并发上限一时开不了的）：开好后一并递出；使用者亲手打的没有传话条目
   inbox?: Array<{ text: string; entry?: AgentMessageRecord }>;
 }
@@ -525,6 +535,7 @@ export class AgentHub {
       state: agent.state,
       parent: this.#senderOf(agent.parent),
       path: agent.path,
+      ...(agent.displayName !== undefined ? { displayName: agent.displayName } : {}),
     }));
     return [...sessions, ...agents];
   }
@@ -792,6 +803,7 @@ export class AgentHub {
       this.#active(record) ||
       this.#closing ||
       record.activating === true ||
+      record.compacting === true ||
       record.dormant === true
     ) {
       return;
@@ -864,6 +876,7 @@ export class AgentHub {
         state: restored.interrupted ? "interrupted" : "idle",
         sessionId: restored.sessionId,
         ...(restored.workspace !== undefined ? { workspace: restored.workspace } : {}),
+        ...(restored.displayName !== undefined ? { displayName: restored.displayName } : {}),
         startedAt: restored.startedAt,
         updatedAt: restored.updatedAt,
         deliver: (text, entry) => this.#deliverTo(record, text, entry),
@@ -974,6 +987,27 @@ export class AgentHub {
   // 使用者在界面里停下（x）；同叫停
   async stop(record: SubagentRecord): Promise<void> {
     await this.#halt(record, "stopped");
+  }
+
+  // 决策 505：使用者在它的视图里 /compact——只在停着时压；压的期间不起新的一轮，压完有排着的即叫它接着干
+  async compacting<T>(record: SubagentRecord, work: () => Promise<T>): Promise<T> {
+    if (this.#active(record) || record.activating === true || record.compacting === true) {
+      throw new Error(`can't compact ${record.agentName} while it's running`);
+    }
+    record.compacting = true;
+    try {
+      return await work();
+    } finally {
+      record.compacting = false;
+      this.#startIfRoom(record);
+    }
+  }
+
+  // 决策 505：改它的显示名（记进它自己的会话记录，续接后还在）；还没有运行面的（续接认回、没重开的）只改这一次进程里的
+  rename(record: SubagentRecord, name: string): void {
+    if (name === record.agentName) delete record.displayName;
+    else record.displayName = name;
+    record.runtime?.setName?.(name);
   }
 
   // 某会话下还在干活的子 agent：在跑的，加上停着但开的后台作业还没收尾的（pigeon run 据此等）
