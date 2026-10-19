@@ -22,8 +22,6 @@ export interface ApprovalRequest {
   readonly runId?: RunId;
   // M5.5（决策 040）：请求所属的会话；决策 509：终端界面按它把审批挂在所属会话里（只在它的视图里出现）
   readonly sessionId?: SessionId;
-  // 决策 443：会话面板派出的独立会话的名字（来源行写明）；决策 509 起终端界面不再给（审批只在所属会话里出现）
-  readonly pooled?: { readonly name: string };
   // 决策 480：子 agent 的审批汇到所属会话的队列时在场——从会话往下的名字路径（"general-1 › explore-2"）；
   // 这时放权只记在这个子 agent 自己的会话里，按键说明写 for this sub-agent
   readonly subagent?: { readonly path: string };

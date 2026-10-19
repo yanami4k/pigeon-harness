@@ -14,27 +14,12 @@ import type { ToolExecutionDecision } from "../state/tool-execution.ts";
 // 参数摘要上限（字符）；超出截断并标注原长，防大参数刷屏
 const ARGS_SUMMARY_LIMIT = 160;
 
-// 审批来源行（M5.5 S3，决策 040）：别的会话的审批汇聚到同一面板时标明来源；主会话自己的请求无来源行（终端界面的审批块用）
+// 审批来源行（终端界面的审批块用）：子 agent 的请求写明是哪个子 agent（决策 480，嵌套带路径）；主代理自己的请求没有。
+// 决策 509：审批只在所属会话里出现，不再写所属会话
 export function approvalSourceLine(request: {
-  readonly sessionId?: string;
-  readonly pooled?: { readonly name: string };
   readonly subagent?: { readonly path: string };
 }): string | undefined {
-  // 决策 480：子 agent（嵌套带路径）；所属会话是面板里的会话时一并写明
-  if (request.subagent !== undefined) {
-    return (
-      `source: sub-agent ${request.subagent.path}` +
-      (request.pooled !== undefined ? ` | session ${request.pooled.name}` : "")
-    );
-  }
-  // 决策 443：会话面板派出的会话
-  if (request.pooled !== undefined) {
-    return (
-      `source: session ${request.pooled.name}` +
-      (request.sessionId !== undefined ? ` | session ID ${shortId(request.sessionId)}` : "")
-    );
-  }
-  return undefined;
+  return request.subagent !== undefined ? `source: sub-agent ${request.subagent.path}` : undefined;
 }
 
 // 决策 480：agent 之间的一条传话（trace 与 replay 共用）：哪一种、谁发给谁、正文开头一行

@@ -99,10 +99,10 @@ test("C1 控制字符（0x80–0x9f，0x9b 在部分终端里等同 ESC [）换�
   assert.equal(sanitizeTerminalText(cleaned), cleaned);
 });
 
-test("审批来源行：会话面板派出的会话写明会话名（决策 443），主会话没有", () => {
+test("审批来源行：子 agent 的请求写明路径，主代理自己的没有（决策 509：不再写所属会话）", () => {
   assert.equal(
-    approvalSourceLine({ sessionId: "sess_01ABCDEFGHJKMNPQRSTVWXYZ00", pooled: { name: "s2" } }),
-    "source: session s2 | session ID sess_01ABCDEF…"
+    approvalSourceLine({ subagent: { path: "general-1 › explore-2" } }),
+    "source: sub-agent general-1 › explore-2"
   );
   assert.equal(approvalSourceLine({}), undefined);
 });

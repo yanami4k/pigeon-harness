@@ -105,9 +105,7 @@ export function askApprovalPanel(
   const pending: PendingApproval = {
     resolve,
     ...(request.protectedPath !== undefined ? { protectedPath: true } : {}),
-    ...(request.pooled === undefined
-      ? { mainWaiting: `${request.toolName} ${summarizeArgs(request.args)}` }
-      : {}),
+    mainWaiting: `${request.toolName} ${summarizeArgs(request.args)}`,
   };
   host.setPendingApproval(pending);
   host.updateStatus();

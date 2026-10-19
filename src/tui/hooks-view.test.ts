@@ -299,7 +299,7 @@ test("决策 323：外部取消（Esc）后的这一轮不跑 Stop 钩子", asyn
   }
 });
 
-test("决策 323/324、457：审批面板出现记 permission_prompt；面板会话的请示同样记 permission_prompt", async () => {
+test("决策 323/324、457：审批面板出现记 permission_prompt；别的会话的请示同样记 permission_prompt", async () => {
   const hooks = new FakeHooks();
   const { shell, term, logDir } = makeShell(hooks);
   const notificationTypes = (): string[] =>
@@ -318,18 +318,15 @@ test("决策 323/324、457：审批面板出现记 permission_prompt；面板会
     term.input("y");
     await settle();
 
-    const pooledRequest: ApprovalRequest = {
+    const otherRequest: ApprovalRequest = {
       toolName: "edit_file",
       toolCallId: "tc-2",
       args: { path: "a.ts" },
       sessionId: newSessionId(),
-      pooled: { name: "w1" },
     };
-    void askApprovalPanel(shell, pooledRequest);
+    void shell.askApproval(otherRequest);
     await settle();
     assert.deepEqual(notificationTypes(), ["permission_prompt", "permission_prompt"]);
-    term.input("n");
-    await settle();
   } finally {
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });

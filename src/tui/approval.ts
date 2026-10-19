@@ -248,15 +248,12 @@ function subjectOf(request: ApprovalRequest): string {
 }
 
 function sourceOf(request: ApprovalRequest): string {
-  const parts = [request.pooled?.name, request.subagent?.path].filter(
-    (part): part is string => part !== undefined
-  );
-  return parts.length > 0 ? `[${parts.join(" › ")}] ` : "";
+  return request.subagent !== undefined ? `[${request.subagent.path}] ` : "";
 }
 
 // 决策 480：撤回的请求（子 agent 被停下）答完的一行
 export function withdrawnLine(request: ApprovalRequest): string {
-  return `${sourceOf(request)}withdrawn: ${request.subagent?.path ?? request.pooled?.name ?? request.toolName} was stopped`;
+  return `${sourceOf(request)}withdrawn: ${request.subagent?.path ?? request.toolName} was stopped`;
 }
 
 export function approvedLine(request: ApprovalRequest, note = ""): string {

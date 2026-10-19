@@ -20,14 +20,9 @@ test("子 agent 的请求：来源行带路径，[a]、[d] 写 for this sub-agen
     /\[a\] allow for this sub-agent \/ \[d\] allow for this sub-agent \(this directory\)/
   );
   assert.ok(!text.includes("for this session"));
-  const pooled = approvalBlockText(
-    { ...base, pooled: { name: "s1" }, subagent: { path: "general-1" } },
-    false
-  );
-  assert.match(pooled, /source: sub-agent general-1 \| session s1/);
   assert.match(
-    approvedLine({ ...base, pooled: { name: "s1" }, subagent: { path: "general-1" } }),
-    /^\[s1 › general-1\] ✓ approved edit_file: src\/a\.ts/
+    approvedLine({ ...base, subagent: { path: "general-1" } }),
+    /^\[general-1\] ✓ approved edit_file: src\/a\.ts/
   );
   const exec = approvalBlockText(
     {

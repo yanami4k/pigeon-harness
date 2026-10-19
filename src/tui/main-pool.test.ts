@@ -97,8 +97,6 @@ test("派出的会话进自己的工作树改文件、持有在用锁；审批�
   // 决策 490：缺省显示名是「目录名 + 会话号末 4 位」，工作树名跟着它
   assert.match(opened?.worktree?.path ?? "", new RegExp(`${opened?.name.toLowerCase()}-?`));
   assert.equal(lockCount(home), 1, "开着期间持有在用锁");
-  // 决策 509：审批带上所属会话（只在它的视图里出现），不再写来源会话
-  assert.equal(requests[0]?.pooled, undefined);
   assert.equal(requests[0]?.sessionId, opened?.id);
   assert.deepEqual(states, ["waiting"]);
   assert.match(pool.list()[0]?.waiting ?? "", /^write_file/);
@@ -451,7 +449,6 @@ test("决策 484、509：会话核换手——审批一律带上所属会话；�
   await pool.spawn("写 a1");
   await until(() => pool.list()[0]?.state === "idle", "第一轮跑完");
   assert.equal(requests[0]?.sessionId, pool.list()[0]?.id);
-  assert.equal(requests[0]?.pooled, undefined);
   assert.deepEqual(states, ["waiting"]);
   const id = pool.list()[0]?.id ?? "";
   // 取出、成为当前会话：审批照样带所属会话，打转检测挂到壳上
@@ -462,7 +459,6 @@ test("决策 484、509：会话核换手——审批一律带上所属会话；�
   assert.equal(guards, 1);
   await coreBundle(core).adapter.run("写 a2");
   assert.equal(requests[1]?.sessionId, core.sessionId);
-  assert.equal(requests[1]?.pooled, undefined);
   assert.equal(states[1], "none", "当前会话不在面板上");
   // 退回面板：卡片又标等待
   setCoreRole(context, core, false);
