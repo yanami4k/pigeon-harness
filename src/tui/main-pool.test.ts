@@ -9,14 +9,21 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { basename, join, resolve } from "node:path";
 import { afterEach, test } from "vitest";
 import { reopenNamedWorktree } from "../application/named-worktree.ts";
+import { createFixtureSession } from "../application/session-store-fixtures.ts";
 import { git, initRepo, routedModel, tempRoot } from "../application/tui-session-fixtures.ts";
+import { listLeftoverWorktrees, planClean } from "../application/worktree-cleanup.ts";
 import type { ApprovalRequest } from "../approvals/handler.ts";
+import { addWorktree } from "../orchestration/worktree.ts";
+import { addToSessionIndex, updateListedWorkspace } from "../persistence/session-index.ts";
 import { loadSettings } from "../persistence/settings.ts";
 import type { LayeredHook } from "../state/hooks.ts";
 import type { SessionId } from "../state/ids.ts";
-import { worktreesDirOf } from "../state/paths.ts";
+import { newSessionId } from "../state/ids.ts";
+import { sessionIndexPathOf, sessionsDirOf, worktreesDirOf } from "../state/paths.ts";
 import { emptySettingsSnapshot, type SettingsSnapshot } from "../state/settings.ts";
 import {
+  adoptCoreWorkspace,
+  adoptCoreWorktree,
   coreBundle,
   createSessionPool,
   pooledRuntimeOf,
@@ -538,4 +545,63 @@ test("目录名带点的项目（my.app）：面板派出的树名清洗成 my-a
   const card = pool.list()[0];
   assert.match(basename(card?.worktree?.path ?? ""), /^my-app-[0-9a-z]{4}$/);
   assert.equal(readFileSync(join(card?.worktree?.path ?? "", "made.txt"), "utf8"), "made\n");
+});
+
+// 决策 497：已在面板工作清单里的会话，工作目录一变清单里那条就跟着改（main.ts 的 adoptWorkspace 与 worktreeSwitch.adopt
+// 都经 adoptCoreWorkspace / adoptCoreWorktree）。真实场景：清单里的会话在主检出，用 enter_worktree 进了树 T；退出 Pigeon 后
+// 裸 clean 不删 T。没进过面板的会话不因此加进清单
+test("清单里的会话进了工作树 T：清单跟着改，退出之后裸 clean 不删 T；没进过面板的不加进清单", async () => {
+  const { root, cleanup } = tempRoot("pigeon-pool-follow-");
+  cleanups.push(cleanup);
+  const home = join(root, ".home");
+  mkdirSync(home);
+  initRepo(root, { "a.txt": "one\n" });
+  writeFileSync(join(root, ".gitignore"), ".pigeon/\n.home/\n");
+  const sessionId = newSessionId();
+  const writer = createFixtureSession({ sessionsDir: sessionsDirOf(root), sessionId, cwd: root });
+  await writer.close();
+  addToSessionIndex({ sessionId, governanceRoot: root, workspaceRoot: root }, home);
+  const tree = addWorktree({ repoRoot: root, sessionId: newSessionId(), name: "tree-t" });
+  const worktree = reopenNamedWorktree(root, tree.path);
+  assert.ok(worktree !== undefined);
+  const follow = (core: SessionCore) =>
+    updateListedWorkspace(core.sessionId, core.workspaceRoot, home);
+  const core = {
+    sessionId: sessionId as SessionId,
+    governanceRoot: root,
+    name: "s",
+    task: "",
+    modeCell: { current: "prompt" },
+    workspaceRoot: root,
+    current: true,
+    approvals: new AbortController(),
+    startContexts: [],
+  } as unknown as SessionCore;
+  // enter_worktree：工作目录换成树（worktreeSwitch.setWorkspace），再认领这棵树
+  core.workspaceRoot = tree.path;
+  adoptCoreWorktree(core, worktree, follow, home);
+  const listed = () =>
+    (
+      JSON.parse(readFileSync(sessionIndexPathOf(home), "utf8")) as {
+        sessions: Array<{ sessionId: string; workspaceRoot: string }>;
+      }
+    ).sessions;
+  assert.equal(resolve(listed()[0]?.workspaceRoot ?? ""), resolve(tree.path));
+  // 退出 Pigeon：在用标记放掉，只剩清单
+  core.releaseInUse?.();
+  const items = listLeftoverWorktrees({ workspaceRoot: root, homeDir: home });
+  const t = items.find((item) => item.name === "tree-t");
+  assert.match(t?.inUseReason ?? "", /session panel/);
+  assert.ok(!planClean(items, []).remove.some((item) => item.name === "tree-t"), "裸 clean 不删 T");
+  // 续接回到主检出（adoptWorkspace）：清单同样跟着改回去
+  adoptCoreWorkspace(core, root, follow, home);
+  assert.equal(resolve(listed()[0]?.workspaceRoot ?? ""), resolve(root));
+  // 没进过面板的会话：不加进清单
+  const other = { ...core, sessionId: newSessionId() as SessionId } as SessionCore;
+  other.worktree = undefined;
+  other.releaseInUse = undefined;
+  other.workspaceRoot = tree.path;
+  adoptCoreWorktree(other, worktree, follow, home);
+  (other.releaseInUse as (() => void) | undefined)?.();
+  assert.equal(listed().length, 1);
 });

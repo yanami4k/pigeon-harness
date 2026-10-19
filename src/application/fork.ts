@@ -20,7 +20,7 @@ import { loadStoreSession, loadStoreSessionFile } from "../persistence/session-v
 import { holdWorktreeInUse } from "../persistence/worktree-in-use.ts";
 import { type PruneSeed, pruneSeedFromEntries } from "../pi-runtime/context-prune.ts";
 import type { AgentMessage } from "../pi-runtime/index.ts";
-import { sessionContextMessages } from "../pi-runtime/session-store.ts";
+import { SessionStoreFault, sessionContextMessages } from "../pi-runtime/session-store.ts";
 import { newSessionId, type SessionId } from "../state/ids.ts";
 import type { OutcomeLabel } from "../state/outcome-label.ts";
 import { storeCheckpointBefore, storeMessageAt } from "../state/session-judge.ts";
@@ -56,6 +56,8 @@ export interface ForkRequest {
   input?: string;
   // 在用标记所在的主目录（测试注入；缺省用户主目录）
   homeDir?: string;
+  // 记分叉条目、开分支会话文件的那一步（测试注入；缺省 beginStoreFork）
+  beginFork?: typeof beginStoreFork;
 }
 
 export interface PreparedFork {
@@ -148,13 +150,14 @@ export async function prepareFork(request: ForkRequest): Promise<PreparedFork> {
     trigger: request.trigger,
     forkedAt: Date.now(),
   };
-  const storeFork = await beginStoreFork({
+  const onFault = storeFaultWarner();
+  const storeFork = await (request.beginFork ?? beginStoreFork)({
     sessionsDir: dir,
     sourceSessionId,
     ...(request.sourceStore !== undefined ? { sourceStore: request.sourceStore } : {}),
     cwd: sourceWorkspace,
     forked,
-    onFault: storeFaultWarner(),
+    onFault,
   });
   if (storeFork === undefined) {
     throw new ForkError(`writing the fork entry to session ${sourceSessionId} failed; not forked`);
@@ -208,9 +211,11 @@ export async function prepareFork(request: ForkRequest): Promise<PreparedFork> {
       releaseInUse,
     };
   } catch (error) {
-    // 准备失败：放掉在用标记，释放来源会话的写者（它再出错不盖过原来的错）
+    // 准备失败：放掉在用标记，释放来源会话的写者（它再出错不盖过原来的错，只告警一行）
     releaseInUse();
-    await storeFork.release().catch(() => {});
+    await storeFork.release().catch((cause: unknown) => {
+      onFault(new SessionStoreFault("fork", cause));
+    });
     throw error;
   }
   // 释放来源会话的写者也可能抛错：已持有的在用标记一并放掉，不留到进程退出

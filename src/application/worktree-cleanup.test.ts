@@ -395,7 +395,7 @@ test("确认清单写真正要删的分支：目录已不在、登记在用户�
   assert.doesNotMatch(text, /my-work2/);
 });
 
-// 决策 497：清单里的会话的工作目录变了（例如用 enter_worktree 进了树 T），清单里那条跟着走——退出 Pigeon 之后裸 clean 不删 T，
+// 决策 497：清单里的会话的工作目录变了（续接、/resume 回到另一棵树；主检出进树的真实路径另见 main-pool.test），清单里那条跟着走——退出 Pigeon 之后裸 clean 不删 T，
 // 它原先记的位置不再算它的；没进过面板的会话不因此加进清单
 test("清单里的会话进了另一棵树：清单跟着改，裸 clean 不删新树、旧位置不再算它的；不在清单里的不加", async () => {
   const repo = makeRepo();
@@ -404,7 +404,7 @@ test("清单里的会话进了另一棵树：清单跟着改，裸 clean 不删�
   const before = addWorktree({ repoRoot: repo, sessionId: newSessionId(), name: "before" });
   const tree = addWorktree({ repoRoot: repo, sessionId: newSessionId(), name: "tree-t" });
   const sessionId = await listInPanel(repo, before.path, home);
-  // 会话移进 T（main.ts 的 worktreeSwitch.adopt / adoptWorkspace 都走这一步）
+  // 会话换到 T（main.ts 的 adoptWorkspace 经 adoptCoreWorkspace 走这一步）
   updateListedWorkspace(sessionId, tree.path, home);
   const items = listLeftoverWorktrees(scope);
   assert.match(byName(items, "tree-t").inUseReason ?? "", /session panel/);

@@ -20,6 +20,7 @@ import {
   type NamedWorktree,
   openNamedWorktree,
   prefetchWorktreeBase,
+  reopenNamedWorktree,
   worktreeNameFrom,
 } from "../application/named-worktree.ts";
 import {
@@ -546,6 +547,41 @@ export function takeFromPanel(input: {
     return `Error: ${id} is in another repository; nothing to take`;
   }
   return pool.takeInto(card.id, { workspace: input.into, root: caller.governanceRoot });
+}
+
+// 决策 445、446：会话核认领它的工作目录（项目根或某棵工作树，含其中的子目录）；在工作树里的期间持有它的在用标记。
+// 决策 497：认领之后经 follow 让工作清单里那条跟着走（已在清单里的才改）
+export function adoptCoreWorkspace(
+  core: SessionCore,
+  root: string,
+  follow: (core: SessionCore) => void,
+  homeDir?: string
+): void {
+  core.workspaceRoot = root;
+  const next = sameDir(root, core.governanceRoot)
+    ? undefined
+    : (reopenNamedWorktree(core.governanceRoot, root) ?? core.worktree);
+  if (next?.path !== core.worktree?.path || core.releaseInUse === undefined) {
+    core.releaseInUse?.();
+    core.releaseInUse = next !== undefined ? holdWorktreeInUse(next.path, homeDir) : undefined;
+  }
+  core.worktree = next;
+  follow(core);
+}
+
+// 决策 446：会话移进工作树（enter_worktree，工作目录已换成它）：换持这棵树的在用标记；决策 497：工作清单里那条跟着走
+export function adoptCoreWorktree(
+  core: SessionCore,
+  worktree: NamedWorktree,
+  follow: (core: SessionCore) => void,
+  homeDir?: string
+): void {
+  if (core.worktree?.path !== worktree.path) {
+    core.releaseInUse?.();
+    core.releaseInUse = holdWorktreeInUse(worktree.path, homeDir);
+  }
+  core.worktree = worktree;
+  follow(core);
 }
 
 export function createSessionPool(context: SessionPoolContext): {

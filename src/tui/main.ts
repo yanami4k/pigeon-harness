@@ -47,11 +47,7 @@ import {
   resolveEditor,
   spawnEditor,
 } from "../application/memory-command.ts";
-import {
-  namedWorktreeRepoRoot,
-  openNamedWorktree,
-  reopenNamedWorktree,
-} from "../application/named-worktree.ts";
+import { namedWorktreeRepoRoot, openNamedWorktree } from "../application/named-worktree.ts";
 import { promptHistoryStore } from "../application/prompt-history.ts";
 import {
   applyRewind,
@@ -142,6 +138,8 @@ import { findFdPath } from "./fd-path.ts";
 import { keybindingRows } from "./keybindings.ts";
 import { guardTuiAgent } from "./loop-guard-view.ts";
 import {
+  adoptCoreWorkspace,
+  adoptCoreWorktree,
   attachCoreRuntime,
   closeCore,
   coreApprovalHandler,
@@ -520,17 +518,7 @@ export async function main(argv: string[]): Promise<void> {
   }
   // 决策 445、446：会话核的工作区（治理根或独立工作树）；独立工作树开着期间持有它的在用锁
   function adoptWorkspace(core: SessionCore, root: string): void {
-    core.workspaceRoot = root;
-    const next =
-      rootKey(root) === rootKey(core.governanceRoot)
-        ? undefined
-        : (reopenNamedWorktree(core.governanceRoot, root) ?? core.worktree);
-    if (next?.path !== core.worktree?.path || core.releaseInUse === undefined) {
-      core.releaseInUse?.();
-      core.releaseInUse = next !== undefined ? holdWorktreeInUse(next.path) : undefined;
-    }
-    core.worktree = next;
-    followListed(core);
+    adoptCoreWorkspace(core, root, followListed);
   }
   // 决策 497：已在面板工作清单里的会话，清单里那条的工作目录跟着它走（/worktrees clean 据此认在用的树）；没进过面板的不加进清单
   function followListed(core: SessionCore): void {
@@ -1424,13 +1412,8 @@ export async function main(argv: string[]): Promise<void> {
     rebuild: () => rebuildMain(settingsOfCore(current)),
     adopt: (worktree) => {
       const core = current;
-      if (core.worktree?.path !== worktree.path) {
-        core.releaseInUse?.();
-        core.releaseInUse = holdWorktreeInUse(worktree.path);
-      }
-      core.worktree = worktree;
       recordWorktreeEntry(coreBundle(core).sessionStore, worktree);
-      followListed(core);
+      adoptCoreWorktree(core, worktree, followListed);
     },
     system: (line, alert) =>
       alert === true ? shellHolder.current?.addAlert(line) : shellHolder.current?.addSystem(line),

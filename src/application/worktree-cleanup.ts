@@ -9,7 +9,7 @@
 // 期间变成在用或改动有变化的剔除并说明；真删的那一刻再看一次在用标记。删除不跟随链接（worktree.ts 的 removeWorktree）。
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import {
   branchCreationCommit,
   branchMovedSince,
@@ -24,7 +24,7 @@ import {
 import { type ListedSession, readableSessionIndex } from "../persistence/session-index.ts";
 import { worktreeInUse } from "../persistence/worktree-in-use.ts";
 import { pigeonRel, sessionIndexPathOf, worktreesDirOf } from "../state/paths.ts";
-import { plural } from "./format.ts";
+import { plural, tildePath } from "./format.ts";
 import { namedWorktreeBase, namedWorktreeBranch } from "./named-worktree.ts";
 import { sessionNameOf } from "./session-name.ts";
 
@@ -145,14 +145,6 @@ function untakenFiles(
   }
 }
 
-// 主目录下的路径缩写成 ~ 开头（给人看的说明里用）
-function homePath(path: string, home: string): string {
-  const rel = relative(home, path);
-  if (rel === "") return "~";
-  if (rel.startsWith("..") || isAbsolute(rel)) return path;
-  return `~${sep}${rel}`;
-}
-
 // 决策 497：会话面板工作清单里挂着的会话（它们的工作目录）；清单文件在却读不成为 undefined（这时每棵树都按在用算，
 // 不因读不到清单就删了面板会话的树）
 function listedSessions(scope: WorktreeScope): ListedSession[] | undefined {
@@ -173,7 +165,7 @@ function inUseFacts(
   if (listed === undefined) {
     const home = scope.homeDir ?? homedir();
     return {
-      inUseReason: `the session panel's work list can't be read: ${homePath(sessionIndexPathOf(home), home)}`,
+      inUseReason: `the session panel's work list can't be read: ${tildePath(sessionIndexPathOf(home), home)}`,
     };
   }
   const owner = listed.find(

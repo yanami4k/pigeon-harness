@@ -1,8 +1,3 @@
-// 决策 451：终端界面的欢迎头——启动时放在对话流最上方，随消息一起往上滚（不常驻）。左边像素鸽子（四分块字符 11 列 × 4 行，长宽比接近 1:1，
-// 不上色，用终端缺省前景色，深浅背景都看得见），右边三行字：Pigeon v版本（加粗）、所用模型、当前目录（主目录缩写为 ~），
-// 与鸽子纵向居中。窄终端放不下时只留文字（各行按宽度截断），不折行、不错位。
-// 决策 453：模型取运行面的模型信息（接入模块声明的优先，其次启动参数）；只有占位标签时没有真名字，不写这一行
-import { isAbsolute, relative, sep } from "node:path";
 import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { promptModelName } from "../application/system-prompt.ts";
 import { bold, secondary } from "./style.ts";
@@ -38,14 +33,8 @@ export function modelLabelOf(info: {
   return promptModelName(info) === undefined ? undefined : `${info.id} · ${info.provider}`;
 }
 
-// 主目录下的路径缩写成 ~ 开头（Windows 上不分大小写比较）
-export function tildePath(path: string, home: string): string {
-  if (home === "") return path;
-  const rel = relative(home, path);
-  if (rel === "") return "~";
-  if (rel.startsWith("..") || isAbsolute(rel)) return path;
-  return `~${sep}${rel}`;
-}
+// 主目录下的路径缩写成 ~ 开头（与命令行侧同一份，见 application/format.ts）
+export { tildePath } from "../application/format.ts";
 
 export function welcomeLines(info: WelcomeInfo, width: number): string[] {
   const texts = [`Pigeon v${info.version}`, info.model, info.cwd].filter(

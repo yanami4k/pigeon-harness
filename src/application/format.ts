@@ -1,6 +1,7 @@
 // Actor 报告共用通俗措辞格式化助手（trace / replay / resume 菜单等共用，单一约定，禁止各视图
 // 自造第二套措辞）。住在 application/（M2 S1，决策 025）：它是 cli 与将来的 tui 唯一同时
 // 可达的共享层——resume 流程（application/resume.ts）与 CLI 各只读视图（cli/）都从这里取措辞。
+import { isAbsolute, relative, sep } from "node:path";
 import type { FailureClass } from "../state/classification.ts";
 import type {
   ContinuationData,
@@ -84,6 +85,15 @@ export function failureLine(what: string, error: unknown): string {
 }
 
 // 英文数量写法："1 file"、"3 files"；复数不是加 s 的词传第三个参数
+
+// 主目录下的路径缩写成 ~ 开头（Windows 上不分大小写比较）；home 为空串即原样
+export function tildePath(path: string, home: string): string {
+  if (home === "") return path;
+  const rel = relative(home, path);
+  if (rel === "") return "~";
+  if (rel.startsWith("..") || isAbsolute(rel)) return path;
+  return `~${sep}${rel}`;
+}
 
 export function plural(count: number, noun: string, nouns = `${noun}s`): string {
   return `${count} ${count === 1 ? noun : nouns}`;

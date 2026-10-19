@@ -1,11 +1,11 @@
 // 分叉准备阶段（决策 494）：建好分叉工作树即持有它的在用标记；之后释放来源会话的写者（storeFork.release）抛错时，
-// 在用标记也一并放掉，不留到进程退出。这里把 beginStoreFork 换成释放时抛错的版本，走真实的 prepareFork
+// 在用标记也一并放掉，不留到进程退出。这里经 ForkRequest.beginFork 换上释放时抛错的 beginStoreFork，走真实的 prepareFork
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test, vi } from "vitest";
+import { test } from "vitest";
 import { loadStoreSession } from "../persistence/session-view.ts";
 import { worktreeInUse } from "../persistence/worktree-in-use.ts";
 import { createFakeStreamFn } from "../pi-runtime/fixtures.ts";
@@ -15,25 +15,22 @@ import { prepareFork } from "./fork.ts";
 import type { McpSession } from "./mcp.ts";
 import { disposeRuntime } from "./runtime.ts";
 import { openSessionRuntime } from "./session-runtime.ts";
-import { isStatusText } from "./status-fixtures.ts";
+import { beginStoreFork } from "./session-store.ts";
 
-vi.mock("./session-store.ts", async (importOriginal) => {
-  const original = await importOriginal<typeof import("./session-store.ts")>();
+// 释放时抛错的 beginStoreFork（照常记分叉条目、开分支会话文件）
+const failingRelease: typeof beginStoreFork = async (...args) => {
+  const fork = await beginStoreFork(...args);
+  if (fork === undefined) return fork;
   return {
-    ...original,
-    beginStoreFork: async (...args: Parameters<typeof original.beginStoreFork>) => {
-      const fork = await original.beginStoreFork(...args);
-      if (fork === undefined) return fork;
-      return {
-        ...fork,
-        release: async () => {
-          await fork.release();
-          throw new Error("releasing the source session failed");
-        },
-      };
+    ...fork,
+    release: async () => {
+      await fork.release();
+      throw new Error("releasing the source session failed");
     },
   };
-});
+};
+
+import { isStatusText } from "./status-fixtures.ts";
 
 const noMcp = async (): Promise<McpSession> => ({
   tools: [],
@@ -107,6 +104,7 @@ test("释放来源会话的写者抛错：分叉工作树的在用标记照样�
           forkPoint: { runId: run.runId, runSeq },
           trigger: "manual",
           homeDir: home,
+          beginFork: failingRelease,
         }),
         /releasing the source session failed/
       );
