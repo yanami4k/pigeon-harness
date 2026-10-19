@@ -518,7 +518,7 @@
 | 502 | 会话面板里输入框的话去掉首尾空白后少于 3 个字（中英文每字算一个）时回车不派新会话：字留在输入框，面板提示行写 `too short to start a session` | 产品体验 | 终端界面 |
 | 503 | 主代理与子 agent 的切换照 Claude Code 放在输入框下方的子 agent 面板里：主代理视图与子 agent 视图都显示它，第一行为 `main`，正在看的那个标亮；↓ 进、↑↓ 选、→/← 进出下层、Enter 切过去、Esc 回输入框；任何会话视图里输入框为空时连按两下 ← 回会话面板；子 agent 视图去掉顶上的标题行，状态栏显示正在看的代理的上下文与用量 | 产品体验 | 终端界面 |
 | 504 | 子 agent 视图里 Esc 中断正在看的这个子 agent 的这一轮（与主代理视图一致）；回主代理在面板里选 `main`；连按两下 Esc 打开回退列表只在主代理视图 | 产品体验 | 终端界面 |
-| 505 | 斜杠命令对着正在看的代理：`/status`、`/compact`、`/export`、`/rename`、`/tasks`、`/hooks`、`/grants`、`/revoke`、`/grants save` 在子 agent 视图里就地作用于这个子 agent（改名只改显示，派出时的名字仍是它的地址）；`/clear`、`/rewind`、`/fork`、`/take` 在子 agent 视图里直接拒绝；`/quit`、`/config`、`/reload`、`/memory`、`/memory edit`、`/worktrees`、`/panel`、`/resume`、`/new` 在哪都一样、就地执行 | 产品体验 | 终端界面 |
+| 505 | 斜杠命令对着正在看的代理：`/status`、`/compact`、`/rename`、`/tasks`、`/hooks`、`/grants`、`/revoke`、`/grants save` 在子 agent 视图里就地作用于这个子 agent（改名只改显示，派出时的名字仍是它的地址）；`/clear`、`/rewind`、`/fork`、`/take` 在子 agent 视图里直接拒绝；`/quit`、`/config`、`/reload`、`/memory`、`/memory edit`、`/worktrees`、`/panel`、`/resume`、`/new` 在哪都一样、就地执行；`/export` 仍只在沙箱会话里（手动交回改动，见 245），不在此列 | 产品体验 | 终端界面 |
 
 ## 条目
 
@@ -4534,5 +4534,5 @@
 
 ### 505 斜杠命令对着正在看的代理
 
-- 结论：斜杠命令对着正在看的代理：`/status`、`/compact`、`/export`、`/rename`、`/tasks`、`/hooks`、`/grants`、`/revoke`、`/grants save` 在子 agent 视图里就地作用于这个子 agent（改名只改显示，派出时的名字仍是它的地址）；`/clear`、`/rewind`、`/fork`、`/take` 在子 agent 视图里直接拒绝；`/quit`、`/config`、`/reload`、`/memory`、`/memory edit`、`/worktrees`、`/panel`、`/resume`、`/new` 在哪都一样、就地执行。
+- 结论：斜杠命令对着正在看的代理：`/status`、`/compact`、`/rename`、`/tasks`、`/hooks`、`/grants`、`/revoke`、`/grants save` 在子 agent 视图里就地作用于这个子 agent（改名只改显示，派出时的名字仍是它的地址）；`/clear`、`/rewind`、`/fork`、`/take` 在子 agent 视图里直接拒绝；`/quit`、`/config`、`/reload`、`/memory`、`/memory edit`、`/worktrees`、`/panel`、`/resume`、`/new` 在哪都一样、就地执行。`/export` 仍只在沙箱会话里（手动交回改动，见 245），不在此列。
 - 理由：子 agent 是派出的会话，命令按"看谁对谁"作用；改写它历史或手上工作的四条会让派出方在不知情时与它对不上，所以只对主代理开放；直接拒绝而不改去作用于主代理，免得看着子 agent 却改了主代理。
