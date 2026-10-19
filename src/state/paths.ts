@@ -284,7 +284,7 @@ export function legacyConfigPath(root: string, file: string): string {
   return path.join(root, PIGEON_DIR, file);
 }
 
-// 旧位置的程序状态 → 新位置（相对 .pigeon 的名字；worktrees 由 git worktree move 迁移）。
+// 旧位置的程序状态 → 新位置（相对 .pigeon 的名字；工作树不迁移，见决策 494、511）。
 // 旧学到的记忆与补做复盘记录不在此列：决策 331、341 起由迁移命令直接挪出仓库进用户级备份
 export const LEGACY_STATE_ENTRIES = [
   { name: "sessions", target: (root: string) => sessionsDirOf(root) },

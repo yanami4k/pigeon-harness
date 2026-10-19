@@ -534,3 +534,19 @@ test("决策 512：保存后经同一个会话的重建（同 /reload 的换绑�
     cleanup();
   }
 });
+
+test("决策 512 审查：设置视图开着、但不是在里面改值触发的同一会话换绑（如移进工作树）照旧回主视图", async () => {
+  const { shell, term, cleanup } = makeShell();
+  try {
+    await settle();
+    term.input("/config");
+    term.input("\r");
+    await settle();
+    assert.equal(shell.currentView(), "config");
+    shell.rebindSession(shell.sessionId(), { runtime: new ScriptedRuntime(shell.sessionId()) });
+    await settle();
+    assert.equal(shell.currentView(), "main");
+  } finally {
+    cleanup();
+  }
+});

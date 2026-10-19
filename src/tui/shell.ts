@@ -1731,6 +1731,9 @@ export class PigeonTuiShell
 
   // 写进用户级设置，再按 /reload 的重建当场生效（重建期间与 Run 同样占住输入）；面板开着时随后刷新。
   // 主运行中、上一次重建还没完、或有子 agent 在跑时不改（改了也重建不了），说明原因
+  // 决策 512：正在进行的重建是设置视图里改值触发的（重建换绑时据此留在设置视图）
+  private configRebuild = false;
+
   private applyConfig(id: string, value: string): void {
     const face = this.options.config;
     if (face === undefined) return;
@@ -1788,11 +1791,14 @@ export class PigeonTuiShell
       return;
     }
     this.running = true;
+    // 决策 512：由设置视图触发的重建留在设置视图
+    this.configRebuild = inPanel;
     if (inPanel) this.configPanel.setNote("");
     this.updateStatus();
     this.tui.requestRender();
     const finish = (lines: readonly string[], failed: boolean): void => {
       this.running = false;
+      this.configRebuild = false;
       if (inPanel) {
         // 由面板触发的重读不单独报重读结果（SETTINGS_RELOADED_PREFIX）；别的提示（外部同时改了 MCP 等）并进这一句
         const extra = lines.filter(
@@ -3741,7 +3747,10 @@ export class PigeonTuiShell
   ): void {
     // 决策 512：设置视图里改了值、重建的是同一个会话：留在设置视图（光标停在那一项，由壳随后刷新面板）
     const stayInConfig =
-      this.view === "config" && this.configPanel.isOpen() && sessionId === this.current.sessionId;
+      this.configRebuild &&
+      this.view === "config" &&
+      this.configPanel.isOpen() &&
+      sessionId === this.current.sessionId;
     // 决策 458：换到别的会话时当前会话卡的摘要（首条输入、最近回复、偷看）从新会话重新记（随后画的历史一并记下）。
     // 决策 496：旧会话留给下一条输入的程序说明不带进新会话（还在干活的已随 handOff 交走）
     if (sessionId !== this.current.sessionId) {
@@ -3758,6 +3767,7 @@ export class PigeonTuiShell
     this.followWorkspace(binding);
     // 先换会话面再切视图（切视图时按新会话重画）
     if (stayInConfig) {
+      this.title.setText(this.titleText());
       this.refreshApprovalBox();
       this.layout();
       this.updateStatus();

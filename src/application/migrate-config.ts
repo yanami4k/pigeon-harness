@@ -365,7 +365,8 @@ function liveLocksUnder(target: string): string[] {
   return found;
 }
 
-// 决策 494：工作树不再有迁移这一步（旧的 .pigeon/worktrees 与 .pigeon/state/worktrees 一概不认）
+// 决策 494：工作树不再有迁移这一步（决策 325 之前的 worker 树与 .pigeon/state/worktrees 一概不认；511 起工作树本身就在
+// .pigeon/worktrees 下，迁移命令不碰它）
 const MOVED_STATE = LEGACY_STATE_ENTRIES;
 
 export const legacyStateStep: MigrationStep = {
