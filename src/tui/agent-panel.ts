@@ -30,8 +30,9 @@ export function agentStateWord(state: AgentState): string {
   return STATE_WORD[state];
 }
 
-export function agentActive(record: Pick<SubagentRecord, "state">): boolean {
-  return record.state === "starting" || record.state === "running";
+// 在干活：在跑，或使用者 /compact 正在压（决策 505：x 与子 agent 视图里的 Esc 能中断它）
+export function agentActive(record: Pick<SubagentRecord, "state" | "compacting">): boolean {
+  return record.state === "starting" || record.state === "running" || record.compacting === true;
 }
 
 // 决策 503：最上层的第一行——主代理
@@ -255,7 +256,11 @@ export class AgentPanel implements Component {
         continue;
       }
       const below = this.descendants(record);
-      const state = waiting.has(record.path) ? "waiting for approval" : STATE_WORD[record.state];
+      const state = waiting.has(record.path)
+        ? "waiting for approval"
+        : record.compacting === true
+          ? "compacting"
+          : STATE_WORD[record.state];
       const detail =
         record.state === "failed" && record.error !== undefined ? `: ${oneLine(record.error)}` : "";
       const text =

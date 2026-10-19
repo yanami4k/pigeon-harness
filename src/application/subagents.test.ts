@@ -440,9 +440,34 @@ test("决策 505：/compact 只在停着时压；压的期间来的话排着、�
   await tick();
   assert.equal(child.inputs.length, 1, "压的期间不起新的一轮");
   assert.equal(record.state, "idle");
+  // 压缩中算还在干活：换会话时退到面板、退出前先问
+  assert.equal(hub.busyUnder("main-session"), 1);
+  assert.equal(hub.runningTotal(), 1);
+  assert.equal(hub.runningUnder("main-session"), 1);
   gate.resolve("compacted");
   assert.equal(await compacted, "compacted");
   await tick();
   assert.equal(record.state, "running", "压完即接着干");
   assert.match(child.inputs[1] ?? "", /now fix it/);
+});
+
+test("决策 505：x 与子 agent 视图里的 Esc 能中断压缩：中断它的运行面，状态回到压缩前", async () => {
+  const { hub, host, agents } = harness();
+  await host.spawn({ task: "find the parser", type: "explore" });
+  await tick();
+  const record = hub.agentsOf("main-session")[0];
+  const child = agents[0];
+  assert.ok(record !== undefined && child !== undefined);
+  child.finish("found it");
+  await tick();
+  const gate = Promise.withResolvers<string>();
+  const compacted = hub.compacting(record, () => gate.promise);
+  await hub.stop(record);
+  assert.equal(child.interrupted, 1, "中断了它的运行面（压缩跟着取消）");
+  assert.equal(record.state, "idle", "不标停下");
+  assert.notEqual(record.dormant, true);
+  gate.resolve("cancelled");
+  await compacted;
+  assert.equal(record.compacting, false);
+  assert.equal(hub.busyUnder("main-session"), 0);
 });

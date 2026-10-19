@@ -90,10 +90,10 @@ test("还没有运行面（续接认回、没重开）：没有命令面，/stat
   await assert.rejects(commands.compact(target, undefined), /isn't open right now/);
 });
 
-test("/rename 只改显示名、写明地址不变；不合规的名字拒绝", () => {
+test("/rename 只改显示名、只回改名的结果；不合规的名字拒绝", () => {
   const { face: commands, renamed } = face();
   const target = record(true);
-  assert.equal(commands.rename(target, "fixer"), "renamed to fixer (still addressed as general-1)");
+  assert.equal(commands.rename(target, "fixer"), "renamed to fixer");
   assert.equal(target.displayName, "fixer");
   assert.match(commands.rename(target, "bad name!"), /^invalid name/);
   assert.deepEqual(renamed, ["fixer"]);

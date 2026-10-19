@@ -87,11 +87,18 @@ async function openTop(
   root: { dir: string; home: string },
   streamFn: StreamFn,
   delivered: string[],
-  settings?: SettingsSnapshot
+  settings?: SettingsSnapshot,
+  compaction?: { thresholdTokens: number; keepRecentTokens: number }
 ) {
   const hub = new AgentHub({ mail: new MailGate() });
   const sessionId = newSessionId();
-  const flags = { yolo: true, provider: "custom", modelId: "custom", persistThinking: true };
+  const flags = {
+    yolo: true,
+    provider: "custom",
+    modelId: "custom",
+    persistThinking: true,
+    ...(compaction !== undefined ? { compaction } : {}),
+  };
   let opened: Awaited<ReturnType<typeof openSessionRuntime>> | undefined;
   const bundle = () => {
     if (opened === undefined) throw new Error("not open");
@@ -353,19 +360,33 @@ test("决策 505：子 agent 的运行面给命令用的那一面——它自己
       },
       { text: "done" },
     ],
-    [{ text: "child reply", contextTokens: 7 }]
+    [
+      { text: `first ${"x".repeat(2000)}`, contextTokens: 50 },
+      { text: `second ${"y".repeat(2000)}`, contextTokens: 80 },
+      { text: "summary of the work so far" },
+    ]
   );
-  const { hub, sessionId, opened } = await openTop(root, streamFn, delivered);
+  const { hub, sessionId, opened } = await openTop(root, streamFn, delivered, undefined, {
+    thresholdTokens: 900_000,
+    keepRecentTokens: 5,
+  });
   try {
     await opened.bundle.adapter.run("spawn one");
     const [record] = hub.agentsOf(sessionId);
+    assert.ok(record !== undefined);
+    // 第二轮：使用者在它的视图里打的话
+    assert.equal(hub.sendFromUser(record, "go on"), undefined);
+    await record.activity;
     const inspect = inspectSubagent(record?.runtime);
     assert.ok(record !== undefined && inspect !== undefined);
     assert.equal(inspect.governanceRoot, root.dir);
     assert.notEqual(inspect.bundle.grantStore, opened.bundle.grantStore, "放权是它自己的");
     assert.ok(inspect.bundle.adapter.contextUsage() !== undefined, "上下文用量");
     const outcome = await hub.compacting(record, () => inspect.bundle.adapter.compact());
-    assert.ok(["compacted", "skipped", "failed"].includes(outcome.kind));
+    assert.equal(outcome.kind, "compacted", "压成了");
+    assert.ok(
+      JSON.stringify(inspect.bundle.adapter.transcript()).includes("summary of the work so far")
+    );
     hub.rename(record, "carrier");
     await inspect.bundle.sessionStore.flush();
     await opened.bundle.sessionStore.flush();

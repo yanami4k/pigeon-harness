@@ -11,7 +11,7 @@ import {
 import { sessionsDirOf } from "../state/paths.ts";
 import { TRUNCATION_CONTINUE_PROMPT, TRUNCATION_RESUME_PROMPT } from "../state/runaway-config.ts";
 import { type StoreMessage, toolResultMark } from "../state/session-judge.ts";
-import type { ViewMessage } from "../state/session-view.ts";
+import type { SessionView, ViewMessage } from "../state/session-view.ts";
 import { agentMessageMarkOf, isStatusMessage, statusSummary } from "../state/status-text.ts";
 import { JOB_NOTICE_PREFIX } from "./background-jobs.ts";
 import { PROGRAM_NOTE_PREFIX } from "./enter-worktree-tool.ts";
@@ -213,6 +213,14 @@ export function loadSessionHistory(
       },
     ];
   }
+  return limitHistory(historyLinesOfView(view, entryChars), limit);
+}
+
+// 一个会话视图的全部历史行（不折叠）；决策 501：只看历史的视图跟随记录时按它比出新增的行
+export function historyLinesOfView(
+  view: SessionView,
+  entryChars = DEFAULT_HISTORY_ENTRY_CHARS
+): HistoryLine[] {
   const runFailures = new Map(view.runs.map((run) => [run.runId as string, run.failure]));
   const runStarts = new Map<string, number>();
   const body: HistoryLine[] = [];
@@ -281,8 +289,16 @@ export function loadSessionHistory(
       });
     }
   }
+  return body;
+}
+
+// 超出上限时最早部分折叠为一行提示
+export function limitHistory(
+  body: readonly HistoryLine[],
+  limit = DEFAULT_HISTORY_LIMIT
+): HistoryLine[] {
   if (body.length <= limit) {
-    return body;
+    return [...body];
   }
   return [
     { kind: "notice", text: `[${plural(body.length - limit, "earlier line")} not shown]` },

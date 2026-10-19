@@ -419,11 +419,9 @@ export class AgentHub {
     return node === undefined ? [] : this.#agents.filter((agent) => agent.top === node);
   }
 
-  // 某会话下还在跑的子 agent 个数
+  // 某会话下还在跑的子 agent 个数（决策 505：在 /compact 的算在跑）
   runningUnder(sessionId: string): number {
-    return this.agentsOf(sessionId).filter(
-      (agent) => agent.state === "starting" || agent.state === "running"
-    ).length;
+    return this.agentsOf(sessionId).filter((agent) => this.#working(agent)).length;
   }
 
   // 决策 490：子 agent 按名字找，会话按全量会话号找（会话的显示名只用于显示，可以重名、可以改）
@@ -796,6 +794,11 @@ export class AgentHub {
     return record.state === "starting" || record.state === "running";
   }
 
+  // 决策 505：在跑，或使用者在它的视图里 /compact 正在压（换会话、退出时都算还在干活）
+  #working(record: SubagentRecord): boolean {
+    return this.#active(record) || record.compacting === true;
+  }
+
   // 停着的子 agent 有待递的：没撞并发上限即叫它接着干
   #startIfRoom(record: SubagentRecord): void {
     // 停下之后静着的不自己醒（排着的通知留着，收到新消息才再干）
@@ -984,8 +987,14 @@ export class AgentHub {
     }
   }
 
-  // 使用者在界面里停下（x）；同叫停
+  // 使用者在界面里停下（x、子 agent 视图里 Esc）；同叫停。决策 505：正在压的中断压缩，它回到压缩前的样子（状态不变）
   async stop(record: SubagentRecord): Promise<void> {
+    if (record.compacting === true) {
+      const children = this.#agents.filter((agent) => agent.parent === record);
+      await Promise.all(children.map((child) => this.#halt(child, "stopped")));
+      void record.runtime?.interrupt().catch(() => {});
+      return;
+    }
     await this.#halt(record, "stopped");
   }
 
@@ -1013,7 +1022,7 @@ export class AgentHub {
   // 某会话下还在干活的子 agent：在跑的，加上停着但开的后台作业还没收尾的（pigeon run 据此等）
   busyUnder(sessionId: string): number {
     return this.agentsOf(sessionId).filter(
-      (agent) => this.#active(agent) || agent.runtime?.hasJobs?.() === true
+      (agent) => this.#working(agent) || agent.runtime?.hasJobs?.() === true
     ).length;
   }
 
@@ -1032,7 +1041,7 @@ export class AgentHub {
 
   // 整个进程里还在跑的子 agent 个数（退出前确认用）
   runningTotal(): number {
-    return this.#agents.filter((agent) => this.#active(agent)).length;
+    return this.#agents.filter((agent) => this.#working(agent)).length;
   }
 
   // 决策 482：使用者在子 agent 里亲手打的字——算使用者的话，不附信任说明、不记传话条目；在跑的这一轮结束后递，

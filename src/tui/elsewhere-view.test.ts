@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
+import { recordedSessionPath } from "../application/session-follow.ts";
 import type { PooledSessionCard, SessionPanelSource } from "../application/session-pool.ts";
 import { createFixtureSession } from "../application/session-store-fixtures.ts";
 import { newSessionId } from "../state/ids.ts";
@@ -17,6 +18,7 @@ async function makeShell() {
   const root = mkdtempSync(join(tmpdir(), "pigeon-elsewhere-"));
   const logDir = mkdtempSync(join(tmpdir(), "pigeon-elsewhere-log-"));
   const record = createFixtureSession({ sessionsDir: sessionsDirOf(root), cwd: root });
+  const sessionsDir = sessionsDirOf(root);
   record.startRun({
     task: "修登录",
     config: {
@@ -57,7 +59,8 @@ async function makeShell() {
   };
   const runtime = new ScriptedRuntime(newSessionId());
   const term = new MockTerminal(110, 30);
-  const mode = { current: "prompt" as "prompt" | "yolo" };
+  // 主会话在放手档，它在询问档：状态栏写哪个一眼可辨
+  const mode = { current: "yolo" as "prompt" | "yolo" };
   const shell = new PigeonTuiShell({
     terminal: term,
     runtime,
@@ -92,6 +95,11 @@ async function makeShell() {
     runtime,
     calls,
     mode,
+    get path(): string {
+      const found = recordedSessionPath(root, record.sessionId);
+      assert.ok(found !== undefined, sessionsDir);
+      return found;
+    },
     cleanup: async () => {
       shell.stop();
       await record.close();
@@ -111,16 +119,18 @@ async function openFar(term: MockTerminal): Promise<void> {
 }
 
 test("内容跟着它的会话记录更新，状态栏是它的模式、上下文与用量；标题照旧", async () => {
-  const { shell, term, record, cleanup } = await makeShell();
+  const { shell, term, record, path, cleanup } = await makeShell();
   try {
     await settle();
     assert.doesNotMatch(screenText(term), /ctx 20%/, "主视图的状态栏不是它的");
+    assert.match(screenText(term), /bypass/, "主视图是主会话的模式");
     await openFar(term);
     assert.equal(shell.currentView(), "elsewhere");
     let screen = screenText(term);
     assert.match(screen, /session far · open elsewhere · esc to go back/);
     assert.match(screen, /第一段回复/);
-    assert.match(screen, /ask/, "它的模式");
+    assert.match(screen, /\bask\b/, "它的模式");
+    assert.doesNotMatch(screen, /bypass/, "不是主会话的模式");
     assert.match(screen, /ctx 20%/, "它的上下文");
     assert.match(screen, /20k tokens|20\.0k/, "它的用量");
     assert.doesNotMatch(screen, /^ {2}main$/m, "不显示子 agent 面板");
@@ -131,6 +141,17 @@ test("内容跟着它的会话记录更新，状态栏是它的模式、上下�
     screen = screenText(term);
     assert.match(screen, /第二段回复/, "内容跟着记录更新");
     assert.match(screen, /ctx 40%/, "状态栏跟着更新");
+    // 记录文件读不到（被删）：停在原样，不抛、不刷屏
+    rmSync(path);
+    await settle(200);
+    assert.equal(shell.currentView(), "elsewhere");
+    assert.match(screenText(term), /第二段回复/);
+    // 离开视图：定时器清掉
+    assert.equal(shell.followingElsewhere(), true);
+    term.input("\x1b");
+    await settle();
+    assert.equal(shell.currentView(), "panel");
+    assert.equal(shell.followingElsewhere(), false);
   } finally {
     await cleanup();
   }
@@ -151,10 +172,18 @@ test("不收任何输入：消息与命令都回一行、不跳走；连按两�
     }
     assert.deepEqual(runtime.runs, []);
     assert.deepEqual(calls, []);
+    // 被拒的输入不进输入历史：↑ 召回的是之前打开面板的那条
+    term.input("\x15");
+    term.input("\x1b[A");
+    await settle();
+    assert.equal(shell.inputText(), "/panel");
+    term.input("\x1b[B");
+    await settle();
+    term.input("\x15");
     // Shift+Tab 也不收：当前会话的模式不被悄悄切换
     term.input("\x1b[Z");
     await settle();
-    assert.equal(mode.current, "prompt");
+    assert.equal(mode.current, "yolo");
     // 记录有追加、按记录重画之后，回过的提示照样在
     record.assistant({ text: "那边又回了一段" });
     await record.writer.flush();

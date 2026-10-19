@@ -51,16 +51,10 @@ import {
 import { compactionNoticeText, manualCompactionText } from "../application/compaction-text.ts";
 import { type ConfigItemView, parseConfigAssignment } from "../application/config-options.ts";
 import { failureLine, plural, workEndLine } from "../application/format.ts";
-import { loadSessionHistory } from "../application/history.ts";
+import { type HistoryLine, limitHistory, loadSessionHistory } from "../application/history.ts";
 import type { HookEventReport } from "../application/hooks.ts";
 import type { PromptHistoryStore } from "../application/prompt-history.ts";
 import { listRecentMainSessions } from "../application/recent-sessions.ts";
-import {
-  type RecordedStatus,
-  recordedSessionPath,
-  recordedSessionStatus,
-  recordStamp,
-} from "../application/recorded-status.ts";
 import type {
   CodeCheck,
   PreparedRewind,
@@ -77,6 +71,12 @@ import {
   mergeCostTally,
   sessionCostTally,
 } from "../application/session-cost.ts";
+import {
+  historyDelta,
+  type RecordedStatus,
+  recordedSessionPath,
+  SessionFollower,
+} from "../application/session-follow.ts";
 import type {
   PooledSessionCard,
   PooledSessionState,
@@ -130,7 +130,12 @@ import {
 } from "./input-editor.ts";
 import { InputQueue } from "./input-queue.ts";
 import { installKeybindings, isKey, type KeybindingRow } from "./keybindings.ts";
-import { attachToolResultTo, MessageFlow, projectRuntimeEvent } from "./message-flow.ts";
+import {
+  attachToolResultTo,
+  type HistoryToolLine,
+  MessageFlow,
+  projectRuntimeEvent,
+} from "./message-flow.ts";
 import {
   MessageTree,
   type RewindAction,
@@ -425,7 +430,7 @@ const APPROVAL_CHROME_ROWS = 10;
 // 决策 470：按 ← 打开面板的第一下在状态行的提示（ASCII：箭头字符在中文环境下宽度不定）
 const PANEL_HINT = "press Left again to open the panel";
 
-// 决策 505：要它的运行面才能做的代理级命令（续接认回、还没重开的子 agent 先发一句话）
+// 决策 505：要它的运行面才能做的代理级命令（续接认回、还没重开运行面的子 agent 上回一句它没开着）
 const AGENT_RUNTIME_COMMANDS = new Set([
   "compact",
   "rename",
@@ -440,14 +445,16 @@ const AGENT_RUNTIME_COMMANDS = new Set([
 interface ElsewhereSession {
   card: PooledSessionCard;
   flow: MessageFlow;
-  // 它所在项目的根与会话记录文件
-  root?: string;
-  path?: string;
-  // 记录文件上次看时的大小与修改时刻
-  stamp?: string | undefined;
+  // 跟着它的会话记录（记录文件在才有）
+  follower?: SessionFollower;
+  // 已画的全部历史行（不折叠）与其中画出来的工具行的组件（按行号）
+  drawn: HistoryLine[];
+  tools: Map<number, HistoryToolLine>;
   status: RecordedStatus;
   timer?: ReturnType<typeof setInterval>;
-  // 回过的"不收输入"提示（按记录重画后补回）
+  // 上一次看还没回来
+  polling: boolean;
+  // 回过的"不收输入"提示（整份重画后补回）
   refusals: string[];
 }
 // 决策 502：面板里派新会话的话至少几个字
@@ -970,9 +977,18 @@ export class PigeonTuiShell
       approval?.resolve({ key: "r", reason });
       return;
     }
-    // 历史（286）：发出的与排队的都进历史；拒绝理由不进
-    this.input.addToHistory(value);
-    this.options.promptHistory?.add(value);
+    // 历史（286）：发出的与排队的都进历史；拒绝理由不进。决策 501、505：只看历史的视图里的输入、子 agent 视图里只对主代理的
+    // 四条命令一律被拒（原文留在输入框），也不进
+    const refused =
+      (this.view === "elsewhere" && this.elsewhereSession !== undefined) ||
+      (this.view === "agent" &&
+        this.agentSession !== undefined &&
+        value.startsWith("/") &&
+        commandScope(value) === "main");
+    if (!refused) {
+      this.input.addToHistory(value);
+      this.options.promptHistory?.add(value);
+    }
     // 决策 482：子 agent 视图里的输入是使用者亲手打给它的话。决策 505：斜杠命令就地执行——代理级的作用于这个子 agent，
     // 程序级的与主视图一样，只对主代理的直接拒绝
     if (this.view === "agent" && this.agentSession !== undefined) {
@@ -1449,10 +1465,7 @@ export class PigeonTuiShell
       return;
     }
     // 代理级的看这个子 agent 在不在跑，程序级的与主视图一样看主代理
-    const busy =
-      scope === "agent"
-        ? agentActive(session.record) || session.record.compacting === true
-        : this.isBusy();
+    const busy = scope === "agent" ? agentActive(session.record) : this.isBusy();
     const rejection = busy ? rejectWhileRunning(value) : undefined;
     if (rejection !== undefined) {
       keep(rejection);
@@ -1463,7 +1476,7 @@ export class PigeonTuiShell
       AGENT_RUNTIME_COMMANDS.has(name ?? "") &&
       this.options.agents?.commands?.(session.record) === undefined
     ) {
-      keep(`${agentLabel(session.record)} isn't open right now; send it a message first`);
+      keep(`${agentLabel(session.record)} isn't open right now`);
       return;
     }
     session.flow.addUserEcho(value);
@@ -2074,29 +2087,40 @@ export class PigeonTuiShell
     );
   }
 
-  // 决策 485、501：进入别的 Pigeon 开着的会话：整屏看它的历史（取自它的会话记录，记录有追加即重画），状态栏是它的模式、
-  // 上下文与用量；不收输入，Esc 或连按两下 ← 回面板
+  // 决策 485、501：进入别的 Pigeon 开着的会话：整屏看它的历史（取自它的会话记录，之后跟着记录的追加），状态栏是它的模式、
+  // 上下文与用量；不收输入，Esc 或连按两下 ← 回面板。读记录是异步的：视图先开出来，内容随后补上
   private openElsewhere(card: PooledSessionCard): void {
     const flow = new MessageFlow();
     flow.setToolsExpanded(this.flow.toolsExpandedState());
     const root = card.root ?? this.sessionsRoot();
-    this.renderHistoryInto(flow, card.id, undefined, root);
     this.sessionPanel.closePeek();
-    const path = root !== undefined ? recordedSessionPath(root, card.id) : undefined;
+    let path: string | undefined;
+    try {
+      path = root !== undefined ? recordedSessionPath(root, card.id) : undefined;
+    } catch {
+      // 会话目录读不成：按没有记录画
+      path = undefined;
+    }
     const session: ElsewhereSession = {
       card,
       flow,
-      ...(root !== undefined ? { root } : {}),
-      ...(path !== undefined ? { path, stamp: recordStamp(path) } : {}),
-      status:
-        root !== undefined ? recordedSessionStatus(root, card.id) : { cost: emptyCostTally() },
+      ...(root !== undefined && path !== undefined
+        ? { follower: new SessionFollower({ root, sessionId: card.id, path }) }
+        : {}),
+      drawn: [],
+      tools: new Map(),
+      status: { cost: emptyCostTally() },
+      polling: false,
       refusals: [],
     };
+    // 没有记录文件：照原来的办法画（写明没有记录）
+    if (session.follower === undefined) this.renderHistoryInto(flow, card.id, undefined, root);
     this.leaveElsewhere();
     this.elsewhereSession = session;
-    if (path !== undefined) {
+    if (session.follower !== undefined) {
+      void this.followElsewhere(session);
       session.timer = setInterval(
-        () => this.followElsewhere(session),
+        () => void this.followElsewhere(session),
         this.options.recordPollMs ?? 1000
       );
       session.timer.unref?.();
@@ -2104,26 +2128,75 @@ export class PigeonTuiShell
     this.showView("elsewhere");
   }
 
-  // 决策 501：它的会话记录有追加（文件的大小或修改时刻变了）即按记录重画，状态栏跟着
-  private followElsewhere(session: ElsewhereSession): void {
-    if (this.elsewhereSession !== session || session.path === undefined) return;
-    const stamp = recordStamp(session.path);
-    if (stamp === session.stamp) return;
-    session.stamp = stamp;
-    session.flow.clear();
-    this.renderHistoryInto(session.flow, session.card.id, undefined, session.root);
-    for (const line of session.refusals) session.flow.addSystem(line);
-    if (session.root !== undefined) {
-      session.status = recordedSessionStatus(session.root, session.card.id);
+  // 决策 501：看一次它的会话记录——只读追加的部分，新增的行接在后面（工具行补上结果）；从头读的或对不上的整份重画。
+  // 读不到（文件没了、目录被删等）停在原样，下一次再看，不报
+  private async followElsewhere(session: ElsewhereSession): Promise<void> {
+    const follower = session.follower;
+    if (follower === undefined || session.polling || this.elsewhereSession !== session) return;
+    session.polling = true;
+    try {
+      const update = await follower.poll();
+      if (update === undefined || this.elsewhereSession !== session) return;
+      const delta = update.restarted ? undefined : historyDelta(session.drawn, update.lines);
+      if (delta === undefined) {
+        this.redrawElsewhere(session, update.lines);
+      } else {
+        for (const index of delta.changed) {
+          const handle = session.tools.get(index);
+          const line = update.lines[index];
+          if (handle !== undefined && line !== undefined)
+            session.flow.updateHistoryTool(handle, line);
+        }
+        this.trackTools(
+          session,
+          session.drawn.length,
+          delta.added,
+          session.flow.addHistory(delta.added)
+        );
+        session.drawn = update.lines;
+      }
+      session.status = update.status;
+      this.updateStatus();
+      this.tui.requestRender();
+    } catch {
+      // 停在原样，下一次再看
+    } finally {
+      session.polling = false;
     }
-    this.updateStatus();
-    this.tui.requestRender();
+  }
+
+  // 整份重画（第一次、记录被截断或换了、主分支换了）：超出上限的最早部分折叠为一行
+  private redrawElsewhere(session: ElsewhereSession, lines: HistoryLine[]): void {
+    session.flow.clear();
+    session.tools.clear();
+    const shown = limitHistory(lines, this.options.historyLimit);
+    // 折叠了的第一行是提示，其后与 lines 的末段一一对应：shown 的第 k 行即 lines 的第 (lines.length - shown.length + k) 行
+    this.trackTools(session, lines.length - shown.length, shown, session.flow.addHistory(shown));
+    for (const line of session.refusals) session.flow.addSystem(line);
+    session.drawn = lines;
+  }
+
+  private trackTools(
+    session: ElsewhereSession,
+    from: number,
+    lines: readonly HistoryLine[],
+    handles: ReadonlyArray<HistoryToolLine | undefined>
+  ): void {
+    for (let index = 0; index < lines.length; index++) {
+      const handle = handles[index];
+      if (handle !== undefined) session.tools.set(from + index, handle);
+    }
   }
 
   private leaveElsewhere(): void {
     const timer = this.elsewhereSession?.timer;
     if (timer !== undefined) clearInterval(timer);
     this.elsewhereSession = undefined;
+  }
+
+  // 决策 501：只看历史的视图还在跟着记录（测试看离开之后定时器已清掉）
+  followingElsewhere(): boolean {
+    return this.elsewhereSession?.timer !== undefined;
   }
 
   // 决策 484：进入会话面板里的一个会话——它成为当前会话（换手由装配方做），原来的当前会话退到面板接着跑
@@ -2728,19 +2801,22 @@ export class PigeonTuiShell
     }
     const filter = createSessionFilter(root);
     const among = new Set<string>(sessions.map((session) => session.sessionId));
-    // 决策 471：整屏的续接视图（同设置视图的做法）；选中或退出都先回主视图，再照旧续接
+    // 决策 471：整屏的续接视图（同设置视图的做法）；选中或退出都先回打开它的视图（决策 505：子 agent 视图里打开的回那个
+    // 子 agent），再照旧续接——续接成了即换到新会话的主视图
+    const back = this.view === "agent" ? this.agentSession?.record : undefined;
     this.picker.open(
       sessions,
       (picked) => {
-        this.showView("main");
+        if (back !== undefined) this.openAgentSession(back);
+        else this.showView("main");
         if (picked === undefined) {
           // 按 Esc 取消：不说
         } else if (picked.sandbox) {
-          this.flow.addSystem(sandboxResumeHint(picked.sessionId));
+          this.viewFlow().addSystem(sandboxResumeHint(picked.sessionId));
         } else if (this.handOffBlocked() !== undefined) {
-          this.flow.addSystem(this.handOffBlocked() ?? "");
+          this.viewFlow().addSystem(this.handOffBlocked() ?? "");
         } else {
-          dispatchResumeCommand(this, picked.sessionId);
+          dispatchResumeCommand(this.resumeHost(), picked.sessionId);
         }
         this.tui.requestRender();
         this.drainQueue();
@@ -2903,6 +2979,34 @@ export class PigeonTuiShell
     if (this.view === "panel") this.sessionPanel.setNote(line);
   }
 
+  // 决策 505：/resume 的宿主——说明与报错写在正在看的视图里（子 agent 视图里敲的写在那里；换到新会话之后即主视图）
+  private resumeHost(): ResumeViewHost<TuiSessionBinding> {
+    const say = (line: string, alert: boolean): void => {
+      if (this.view !== "agent") {
+        if (alert) this.addAlert(line);
+        else this.addSystem(line);
+      } else if (alert) {
+        this.viewFlow().addAlert(line);
+      } else {
+        this.viewFlow().addSystem(line);
+      }
+    };
+    return {
+      isStarted: () => this.isStarted(),
+      addSystem: (line) => say(line, false),
+      addAlert: (line) => say(line, true),
+      addHistoryLines: (lines) => this.addHistoryLines(lines),
+      render: () => this.render(),
+      updateStatus: () => this.updateStatus(),
+      setResuming: (resuming) => this.setResuming(resuming),
+      sessionId: () => this.sessionId(),
+      resumeOptions: () => this.resumeOptions(),
+      historyLimit: () => this.historyLimit(),
+      rebindSession: (sessionId, binding) => this.rebindSession(sessionId, binding),
+      pooledSessionIds: () => this.pooledSessionIds(),
+    };
+  }
+
   addHistoryLines(lines: Parameters<MessageFlow["addHistory"]>[0]): void {
     this.flow.addHistory(lines);
   }
@@ -2971,7 +3075,7 @@ export class PigeonTuiShell
       this.viewFlow().addSystem(sandboxResumeHint(arg));
       return;
     }
-    dispatchResumeCommand(this, arg);
+    dispatchResumeCommand(this.resumeHost(), arg);
   }
 
   // 决策 496：/clear 与 /new [path]——开一个新会话并换过去；当前会话还在干活时退到面板接着跑（装配方在 create 里做这件事）
@@ -2998,7 +3102,7 @@ export class PigeonTuiShell
     this.render();
     const finish = (error?: unknown): void => {
       this.setResuming(false);
-      if (error !== undefined) this.flow.addAlert(failureLine(command, error));
+      if (error !== undefined) this.viewFlow().addAlert(failureLine(command, error));
       this.updateStatus();
       this.render();
     };

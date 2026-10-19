@@ -84,8 +84,6 @@ export function failureLine(what: string, error: unknown): string {
   return /^(usage:|can't )/.test(message) ? message : `${what} failed: ${message}`;
 }
 
-// 英文数量写法："1 file"、"3 files"；复数不是加 s 的词传第三个参数
-
 // 主目录下的路径缩写成 ~ 开头（Windows 上不分大小写比较）；home 为空串即原样
 export function tildePath(path: string, home: string): string {
   if (home === "") return path;
@@ -95,6 +93,7 @@ export function tildePath(path: string, home: string): string {
   return `~${sep}${rel}`;
 }
 
+// 英文数量写法："1 file"、"3 files"；复数不是加 s 的词传第三个参数
 export function plural(count: number, noun: string, nouns = `${noun}s`): string {
   return `${count} ${count === 1 ? noun : nouns}`;
 }

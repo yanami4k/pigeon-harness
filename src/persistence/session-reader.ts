@@ -252,92 +252,126 @@ export function readSessionFile(path: string): SessionFileView | undefined {
   if (lines.at(-1) === "") {
     lines.pop();
   }
-  const header = lines.length > 0 ? parseHeader(lines[0] ?? "") : undefined;
-  if (header === undefined) {
-    return undefined;
-  }
-  const entries: StoredEntry[] = [];
-  const entriesById = new Map<string, StoredEntry>();
-  const usedIds = new Set<string>();
-  // 被跳过的条目 → 它（解析后）的父条目：子条目与通道经它改接
-  const spliced = new Map<string, string | null>();
-  const lanes = new Map<string, string | null>([["main", null]]);
-  const labels = new Map<string, string>();
-  let name: string | undefined;
-  const warnings: string[] = [];
-  let lastSeq = 0;
-  const resolve = (id: string | null): string | null =>
-    id !== null && spliced.has(id) ? (spliced.get(id) ?? null) : id;
+  const parser = new SessionFileParser(path);
+  // 不完整的末行：写者可能正在追加它，照 181 跳过、不告警
+  parser.feed(lines, { lastMayBeTorn: true });
+  return parser.view();
+}
 
-  for (let index = 1; index < lines.length; index++) {
-    const lineNo = index + 1;
-    const skip = (reason: string) => warnings.push(`line ${lineNo}: ${reason}; skipped`);
+// 会话文件的逐行解析（决策 501：只看历史的视图跟随别的进程写的会话记录时，只把追加的整行喂进来）。第一行是文件头
+export class SessionFileParser {
+  readonly path: string;
+  private header: SessionHeaderView | undefined;
+  // 已喂过的行数（含文件头；行号从 1 起）
+  private lineCount = 0;
+  private readonly entries: StoredEntry[] = [];
+  private readonly entriesById = new Map<string, StoredEntry>();
+  private readonly usedIds = new Set<string>();
+  // 被跳过的条目 → 它（解析后）的父条目：子条目与通道经它改接
+  private readonly spliced = new Map<string, string | null>();
+  private readonly lanes = new Map<string, string | null>([["main", null]]);
+  private readonly labels = new Map<string, string>();
+  private name: string | undefined;
+  private readonly warnings: string[] = [];
+  private lastSeq = 0;
+
+  constructor(path: string) {
+    this.path = path;
+  }
+
+  private resolve(id: string | null): string | null {
+    return id !== null && this.spliced.has(id) ? (this.spliced.get(id) ?? null) : id;
+  }
+
+  // 喂一批整行（不含换行符）。lastMayBeTorn：这批的最后一行可能是写到一半的（不合法即跳过、不告警）
+  feed(lines: readonly string[], options: { lastMayBeTorn?: boolean } = {}): void {
+    for (let index = 0; index < lines.length; index++) {
+      this.lineCount += 1;
+      const line = lines[index] ?? "";
+      if (this.lineCount === 1) {
+        this.header = parseHeader(line);
+        continue;
+      }
+      if (this.header === undefined) continue;
+      this.feedLine(line, options.lastMayBeTorn === true && index === lines.length - 1);
+    }
+  }
+
+  private feedLine(line: string, mayBeTorn: boolean): void {
+    const lineNo = this.lineCount;
+    const skip = (reason: string) => this.warnings.push(`line ${lineNo}: ${reason}; skipped`);
     let value: unknown;
     try {
-      value = JSON.parse(lines[index] ?? "");
+      value = JSON.parse(line);
     } catch {
-      // 不完整的末行：写者可能正在追加它，照 181 跳过、不告警
-      if (index !== lines.length - 1) {
+      if (!mayBeTorn) {
         skip("not valid JSON");
       }
-      continue;
+      return;
     }
-    if (!isObject(value) || !Number.isSafeInteger(value.seq) || (value.seq as number) <= lastSeq) {
+    if (
+      !isObject(value) ||
+      !Number.isSafeInteger(value.seq) ||
+      (value.seq as number) <= this.lastSeq
+    ) {
       skip("missing increasing seq");
-      continue;
+      return;
     }
     const seq = value.seq as number;
-    lastSeq = seq;
+    this.lastSeq = seq;
     if (value.kind === "entry") {
       const type = value.type;
       const id = value.id;
       if (typeof id !== "string" || typeof type !== "string") {
         skip("entry missing id or type");
-        continue;
+        return;
       }
-      const parentId = resolve(typeof value.parentId === "string" ? value.parentId : null);
+      const parentId = this.resolve(typeof value.parentId === "string" ? value.parentId : null);
       if (!ENTRY_TYPES.has(type)) {
-        spliced.set(id, parentId);
-        for (const [lane, leaf] of lanes) {
-          if (leaf === id) lanes.set(lane, parentId);
+        this.spliced.set(id, parentId);
+        for (const [lane, leaf] of this.lanes) {
+          if (leaf === id) this.lanes.set(lane, parentId);
         }
         skip(`unknown entry type ${type}`);
-        continue;
+        return;
       }
-      if (usedIds.has(id)) {
+      if (this.usedIds.has(id)) {
         skip(`duplicate entry ID ${id}`);
-        continue;
+        return;
       }
       const { kind: _kind, lane, ...fields } = value;
       const entry = { ...fields, type, id, parentId, seq } as StoredEntry;
-      usedIds.add(id);
-      entries.push(entry);
-      entriesById.set(id, entry);
+      this.usedIds.add(id);
+      this.entries.push(entry);
+      this.entriesById.set(id, entry);
       if (typeof lane === "string") {
-        lanes.set(lane, id);
+        this.lanes.set(lane, id);
       }
     } else if (value.kind === "record") {
       if (typeof value.type !== "string" || !RECORD_TYPES.has(value.type)) {
         skip(`unknown record type ${String(value.type)}`);
-        continue;
+        return;
       }
       if (typeof value.id === "string") {
-        usedIds.add(value.id);
+        this.usedIds.add(value.id);
       }
     } else if (value.kind === "lane") {
       if (typeof value.lane !== "string") {
         skip("lane change missing lane name");
-        continue;
+        return;
       }
-      lanes.set(value.lane, resolve(typeof value.leafId === "string" ? value.leafId : null));
+      this.lanes.set(
+        value.lane,
+        this.resolve(typeof value.leafId === "string" ? value.leafId : null)
+      );
     } else if (value.kind === "fact") {
       if (value.fact === "name") {
-        name = typeof value.name === "string" ? value.name : undefined;
+        this.name = typeof value.name === "string" ? value.name : undefined;
       } else if (value.fact === "label" && typeof value.targetId === "string") {
         if (typeof value.label === "string") {
-          labels.set(value.targetId, value.label);
+          this.labels.set(value.targetId, value.label);
         } else {
-          labels.delete(value.targetId);
+          this.labels.delete(value.targetId);
         }
       } else {
         skip(`unknown fact kind ${String(value.fact)}`);
@@ -346,16 +380,22 @@ export function readSessionFile(path: string): SessionFileView | undefined {
       skip(`unknown change kind ${String(value.kind)}`);
     }
   }
-  return {
-    path,
-    header,
-    entries,
-    entriesById,
-    lanes,
-    ...(name !== undefined ? { name } : {}),
-    labels,
-    warnings,
-  };
+
+  // 到此为止的样子；还没有合法文件头为 undefined（返回的集合随之后的喂入变化，调用方不留着改）
+  view(): SessionFileView | undefined {
+    const header = this.header;
+    if (header === undefined) return undefined;
+    return {
+      path: this.path,
+      header,
+      entries: this.entries,
+      entriesById: this.entriesById,
+      lanes: this.lanes,
+      ...(this.name !== undefined ? { name: this.name } : {}),
+      labels: this.labels,
+      warnings: this.warnings,
+    };
+  }
 }
 
 // 从根到某条目（含）的分支条目；leafId 为 null 即空分支。父条目缺失时止于断处

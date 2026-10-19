@@ -1,3 +1,7 @@
+// 决策 451：终端界面的欢迎头——启动时放在对话流最上方，随消息一起往上滚（不常驻）。左边像素鸽子（四分块字符 11 列 × 4 行，长宽比接近 1:1，
+// 不上色，用终端缺省前景色，深浅背景都看得见），右边三行字：Pigeon v版本（加粗）、所用模型、当前目录（主目录缩写为 ~），
+// 与鸽子纵向居中。窄终端放不下时只留文字（各行按宽度截断），不折行、不错位。
+// 决策 453：模型取运行面的模型信息（接入模块声明的优先，其次启动参数）；只有占位标签时没有真名字，不写这一行
 import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { promptModelName } from "../application/system-prompt.ts";
 import { bold, secondary } from "./style.ts";

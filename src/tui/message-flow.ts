@@ -38,6 +38,9 @@ import { diffOfDetails, type ToolResultView, toolResultBody } from "./tool-outpu
 // 决策 458：偷看当前会话时显示的最近几条对话
 const RECENT_LINES = 6;
 
+// 回看历史里一行工具行的组件（MessageFlow.addHistory 交回）
+export type HistoryToolLine = Text;
+
 export class MessageFlow {
   // Container 承载任意多 Text child；ScrollView 恰好包一个 child（决策 028：main-screen 下
   // 裁剪/follow 由终端 scrollback 实现，ScrollView 声明意图并兼容 alt-screen 布局引擎）
@@ -142,8 +145,11 @@ export class MessageFlow {
   }
 
   // 历史行（M5 S2，决策 045）：/resume 换绑后一次性渲染；thinking 行弱化，其余同实时流口径
-  addHistory(lines: readonly HistoryLine[]): void {
+  // 返回与 lines 对齐的句柄：工具行是它的组件（决策 501：跟随记录时结果到了原地补上），其余为 undefined
+  addHistory(lines: readonly HistoryLine[]): Array<HistoryToolLine | undefined> {
+    const handles: Array<HistoryToolLine | undefined> = [];
     for (const line of lines) {
+      handles.push(undefined);
       if (line.kind === "thinking" || line.kind === "end") {
         this.appendDim(line.text);
       } else if (line.kind === "approval") {
@@ -151,9 +157,9 @@ export class MessageFlow {
         this.addConclusion(line.text);
       } else if (line.kind === "tool" || line.kind === "toolResult") {
         // 工具调用行与结果行同实时流：暗色，失败的开头标红色 ✗
-        this.list.addChild(
-          new Text(toolEntryText(line.text, line.failed === true), 1, 1, secondary)
-        );
+        const text = new Text(toolEntryText(line.text, line.failed === true), 1, 1, secondary);
+        this.list.addChild(text);
+        handles[handles.length - 1] = text;
       } else if (line.kind === "assistant") {
         this.appendMarkdown(line.text);
         this.lastReply = line.text;
@@ -166,6 +172,12 @@ export class MessageFlow {
         }
       }
     }
+    return handles;
+  }
+
+  // 决策 501：回看历史里的一行工具行补上结果（"-> ok" / "-> error"）
+  updateHistoryTool(handle: HistoryToolLine, line: HistoryLine): void {
+    handle.setText(toolEntryText(line.text, line.failed === true));
   }
 
   // user 消息提交回显

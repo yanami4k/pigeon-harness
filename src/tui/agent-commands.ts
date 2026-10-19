@@ -107,7 +107,7 @@ export function agentCommandsFace(
     rename: (record, name) => {
       if (!validSessionName(name)) return "invalid name: use letters, digits, _, - and . (max 40)";
       deps.hub.rename(record, name);
-      return `renamed to ${name} (still addressed as ${record.agentName})`;
+      return `renamed to ${name}`;
     },
   };
 }
