@@ -1,4 +1,4 @@
-// 决策 469：状态栏最前面写当前会话的审批模式（ask 暗色、yolo 醒目），Shift+Tab 在两者之间切换、当场生效；审批挂着时按键
+// 决策 469：状态栏最前面写当前会话的审批模式（决策 514：ask 青色、bypass 橙色），Shift+Tab 在两者之间切换、当场生效；审批挂着时按键
 // 归审批，不切换也不替人回答；没有模式可切的（替身运行面）状态栏不写模式、Shift+Tab 不做事。
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -37,7 +37,7 @@ function makeShell(control?: ApprovalModeControl) {
   };
 }
 
-test("状态栏最前面写模式；Shift+Tab 切换当场生效，放手档显示 bypass 且醒目、ask 暗色", async () => {
+test("状态栏最前面写模式；Shift+Tab 切换当场生效，放手档显示 bypass 且为橙色、ask 青色（决策 514）", async () => {
   const changes: string[] = [];
   let mode: "prompt" | "yolo" = "prompt";
   const control: ApprovalModeControl = {
@@ -56,10 +56,13 @@ test("状态栏最前面写模式；Shift+Tab 切换当场生效，放手档显�
     await settle();
     assert.equal(bar(), "bypass · ctx 23% (46k/200k) · 0 tokens");
     assert.deepEqual(changes, ["prompt->yolo"]);
-    assert.ok(term.writes.join("").includes("\x1b[31mbypass\x1b[39m"), "bypass 醒目");
+    // 决策 514：bypass 橙色（256 色 208 号），ask 青色
+    assert.ok(term.writes.join("").includes("\x1b[38;5;208mbypass\x1b[39m"), "bypass 橙色");
+    term.writes.length = 0;
     term.input(SHIFT_TAB);
     await settle();
     assert.equal(bar(), "ask · ctx 23% (46k/200k) · 0 tokens");
+    assert.ok(term.writes.join("").includes("\x1b[36mask\x1b[39m"), "ask 青色");
     assert.deepEqual(changes, ["prompt->yolo", "yolo->prompt"]);
   } finally {
     cleanup();

@@ -2,10 +2,11 @@
 // 按组列出（模型、联网、上下文、工具、防打转与钩子、工作区、界面、键位），←/→ 或 Tab 切组。每项一行名字、用户级写的值
 // （default 即没写、取缺省）与缺省值，下面常显一行暗色的说明：选项名、一句说明，生效值与用户级写的不同时附上生效值；被项目层
 // 覆盖的在名字旁标注。↑/↓ 选项；决策 512：选中一项按 Enter 进入编辑——开关与枚举用 ←/→ 在备选值间切换（待保存的值与现在
-// 写的不同时标出），数字与字符串直接输入（Backspace 删字，清空即取缺省）；再按 Enter 保存（与现在相同即不写），Esc 放弃；
-// 编辑中 ↑/↓ 不移动选项。非法时视图底部醒目地写原因、不写文件。键位组每个动作一行：当前生效的键与缺省键，与别的 Pigeon 动作冲突时标红；
+// 写的值照旧以 ‹值› 显示，决策 514 起不再另标），数字与字符串直接输入（Backspace 删字，清空即取缺省）；再按 Enter 保存
+// （与现在相同即不写），Esc 放弃；编辑中 ↑/↓ 不移动选项。非法时视图底部醒目地写原因、不写文件。决策 514：视图顶上一行暗色
+// 写当前可用的按键（平时、编辑中、按下新键各一套）。键位组每个动作一行：当前生效的键与缺省键，与别的 Pigeon 动作冲突时标红；
 // 选中按 Enter 进入"按下新键"，下一下按键即绑定（Esc 取消，Backspace 清空），Delete 恢复缺省。改动写用户级并重建运行面
-// （由壳做）。放不下时跟着选中项滚动。光标与提示只用 ASCII 与 "›"
+// （由壳做）。放不下时跟着选中项滚动。光标用 "›"；决策 514 的按键提示用箭头与圆点
 import {
   type Component,
   matchesKey,
@@ -25,6 +26,14 @@ import { clipToWidth } from "./status-bar.ts";
 import { secondary, warning } from "./style.ts";
 
 const HEADER = `settings (user level, ${userPigeonRel(SETTINGS_FILE)})`;
+
+// 决策 514：视图顶上的按键提示（暗色）：平时、编辑备选值、就地输入、按下新键（箭头与圆点同状态栏的圆点，按一列算）
+const HINT = {
+  browse: "↑/↓ select · Enter edit · ←/→ group · Esc close",
+  choice: "←/→ change · Enter save · Esc cancel",
+  text: "type a value · Backspace delete · Enter save · Esc cancel",
+  capture: "press a key · Backspace clear · Esc cancel",
+} as const;
 
 // 被 git 跟踪的 settings.local.json 已按共享层给出（config-options.ts）
 const LAYER_LABEL = { project: "project settings", local: "project local settings" } as const;
@@ -212,8 +221,9 @@ export class ConfigPanel {
       const row = this.keys()[this.cursor()];
       if (row === undefined) return;
       if (matchesKey(data, "enter")) {
+        // 决策 514：按键说明在视图顶上的提示行，底部不再重复
         this.capturing = true;
-        this.setNote(`press the new key for ${row.action} (esc cancels, backspace clears)`);
+        this.setNote("");
       } else if (matchesKey(data, "delete")) {
         this.onChange?.(`${KEYBINDING_ID_PREFIX}${row.action}`, "default");
       }
@@ -303,14 +313,12 @@ export class ConfigPanel {
       const label = clipToWidth(configLabel(item), labelWidth);
       const pad = " ".repeat(Math.max(0, labelWidth - visibleWidth(label)));
       const editing = selected ? this.editing : undefined;
-      // 决策 512：编辑中的值——备选值写成 ‹值›，待保存的与现在写的不同时标 (unsaved)；输入的带光标
+      // 决策 512、514：编辑中的值——备选值写成 ‹值›，输入的带光标
       const value =
         editing === undefined
           ? sanitizeTerminalText(item.user)
           : editing.kind === "choice"
-            ? `‹${sanitizeTerminalText(editing.value)}›${
-                editing.value !== item.user ? ` ${warning("(unsaved)")}` : ""
-              }`
+            ? `‹${sanitizeTerminalText(editing.value)}›`
             : `${sanitizeTerminalText(editing.value)}_`;
       const valuePad = " ".repeat(Math.max(0, valueWidth - visibleWidth(value)));
       const head = `${selected ? "›" : " "} ${label}${pad}   ${value}${valuePad}   ${secondary(`default ${item.option.defaultLabel}`)}`;
@@ -352,7 +360,17 @@ export class ConfigPanel {
 
   private render(width: number): string[] {
     if (!this.opened) return [];
-    const top = [clipToWidth(secondary(HEADER), width), this.tabs(width), ""];
+    const hint = this.capturing
+      ? HINT.capture
+      : this.editing !== undefined
+        ? HINT[this.editing.kind]
+        : HINT.browse;
+    const top = [
+      clipToWidth(secondary(HEADER), width),
+      clipToWidth(secondary(hint), width),
+      this.tabs(width),
+      "",
+    ];
     const bottom =
       this.note === ""
         ? []

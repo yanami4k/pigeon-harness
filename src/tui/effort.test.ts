@@ -232,6 +232,8 @@ test("子 agent 视图里 /effort 与 Alt+T 改的是那个子 agent 的档位�
     assert.deepEqual(sub.sets, ["medium", "xhigh"]);
     assert.deepEqual(main.sets, []);
     assert.match(statusLine(term), /^ask · effort xhigh/);
+    // 决策 514：子 agent 视图里的状态栏同样上色
+    assert.ok(term.writes.join("").includes("\x1b[31meffort xhigh\x1b[39m"));
   } finally {
     cleanup();
   }

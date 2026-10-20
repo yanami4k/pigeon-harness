@@ -7,12 +7,12 @@ import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/p
 import { compactNumber } from "../application/format.ts";
 import type { CostTally } from "../application/session-cost.ts";
 import type { ThinkingLevel } from "../state/runtime-events.ts";
-import { secondary, warning } from "./style.ts";
+import { secondary } from "./style.ts";
 
 export interface StatusBarState {
-  // 决策 469、499：当前会话的审批模式（写在最前面：ask 暗色、bypass 醒目）；缺省不写
+  // 决策 469、499：当前会话的审批模式（写在最前面；决策 514：ask 青色、bypass 橙色）；缺省不写
   mode?: "prompt" | "yolo" | undefined;
-  // 决策 513：正在看的代理的思考强度（紧跟模式，暗色）；缺省不写
+  // 决策 513：正在看的代理的思考强度（紧跟模式，按决策 514 的颜色）；缺省不写
   effort?: ThinkingLevel | undefined;
   context?: { tokens: number; contextWindow: number } | undefined;
   // 本会话累计的用量（记账在 application/session-cost.ts；这里只取其中的 token 数）
@@ -54,6 +54,23 @@ export function modeLabel(mode: "prompt" | "yolo"): "ask" | "bypass";
 export function modeLabel(mode: StatusBarState["mode"]): "ask" | "bypass" | undefined;
 export function modeLabel(mode: StatusBarState["mode"]): "ask" | "bypass" | undefined {
   return mode === undefined ? undefined : mode === "yolo" ? "bypass" : "ask";
+}
+
+// 决策 514：状态栏上色——审批模式 ask 青色、bypass 橙色（256 色 208 号）；思考强度 off 正常前景色、low 绿、medium 黄、
+// high 品红、xhigh 红（minimal 同 low、max 同 xhigh）；其余照旧暗色。只包受信的固定文字
+const MODE_COLOR: Record<"ask" | "bypass", string> = { ask: "\x1b[36m", bypass: "\x1b[38;5;208m" };
+const EFFORT_COLOR: Record<ThinkingLevel, string | undefined> = {
+  off: undefined,
+  minimal: "\x1b[32m",
+  low: "\x1b[32m",
+  medium: "\x1b[33m",
+  high: "\x1b[35m",
+  xhigh: "\x1b[31m",
+  max: "\x1b[31m",
+};
+
+function colored(color: string | undefined, text: string): string {
+  return color === undefined ? text : `${color}${text}\x1b[39m`;
 }
 
 // 一行状态栏文本（不含左边距）；width 为可用宽度
@@ -99,14 +116,27 @@ export class StatusBar implements Component {
 
   invalidate(): void {}
 
-  // 与 Text 同样留 1 格左边距；恰好一行。决策 454：次要信息，弱化样式
+  // 与 Text 同样留 1 格左边距；恰好一行。决策 454：次要信息，弱化样式；决策 514：模式与思考强度按各自的颜色（截断后
+  // 只剩一截的不上色，照旧暗色）
   render(width: number): string[] {
     const text = statusBarText(this.state, Math.max(0, width - 2));
     if (text === "") return [""];
-    // 决策 469、499：放手档（显示 bypass）用醒目颜色，其余照旧暗色
-    if (this.state.mode === "yolo" && text.startsWith("bypass")) {
-      return [` ${warning("bypass")}${secondary(text.slice("bypass".length))}`];
+    let rest = text;
+    let out = "";
+    const mode = modeLabel(this.state.mode);
+    if (mode !== undefined && rest.startsWith(mode)) {
+      out += colored(MODE_COLOR[mode], mode);
+      rest = rest.slice(mode.length);
     }
-    return [` ${secondary(text)}`];
+    const effort = this.state.effort;
+    if (effort !== undefined) {
+      const separator = out === "" ? "" : " · ";
+      const segment = `effort ${effort}`;
+      if (rest.startsWith(`${separator}${segment}`)) {
+        out += `${secondary(separator)}${colored(EFFORT_COLOR[effort], segment)}`;
+        rest = rest.slice(separator.length + segment.length);
+      }
+    }
+    return [` ${out}${secondary(rest)}`];
   }
 }

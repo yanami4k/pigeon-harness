@@ -117,7 +117,9 @@ test("/config 打开整屏的设置视图：每项下面常显说明、生效值
     assert.ok(squashSpaces(screenFlat(term)).includes("overriddenbyprojectsettings"), screen);
     // 整屏：没有消息区的输入框
     assert.equal(term.screen.contentLines().filter((line) => /^-{20,}/.test(line)).length, 0);
-    assert.doesNotMatch(screen, /·|→/);
+    // 决策 514：顶上一行写平时的按键；别处不出现箭头与圆点
+    assert.equal(screen.split("\n")[1], "↑/↓ select · Enter edit · ←/→ group · Esc close");
+    assert.doesNotMatch(screen.split("\n").slice(2).join("\n"), /·|→/);
     // 决策 512：Enter 进编辑，→ 切到下一个值（default → off），Enter 保存
     term.input("\r");
     term.input(RIGHT);
@@ -431,7 +433,8 @@ test("决策 465：键位组——每个动作的生效键与缺省键；Enter �
     assert.match(screen, /› pigeon\.cancel +escape +default escape/);
     term.input("\r");
     await settle();
-    assert.match(screenText(term), /press the new key for pigeon\.cancel/);
+    // 决策 514：按键说明在顶上的提示行
+    assert.equal(screenText(term).split("\n")[1], "press a key · Backspace clear · Esc cancel");
     term.input("\x1b[Z");
     await settle();
     assert.deepEqual(writes, ["keybindings:pigeon.cancel=shift+tab"]);
@@ -474,7 +477,10 @@ test("决策 512：Enter 进编辑——←/→ 在备选值间切换、不写�
     term.input(RIGHT);
     await settle();
     assert.deepEqual(writes, [], "切值不写文件");
-    assert.match(screenText(term), /› thinking level +‹minimal› \(unsaved\)/);
+    // 决策 514：不再标 (unsaved)；顶上的提示换成编辑中的一套
+    assert.match(screenText(term), /› thinking level +‹minimal› +default by model/);
+    assert.doesNotMatch(screenText(term), /unsaved/);
+    assert.equal(screenText(term).split("\n")[1], "←/→ change · Enter save · Esc cancel");
     term.input("\x1b[A");
     term.input(DOWN);
     await settle();
@@ -487,7 +493,11 @@ test("决策 512：Enter 进编辑——←/→ 在备选值间切换、不写�
     assert.deepEqual(writes, []);
     assert.deepEqual(reloads, []);
     assert.match(screenText(term), /› thinking level +default/, "Esc 放弃回原值");
-    assert.doesNotMatch(screenText(term), /unsaved/);
+    assert.equal(
+      screenText(term).split("\n")[1],
+      "↑/↓ select · Enter edit · ←/→ group · Esc close",
+      "放弃后提示换回平时的"
+    );
     // 切回原值再保存：与现在相同即不写
     term.input("\r");
     term.input(RIGHT);
@@ -546,6 +556,46 @@ test("决策 512 审查：设置视图开着、但不是在里面改值触发的
     shell.rebindSession(shell.sessionId(), { runtime: new ScriptedRuntime(shell.sessionId()) });
     await settle();
     assert.equal(shell.currentView(), "main");
+  } finally {
+    cleanup();
+  }
+});
+
+test("决策 514：顶上的按键提示随状态切换——就地输入一套、按下新键一套，Esc 回平时的；提示是暗色", async () => {
+  const { term, cleanup } = makeShell();
+  try {
+    await settle();
+    term.input("/config");
+    term.input("\r");
+    await settle();
+    const hint = (): string => screenText(term).split("\n")[1] ?? "";
+    const raw = (): string => term.writes.join("");
+    assert.ok(
+      raw().includes("\x1b[2m↑/↓ select · Enter edit · ←/→ group · Esc close\x1b[22m"),
+      "暗色"
+    );
+    // 数字项（model 组的 model request retries）：就地输入
+    term.input(DOWN);
+    await settle();
+    assert.match(screenText(term), /› model request retries/);
+    term.input("\r");
+    await settle();
+    assert.equal(hint(), "type a value · Backspace delete · Enter save · Esc cancel");
+    term.input("\x1b");
+    await settle();
+    assert.equal(hint(), "↑/↓ select · Enter edit · ←/→ group · Esc close");
+    // 键位组：按下新键时的提示
+    for (let step = 0; step < 12 && !/\[keys\]/.test(screenText(term)); step++) {
+      term.input(RIGHT);
+      await settle();
+    }
+    assert.match(screenText(term), /\[keys\]/);
+    term.input("\r");
+    await settle();
+    assert.equal(hint(), "press a key · Backspace clear · Esc cancel");
+    term.input("\x1b");
+    await settle();
+    assert.equal(hint(), "↑/↓ select · Enter edit · ←/→ group · Esc close");
   } finally {
     cleanup();
   }
