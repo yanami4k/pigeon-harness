@@ -220,6 +220,9 @@ export interface FakeDockerState {
 
 export interface FakeSandboxDocker {
   docker: string[];
+  // 状态文件与它的锁目录（测试可直接造锁或检查锁）
+  stateFile: string;
+  lockDir: string;
   // "容器内"的工作区根（本机临时目录，Windows 上取 MSYS 形式）
   containerRoot: string;
   // 该目录的本机路径
@@ -360,6 +363,8 @@ export function fakeSandboxDocker(initial: Partial<FakeDockerState> = {}): FakeS
     JSON.parse(readFileSync(stateFile, "utf8")) as FakeDockerState;
   return {
     docker: [process.execPath, script, stateFile],
+    stateFile,
+    lockDir,
     containerRoot,
     localRoot,
     cacheRoot,

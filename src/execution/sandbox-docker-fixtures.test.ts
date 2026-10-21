@@ -1,8 +1,8 @@
 // 假 docker 夹具的状态锁：并发调用不丢写入，持有者已死的锁能被接管。
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { test } from "vitest";
 import { type FakeSandboxDocker, fakeSandboxDocker } from "./sandbox-docker-fixtures.ts";
 
@@ -31,10 +31,6 @@ async function until(check: () => boolean, ms = 15_000): Promise<void> {
     if (Date.now() > deadline) throw new Error("等待超时");
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-}
-
-function lockPath(fixture: FakeSandboxDocker): string {
-  return `${join(dirname(fixture.localRoot), "state.json")}.lock`;
 }
 
 const CONTAINER = {
@@ -74,11 +70,9 @@ test("假 docker：并发调用不丢写入", async () => {
 test("假 docker：持有者已死的锁能被接管", async () => {
   const fixture = fakeSandboxDocker({ pullable: ["taken-over:latest"] });
   try {
-    const lockDir = lockPath(fixture);
+    const lockDir = fixture.lockDir;
     mkdirSync(lockDir);
-    const dead = spawnSync(process.execPath, ["-e", "process.exit(0)"]);
-    assert.ok(dead.pid !== undefined && dead.pid > 0);
-    writeFileSync(join(lockDir, "pid"), String(dead.pid));
+    writeFileSync(join(lockDir, "pid"), String(0x7ffffffc));
     assert.equal(await runDocker(fixture, ["pull", "taken-over:latest"]), 0);
     assert.ok(fixture.state().images.includes("taken-over:latest"));
     assert.equal(existsSync(lockDir), false, "接手后应释放锁");
@@ -90,7 +84,7 @@ test("假 docker：持有者已死的锁能被接管", async () => {
 test("假 docker：exec 期间别人持的锁不被退出钩子删掉", async () => {
   const fixture = execFixture();
   try {
-    const lockDir = lockPath(fixture);
+    const lockDir = fixture.lockDir;
     const { exited } = startDocker(fixture, [
       "exec",
       "-w",
@@ -115,7 +109,7 @@ test("假 docker：exec 期间别人持的锁不被退出钩子删掉", async ()
 test("假 docker：exec 期间 update 与 ps 不被阻塞", async () => {
   const fixture = execFixture();
   try {
-    const lockDir = lockPath(fixture);
+    const lockDir = fixture.lockDir;
     const { child, exited } = startDocker(fixture, [
       "exec",
       "-w",
