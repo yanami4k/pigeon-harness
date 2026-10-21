@@ -71,7 +71,7 @@
 - 只跑某几个测试文件：`npm run test -- <文件或 glob…>`（给了文件就只跑这些，不分档；例如
   `npm run test -- src/tui/status-bar.test.ts`）。其余以 `-` 开头的参数原样交给 `vitest run`，例如按名称筛选
   `npm run test -- -t 审批`。
-- 真容器用例与全量验收在有 Docker 的机器上跑；本机只跑改动涉及的单个文件。
+- 真容器用例需要装有 Docker 与所需镜像的机器，没有时照常跳过。
 
 ## 覆盖率与基准
 
