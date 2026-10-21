@@ -32,7 +32,8 @@ const REQUIRED = [
   "third_party/pi-web-access/LICENSE",
   "third_party/pi-web-access/NOTICE.md",
 ];
-const FORBIDDEN = ["docs/notes", ".pigeon/state", "key"];
+const FORBIDDEN_PATHS = ["docs/notes", ".pigeon/state"];
+const SECRET_FILE = /(^|\/)(?:\.env(?:\..*)?|.*\.pem|.*\.key|id_rsa.*)$/i;
 
 function fail(message) {
   throw new Error(message);
@@ -86,9 +87,10 @@ try {
     if (!files.includes(path)) fail(`安装包缺少 ${path}`);
   }
   for (const path of files) {
-    for (const forbidden of FORBIDDEN) {
+    for (const forbidden of FORBIDDEN_PATHS) {
       if (path.includes(forbidden)) fail(`安装包不应包含 ${path}`);
     }
+    if (SECRET_FILE.test(path)) fail(`安装包不应包含密钥文件 ${path}`);
   }
 
   const prefix = join(temp, "prefix");
