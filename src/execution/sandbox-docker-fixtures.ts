@@ -18,10 +18,16 @@ const [stateFile, ...args] = process.argv.slice(2);
 const lockDir = stateFile + ".lock";
 const holderFile = lockDir + "/pid";
 const pause = new Int32Array(new SharedArrayBuffer(4));
+let held = false;
 const release = () => {
-  try { rmSync(lockDir, { recursive: true, force: true }); } catch {}
+  if (!held) return;
+  rmSync(lockDir, { recursive: true, force: true });
+  held = false;
 };
-process.on("exit", release);
+const releaseOnExit = () => {
+  try { release(); } catch (error) { process.stderr.write("fake docker: failed to release lock: " + error + "\\n"); }
+};
+process.on("exit", releaseOnExit);
 const holderAlive = (pid) => {
   try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; }
 };
@@ -30,7 +36,7 @@ const takeOverDeadHolder = () => {
   try { pid = Number(readFileSync(holderFile, "utf8")); } catch { return false; }
   if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
   if (holderAlive(pid)) return false;
-  release();
+  try { rmSync(lockDir, { recursive: true, force: true }); } catch { return false; }
   return true;
 };
 const lockStarted = Date.now();
@@ -38,6 +44,7 @@ for (;;) {
   try {
     mkdirSync(lockDir);
     writeFileSync(holderFile, String(process.pid));
+    held = true;
     break;
   } catch (error) {
     const code = error.code;
@@ -129,6 +136,7 @@ if (sub === "ps") {
   process.exit(0);
 }
 if (sub !== "exec") fail(1, "fake docker: unsupported " + sub);
+process.off("exit", releaseOnExit);
 release();
 let i = 1;
 let cwd = process.cwd();
@@ -262,11 +270,13 @@ export function fakeSandboxDocker(initial: Partial<FakeDockerState> = {}): FakeS
   };
   const withLock = <T>(fn: () => T): T => {
     const pause = new Int32Array(new SharedArrayBuffer(4));
+    let held = false;
     const started = Date.now();
     for (;;) {
       try {
         mkdirSync(lockDir);
         writeFileSync(holderFile, String(process.pid));
+        held = true;
         break;
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
@@ -279,10 +289,9 @@ export function fakeSandboxDocker(initial: Partial<FakeDockerState> = {}): FakeS
     try {
       return fn();
     } finally {
-      try {
+      if (held) {
         rmSync(lockDir, { recursive: true, force: true });
-      } catch {
-        // 清理失败不改写调用方的结果
+        held = false;
       }
     }
   };
