@@ -133,7 +133,24 @@ export function sessionIndexed(sessionId: string, homeDir: string = homedir()): 
 
 // 清单里会话文件还在的（按加入先后）
 export function listSessionIndex(homeDir: string = homedir()): ListedSession[] {
-  return readEntries(sessionIndexPathOf(homeDir))
+  return listedOf(readEntries(sessionIndexPathOf(homeDir)));
+}
+
+// 同上，但清单文件在却读不成或格式不对时抛错（/worktrees clean 据此不删：读不到清单不等于没有面板会话）
+export function readableSessionIndex(homeDir: string = homedir()): ListedSession[] {
+  const file = sessionIndexPathOf(homeDir);
+  if (!existsSync(file)) return [];
+  const raw: unknown = JSON.parse(readFileSync(file, "utf8"));
+  if (!Value.Check(SessionIndexFileSchema, raw)) {
+    throw new Error(`unrecognized session index: ${file}`);
+  }
+  return listedOf(
+    (raw as { sessions: SessionIndexEntry[] }).sessions.map((entry) => ({ ...entry }))
+  );
+}
+
+function listedOf(entries: SessionIndexEntry[]): ListedSession[] {
+  return entries
     .sort((left, right) => left.addedAt - right.addedAt)
     .flatMap((entry) => {
       try {

@@ -6,8 +6,6 @@
 // - 两层都没有条目时：可写入的入口照样推送（让 agent 知道该记什么、记在哪一层）；只推送的入口不推这一段。
 // - 条目部分照原文放入：格式被人改坏时同样照原文推入（工具另行拒绝写入）。
 // - 清单（每层的文件哈希、字节数、条数、上限与文字版本）随 Run 开始条目落盘。
-// - 决策 431：读到旧格式的记忆文件即一次性迁移（见 memory-migration.ts），推送的一律是新格式；迁移没能落盘时这一次推内存里
-//   转换的新格式，清单的哈希与字节数随之按推送的原文算。没能落盘的告警经 report 交给入口（迁移成功不告知，决策 460）。
 import type { MemoryLimits } from "../state/memory-config.ts";
 import {
   countChars,
@@ -18,8 +16,7 @@ import {
   type MemoryLayer,
   memoryFactsOfText,
 } from "./learned.ts";
-import { availableMemoryLayers, memoryLocation } from "./learned-store.ts";
-import { type MemoryMigrationReport, readMemoryLayer } from "./memory-migration.ts";
+import { availableMemoryLayers, memoryLocation, readMemoryFile } from "./learned-store.ts";
 
 // 冲突处理的两种填法（记忆文字 v5）：可写入（有人对话）/ 只推送（无人值守）
 export type MemoryConflictMode = "interactive" | "unattended";
@@ -69,7 +66,7 @@ export function pushedLayerSection(input: {
 export interface PushedMemoryLayerManifest {
   layer: MemoryLayer;
   path: string;
-  // 记忆文件原文的 sha256（文件不在时为空串的哈希）与字节数；旧格式没能落盘改写时为内存里转换后的原文
+  // 记忆文件原文的 sha256（文件不在时为空串的哈希）与字节数
   hash: string;
   bytes: number;
   // 条数（以"- [编号]"开头的行数）与上限（字符）
@@ -98,8 +95,6 @@ export function loadPushedMemory(input: {
   writable: boolean;
   // 推送哪几层；缺省两层
   layers?: readonly MemoryLayer[];
-  // 旧格式迁移的结果与告警（给人看的一行）；缺省写标准错误输出
-  report?: MemoryMigrationReport;
 }): PushedMemory {
   // 主目录下启动时只有用户级这一层（项目级与它是同一个文件）
   const available = availableMemoryLayers({
@@ -117,7 +112,7 @@ export function loadPushedMemory(input: {
       governanceRoot: input.governanceRoot,
       ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
     });
-    const read = readMemoryLayer(location, input.report);
+    const read = readMemoryFile(location.file);
     const section = entriesSection(read.text).trimEnd();
     const facts = memoryFactsOfText(read.text);
     const limit = input.limits[layer];

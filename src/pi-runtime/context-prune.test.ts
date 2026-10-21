@@ -22,33 +22,29 @@ import {
 } from "./context-prune.ts";
 import type { AgentMessage } from "./index.ts";
 
-test("决策 428：裁掉命令结果时保留文件变化一段——新的英文开头与旧会话里的中文开头都认", () => {
-  for (const changes of [
-    "\nFile changes: added 1 / removed 0 / modified 0\nAdded: gen.txt",
-    "\n文件变化：新增 1 / 删除 0 / 修改 0\n新增：gen.txt",
-  ]) {
-    const result = {
-      role: "toolResult",
-      toolCallId: "c1",
+test("决策 428：裁掉命令结果时保留文件变化一段", () => {
+  const changes = "\nFile changes: added 1 / removed 0 / modified 0\nAdded: gen.txt";
+  const result = {
+    role: "toolResult",
+    toolCallId: "c1",
+    toolName: "run_command",
+    content: [{ type: "text", text: `$ make\nExit code: 0\n${"y".repeat(200)}${changes}` }],
+    details: { exitCode: 0, fileChanges: { added: ["gen.txt"], removed: [], modified: [] } },
+    isError: false,
+    timestamp: 0,
+  } as unknown as ToolResultMessage;
+  const text = placeholderOf(
+    {
       toolName: "run_command",
-      content: [{ type: "text", text: `$ make\nExit code: 0\n${"y".repeat(200)}${changes}` }],
-      details: { exitCode: 0, fileChanges: { added: ["gen.txt"], removed: [], modified: [] } },
-      isError: false,
-      timestamp: 0,
-    } as unknown as ToolResultMessage;
-    const text = placeholderOf(
-      {
-        toolName: "run_command",
-        reason: "large",
-        tokens: 1_000,
-        result,
-        args: { command: "make" },
-      },
-      undefined
-    );
-    assert.ok(text.endsWith(changes), text);
-    assert.ok(!text.includes("y".repeat(50)), "输出部分已换掉");
-  }
+      reason: "large",
+      tokens: 1_000,
+      result,
+      args: { command: "make" },
+    },
+    undefined
+  );
+  assert.ok(text.endsWith(changes), text);
+  assert.ok(!text.includes("y".repeat(50)), "输出部分已换掉");
 });
 
 let clock = 0;
@@ -326,7 +322,7 @@ test("命令：截断而全文没落盘的、补落盘失败的不裁；部分�
     },
   };
   const generated = "y".repeat(4_000);
-  const changes = "\n文件变化：新增 1 / 删除 0 / 修改 0\n新增：gen.txt";
+  const changes = "\nFile changes: added 1 / removed 0 / modified 0\nAdded: gen.txt";
   const echo = `echo ${"x".repeat(800)}`;
   const command = (text: string, details: Record<string, unknown>, run = "make"): Call => ({
     name: "run_command",

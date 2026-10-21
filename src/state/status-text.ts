@@ -16,7 +16,7 @@ export function isStatusMessage(message: unknown): boolean {
 }
 
 // 决策 480、482：agent 之间的传话（派出时交代的任务、消息、交回的结果）以一条带标记的用户消息进模型——标记记谁发给谁、
-// 哪一种，随消息原样存进会话记录、交给模型之前去掉；回看、回退与续接列表据此认出不是人说的（旧会话里的程序通知照旧按前缀认）
+// 哪一种，随消息原样存进会话记录、交给模型之前去掉；回看、回退与续接列表据此认出不是人说的
 export const AGENT_MESSAGE_MARKER = "pigeonAgentMessage";
 
 export interface AgentMessageMark {

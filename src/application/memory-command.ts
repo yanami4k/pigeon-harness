@@ -5,8 +5,6 @@
 //   内容留在编辑稿里供人取回。没有设置编辑器时给出文件路径，请人直接编辑。
 // - 保存时别处正在写这一层：排队等，不设上限；等待超过 1 秒才提示，人可取消，取消时原文件不动、编辑稿保留。
 // - 改动从下一条消息起生效：每个 Run 开始时重读，变了即在开工状态块里整节追加（决策 363）。
-// - 决策 431：查看与打开编辑稿时读到旧格式的记忆文件，即一次性迁移（备份、锁内改写），迁移的结果与没能落盘的告警附在
-//   回话末尾；保存时在锁内再迁移一次（打开时没能落盘的这时补上），备份或改写出错即不保存。
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -23,10 +21,10 @@ import {
   type MemoryLocation,
   MemoryLockAbortedError,
   memoryLocation,
+  readMemoryFile,
   withMemoryLock,
   writeMemoryFile,
 } from "../memory/learned-store.ts";
-import { migrateMemoryFileLocked, readMemoryLayer } from "../memory/memory-migration.ts";
 import { ensureStateDirOf } from "../persistence/settings.ts";
 import type { MemoryLimits } from "../state/memory-config.ts";
 import { plural } from "./format.ts";
@@ -56,15 +54,10 @@ function layerLabel(layer: MemoryLayer): string {
   return `${layer} memory`;
 }
 
-// 回话末尾附上迁移的结果与告警（每条一行）
-function withNotes(text: string, notes: readonly string[]): string {
-  return notes.length === 0 ? text : `${text}\n${notes.join("\n")}`;
-}
-
-// 一层的查看文字；迁移的结果与告警记进 notes
-function layerView(ctx: MemoryCommandContext, layer: MemoryLayer, notes: string[]): string {
+// 一层的查看文字
+function layerView(ctx: MemoryCommandContext, layer: MemoryLayer): string {
   const location = locationOf(ctx, layer);
-  const read = readMemoryLayer(location, (line) => notes.push(line));
+  const read = readMemoryFile(location.file);
   const limit = ctx.limits[layer];
   const title = `${layerLabel(layer)} (${location.display}, ${location.file})`;
   const section = entriesSection(read.text).trimEnd();
@@ -80,12 +73,9 @@ function layerView(ctx: MemoryCommandContext, layer: MemoryLayer, notes: string[
 }
 
 export function memoryViewText(ctx: MemoryCommandContext): string {
-  const notes: string[] = [];
-  const view = [
-    "memory",
-    ...availableMemoryLayers(ctx).map((layer) => layerView(ctx, layer, notes)),
-  ].join("\n\n");
-  return notes.length === 0 ? view : `${view}\n\n${notes.join("\n")}`;
+  return ["memory", ...availableMemoryLayers(ctx).map((layer) => layerView(ctx, layer))].join(
+    "\n\n"
+  );
 }
 
 // 编辑器：$VISUAL 优先，其次 $EDITOR；都没有为 undefined
@@ -157,8 +147,7 @@ export async function editMemoryLayer(
   if (editor === undefined) {
     return `no editor set ($VISUAL/$EDITOR); edit ${location.file} directly`;
   }
-  const notes: string[] = [];
-  const original = readMemoryLayer(location, (line) => notes.push(line));
+  const original = readMemoryFile(location.file);
   const draft = memoryDraftPathOf(location.file);
   // 决策 444：项目级草稿在程序状态目录里——第一次写时确保全局忽略规则（用户级不动）
   ensureStateDirOf(draft);
@@ -167,25 +156,22 @@ export async function editMemoryLayer(
   const ran = (options.run ?? spawnEditor)(editor, draft);
   const keep = `edits kept in ${draft}`;
   if (!ran.ok) {
-    return withNotes(`${label} not saved: ${ran.error}; ${keep}`, notes);
+    return `${label} not saved: ${ran.error}; ${keep}`;
   }
   const edited = existsSync(draft) ? readFileSync(draft, "utf8") : "";
   const before = original.exists ? original.text : MEMORY_FILE_HEADERS[layer];
   if (edited === before) {
     rmSync(draft, { force: true });
-    return withNotes(`${label} unchanged`, notes);
+    return `${label} unchanged`;
   }
   const parsed = parseMemory(edited, layer);
   if (!parsed.ok) {
-    return withNotes(`${label} not saved: bad format from line ${parsed.line}; ${keep}`, notes);
+    return `${label} not saved: bad format from line ${parsed.line}; ${keep}`;
   }
   const used = usedChars(parsed.doc.entries, layer);
   const limit = ctx.limits[layer];
   if (used > limit) {
-    return withNotes(
-      `${label} not saved: ${used} chars, ${used - limit} over the ${limit} limit; ${keep}`,
-      notes
-    );
+    return `${label} not saved: ${used} chars, ${used - limit} over the ${limit} limit; ${keep}`;
   }
   // 别处正在写这一层时排队等，不设上限；等满 waitingDelayMs 才提示，轮到或取消即撤掉计时
   let waitingTimer: NodeJS.Timeout | undefined;
@@ -193,16 +179,7 @@ export async function editMemoryLayer(
     const result = await withMemoryLock(
       location.lock,
       () => {
-        // 决策 431：打开时没能落盘的迁移这时补上（转换确定，补上后与编辑稿的起点逐字相同）；备份或改写出错即不保存
-        let current: ReturnType<typeof migrateMemoryFileLocked>;
-        try {
-          current = migrateMemoryFileLocked(location);
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : String(error);
-          return `${label} not saved: migrating the old-format file failed (${detail}); ${keep}`;
-        }
-        if (current.backup !== undefined) {
-        }
+        const current = readMemoryFile(location.file);
         // 编辑期间原文件被另一处（另一个会话的 update_memory）改过：不覆盖
         if (current.hash !== original.hash) {
           return `${label} not saved: changed elsewhere while editing; ${keep}`;
@@ -223,11 +200,11 @@ export async function editMemoryLayer(
         },
       }
     );
-    return withNotes(result, notes);
+    return result;
   } catch (error) {
     // 人取消：原文件不动，草稿保留
     if (error instanceof MemoryLockAbortedError) {
-      return withNotes(memorySaveCancelledText(draft), notes);
+      return memorySaveCancelledText(draft);
     }
     throw error;
   } finally {

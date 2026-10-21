@@ -8,7 +8,9 @@ import { failureLine } from "../application/format.ts";
 import { runGrantCommand } from "../application/grants.ts";
 import { MEMORY_COMMAND_USAGE, MEMORY_SAVE_WAITING_TEXT } from "../application/memory-command.ts";
 import {
+  SANDBOX_CLEAR_UNSUPPORTED,
   SANDBOX_FORK_UNSUPPORTED,
+  SANDBOX_NEW_UNSUPPORTED,
   SANDBOX_RESUME_UNSUPPORTED,
   SANDBOX_TAKE_UNSUPPORTED,
 } from "../application/sandbox-session.ts";
@@ -44,6 +46,9 @@ export interface TuiGrantsContext {
   layeredRules?: readonly LayeredGrantRule[];
 }
 
+// 决策 496：/clear（工作目录不变）与 /new [path]（path 为原样的剩余文本，可以有空格；不给即项目根）
+export type NewSessionRequest = { kind: "clear" } | { kind: "new"; path?: string };
+
 // 壳侧窄接口：命令分发需要的当前会话上下文与壳动作
 export interface CommandsHost {
   addSystem(line: string): void;
@@ -59,8 +64,8 @@ export interface CommandsHost {
   // M7（决策 079）：/fork 手动分叉，交回给人看的一行（缺省 = 不可用）
   readonly forkCommand?: ((args: string) => Promise<string>) | undefined;
   resumeCommand(arg: string | undefined): void;
-  // 决策 488：/new 开一个新会话（当前会话还在干活时退到面板接着跑）；缺省 = /new 不可用
-  readonly newSessionCommand?: (() => void) | undefined;
+  // 决策 496：/clear 原地换新对话、/new [path] 在 path 开新会话（当前会话还在干活时退到面板接着跑）；缺省 = 不可用
+  readonly newSessionCommand?: ((request: NewSessionRequest) => void) | undefined;
   compactCommand(focus: string | undefined): void;
   // 决策 340：/reload 重读设置（装配方给了重载入口才在场）
   readonly reloadCommand?: ((args: readonly string[]) => void) | undefined;
@@ -72,6 +77,8 @@ export interface CommandsHost {
   memory?(): TuiMemoryFace | undefined;
   // 接管 Esc（审批挂起时除外），直到返回的函数被调用；缺省 = 不能接管
   captureEscape?(onEscape: () => void): () => void;
+  // 决策 492：/worktrees clean 列出清单后，界面在状态行问一次 y/N
+  beginCleanConfirm?(): void;
   // 决策 448：/worktrees 的命令面（缺省 = /worktrees 不可用）
   worktrees?(): TuiWorktreesFace | undefined;
   // 决策 456：/rename 改当前会话的名字，返回落消息区的一行（改成了为 "renamed to <名字>"，不合规为报错）；缺省 = /rename 不可用
@@ -83,9 +90,15 @@ export interface CommandsHost {
   // 决策 443：/panel 打开会话面板（缺省 = 不可用）
   readonly panelCommand?: (() => void) | undefined;
   // 决策 443：/take <名字> 取回会话面板里那个会话工作树里的改动；没有这个会话即 undefined
-  takePooled?(name: string): Promise<string> | undefined;
+  takePooled?(id: string): Promise<string> | undefined;
   // 决策 443：会话面板里有没有这个名字的会话（只查不取）
-  hasPooled?(name: string): boolean;
+  hasPooled?(id: string): boolean;
+  // 决策 490：/take 不带参数时列出"现在能取"的会话（会话名 + 全量会话号）
+  takeableText?(): string;
+  // 决策 491：/status 的一段文本（装配方现取；读会话记录等异步工作在里面做）
+  statusCommand?(): Promise<string>;
+  // 决策 490：/take 不带参数时把命令填进输入框，参数由输入框下方的补全列表给
+  beginTakePick?(): void;
   // 决策 458：当前会话的名字（/take 用到它时说明不用取回）
   currentSessionName?(): string | undefined;
 }
@@ -103,7 +116,7 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
       host.requestExit();
       return;
     }
-    // 决策 237、245：沙箱会话——/export 手动交回；分叉、取回与 /resume 换绑不支持，说明原因
+    // 决策 237、245：沙箱会话——/export 手动交回；分叉、取回与 /resume 换绑不支持，说明原因（决策 496：/clear、/new 同 /resume）
     const sandbox = host.sandbox?.();
     if (sandbox !== undefined) {
       if (tokens[0] === "export") {
@@ -128,7 +141,11 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
             ? SANDBOX_TAKE_UNSUPPORTED
             : tokens[0] === "resume"
               ? SANDBOX_RESUME_UNSUPPORTED
-              : undefined;
+              : tokens[0] === "new"
+                ? SANDBOX_NEW_UNSUPPORTED
+                : tokens[0] === "clear"
+                  ? SANDBOX_CLEAR_UNSUPPORTED
+                  : undefined;
       if (reason !== undefined) {
         host.addSystem(reason);
         return;
@@ -149,21 +166,26 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
       );
       return;
     }
-    // 决策 443：/take <名字> 把会话面板里那个会话工作树里的改动取回主工作目录
+    // 决策 443、490：/take <会话号> 把会话面板里那个会话工作树里的改动取回主工作目录；
+    // 不带参数列出现在能取的（会话号是全量 ULID，不做前缀或后缀模糊）
     if (tokens[0] === "take") {
-      const name = tokens[1];
-      if (name === undefined) {
-        host.addSystem("usage: /take <session>");
+      const id = tokens[1];
+      if (id === undefined) {
+        if (host.beginTakePick !== undefined) {
+          host.beginTakePick();
+          return;
+        }
+        host.addSystem(host.takeableText?.() ?? "usage: /take [session ID]");
         return;
       }
       // 决策 458：当前会话也在会话面板里列着，但它的改动就在本工作区里，没有可取回的
-      if (host.hasPooled?.(name) !== true && host.currentSessionName?.() === name) {
-        host.addSystem(`${name} is the current session; nothing to take`);
+      if (host.hasPooled?.(id) !== true && host.sessionId() === id) {
+        host.addSystem(`${id} is the current session; nothing to take`);
         return;
       }
-      const pooled = host.takePooled?.(name);
+      const pooled = host.takePooled?.(id);
       if (pooled === undefined) {
-        host.addSystem(`no session named ${name} in the session panel`);
+        host.addSystem(`no session with ID ${id} in the session panel`);
         return;
       }
       void pooled.then((text) => {
@@ -222,6 +244,8 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
     const worktrees = host.worktrees?.();
     if (tokens[0] === "worktrees" && worktrees !== undefined) {
       host.addSystem(worktrees.run(tokens.slice(1)));
+      // 决策 492：clean 列出了将删的清单即进入"问一次 y/N"；答别的、Esc、或下一条命令都作罢
+      if (worktrees.hasPending()) host.beginCleanConfirm?.();
       return;
     }
     // 决策 443：/panel 打开会话面板
@@ -259,18 +283,37 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
         return;
       }
     }
+    // 决策 491：/status——只读，运行中也能看
+    if (tokens[0] === "status" && host.statusCommand !== undefined) {
+      void host.statusCommand().then(
+        (text) => {
+          host.addSystem(text);
+          host.render();
+        },
+        (error: unknown) => {
+          host.addAlert(error instanceof Error ? error.message : String(error));
+          host.render();
+        }
+      );
+      return;
+    }
     // 决策 340：/reload 重读设置（结果与待确认条目写进消息区）
     if (tokens[0] === "reload" && host.reloadCommand !== undefined) {
       host.reloadCommand(tokens.slice(1));
       return;
     }
-    // 决策 488：/new 开一个新会话；工作区跟当前会话所在的项目，不带参数
-    if (tokens[0] === "new" && host.newSessionCommand !== undefined) {
+    // 决策 496：/clear 原地换新对话（不带参数）；/new [path] 在 path 开新会话（不给即项目根）
+    if (tokens[0] === "clear" && host.newSessionCommand !== undefined) {
       if (tokens.length > 1) {
-        host.addSystem("usage: /new");
+        host.addSystem("usage: /clear");
         return;
       }
-      host.newSessionCommand();
+      host.newSessionCommand({ kind: "clear" });
+      return;
+    }
+    if (tokens[0] === "new" && host.newSessionCommand !== undefined) {
+      const path = value.trim().slice("/new".length).trim();
+      host.newSessionCommand(path === "" ? { kind: "new" } : { kind: "new", path });
       return;
     }
     // S4：/resume <sessionId> 冷恢复对账 + 换绑续跑（异步流程，见 resume-view.ts）

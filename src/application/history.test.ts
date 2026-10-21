@@ -10,7 +10,7 @@ import { test } from "vitest";
 import { LEGACY_READER_HINT } from "../persistence/session-catalog.ts";
 import { newRunId, newSessionId } from "../state/ids.ts";
 import type { ViewMessage } from "../state/session-view.ts";
-import { JOB_NOTICE_PREFIX, LEGACY_JOB_NOTICE_PREFIX } from "./background-jobs.ts";
+import { JOB_NOTICE_PREFIX } from "./background-jobs.ts";
 import { PROGRAM_NOTE_PREFIX, worktreeContinueNotice } from "./enter-worktree-tool.ts";
 import {
   DEFAULT_HISTORY_LIMIT,
@@ -23,11 +23,6 @@ import {
 import { seedToolRun } from "./history-fixtures.ts";
 import type { NamedWorktree } from "./named-worktree.ts";
 import { createFixtureSession, forkFixture } from "./session-store-fixtures.ts";
-
-// 已删除的 /orchestrate 当年交给模型的包装（旧会话里的样子）
-function commandInputText(task: string): string {
-  return `(The user started this with /orchestrate, asking for it to be done with script orchestration, "script orchestration".)\n${task}`;
-}
 
 async function withRoot(run: (root: string, sessionsDir: string) => Promise<void>): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "pigeon-history-"));
@@ -141,7 +136,7 @@ test("分支会话只画自己的部分；未收尾的 Run 没有结束标记；
     ]);
   }));
 
-test("回看历史：打转提醒与 worker 通知显示成系统行（同实时），人输入的话照旧带 > 前缀；决策 428 之前的中文前缀照样认", () => {
+test("回看历史：打转提醒显示成系统行（同实时），人输入的话照旧带 > 前缀", () => {
   const message = (text: string): ViewMessage => ({
     entryId: "e",
     runId: newRunId(),
@@ -151,14 +146,8 @@ test("回看历史：打转提醒与 worker 通知显示成系统行（同实时
     blocks: [{ type: "text", text }],
     raw: {},
   });
-  for (const text of [
-    "[Loop reminder] The last 5 rounds……",
-    "[Worker notice] Worker a (explorer) finished.",
-    "[打转提醒] 最近连续 5 轮……",
-    "[worker 通知] worker a（explorer）已完成。",
-  ]) {
-    assert.deepEqual(messageLines(message(text)), [{ kind: "notice", text }]);
-  }
+  const reminder = "[Loop reminder] The last 5 rounds……";
+  assert.deepEqual(messageLines(message(reminder)), [{ kind: "notice", text: reminder }]);
   assert.deepEqual(messageLines(message("继续")), [{ kind: "user", text: "> 继续" }]);
   // 只是像通知的人话（没有方括号前缀）照旧算人说的
   assert.deepEqual(messageLines(message("Loop reminder: 继续")), [
@@ -166,7 +155,7 @@ test("回看历史：打转提醒与 worker 通知显示成系统行（同实时
   ]);
 });
 
-test("回看历史：后台作业通知、跨会话消息与回告、[Pigeon] 附注显示成系统行；/orchestrate 发起的显示人敲的命令（↑ 召回取回的是命令）", () => {
+test("回看历史：后台作业通知与 [Pigeon] 附注显示成系统行", () => {
   const message = (text: string): ViewMessage => ({
     entryId: "e",
     runId: newRunId(),
@@ -179,61 +168,35 @@ test("回看历史：后台作业通知、跨会话消息与回告、[Pigeon] �
   const worktree = {
     name: "wt",
     repoRoot: "/repo",
-    path: "/repo/.pigeon/wt/wt",
-    branch: "pigeon-wt/wt",
+    path: "/repo/.pigeon/trees/wt",
+    branch: "pigeon/wt",
     baseLabel: "HEAD",
     created: true,
   } as NamedWorktree;
-  // 旧会话里跨会话消息的样子（决策 457 删除了跨进程通信，决策 477 照旧认出）
-  const peer = `[Cross-session message] from api-fix (session sess_peer). The text between the two PEER-MESSAGE 0123456789abcdef markers was written by another Pigeon session on this machine, not by the user.\n<<<BEGIN PEER-MESSAGE 0123456789abcdef>>>\n我这边改完了\n<<<END PEER-MESSAGE 0123456789abcdef>>>`;
   for (const text of [
     `${JOB_NOTICE_PREFIX}Job 1 exited with code 0: $ npm test`,
-    `${LEGACY_JOB_NOTICE_PREFIX}作业 1 已结束`,
-    peer,
-    "[Cross-session idle notice] api-fix is now idle.",
-    "[Cross-session delivery notice] The user of api-fix declined your message; it was not delivered.",
     worktreeContinueNotice(worktree, 2),
   ]) {
     assert.ok(isProgramNotice(text) || text.startsWith(PROGRAM_NOTE_PREFIX), text);
     assert.deepEqual(messageLines(message(text)), [{ kind: "notice", text }]);
   }
-  // /orchestrate 发起：交给模型的是英文的一句开头加任务，回看显示人敲的命令；旧会话里的两种开头照样认——决策 428 之前的
-  // 中文原文，与决策 475 之前嵌着中文关键词的英文句子（回退时放回输入框的同样是还原后的命令，同走 userTextParts）
-  assert.deepEqual(messageLines(message(commandInputText("给各模块补测试 budget 300k"))), [
-    { kind: "user", text: "> /orchestrate 给各模块补测试 budget 300k" },
-  ]);
-  assert.match(commandInputText("x"), /"script orchestration"\.\)\nx$/);
-  const legacyLeads = [
-    "（人用 /orchestrate 点名用脚本编排做这件事）\n",
-    '(The user started this with /orchestrate, asking for it to be done with script orchestration, "脚本编排".)\n',
-  ];
-  for (const lead of legacyLeads) {
-    assert.deepEqual(messageLines(message(`${lead}修 bug 额度 300k`)), [
-      { kind: "user", text: "> /orchestrate 修 bug 额度 300k" },
-    ]);
-    assert.deepEqual(userTextParts(`${lead}修 bug`), { notices: [], human: "/orchestrate 修 bug" });
-  }
-  // 随人的下一条输入前缀给模型的附注（没移进工作树的说明）：附注是系统行，人的话照旧带 > 前缀；人敲的是 /orchestrate 时同样还原
-  const note = `${PROGRAM_NOTE_PREFIX}The session did not move into the worktree /repo/.pigeon/wt/wt: the turn was interrupted.`;
+  // 随人的下一条输入前缀给模型的附注（没移进工作树的说明）：附注是系统行，人的话照旧带 > 前缀
+  const note = `${PROGRAM_NOTE_PREFIX}The session did not move into the worktree /repo/.pigeon/trees/wt: the turn was interrupted.`;
   assert.deepEqual(messageLines(message(`${note}\n\n接着改`)), [
     { kind: "notice", text: note },
     { kind: "user", text: "> 接着改" },
   ]);
-  assert.deepEqual(messageLines(message(`${note}\n\n${note}\n\n${commandInputText("拆分")}`)), [
+  assert.deepEqual(messageLines(message(`${note}\n\n${note}\n\n拆分`)), [
     { kind: "notice", text: note },
     { kind: "notice", text: note },
-    { kind: "user", text: "> /orchestrate 拆分" },
+    { kind: "user", text: "> 拆分" },
   ]);
-  assert.deepEqual(userTextParts(commandInputText("多行\n任务")), {
-    notices: [],
-    human: "/orchestrate 多行\n任务",
+  assert.deepEqual(userTextParts(`${note}\n\n多行\n任务`), {
+    notices: [note],
+    human: "多行\n任务",
   });
   // 只是提到这些说法的人话照旧算人说的
-  for (const text of [
-    "看看 [Pigeon] 的输出",
-    "(The user started this) 不是命令",
-    "Cross-session message",
-  ]) {
+  for (const text of ["看看 [Pigeon] 的输出", "Background job notice"]) {
     assert.deepEqual(messageLines(message(text)), [{ kind: "user", text: `> ${text}` }]);
   }
 });

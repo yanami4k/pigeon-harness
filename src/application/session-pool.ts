@@ -40,7 +40,7 @@ export interface PooledSessionCard {
   worktree?: { path: string; branch: string };
   // 决策 459：不是 git 仓库时派出的会话与其他会话共用当前目录（没有工作树、不隔离）
   sharedDir?: boolean;
-  // 决策 489：共用目录的会话所用的工作区（展示写法）；卡上直接写它，不再写 "shared dir"
+  // 决策 489：会话干活的目录（展示写法，如 `~` 缩写）；卡上写它，与当前会话的工作区相同则不写。共用目录的会话缺它时退回 "shared dir"
   workspace?: string;
   // 当前会话那张卡：已请求中断、这一轮还没停下（卡上写 cancelling）
   cancelling?: boolean;
@@ -74,10 +74,14 @@ export interface SessionPanelSource {
   take?(id: string): Promise<string>;
   // 决策 485：重读工作清单（打开面板时）
   refresh?(): void;
+  // 决策 490：派出时的占位会话号开好之后换成真会话号——按占位号问现在的会话号（面板据此跟住刚派出的那张卡）
+  currentId?(id: string): string;
 }
 
 export interface PooledRuntime<Live = unknown> {
   sessionId: string;
+  // 决策 490：会话开好之后的显示名（缺省是「目录名 + 会话号末 4 位」）；不给即沿用派出时的占位名
+  name?(): string;
   worktree?: { path: string; branch: string };
   // 跑一轮；结果带 status（"failed" 即失败，errorMessage 为原因）
   run(text: string): Promise<unknown>;
@@ -124,6 +128,8 @@ export interface LocalSessionPoolOptions<Live> {
   sharedDir?: () => boolean;
   // 决策 489：共用目录的会话在卡上写出来的工作区（展示用的写法，如 `~` 缩写）；缺省退回 "shared dir"
   sharedWorkspace?: () => string | undefined;
+  // 决策 489：工作树路径在卡上的写法（如 `~` 缩写）；缺省原样
+  displayPath?: (path: string) => string;
 }
 
 const STATE_ORDER: Record<PooledSessionState, number> = {
@@ -219,6 +225,8 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
   readonly #listeners = new Set<() => void>();
   // 从面板去掉、还在释放的（关掉 Pigeon 时一并等）
   readonly #releasing = new Set<Promise<void>>();
+  // 决策 490：占位会话号 → 开好之后的会话号
+  readonly #renamed = new Map<string, string>();
   #seq = 0;
   #closed = false;
 
@@ -281,6 +289,10 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
     };
   }
 
+  currentId(id: string): string {
+    return this.#renamed.get(id) ?? id;
+  }
+
   list(): PooledSessionCard[] {
     return [...this.#entries.values()]
       .map((entry) => entry.card)
@@ -306,6 +318,7 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
     const text = task.trim();
     if (text === "") throw new Error("task is empty");
     this.#seq += 1;
+    // 决策 490：开好之前的占位名；开好后卡片换成核心给出的缺省显示名（目录名 + 会话号末 4 位，见 main-pool.ts）
     const name = `s${this.#seq}`;
     const now = this.#now();
     // 决策 489：共用目录的会话把工作区直接写在卡上
@@ -349,6 +362,7 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
       }
       // 会话号定了：卡片改用它（开的期间已从面板去掉的不再放回）
       this.#entries.delete(entry.card.id);
+      this.#renamed.set(entry.card.id, runtime.sessionId);
       entry.runtime = runtime;
       if (entry.removed === true) {
         entry.closed = true;
@@ -358,7 +372,14 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
       entry.card = {
         ...entry.card,
         id: runtime.sessionId,
-        ...(runtime.worktree !== undefined ? { worktree: runtime.worktree } : {}),
+        ...(runtime.name !== undefined ? { name: runtime.name() } : {}),
+        ...(runtime.worktree !== undefined
+          ? {
+              worktree: runtime.worktree,
+              workspace:
+                this.#options.displayPath?.(runtime.worktree.path) ?? runtime.worktree.path,
+            }
+          : {}),
       };
       this.#entries.set(runtime.sessionId, entry);
       // 开的期间被停（或面板已关）：释放，不开跑
@@ -422,6 +443,8 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
       task: string;
       worktree?: { path: string; branch: string };
       sharedDir?: boolean;
+      // 决策 489：它干活的目录（展示写法）
+      workspace?: string;
     },
     handOff: PooledHandOff = {}
   ): PooledSessionCard {
@@ -435,6 +458,7 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
         summary: replySummary(runtime.transcript()),
         ...(card.worktree !== undefined ? { worktree: card.worktree } : {}),
         ...(card.sharedDir === true ? { sharedDir: true } : {}),
+        ...(card.workspace !== undefined ? { workspace: card.workspace } : {}),
         startedAt: now,
         updatedAt: now,
       },
@@ -643,7 +667,7 @@ export class LocalSessionPool<Live = unknown> implements SessionPanelSource {
       )
       .slice(-4)
       .map((message) => {
-        // 人说的话只取人亲手输入的部分（/orchestrate 还原成命令，去掉程序附注）
+        // 人说的话只取人亲手输入的部分（去掉程序通知与附注）
         const raw = roleOf(message) === "user" ? (humanInputText(message) ?? "") : textOf(message);
         const text = raw.replace(/\s+/g, " ").trim();
         const clipped = text.length > 200 ? `${text.slice(0, 200)}…` : text;

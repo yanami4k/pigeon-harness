@@ -12,13 +12,6 @@ export const TRUNCATION_CONTINUE_PROMPT =
   "Your previous reply was cut off and no tool was run. Do not repeat earlier text; briefly state the next step and make one tool call right away.";
 export const TRUNCATION_RESUME_PROMPT =
   "Your previous reply hit the output length limit and was cut off, so its last line may be incomplete. Finish that line first, then continue from where it stopped without repeating what you already wrote.";
-// 此前各版发出过的撞上限续跑提示：只供回看历史时认出旧会话记录里的续跑提示，不再发出
-// 旧会话里的中文原文，只用来认出旧记录
-export const PREVIOUS_TRUNCATION_RESUME_PROMPTS: readonly string[] = [
-  "上条回复因长度上限被截断；从断处接着写，不要重复已写的内容",
-  "上条回复被截断，未执行任何工具；不要重复前文，简短说明下一步并直接发出一个工具调用",
-  "上条回复因长度上限被截断，最后一行可能没写完；先补完它，再从断处接着写，不要重复已写的内容",
-];
 
 export const TruncationContinuationSectionSchema = Type.Object(
   {

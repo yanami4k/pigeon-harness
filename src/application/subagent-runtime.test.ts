@@ -260,7 +260,7 @@ test("临时工作树：从派出方工作目录的快照起步（含未提交�
     assert.equal(writer.state, "idle");
     const wt = writer.worktree;
     assert.ok(wt !== undefined, "有改动：结果附工作树");
-    assert.match(wt.branch, /^pigeon\/[0-9a-z]{8}-general-1$/);
+    assert.match(wt.branch, /^pigeon\/general-1$/);
     // Windows 上检出按 autocrlf 转换行尾
     assert.equal(
       readFileSync(join(wt.path, "a.txt"), "utf8").replace(/\r\n/g, "\n"),
@@ -272,14 +272,9 @@ test("临时工作树：从派出方工作目录的快照起步（含未提交�
       notice?.includes(`Its changes are in the worktree at ${wt.path} (branch ${wt.branch}).`)
     );
     assert.equal(idle.worktree, undefined, "没有改动：不附工作树");
-    const idlePath = git(root.dir, ["worktree", "list", "--porcelain"])
-      .split("\n")
-      .find((line) => line.includes("-idle"))
-      ?.slice("worktree ".length);
-    assert.ok(idlePath !== undefined && existsSync(idlePath));
     await hub.close();
-    assert.ok(existsSync(wt.path), "有改动的保留");
-    assert.equal(existsSync(idlePath), false, "没有改动的删掉");
+    // 决策 494：退出不删工作树，有没有改动都留着（收尾交给 /worktrees clean）
+    assert.ok(existsSync(wt.path), "有改动的留着");
     assert.equal(existsSync(join(root.dir, "b.txt")), false, "派出方的工作目录不动");
   } finally {
     await disposeRuntime(opened.bundle).catch(() => {});
@@ -470,9 +465,9 @@ test("决策 486：take_changes 把子 agent 工作树里的改动（含新建�
           },
         ],
       },
-      { text: "", toolCalls: [{ name: "take_changes", args: { name: "general-1" }, id: "t1" }] },
-      { text: "", toolCalls: [{ name: "take_changes", args: { name: "general-1" }, id: "t2" }] },
-      { text: "", toolCalls: [{ name: "take_changes", args: { name: "nobody" }, id: "t3" }] },
+      { text: "", toolCalls: [{ name: "take_changes", args: { target: "general-1" }, id: "t1" }] },
+      { text: "", toolCalls: [{ name: "take_changes", args: { target: "general-1" }, id: "t2" }] },
+      { text: "", toolCalls: [{ name: "take_changes", args: { target: "nobody" }, id: "t3" }] },
       { text: "done" },
     ],
     [
@@ -497,6 +492,7 @@ test("决策 486：take_changes 把子 agent 工作树里的改动（含新建�
     assert.ok(transcript.includes("no changes to take from sub-agent general-1"), "再取只取之后的");
     assert.ok(transcript.includes("no sub-agent named nobody that you started"));
     await hub.close();
+    // 子 agent 的工作树随它自己收尾清理（决策 494 说的是会话退出不删，不含临时分身）
     assert.equal(existsSync(wt.path), false, "完整取回之后再没改：关掉即删");
   } finally {
     await disposeRuntime(opened.bundle).catch(() => {});
@@ -526,7 +522,7 @@ test("决策 486：派出方有未提交改动时按起点快照引用取回；�
           },
         ],
       },
-      { text: "", toolCalls: [{ name: "take_changes", args: { name: "general-1" }, id: "t1" }] },
+      { text: "", toolCalls: [{ name: "take_changes", args: { target: "general-1" }, id: "t1" }] },
       { text: "done" },
     ],
     [

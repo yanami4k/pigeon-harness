@@ -16,10 +16,11 @@ import { summarizeArgs } from "../application/format.ts";
 import type { LaunchFlags } from "../application/launch-flags.ts";
 import { attachLoopGuard } from "../application/loop-guard.ts";
 import {
-  closeNamedWorktree,
+  availableWorktreeName,
   type NamedWorktree,
   openNamedWorktree,
   prefetchWorktreeBase,
+  worktreeNameFrom,
 } from "../application/named-worktree.ts";
 import {
   type ApprovalModeCell,
@@ -27,16 +28,14 @@ import {
   type MemoryWriteConfig,
   type RuntimeBundle,
 } from "../application/runtime.ts";
-import { validSessionName } from "../application/session-name.ts";
+import { defaultSessionName, validSessionName } from "../application/session-name.ts";
 import {
   advanceTakeBase,
-  dropTakeBase,
   LocalSessionPool,
   type PooledHooks,
   type PooledRuntime,
   readTakeBase,
   takePooledChanges,
-  unchangedSinceTake,
 } from "../application/session-pool.ts";
 import { type OpenedSessionRuntime, openSessionRuntime } from "../application/session-runtime.ts";
 import { agentMessageEntry } from "../application/session-store.ts";
@@ -47,11 +46,7 @@ import type { WebToolsConfig } from "../application/web-tools.ts";
 import { isGitWorkspace } from "../application/worktree-cleanup.ts";
 import type { SessionGrantStore } from "../approvals/grant-store.ts";
 import type { ApprovalHandler } from "../approvals/handler.ts";
-import {
-  holdWorktreeInUse,
-  worktreeHeldHere,
-  worktreeInUseByOthers,
-} from "../persistence/worktree-in-use.ts";
+import { holdWorktreeInUse } from "../persistence/worktree-in-use.ts";
 import type { StreamFn } from "../pi-runtime/index.ts";
 import { newSessionId, type SessionId } from "../state/ids.ts";
 import {
@@ -95,13 +90,12 @@ export interface SessionPoolContext {
   spawnTarget?(): { governanceRoot: string; settings?: SettingsSnapshot | undefined };
   // 当前会话所在项目的治理根（/take 不跨仓库）
   currentRoot?(): string;
-  // 在不在工作清单里（清单里的会话释放时工作树留着）；派出的会话开好时记进清单
-  listed?(sessionId: string): boolean;
+  // 派出的会话开好时记进工作清单
   onListed?(core: SessionCore): void;
   // 从面板去掉：删出工作清单
   onUnlisted?(sessionId: string): void;
-  // 决策 486：会话（caller）的主 agent 用 take_changes 取面板里的会话；没有这个名字的面板会话返回 undefined
-  panelTake?(caller: SessionCore, name: string, into: string): string | undefined;
+  // 决策 486、490：会话（caller）的主 agent 用 take_changes 取面板里的会话（按全量会话号）；面板里没有它返回 undefined
+  panelTake?(caller: SessionCore, id: string, into: string): string | undefined;
 }
 
 export interface CurrentRoute {
@@ -309,7 +303,7 @@ export function registerCoreAgents(
     workspaceRoot: () => core.workspaceRoot,
     ...(context.panelTake !== undefined
       ? {
-          takeFromPanel: (name: string, into: string) => context.panelTake?.(core, name, into),
+          takeFromPanel: (id: string, into: string) => context.panelTake?.(core, id, into),
         }
       : {}),
     limits: () => agentLimitsOfSettings(settingsOf(context, core)),
@@ -377,11 +371,10 @@ function takenBaseOf(core: SessionCore): string | undefined {
 }
 
 // 决策 484：释放一个会话核（面板里去掉、关掉 Pigeon、/resume 换走闲着的当前会话）：注销通讯录（它派出的子 agent 一并停下）、
-// 跑 SessionEnd、释放运行面与在用锁。cleanWorktree：按有没有改动清理它的工作树（不问；当前会话退出时由入口另问）
+// 跑 SessionEnd、释放运行面与在用标记。决策 494：工作树与它的取回起点都不动（收尾交给 /worktrees clean，删树时一并删起点）
 export async function closeCore(
-  context: SessionPoolContext,
   core: SessionCore,
-  options: { reason: "exit" | "switch"; cleanWorktree: boolean }
+  options: { reason: "exit" | "switch" }
 ): Promise<void> {
   if (core.closed === true) return;
   core.closed = true;
@@ -400,24 +393,6 @@ export async function closeCore(
   if (bundle !== undefined) await disposeRuntime(bundle).catch(() => {});
   core.releaseInUse?.();
   core.releaseInUse = undefined;
-  const worktree = core.worktree;
-  if (worktree !== undefined && options.cleanWorktree) {
-    // 完整取回过、之后再没有改动的同样算没有改动（删工作树与分支）
-    const recorded = takenBaseOf(core);
-    const taken = recorded !== undefined && recorded !== worktree.base ? recorded : undefined;
-    await closeNamedWorktree(worktree, {
-      write: sayOf(context, core),
-      // 本进程里别的会话还在这个工作树里（它已放下自己的在用锁）同样算开着
-      inUseByOthers: () =>
-        worktreeHeldHere(worktree.path) ||
-        worktreeInUseByOthers(
-          worktree.path,
-          context.homeDir !== undefined ? { homeDir: context.homeDir } : {}
-        ),
-      ...(taken !== undefined ? { unchanged: () => unchangedSinceTake(worktree.path, taken) } : {}),
-    }).catch(() => "kept");
-    dropTakeBase(core.governanceRoot, worktree.name);
-  }
 }
 
 // 决策 484：会话核在面板里时的运行面（派出的、与从当前会话退下来的同一份）
@@ -435,6 +410,8 @@ export function pooledRuntimeOf(
   };
   return {
     sessionId: core.sessionId,
+    // 决策 490：开好之后的缺省显示名
+    name: () => core.name,
     ...(core.worktree !== undefined
       ? { worktree: { path: core.worktree.path, branch: core.worktree.branch } }
       : {}),
@@ -485,14 +462,10 @@ export function pooledRuntimeOf(
     },
     isRunning: () => core.opened?.bundle.adapter.isRunning() ?? false,
     transcript: () => core.opened?.bundle.adapter.transcript() ?? [],
-    // 决策 485：还在工作清单里的会话（关掉 Pigeon 时）工作树留着，下次进来接着用；从面板去掉的已先删出清单
+    // 决策 485、494：关掉 Pigeon、从面板去掉都不动工作树；从面板去掉的先删出清单（决策 497：之后 /worktrees clean 才清得掉它）
     close: async (options) => {
-      // 从面板去掉的：先删出清单，工作树按有没有改动清理
       if (options?.removed === true) context.onUnlisted?.(core.sessionId);
-      await closeCore(context, core, {
-        reason: "exit",
-        cleanWorktree: options?.removed === true || context.listed?.(core.sessionId) !== true,
-      });
+      await closeCore(core, { reason: "exit" });
     },
     live: {
       subscribe: (listener) => bundleNow().adapter.subscribe(listener),
@@ -561,16 +534,19 @@ export function createSessionPool(context: SessionPoolContext): {
   const pool = new LocalSessionPool<PooledLive>({
     sharedDir,
     sharedWorkspace,
-    open: async ({ name, task, hooks, sharedDir: shared }) => {
+    displayPath: (path) => tildePath(path, context.homeDir ?? homedir()),
+    open: async ({ task, hooks, sharedDir: shared }) => {
       const sessionId = newSessionId();
       const spawnedIn = target();
+      // 决策 490：缺省显示名 = 工作目录名 + 会话号末 4 位（Claude Code 的"目录名 + 两字符后缀"同一路数）
+      const displayName = defaultSessionName(spawnedIn.governanceRoot, sessionId);
       const governanceRoot = spawnedIn.governanceRoot;
       // 本进程启动的项目里的不带快照（用本进程的，/reload 换新的）
       const settings = spawnedIn.settings ?? context.settings();
       // 决策 469：这个会话自己的审批模式（从当前会话当时的起）；它派出的子 agent 共用
       const core: SessionCore = {
         sessionId,
-        name,
+        name: displayName,
         task,
         modeCell: {
           current: context.approvalMode?.() ?? (context.flags.yolo ? "yolo" : "prompt"),
@@ -593,12 +569,16 @@ export function createSessionPool(context: SessionPoolContext): {
           alert("fetching the remote default branch failed; worktree starts from HEAD");
           baseMode = "head";
         }
+        // 决策 494：程序生成的名字撞了就让路（<名字>-2…），并在消息区说明用的是哪个名字
+        const wanted = worktreeNameFrom(displayName);
+        const worktreeName = availableWorktreeName(governanceRoot, wanted);
         const worktree = openNamedWorktree({
           cwd: governanceRoot,
-          name: `${name}-${sessionId.slice(-6).toLowerCase()}`,
+          name: worktreeName,
           baseMode,
           notice: say,
         });
+        if (worktreeName !== wanted) say(`worktree name ${wanted} is taken; using ${worktreeName}`);
         core.worktree = worktree;
         core.workspaceRoot = worktree.path;
         // 开着期间持有工作树的在用锁（/worktrees 与退出清理据此不删开着的）；共用目录的没有工作树
@@ -627,14 +607,12 @@ export function createSessionPool(context: SessionPoolContext): {
       } catch (error) {
         await core.registration?.unregister();
         core.releaseInUse?.();
-        if (core.worktree !== undefined) {
-          await closeNamedWorktree(core.worktree, { write: say }).catch(() => "kept");
-        }
+
         throw error;
       }
       const bundle = core.opened.bundle;
       // 决策 456：面板会话的名字记进它自己的会话记录（续接与 /resume 列表照用）
-      if (validSessionName(name)) bundle.sessionStore.setName(name);
+      if (validSessionName(displayName)) bundle.sessionStore.setName(displayName);
       attachCoreRuntime(context, core);
       // 决策 485：在面板里新开的会话进工作清单
       context.onListed?.(core);

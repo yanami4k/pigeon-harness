@@ -9,7 +9,7 @@ import { afterEach, test } from "vitest";
 import { newSessionId } from "../state/ids.ts";
 import { validateSettingsLayer } from "../state/settings.ts";
 import { ConfigPanel } from "./config-panel.ts";
-import { installKeybindings, isKey, keybindingRows } from "./keybindings.ts";
+import { installKeybindings, isKey, keybindingRows, PIGEON_KEYBINDINGS } from "./keybindings.ts";
 import { ScriptedRuntime } from "./runtime-fixtures.ts";
 import { PigeonTuiShell } from "./shell.ts";
 import { MockTerminal, screenText, settle } from "./testing.ts";
@@ -105,6 +105,11 @@ test("决策 465：设置视图的键位组——Pigeon 动作在前；两个 Pi
     assert.deepEqual(tree?.defaults, ["ctrl+x"]);
     const mode = rows.find((row) => row.action === "pigeon.toggleMode");
     assert.deepEqual(mode?.keys, ["shift+tab"]);
+    // 决策 499：按键说明写 ask / bypass
+    assert.equal(
+      PIGEON_KEYBINDINGS["pigeon.toggleMode"].description,
+      "Switch the approval mode (ask / bypass)"
+    );
     assert.deepEqual(rows.find((row) => row.action === "pigeon.openPanel")?.keys, ["left"]);
     assert.deepEqual(rows.find((row) => row.action === "tui.editor.cursorLeft")?.conflicts, []);
     const panel = new ConfigPanel();

@@ -63,7 +63,7 @@ function factsOf(
       !isStatusMessage(message.raw) &&
       agentMessageMarkOf(message.raw) === undefined
   );
-  // 只取人亲手输入的部分（同 /resume 列表：去掉程序附注，/orchestrate 还原成命令）
+  // 只取人亲手输入的部分（同 /resume 列表：去掉程序附注）
   const task =
     human?.blocks
       .map((block) => (block.type === "text" ? (userTextParts(block.text).human ?? "") : ""))
@@ -129,9 +129,8 @@ export class WorkList<Live> implements SessionPanelSource {
           summary: facts.summary,
           dormant: true,
           ...(elsewhere ? { elsewhere: true } : {}),
-          ...(!samePath(entry.governanceRoot, currentRoot)
-            ? { place: tildePath(entry.workspaceRoot, this.#homeDir) }
-            : {}),
+          // 决策 489：卡上写它干活的目录（与当前会话的工作区相同时面板不写）
+          workspace: tildePath(entry.workspaceRoot, this.#homeDir),
           root: entry.governanceRoot,
           startedAt: entry.addedAt,
           updatedAt: entry.addedAt,
@@ -151,6 +150,11 @@ export class WorkList<Live> implements SessionPanelSource {
     const pool = this.#deps.pool;
     if (pool.runtimeOf(id) !== undefined || id === this.#deps.currentId()) return undefined;
     return this.#dormant.get(id);
+  }
+
+  // 决策 490：派出时的占位会话号换成开好之后的会话号（会话池记着）
+  currentId(id: string): string {
+    return this.#deps.pool.currentId(id);
   }
 
   list(): PooledSessionCard[] {

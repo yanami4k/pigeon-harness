@@ -1,6 +1,5 @@
-// 独立工作树（决策 445、446）：pigeon --worktree <名字> 与模型的 enter_worktree 工具共用。
-// - 位置 <主仓库根>/.pigeon/wt/<名字>，分支 pigeon-wt/<名字>（与 worker 的 pigeon/<会话号后 8 位>-<名字> 分开；
-//   不放在 pigeon/ 之下，免得与 worker 分支的目录式引用冲突）。同名目录已在即打开它，不重建。
+// 工作树（决策 445、446、494）：pigeon --worktree <名字>、模型的 enter_worktree 工具与面板派出的会话共用。
+// - 位置 <主仓库根>/.pigeon/trees/<名字>，分支 pigeon/<名字>（与子 agent、/fork 的树同一种形状）。同名目录已在即打开它，不重建。
 // - 起点缺省为远端默认分支（origin/HEAD 指向的分支）：远端引用超过 24 小时没取过就先 fetch，限时约 5 秒、不许交互；
 //   没有远端、取不到或超时即用当前 HEAD。设置 worktree.baseRef 为 "head" 时直接用当前 HEAD。
 // - 建立时按 .worktreeinclude 复制被忽略的文件（449，见 orchestration/worktree.ts 的 createWorktreeAt），并确保全局排除
@@ -9,9 +8,10 @@
 // 会话记录、设置与记忆仍在主仓库根的 .pigeon（治理根是主仓库），工作区是工作树。
 import { execFile, execFileSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import {
   createWorktreeAt,
+  dropTreeRefs,
   listWorktrees,
   mainRepoRoot,
   removeWorktreeAndBranch,
@@ -19,11 +19,11 @@ import {
   worktreePristine,
 } from "../orchestration/worktree.ts";
 import { ensureGlobalIgnoreRulesOnce } from "../persistence/global-ignore.ts";
-import { worktreeInUseByOthers } from "../persistence/worktree-in-use.ts";
-import { namedWorktreesDirOf } from "../state/paths.ts";
+import { worktreesDirOf } from "../state/paths.ts";
 import { GIT_HARDENING_CONFIG } from "../tools/git-hardening.ts";
 
-export const NAMED_WORKTREE_BRANCH_PREFIX = "pigeon-wt/";
+// 决策 494：工作树只有一种形状——目录 .pigeon/trees/<名字>、分支 pigeon/<名字>
+export const WORKTREE_BRANCH_PREFIX = "pigeon/";
 // 名字：小写字母或数字开头，小写字母、数字、下划线与连字符，最长 64（Windows 上分支引用不分大小写，只收小写免得撞名）
 const NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 // 远端引用多久没取过就先取一次
@@ -48,7 +48,7 @@ export interface NamedWorktree {
   fetchFailed?: boolean;
   // 这次新建的（false = 打开已有的）
   created: boolean;
-  // 工作树当前不在自己的分支 pigeon-wt/<名字> 上时为它当前的分支（或"分离头指针"）：退出时按有改动对待，删除只删自己的分支
+  // 工作树当前不在自己的分支 pigeon/<名字> 上时为它当前的分支（或"分离头指针"）：按有改动对待，删除只删自己的分支
   currentBranch?: string;
 }
 
@@ -59,7 +59,18 @@ export function assertWorktreeName(name: string): void {
 }
 
 export function namedWorktreeBranch(name: string): string {
-  return `${NAMED_WORKTREE_BRANCH_PREFIX}${name}`;
+  return `${WORKTREE_BRANCH_PREFIX}${name}`;
+}
+
+// 审计 9：从显示名派生的工作树名先按名字规则清洗——小写；不是小写字母、数字、下划线、连字符的一律换成 -；去掉开头的 - 与 _；
+// 为空用 session；留出让路尾号（-2…）的长度
+export function worktreeNameFrom(displayName: string): string {
+  const cleaned = displayName
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "-")
+    .replace(/^[-_]+/, "")
+    .slice(0, 60);
+  return cleaned === "" ? "session" : cleaned;
 }
 
 function git(
@@ -122,7 +133,7 @@ function recordedBase(repoRoot: string, branch: string): string | undefined {
   }
 }
 
-// 已有的独立工作树：分支一律按 pigeon-wt/<名字>；当前不在这个分支上时记下当前分支；起点取记下的那个
+// 已有的工作树：分支一律按 pigeon/<名字>；当前不在这个分支上时记下当前分支；起点取记下的那个
 function existingNamedWorktree(
   repoRoot: string,
   path: string,
@@ -196,7 +207,31 @@ export function resolveWorktreeBase(
     : { commit: head, label: "HEAD (no remote default branch)" };
 }
 
-// 打开或新建 <主仓库根>/.pigeon/wt/<名字>
+// 决策 494：程序生成的名字撞了就让路——在 <名字>、<名字>-2… 里挑第一个目录与分支都不存在的
+export function availableWorktreeName(
+  repoRoot: string,
+  name: string,
+  // 工作树目录所在的根（子 agent 的树放在会话的治理根下）；缺省主仓库根（repoRoot 可以是仓库里的子目录）
+  dirRoot: string = mainRepoRoot(repoRoot)
+): string {
+  for (let n = 1; n < 100; n += 1) {
+    const candidate = n === 1 ? name : `${name}-${n}`;
+    if (existsSync(join(worktreesDirOf(dirRoot), candidate))) continue;
+    try {
+      git(repoRoot, [
+        "show-ref",
+        "--verify",
+        "--quiet",
+        `refs/heads/${namedWorktreeBranch(candidate)}`,
+      ]);
+    } catch {
+      return candidate;
+    }
+  }
+  throw new NamedWorktreeError(`no free worktree name for ${name}`);
+}
+
+// 打开或新建 <主仓库根>/.pigeon/trees/<名字>
 export function openNamedWorktree(input: {
   cwd: string;
   name: string;
@@ -214,16 +249,20 @@ export function openNamedWorktree(input: {
   } catch {
     throw new NamedWorktreeError("not in a git repository; can't create a worktree");
   }
-  const path = join(namedWorktreesDirOf(repoRoot), input.name);
+  const path = join(worktreesDirOf(repoRoot), input.name);
   const branch = namedWorktreeBranch(input.name);
   if (existsSync(path)) {
     const existing = existingNamedWorktree(repoRoot, path, input.name);
     if (existing === undefined) {
       throw new NamedWorktreeError(`${path} exists but is not a worktree of this repository`);
     }
+    // 决策 494：重开已有的树时说一句，免得"以为新建、其实进了旧树"
+    input.notice?.(`opened the existing worktree ${existing.path}`);
     return existing;
   }
   ensureGlobalIgnoreRulesOnce(repoRoot, input.notice !== undefined ? { notice: input.notice } : {});
+  // 上一棵同名的树被人手删时留下的起点与取回起点不接手
+  dropTreeRefs(repoRoot, input.name);
   const resolution = resolveWorktreeBase(repoRoot, input.baseMode ?? "fresh", {
     ...(input.env !== undefined ? { env: input.env } : {}),
     ...(input.now !== undefined ? { now: input.now } : {}),
@@ -282,56 +321,6 @@ export function uncommittedCount(cwd: string): number {
   }
 }
 
-// 退出时的清理（决策 445）：没有改动即删工作树与分支；有改动问保留还是删除（ask 不给即没有终端可问，保留）。
-// 问答在壳退出之后的终端行内进行（照启动时确认配置的写法），EOF 按保留。删除不跟随链接（worktree.ts）
-export async function closeNamedWorktree(
-  worktree: NamedWorktree,
-  io: {
-    ask?: (prompt: string) => Promise<string | null>;
-    write: (line: string) => void;
-    // 别的仍在的进程开着这个工作树（缺省查在用锁）
-    inUseByOthers?: () => boolean;
-    // 另外也算没有改动的（面板会话完整取回之后再没有改动，决策 483）
-    unchanged?: () => boolean;
-  }
-): Promise<"removed" | "kept"> {
-  if ((io.inUseByOthers ?? (() => worktreeInUseByOthers(worktree.path)))()) {
-    io.write(`worktree ${worktree.name} is open in another session; kept`);
-    return "kept";
-  }
-  const kept = (): "kept" => {
-    io.write(`worktree ${worktree.name} kept at ${worktree.path}`);
-    return "kept";
-  };
-  const remove = (): "removed" | "kept" => {
-    try {
-      removeNamedWorktree(worktree);
-      return "removed";
-    } catch (error) {
-      io.write(
-        `removing worktree ${worktree.name} failed: ${error instanceof Error ? error.message : String(error)}`
-      );
-      return kept();
-    }
-  };
-  if (namedWorktreeUnchanged(worktree) || io.unchanged?.() === true) return remove();
-  if (io.ask === undefined) return kept();
-  for (;;) {
-    const answer = await io.ask(
-      `worktree ${worktree.name} (${worktree.path}) ${
-        worktree.currentBranch !== undefined
-          ? `is on ${worktree.currentBranch} (delete removes only ${worktree.branch})`
-          : "has changes or new commits"
-      }: k keep | d delete (changes and commits on ${worktree.branch} are lost)\n> `
-    );
-    if (answer === null) return kept();
-    const choice = answer.trim().toLowerCase();
-    if (choice === "k" || choice === "") return kept();
-    if (choice === "d") return remove();
-    io.write("k or d");
-  }
-}
-
 // --worktree 的治理根：所在仓库的主仓库根（不在 git 仓库里即报错）
 export function namedWorktreeRepoRoot(cwd: string): string {
   try {
@@ -341,16 +330,19 @@ export function namedWorktreeRepoRoot(cwd: string): string {
   }
 }
 
-// 路径在本仓库的独立工作树里（.pigeon/wt/<名字> 之下）
+// 路径在本仓库的工作树里（.pigeon/trees/<名字> 之下）
 export function insideNamedWorktree(repoRoot: string, path: string): boolean {
-  const rel = relative(namedWorktreesDirOf(repoRoot), resolve(path));
+  const rel = relative(worktreesDirOf(repoRoot), resolve(path));
   return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
-// 决策 446：会话移进工作树之后再打开它（续接、/reload）：按记下的路径找回，目录还在且仍是本仓库登记的工作树才算
+// 决策 446：会话移进工作树之后再打开它（续接、/reload）：按记下的路径找回，目录还在且仍是本仓库登记的工作树才算。
+// 决策 495：路径是工作树里的子目录时找回它所在的那棵树
 export function reopenNamedWorktree(repoRoot: string, path: string): NamedWorktree | undefined {
   if (!insideNamedWorktree(repoRoot, path) || !existsSync(path)) return undefined;
-  return existingNamedWorktree(repoRoot, path, basename(resolve(path)));
+  const name = relative(worktreesDirOf(repoRoot), resolve(path)).split(/[/\\]/)[0] ?? "";
+  if (name === "") return undefined;
+  return existingNamedWorktree(repoRoot, join(worktreesDirOf(repoRoot), name), name);
 }
 
 // 独立工作树记下的起点（/worktrees 列出时按它算改动；取不到为 undefined）

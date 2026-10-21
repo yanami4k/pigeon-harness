@@ -139,14 +139,16 @@ export interface SessionEndpoint {
   limits(): { maxConcurrent: number; maxDepth: number };
   // 决策 486：这个会话的工作目录（take_changes 的落点）；不给即不能取
   workspaceRoot?(): string;
-  // 决策 486：会话的主 agent 取面板里同一仓库的会话的改动（叠进 into）；没有这个名字的面板会话返回 undefined。
+  // 决策 486、490：会话的主 agent 取面板里同一仓库的会话的改动（叠进 into，按全量会话号找）；面板里没有这个会话返回 undefined。
   // 出错的说明以 "Error: " 开头
-  takeFromPanel?(name: string, into: string): string | undefined;
+  takeFromPanel?(id: string, into: string): string | undefined;
 }
 
 export interface AgentListing {
   name: string;
   kind: "session" | "agent";
+  // 决策 490：会话的全量会话号（send_message、take_changes 指向会话时用它）
+  sessionId?: string;
   type?: string;
   state?: AgentState;
   // 派出它的（会话或子 agent 的名字）
@@ -176,7 +178,7 @@ export interface AgentToolsHost {
   list(): AgentListing[];
   stop(name: string): Promise<string>;
   // 决策 486：把自己派出的子 agent（会话的主 agent 另可取面板里同一仓库的会话）的改动取回自己的工作目录
-  take(name: string): string;
+  take(target: string): string;
 }
 
 interface AgentNode {
@@ -413,14 +415,23 @@ export class AgentHub {
     ).length;
   }
 
-  // 按名字找（子 agent 优先，其次会话）
-  #lookup(name: string): AgentNode | undefined {
-    const agent = this.#agents.find((item) => item.agentName === name);
+  // 决策 490：子 agent 按名字找，会话按全量会话号找（会话的显示名只用于显示，可以重名、可以改）
+  #lookup(target: string): AgentNode | undefined {
+    const agent = this.#agents.find((item) => item.agentName === target);
     if (agent !== undefined) return agent;
-    for (const session of this.#sessions.values()) {
-      if (session.name() === name) return session;
-    }
-    return undefined;
+    return this.#sessions.get(target);
+  }
+
+  // 给别的 agent 指向它用的写法：子 agent 是名字，会话是全量会话号
+  #addressOf(node: AgentNode): string {
+    return node.kind === "session" ? (node as SessionNode).endpoint.sessionId : node.name();
+  }
+
+  // 消息头里的发件方：子 agent 写名字，会话另带会话号（回话要用它）
+  #senderOf(node: AgentNode): string {
+    return node.kind === "session"
+      ? `session ${(node as SessionNode).endpoint.sessionId} (${node.name()})`
+      : node.name();
   }
 
   #taken(name: string): boolean {
@@ -458,26 +469,28 @@ export class AgentHub {
       send: (to, text) => this.#send(node, to, text),
       list: () => this.#list(),
       stop: (name) => this.#stopByName(node, name),
-      take: (name) => this.#take(node, name),
+      take: (target) => this.#take(node, target),
     };
   }
 
   // 决策 486：take_changes——取自己直接派出的子 agent（它的子 agent 由它自己取）；在跑的不取。会话的主 agent 找不到这个名字的
   // 子 agent 时再找面板里的会话
-  #take(node: AgentNode, name: string): string {
+  #take(node: AgentNode, target: string): string {
     const into =
       node.kind === "session"
         ? node.top.endpoint.workspaceRoot?.()
         : (node as SubagentRecord).runtime?.workspaceRoot?.();
     if (into === undefined) return "Error: your working directory is unknown; nothing to take";
-    const record = this.#agents.find((agent) => agent.agentName === name && agent.parent === node);
+    const record = this.#agents.find(
+      (agent) => agent.agentName === target && agent.parent === node
+    );
     if (record === undefined) {
       const panel =
-        node.kind === "session" ? node.top.endpoint.takeFromPanel?.(name, into) : undefined;
+        node.kind === "session" ? node.top.endpoint.takeFromPanel?.(target, into) : undefined;
       if (panel !== undefined) return panel;
-      return `Error: no sub-agent named ${name} that you started${
+      return `Error: no sub-agent named ${target} that you started${
         node.kind === "session" && node.top.endpoint.takeFromPanel !== undefined
-          ? ", and no session by that name in the session panel"
+          ? ", and no session with that full session ID in the session panel (see list_agents)"
           : ""
       }`;
     }
@@ -486,7 +499,7 @@ export class AgentHub {
       (agent) =>
         this.#active(agent) || agent.activating === true || agent.runtime?.hasJobs?.() === true
     );
-    if (working) return `Error: ${name} is still working; take its changes after it finishes`;
+    if (working) return `Error: ${target} is still working; take its changes after it finishes`;
     const base = record.runtime?.worktreeBase?.();
     const taken = takeFromAgent({
       name: record.agentName,
@@ -502,6 +515,7 @@ export class AgentHub {
     const sessions: AgentListing[] = [...this.#sessions.values()].map((session) => ({
       name: session.name(),
       kind: "session",
+      sessionId: session.endpoint.sessionId,
     }));
     const agents: AgentListing[] = this.#agents.map((agent) => ({
       name: agent.agentName,
@@ -584,8 +598,10 @@ export class AgentHub {
       wake: () => this.#wake(record),
     };
     const task = wrapBetweenMarkers(
-      headOf("task", parent.name(), "the agent that started you"),
-      request.task
+      headOf("task", this.#senderOf(parent), "the agent that started you"),
+      request.task,
+      undefined,
+      `To message it, use send_message to ${this.#addressOf(parent)}.`
     );
     record.opening = open(spec);
     record.activity = this.#activate(record, async (runtime) => {
@@ -885,10 +901,10 @@ export class AgentHub {
   #send(from: AgentNode, to: string, text: string): string {
     const target = this.#lookup(to);
     if (target === undefined) {
-      const names = this.#list()
-        .map((item) => item.name)
+      const known = this.#list()
+        .map((item) => item.sessionId ?? item.name)
         .join(", ");
-      return `Error: no agent named ${to}. Known names: ${names}.`;
+      return `Error: no sub-agent named ${to} and no session with that full session ID. Known: ${known}.`;
     }
     if (target === from) return "Error: can't send a message to yourself.";
     if (target.kind === "agent") {
@@ -906,14 +922,14 @@ export class AgentHub {
         return `Error: concurrent sub-agent limit reached (${limit} running); ${to} can't start now. Try again when one finishes.`;
       }
     }
-    const verdict = this.#mail.admit(from.name(), to, text, target.pendingNotices());
+    const verdict = this.#mail.admit(this.#addressOf(from), to, text, target.pendingNotices());
     if (verdict !== "ok") return `Error: ${describeVerdict(verdict, to)}`;
     const relation = relationOf(from, target);
     const wrapped = wrapBetweenMarkers(
-      headOf("message", from.name(), relation),
+      headOf("message", this.#senderOf(from), relation),
       text,
       undefined,
-      `To reply, use send_message to ${from.name()}.`
+      `To reply, use send_message to ${this.#addressOf(from)}.`
     );
     target.deliver(wrapped, { from: from.name(), to, kind: "message", text });
     return `Sent to ${to}.`;

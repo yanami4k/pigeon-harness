@@ -60,6 +60,8 @@ function makeShell(extra: Partial<TuiShellOptions> = {}, rows = 40) {
       let pending: (() => void) | undefined;
       const handle: PooledRuntime<Live> = {
         sessionId: id,
+        // 决策 490：/take 只列"现在能取"的（在工作树里干活的），替身也给一个工作树
+        worktree: { path: `/tmp/pigeon-pool/${id}`, branch: `pigeon/${id}` },
         run: (text) => {
           runs.push(`${name}:${text}`);
           transcript.push({ role: "user", content: text });
@@ -179,7 +181,8 @@ test("/panel 打开面板；输入框里的话派新会话；按状态分组，�
     assert.match(screen, /running \(1\)/);
     // 决策 489：当前会话也落在自己的状态组里（这一条里它是闲着的），不再单占一段
     assert.match(screen, /idle \(2\)/);
-    assert.match(screen, /s1 +修登录 +\| 登录修好了/);
+    // 决策 489：卡上写它干活的目录（这里是替身给的工作树路径）
+    assert.match(screen, /s1 \S*pigeon-pool\S* +修登录 +\| 登录修好了/);
     assert.ok(screen.indexOf("running (1)") < screen.indexOf("idle (2)"));
     assert.ok(!term.writes.join("").includes(`${ESC}[2J 日志`), "卡片里的控制序列不写进终端");
     assert.equal(pool.list().length, 2);
@@ -257,7 +260,7 @@ test("决策 483：Ctrl+X 第一下停下选中的会话（运行面不释放）
     assert.equal(shell.currentView(), "main");
     assert.match(screenText(term), /> \/tasks/);
     finishers.length = 0;
-    term.input("/take s1");
+    term.input("/take sess_pool1");
     term.input("\r");
     await settle();
     assert.match(screenText(term), /已取回 s1 的改动/);
@@ -390,7 +393,7 @@ test("/resume 不能换到面板里还开着的会话", async () => {
 });
 
 test("决策 458：当前会话是面板的第一张卡（标 current、状态写在卡里），空状态那句不出现；偷看看它最近的对话，偷看时输入发给它；/take 它的名字说明不用取回", async () => {
-  const { term, runtime, cleanup } = makeShell({ sessionName: () => "demo-main" });
+  const { shell, term, runtime, cleanup } = makeShell({ sessionName: () => "demo-main" });
   try {
     await settle();
     runtime.autoResolve = false;
@@ -440,10 +443,10 @@ test("决策 458：当前会话是面板的第一张卡（标 current、状态�
     await settle();
     term.input(ESC);
     await settle();
-    term.input("/take demo-main");
+    term.input(`/take ${shell.sessionId()}`);
     term.input("\r");
     await settle();
-    assert.match(screenText(term), /demo-main is the current session; nothing to take/);
+    assert.match(screenText(term), /is the current session; nothing to take/);
   } finally {
     cleanup();
   }
@@ -647,7 +650,7 @@ test("决策 458 复查：当前会话与面板会话同名时，派出的同名
     await settle();
     term.input(ESC);
     await settle();
-    term.input("/take s1");
+    term.input("/take sess_pool1");
     term.input("\r");
     await settle();
     assert.deepEqual(taken, ["s1"]);
@@ -677,16 +680,23 @@ test("决策 458 复查：准备中的会话开好、会话号换了之后，选
     startedAt: 0,
     updatedAt: 0,
   };
+  // 决策 490：会话池记着占位号到真会话号的映射，面板按它找回（不按名字）
+  const renamed = new Map<string, string>();
   const panel = new SessionPanel({
     height: () => 20,
     cards: () => cards,
     peek: () => [],
     main: () => main,
+    currentId: (id) => renamed.get(id) ?? id,
   });
   // 决策 489：当前会话落在自己的状态组里（这里 idle 排在 preparing 之后），光标默认在它上面，向上移一格即选到准备中的那一个
   panel.move(-1);
   assert.equal(panel.selected()?.id, "pending:s1");
-  cards = [{ ...cards[0], id: "sess_real_s1", state: "running" as const } as never];
+  // 开好之后显示名也换了（缺省名是目录名加尾号），照样跟得住
+  cards = [
+    { ...cards[0], id: "sess_real_s1", name: "myapp-e5gj", state: "running" as const } as never,
+  ];
+  renamed.set("pending:s1", "sess_real_s1");
   assert.equal(panel.selected()?.id, "sess_real_s1");
 });
 
@@ -788,4 +798,61 @@ test("决策 489：共用目录的会话在卡上写它用的工作区，不再�
   assert.doesNotMatch(withoutStyles(sessionCardText({ ...base, workspace: "~" })), /shared dir/);
   // 拿不到工作区时退回旧说法
   assert.match(sessionCardText(base), /shared dir/);
+  // 决策 489：每张卡都写它干活的目录；与当前会话的工作区相同则不写
+  const tree = { ...base, sharedDir: false, workspace: "~/myapp/.pigeon/trees/x" };
+  assert.match(withoutStyles(sessionCardText(tree)), /s1 ~\/myapp\/\.pigeon\/trees\/x/);
+  assert.doesNotMatch(
+    withoutStyles(sessionCardText(tree, [], undefined, "~/myapp/.pigeon/trees/x")),
+    /trees/
+  );
+});
+
+test("决策 490：/take 不带参数把命令填进输入框、候选随即弹出（只列现在能取的）；Esc 收起后按 Tab 补上会话号，回车才取", async () => {
+  const { term, pool, taken, finishers, cleanup } = makeShell({
+    autocomplete: { basePath: process.cwd(), fdPath: null },
+  });
+  try {
+    await settle();
+    term.input("/panel");
+    term.input("\r");
+    await settle();
+    term.input("干活");
+    term.input("\r");
+    await settle();
+    term.input("还在干");
+    term.input("\r");
+    await settle();
+    // 第一个干完（闲着，能取），第二个还在跑（不能取）
+    finishers[0]?.("干完了");
+    await settle();
+    term.input("\x1b");
+    await settle();
+    const done = pool.list().find((card) => card.state === "idle");
+    const busy = pool.list().find((card) => card.state === "running");
+    assert.ok(done !== undefined && busy !== undefined);
+    term.input("/take");
+    term.input("\r");
+    await settle();
+    const screen = screenText(term);
+    assert.doesNotMatch(screen, /press Tab/, "不再写按 Tab 的提示");
+    assert.doesNotMatch(screen, /== sessions panel ==/, "不开整屏列表");
+    assert.ok(screen.includes(done.id), "候选直接弹出，列着能取的会话");
+    assert.ok(!screen.includes(busy.id), "在跑的不列");
+    // Esc 收起候选，输入框里仍是 /take
+    term.input("\x1b");
+    await settle();
+    assert.ok(!screenText(term).includes(done.id));
+    // 按 Tab 再弹：只有一个候选时按 pi-tui 的 Tab 规矩直接补上它的全量会话号；不直接取
+    term.input("\t");
+    await settle();
+    assert.match(screenText(term), new RegExp(`/take ${done.id}`), "Tab 补上全量会话号");
+    assert.deepEqual(taken, [], "补上会话号不等于取");
+    term.input("\r");
+    await settle();
+    assert.equal(taken.length, 1, "回车才真取");
+    for (const finish of finishers.slice(1)) finish("也干完了");
+    await settle();
+  } finally {
+    cleanup();
+  }
 });

@@ -55,7 +55,7 @@ test("Run 进行中递来的通知：这一轮结束时进下一轮，同一个 
   let adapter: PiRuntimeAdapter | undefined;
   let key = "";
   const { streamFn, calls } = recording((index) => {
-    if (index === 1) key = adapter?.notify("[worker 通知] w 已完成") ?? "";
+    if (index === 1) key = adapter?.notify("[Background job notice] w 已完成") ?? "";
   });
   adapter = adapterWith(streamFn);
   let runs = 0;
@@ -65,7 +65,7 @@ test("Run 进行中递来的通知：这一轮结束时进下一轮，同一个 
   const result = await adapter.run("开始");
   assert.equal(result.status, "completed");
   assert.equal(runs, 1);
-  assert.deepEqual(calls, [["开始"], ["开始", "[worker 通知] w 已完成"]]);
+  assert.deepEqual(calls, [["开始"], ["开始", "[Background job notice] w 已完成"]]);
   assert.equal(adapter.noticeDelivered(key), true);
   assert.equal(adapter.withdrawNotice(key), false);
   assert.equal(adapter.pendingNotices(), 0);
@@ -75,7 +75,7 @@ test("递出之前撤回：通知不进对话，也不多跑一轮", async () =>
   let adapter: PiRuntimeAdapter | undefined;
   const { streamFn, calls } = recording((index) => {
     if (index === 1 && adapter !== undefined) {
-      const key = adapter.notify("[worker 通知] 撤回的");
+      const key = adapter.notify("[Background job notice] 撤回的");
       assert.equal(adapter.withdrawNotice(key), true);
       assert.equal(adapter.noticeDelivered(key), false);
     }
@@ -90,18 +90,18 @@ test("空闲时：runNotices 只带通知开一个 Run；下一次 run 连同输
   const adapter = adapterWith(streamFn);
   await assert.rejects(() => adapter.runNotices(), /no pending notices/);
   await adapter.run("第一句");
-  const key = adapter.notify("[worker 通知] a 已完成");
+  const key = adapter.notify("[Background job notice] a 已完成");
   assert.equal(adapter.pendingNotices(), 1);
   const woke = await adapter.runNotices();
   assert.equal(woke.status, "completed");
   assert.equal(adapter.noticeDelivered(key), true);
-  assert.deepEqual(calls.at(-1), ["第一句", "[worker 通知] a 已完成"]);
-  adapter.notify("[worker 通知] b 已完成");
+  assert.deepEqual(calls.at(-1), ["第一句", "[Background job notice] a 已完成"]);
+  adapter.notify("[Background job notice] b 已完成");
   await adapter.run("第二句");
   assert.deepEqual(calls.at(-1), [
     "第一句",
-    "[worker 通知] a 已完成",
-    "[worker 通知] b 已完成",
+    "[Background job notice] a 已完成",
+    "[Background job notice] b 已完成",
     "第二句",
   ]);
   assert.equal(adapter.pendingNotices(), 0);

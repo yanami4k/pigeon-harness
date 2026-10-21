@@ -1,5 +1,7 @@
 // 决策 439：模型回复用 pi-tui 的 Markdown 渲染。主题只加粗体、斜体、下划线、删除线与少量颜色；引用边与分隔线里的歧义宽字符
-//（│、─）换成 ASCII（沿用"歧义宽字符不进 chrome"的纪律，代码框线与列表符号 pi-tui 本就是 ASCII）；不渲染 LaTeX（$…$ 照原样）。
+//（│、─）换成 ASCII（沿用"歧义宽字符不进 chrome"的纪律，代码框线与列表符号 pi-tui 本就是 ASCII）。决策 500：打开 pi-tui 自带的 LaTeX
+// 渲染——行内 $…$ 与独立成块的 $$…$$ 转成 Unicode 显示，认不出的写法照原文；代码块与行内代码不动，金额与大写环境变量
+//（$HOME、$PATH:$HOME）里的 $ 不受影响。正文里两个 $ 之间没有空白的小写写法（$src/$dest、$i/$n）会被当成公式（pi-tui 的判定）。
 // 内容在交给 Markdown 之前已经过 036 净化，这里的 SGR 都来自受信代码。表格框线 pi-tui 写死、没有主题钩子，照它的样子。
 import type { MarkdownOptions, MarkdownTheme } from "@earendil-works/pi-tui";
 
@@ -54,6 +56,6 @@ export function revealLinkTargets(markdown: string): string {
 }
 
 export const MARKDOWN_OPTIONS: MarkdownOptions = {
-  renderLatex: false,
+  renderLatex: true,
   transform: (markdown) => revealLinkTargets(markdown),
 };

@@ -36,6 +36,7 @@
 // - dispose 对称：取消键的订阅与监听器一律进 disposers，在 start/stop 里成对出现。
 // - 决策 457：worker 的编排面板、整屏树形视图与 worker 会话视图已删除；消息树是会话回退自己的整屏视图（rewind）。
 import {
+  type AutocompleteItem,
   type Component,
   type Editor,
   isKeyRelease,
@@ -103,6 +104,7 @@ import { isGlobalCommand, rejectWhileRunning } from "./command-table.ts";
 import {
   type CommandsHost,
   handleSlashCommand as dispatchSlashCommand,
+  type NewSessionRequest,
   type TuiGrantsContext,
   type TuiMemoryFace,
 } from "./commands.ts";
@@ -110,6 +112,7 @@ import { ConfigPanel } from "./config-panel.ts";
 import type { TuiHooksFace } from "./hooks-view.ts";
 import {
   createPromptEditor,
+  openArgumentCompletions,
   type PromptAutocomplete,
   setPromptAutocompleteRoot,
 } from "./input-editor.ts";
@@ -141,10 +144,12 @@ import {
 import { SessionPanel } from "./session-panel.ts";
 import { SessionPicker } from "./session-picker.ts";
 import { StatusBar } from "./status-bar.ts";
+import type { StatusReport } from "./status-report.ts";
+import { statusReportText } from "./status-report.ts";
 import { secondary } from "./style.ts";
 import { WelcomeHeader, type WelcomeInfo } from "./welcome.ts";
 
-export type { TuiGrantsContext } from "./commands.ts";
+export type { NewSessionRequest, TuiGrantsContext } from "./commands.ts";
 
 // Application API 面：TUI 提交意图与订阅投影的唯一通道（决策 025 的实体）。
 // 结构类型——PiRuntimeAdapter 直接满足；测试注入假实现断言「只经 application API」。
@@ -195,9 +200,16 @@ export interface TuiShellOptions {
   // rebind 由装配方注入：对账收口后按目标 sessionId 重建运行面（restoredGrants 种子）
   // 并释放旧运行面；缺省 = /resume 不可用
   resume?: ResumeOptions<TuiSessionBinding>;
-  // 决策 488：/new 开一个新会话——装配方建好新会话核，交出它的会话号与换绑产物（工作区跟当前会话所在的项目）；
-  // 缺省 = /new 不可用
-  newSession?: { create: () => Promise<{ sessionId: SessionId; binding: TuiSessionBinding }> };
+  // 决策 496：/clear 与 /new [path]——装配方建好新会话核，交出它的会话号与换绑产物（/clear 工作目录不变；/new 在 path，
+  // 不给即项目根）；路径不对等开不成的抛错（写一行报错，留在原会话）。缺省 = 两者不可用
+  newSession?: {
+    create: (
+      request: NewSessionRequest
+    ) => Promise<{ sessionId: SessionId; binding: TuiSessionBinding }>;
+  };
+  // 决策 491：/status 的数据（装配方现取：治理根、工作区、记录与设置、审批模式、用量、git、沙箱、子 agent）；
+  // 缺省 = /status 不可用
+  status?: () => Promise<StatusReport>;
   // 决策 340：/reload 重读设置——返回给人看的行（装配方实现：重读、确认、换上新快照并重建运行面）
   reload?: (args: readonly string[]) => Promise<string[]>;
   // S5+（裁决 033）：优雅退出回调——双击 Ctrl+C / /quit 触发；壳先 stop() 再回调。
@@ -301,6 +313,8 @@ export interface TuiPoolFace {
   enter?(id: string): Promise<string | undefined>;
   // 决策 485：当前会话从主视图离开到面板（← ← 或 /panel），记进工作清单
   left?(): void;
+  // 决策 489：当前会话的工作区（展示写法）；面板卡上与它相同的工作区不写
+  currentWorkspace?(): string;
 }
 
 // 决策 484：当前会话换手时交出与接过的：还在跑的这一轮、排着的输入、待随下一条输入带上的上下文
@@ -316,6 +330,8 @@ export interface TuiHandOff {
 
 // 决策 482：有子 agent 在跑时退出前的确认（需要当场决定）
 export const EXIT_CONFIRM = "sub-agents are still running; exit anyway? (y/n)";
+// 决策 492：/worktrees clean 列出清单之后状态行的问句
+export const CLEAN_CONFIRM = "remove these worktrees? [y/N]";
 
 // 决策 480：子 agent 状态有变后隔多久重算花费（期间的变化合并成一次）
 const AGENT_COST_DELAY_MS = 500;
@@ -401,6 +417,10 @@ export class PigeonTuiShell
   private readonly messageTree: MessageTree;
   // 决策 443：会话面板与进入的会话
   private readonly sessionPanel: SessionPanel;
+  // 决策 492：/worktrees clean 已列出清单，正在等 y/N
+  private cleanConfirm = false;
+  // 决策 490：输入框补全用的那一份（带 /take 的参数候选）；换会话时也用它重建
+  private promptAutocomplete: PromptAutocomplete | undefined;
   // 决策 485：别的 Pigeon 开着的会话（只看历史）
   private elsewhereSession: { card: PooledSessionCard; flow: MessageFlow } | undefined;
   // 决策 482：输入框下方的子 agent 面板、进入的子 agent（回去时回到哪个视图）、退出前等确认、保留期满撤行的定时
@@ -419,6 +439,7 @@ export class PigeonTuiShell
   private agentRetainTimer: ReturnType<typeof setTimeout> | undefined;
   // 决策 458：对当前会话的两次 Ctrl+X 须落在同一次工作上（work 为那次工作的开始时刻）
   private lastPanelStop: { id: string; at: number; work?: number | null | undefined } | undefined;
+
   // 决策 458：在面板里中断主会话时留着的排队内容（回到主视图时放进输入框）
   private heldQueue: string[] = [];
   // 偷看的内容（会话池的接口是异步的，取回来先存着再画）
@@ -555,10 +576,20 @@ export class PigeonTuiShell
         (this.options.openUrl ?? openExternalUrl)(url);
       },
     });
+    // 决策 490：`/take ` 的参数候选由输入框的补全列表给（pi-tui 的 getArgumentCompletions），
+    // 不再另开一个整屏列表
+    this.promptAutocomplete =
+      options.autocomplete === undefined
+        ? undefined
+        : {
+            ...options.autocomplete,
+            arguments: (command: string, prefix: string) =>
+              command === "take" ? this.takeArgumentItems(prefix) : null,
+          };
     this.input = createPromptEditor(
       this.tui,
       options.promptHistory?.load() ?? [],
-      options.autocomplete
+      this.promptAutocomplete
     );
     this.statusBar = new StatusBar({ cost: emptyCostTally() });
     // chrome 除会话名外纯 ASCII（spike 纪律：歧义宽字符不进边框/标题/状态栏）；sessionId 全 ASCII ULID。决策 456：会话名
@@ -574,6 +605,8 @@ export class PigeonTuiShell
         id === this.current.sessionId ? this.mainPeekLines() : (this.peekCache.get(id) ?? []),
       // 决策 458：当前窗口的主会话作为第一张卡
       main: () => this.mainCard(),
+      currentWorkspace: () => this.options.pool?.currentWorkspace?.(),
+      currentId: (id) => this.options.pool?.source.currentId?.(id) ?? id,
     });
     this.messageTree = new MessageTree({
       height: () => Math.max(3, this.options.terminal.rows - 2),
@@ -808,6 +841,11 @@ export class PigeonTuiShell
       this.statusLine.setText(EXIT_HINT);
       return;
     }
+    // 决策 492：清理的 y/N 还在等——状态刷新不盖掉问句（审批挂着时先说审批，答完再回到问句）
+    if (this.cleanConfirm && this.pendingApprovalState === null) {
+      this.statusLine.setText(CLEAN_CONFIRM);
+      return;
+    }
     if (this.panelLeftAt !== undefined) {
       this.statusLine.setText(PANEL_HINT);
       return;
@@ -1033,12 +1071,13 @@ export class PigeonTuiShell
   // 决策 484：能不能换手（进入面板里的会话、/resume）：续接、回退、重读设置、压缩进行中，以及这一轮正在收尾（Stop 钩子、
   // 移进工作树的重建）时不换
   handOffBlocked(): string | undefined {
-    if (
-      this.resuming ||
-      this.rewinding ||
-      this.closing ||
-      (this.running && this.inflight === undefined)
-    ) {
+    if (this.resuming) return "can't switch sessions right now";
+    return this.switchBlocked();
+  }
+
+  // 同上，但不看"正在换手"本身：/resume、/clear、/new 的装配方在等待之后据此再看一次（期间这一轮可能进了收尾）
+  switchBlocked(): string | undefined {
+    if (this.rewinding || this.closing || (this.running && this.inflight === undefined)) {
       return "can't switch sessions right now";
     }
     return undefined;
@@ -1470,9 +1509,9 @@ export class PigeonTuiShell
   }
 
   // 决策 443：/take <名字>——会话面板里有这个名字的会话即取回它工作树里的改动（没有这个名字为 undefined）
-  takePooled(name: string): Promise<string> | undefined {
+  takePooled(id: string): Promise<string> | undefined {
     const source = this.options.pool?.source;
-    const card = source?.list().find((item) => item.name === name);
+    const card = source?.list().find((item) => item.id === id);
     if (source === undefined || card === undefined) return undefined;
     return (
       source.take?.(card.id) ?? Promise.resolve("this session has no worktree; nothing to take")
@@ -1480,10 +1519,64 @@ export class PigeonTuiShell
   }
 
   // 决策 443：会话面板里有没有这个名字的会话（/take 先判歧义，不取）
-  hasPooled(name: string): boolean {
-    return (this.options.pool?.source.list() ?? []).some((item) => item.name === name);
+  hasPooled(id: string): boolean {
+    return (this.options.pool?.source.list() ?? []).some((item) => item.id === id);
   }
 
+  // 决策 492：/worktrees clean 的清单已列出，状态行问一次 y/N
+  beginCleanConfirm(): void {
+    this.cleanConfirm = true;
+    this.updateStatus();
+    this.tui.requestRender();
+  }
+
+  // 决策 490：/take 不带参数——把 `/take ` 填进输入框，参数候选随即在输入框下方弹出（之后按 Tab 也能再弹），选中即补上全量会话号，
+  // 回车才真取
+  beginTakePick(): void {
+    if (this.takeableCards().length === 0) {
+      this.flow.addSystem("no session to take changes from");
+      return;
+    }
+    this.input.setText("/take ");
+    openArgumentCompletions(this.input);
+    this.tui.requestRender();
+  }
+
+  // 决策 490：现在能取的会话——面板里在工作树里干活、已开着且闲着或停着的（不是当前会话；在跑、等待、准备中、开不成的与
+  // 本进程没开的都不列）
+  private takeableCards(): PooledSessionCard[] {
+    return (this.options.pool?.source.list() ?? []).filter(
+      (card) =>
+        card.id !== this.current.sessionId &&
+        card.worktree !== undefined &&
+        card.dormant !== true &&
+        (card.state === "idle" || card.state === "stopped")
+    );
+  }
+
+  // `/take ` 的参数候选（按会话号前缀或名字筛）
+  private takeArgumentItems(prefix: string): AutocompleteItem[] {
+    return this.takeableCards()
+      .filter((card) => prefix === "" || card.id.startsWith(prefix) || card.name.includes(prefix))
+      .map((card) => ({ value: card.id, label: card.name, description: card.id }));
+  }
+
+  // 决策 491：/status 的文本（数据由装配方给；这里只管取与格式化）
+  async statusCommand(): Promise<string> {
+    const report = this.options.status;
+    if (report === undefined) return "/status is not available in this session";
+    return statusReportText(await report());
+  }
+
+  // 决策 490：/take 不带参数时列出"现在能取"的会话——面板里在工作树里干活的（共用目录的、没有工作树的不列）
+  takeableText(): string {
+    const cards = this.takeableCards();
+    if (cards.length === 0) return "no session to take changes from";
+    return [
+      "take changes from (then run /take <id>):",
+      ...cards.map((card) => `  ${card.name}  ${card.id}`),
+    ].join("\n");
+  }
   // 决策 443、483：会话面板里的会话号（/resume 与会话选择器排除它们；停下的运行面还开着，同样排除）
   pooledSessionIds(): ReadonlySet<string> {
     return new Set((this.options.pool?.source.list() ?? []).map((card) => card.id));
@@ -1741,7 +1834,7 @@ export class PigeonTuiShell
     }
     pool.source.spawn(value).then(
       (card) => {
-        this.sessionPanel.selectName(card.name);
+        this.sessionPanel.followSpawn(card.id);
         this.sessionPanel.setNote(
           card.state === "failed" ? `spawn failed: ${card.error ?? ""}` : ""
         );
@@ -2461,7 +2554,11 @@ export class PigeonTuiShell
 
   setPendingApproval(pending: PendingApproval | null): void {
     this.pendingApprovalState = pending;
-    if (pending === null) this.clearApprovalBox();
+    if (pending === null) {
+      this.clearApprovalBox();
+      // 审批答完：状态行回到它之前在说的（例如还在等的 y/N 问句）
+      this.updateStatus();
+    }
   }
 
   lastCtrlCAt(): number | null {
@@ -2586,12 +2683,12 @@ export class PigeonTuiShell
     dispatchResumeCommand(this, arg);
   }
 
-  // 决策 488：/new——开一个新会话并换过去；当前会话还在干活时退到面板接着跑（装配方在 create 里做这件事）
+  // 决策 496：/clear 与 /new [path]——开一个新会话并换过去；当前会话还在干活时退到面板接着跑（装配方在 create 里做这件事）
   newSessionConfigured(): boolean {
     return this.options.newSession !== undefined;
   }
 
-  newSessionCommand(): void {
+  newSessionCommand(request: NewSessionRequest): void {
     // 决策 484：换会话与 /resume、进入面板里的会话同一道守卫（收尾、回退、重读设置、压缩进行中不给换）
     const blocked = this.handOffBlocked();
     if (blocked !== undefined) {
@@ -2599,8 +2696,9 @@ export class PigeonTuiShell
       return;
     }
     const create = this.options.newSession?.create;
+    const command = request.kind === "clear" ? "clear" : "new";
     if (create === undefined) {
-      this.flow.addSystem("/new is not available in this session");
+      this.flow.addSystem(`/${command} is not available in this session`);
       return;
     }
     // 换手期间与 /resume 同样占住输入
@@ -2609,11 +2707,11 @@ export class PigeonTuiShell
     this.render();
     const finish = (error?: unknown): void => {
       this.setResuming(false);
-      if (error !== undefined) this.flow.addAlert(failureLine("new", error));
+      if (error !== undefined) this.flow.addAlert(failureLine(command, error));
       this.updateStatus();
       this.render();
     };
-    void create().then(
+    void create(request).then(
       (created) => {
         // 新会话的 SessionStart 按 startup（不是续跑），花费从零起算
         this.rebindSession(created.sessionId, created.binding, {
@@ -2813,8 +2911,12 @@ export class PigeonTuiShell
     binding: TuiSessionBinding,
     options: { source?: "startup" | "resume"; resumed?: boolean } = {}
   ): void {
-    // 决策 458：换到别的会话时当前会话卡的摘要（首条输入、最近回复、偷看）从新会话重新记（随后画的历史一并记下）
-    if (sessionId !== this.current.sessionId) this.flow.resetDigest();
+    // 决策 458：换到别的会话时当前会话卡的摘要（首条输入、最近回复、偷看）从新会话重新记（随后画的历史一并记下）。
+    // 决策 496：旧会话留给下一条输入的程序说明不带进新会话（还在干活的已随 handOff 交走）
+    if (sessionId !== this.current.sessionId) {
+      this.flow.resetDigest();
+      this.nextInputNotes.length = 0;
+    }
     this.current = {
       sessionId,
       runtime: binding.runtime,
@@ -2825,14 +2927,14 @@ export class PigeonTuiShell
     this.followWorkspace(binding);
     // 先换会话面再切视图（切视图时按新会话重画）
     this.showView("main");
-    // 决策 323、324：换到新会话——SessionStart（缺省 source "resume"；决策 488 的 /new 用 "startup"）补的上下文归新会话；
+    // 决策 323、324：换到新会话——SessionStart（缺省 source "resume"；决策 496 的 /clear、/new 用 "startup"）补的上下文归新会话；
     // 旧会话的 SessionEnd 由装配方在释放旧运行面前跑
     void this.beginSession(options.source ?? "resume");
     this.activeRunId = null;
     // S5：落盘失败警告计数随运行面一起换绑——新面的 listenerErrors 从零起算
     this.reportedListenerErrors = 0;
     this.bindRuntime(binding.runtime);
-    // 决策 488：/new 的新会话从零起算（不按会话记录累计）
+    // 决策 496：/clear、/new 的新会话从零起算（不按会话记录累计）
     this.resetCosts(sessionId, options.resumed ?? true);
     this.tui.requestRender();
   }
@@ -2841,7 +2943,11 @@ export class PigeonTuiShell
   private followWorkspace(binding: TuiSessionBinding): void {
     const autocomplete = this.options.autocomplete;
     if (autocomplete === undefined || binding.workspaceRoot === undefined) return;
-    setPromptAutocompleteRoot(this.input, autocomplete, binding.workspaceRoot);
+    setPromptAutocompleteRoot(
+      this.input,
+      this.promptAutocomplete ?? autocomplete,
+      binding.workspaceRoot
+    );
   }
 
   // 读会话文件渲染历史（与 /resume 同一份读取与上限）；endLine 为历史之后的分隔行（不给即不写）
@@ -2898,6 +3004,21 @@ export class PigeonTuiShell
 
   // 视图的按键。Ctrl+C 与审批挂起期间放给壳级键控；会话回退打开时按键全归它
   private handleScreenKey(data: string): { consume: true } | undefined {
+    // 决策 492：/worktrees clean 的 y/N 问一次就作数——y 删、别的键作罢；排在别的按键之前。等着时来了审批，审批优先：
+    // 按键归审批，不当成 y/N 的回答（审批答完问句还在）
+    if (this.cleanConfirm && this.pendingApprovalState === null) {
+      this.cleanConfirm = false;
+      const face = this.options.worktrees;
+      if (data === "y" || data === "Y") {
+        this.flow.addSystem(face?.confirmPending() ?? "nothing pending to confirm");
+      } else {
+        face?.cancelPending();
+        this.flow.addSystem("cancelled");
+      }
+      this.updateStatus();
+      this.tui.requestRender();
+      return { consume: true };
+    }
     // 决策 482：有子 agent 在跑时退出前的确认，排在审批、设置面板与别的按键之前：y 或 Enter 退出，别的键取消
     //（Ctrl+C 照旧归退出键）
     if (this.exitConfirmOn && data !== "\x03") {

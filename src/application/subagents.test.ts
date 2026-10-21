@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { MailGate } from "./agent-mail.ts";
+import { renderAgentList } from "./agent-tools.ts";
 import { BUILT_IN_AGENT_TYPES } from "./agent-types.ts";
 import {
   AGENT_TRUST_SENTENCE,
@@ -196,10 +197,12 @@ test("续聊：给已干完的子 agent 发消息即叫它接着干，干完再�
   assert.equal(host.send("general-1", "now the second part"), "Sent to general-1.");
   await tick();
   assert.equal(child?.inputs.length, 2);
+  // 决策 490：发件方是会话时带会话号，回话按全量会话号
   assert.match(
     child?.inputs[1] ?? "",
-    /\[Agent message\] From main \(the agent that started you\)/
+    /\[Agent message\] From session main-session \(main\) \(the agent that started you\)/
   );
+  assert.match(child?.inputs[1] ?? "", /To reply, use send_message to main-session\./);
   assert.match(child?.inputs[1] ?? "", /now the second part/);
   assert.equal(child?.records.at(-1)?.kind, "message");
   child?.finish("second done");
@@ -207,15 +210,18 @@ test("续聊：给已干完的子 agent 发消息即叫它接着干，干完再�
   assert.equal(delivered.length, 2);
   assert.match(delivered[1] ?? "", /second done/);
   // 子 agent 发给派出方
-  assert.equal(child?.spec.agents.send("main", "a question"), "Sent to main.");
+  assert.equal(child?.spec.agents.send("main-session", "a question"), "Sent to main-session.");
   assert.match(delivered[2] ?? "", /From general-1 \(a sub-agent you started\)/);
   assert.deepEqual(sessionRecords.at(-1), {
     from: "general-1",
-    to: "main",
+    to: "main-session",
     kind: "message",
     text: "a question",
   });
-  assert.match(host.send("nobody", "hi"), /^Error: no agent named nobody/);
+  assert.match(
+    host.send("nobody", "hi"),
+    /^Error: no sub-agent named nobody and no session with that full session ID/
+  );
 });
 
 test("叫停：只能停自己派出的（连同其下各层）；派出方自己停的不再交回结果", async () => {
@@ -344,9 +350,11 @@ test("关系说法：会话给孙辈发消息、孙辈给会话发消息、同�
   assert.equal(host.send("explore-1", "hi"), "Sent to explore-1.");
   assert.match(
     grandchild?.notices.at(-1) ?? "",
-    /From main \(an agent above the one that started you\)/
+    /From session main-session \(main\) \(an agent above the one that started you\)/
   );
-  assert.equal(grandchild?.spec.agents.send("main", "up"), "Sent to main.");
+  // 决策 490：会话按全量会话号指向，显示名不认
+  assert.match(grandchild?.spec.agents.send("main", "up") ?? "", /^Error: no sub-agent named main/);
+  assert.equal(grandchild?.spec.agents.send("main-session", "up"), "Sent to main-session.");
   assert.match(delivered.at(-1) ?? "", /From explore-1 \(a sub-agent below the ones you started\)/);
   assert.equal(grandchild?.spec.agents.send("general-2", "peer"), "Sent to general-2.");
   assert.match(agents[2]?.notices.at(-1) ?? "", /another agent in your session/);
@@ -375,4 +383,14 @@ test("被停下的子 agent 静着：它自己的后台作业结束不叫醒它�
   assert.equal(host.send("general-1", "go on"), "Sent to general-1.");
   await tick();
   assert.equal(child?.inputs.length, 2);
+});
+
+// 决策 490：list_agents 给每个会话列出全量会话号（send_message、take_changes 指向会话时用它）
+test("list_agents：会话带全量会话号，子 agent 照旧按名字", async () => {
+  const { host } = harness();
+  await host.spawn({ task: "a" });
+  await tick();
+  const text = renderAgentList(host.list());
+  assert.match(text, /^main: session main-session$/m);
+  assert.match(text, /^general-1: general, /m);
 });

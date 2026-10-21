@@ -8,15 +8,19 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, test } from "vitest";
+import { reopenNamedWorktree } from "../application/named-worktree.ts";
 import { git, initRepo, routedModel, tempRoot } from "../application/tui-session-fixtures.ts";
 import type { ApprovalRequest } from "../approvals/handler.ts";
 import { loadSettings } from "../persistence/settings.ts";
 import type { LayeredHook } from "../state/hooks.ts";
+import type { SessionId } from "../state/ids.ts";
+import { worktreesDirOf } from "../state/paths.ts";
 import { emptySettingsSnapshot, type SettingsSnapshot } from "../state/settings.ts";
 import {
   coreBundle,
   createSessionPool,
   pooledRuntimeOf,
+  type SessionCore,
   type SessionPoolContext,
   setCoreRole,
 } from "./main-pool.ts";
@@ -58,7 +62,7 @@ test("派出的会话进自己的工作树改文件、持有在用锁；审批�
   const states: string[] = [];
   const notices: string[] = [];
   let release: (() => void) | undefined;
-  const { pool } = createSessionPool({
+  const context: SessionPoolContext = {
     governanceRoot: root,
     streamFn,
     flags: { provider: "custom", modelId: "custom" } as never,
@@ -75,15 +79,17 @@ test("派出的会话进自己的工作树改文件、持有在用锁；审批�
     },
     mainWorkspace: () => root,
     notice: (line) => notices.push(line),
-  });
+  };
+  const { pool } = createSessionPool(context);
   cleanups.push(() => pool.closeAll());
   const card = await pool.spawn("建一个文件");
   assert.equal(card.state, "preparing");
   await until(() => release !== undefined, "审批到了");
   const opened = pool.list()[0];
-  assert.match(opened?.worktree?.path ?? "", /s1-/);
+  // 决策 490：缺省显示名是「目录名 + 会话号末 4 位」，工作树名跟着它
+  assert.match(opened?.worktree?.path ?? "", new RegExp(`${opened?.name.toLowerCase()}-?`));
   assert.equal(lockCount(home), 1, "开着期间持有在用锁");
-  assert.equal(requests[0]?.pooled?.name, "s1");
+  assert.equal(requests[0]?.pooled?.name, opened?.name);
   assert.equal(requests[0]?.sessionId, opened?.id);
   assert.deepEqual(states, ["waiting"]);
   assert.match(pool.list()[0]?.waiting ?? "", /^write_file/);
@@ -111,9 +117,28 @@ test("派出的会话进自己的工作树改文件、持有在用锁；审批�
   await pool.remove(id);
   assert.equal(pool.list().length, 0);
   assert.equal(lockCount(home), 0, "去掉即释放在用锁");
-  assert.equal(existsSync(worktree), false, "取回之后没再改的工作树删掉");
-  assert.equal(git(root, ["branch", "--list", branch]).trim(), "", "分支删掉");
-  assert.equal(git(root, ["for-each-ref", "refs/pigeon/panel/"]).trim(), "", "起点快照引用删掉");
+  // 决策 494：退出不删工作树，树、分支与取回起点都留着（取回起点只在清理工作树时删）
+  assert.equal(existsSync(worktree), true, "工作树留着");
+  assert.match(git(root, ["branch", "--list", branch]).trim(), new RegExp(branch));
+  assert.notEqual(git(root, ["for-each-ref", "refs/pigeon/panel/"]).trim(), "", "取回起点留着");
+  // 审计 10：取回—退出—重开—再取：重开的会话按钉在引用上的起点取，不按最初的起点重新叠回（手改的不被写回）
+  const reopened = reopenNamedWorktree(root, worktree);
+  assert.ok(reopened !== undefined);
+  const core: SessionCore = {
+    sessionId: id as SessionId,
+    governanceRoot: root,
+    name: opened?.name ?? "",
+    task: "",
+    modeCell: { current: "prompt" },
+    workspaceRoot: worktree,
+    worktree: reopened,
+    current: false,
+    approvals: new AbortController(),
+    startContexts: [],
+  };
+  const again = pooledRuntimeOf(context, core);
+  assert.match((await Promise.resolve(again.take?.())) ?? "", /no changes to take/);
+  assert.equal(readFileSync(join(root, "made.txt"), "utf8"), "edited by hand\n");
 });
 
 test("决策 483：停下即撤回主 agent 挂着的审批（子 agent 的不撤回）", async () => {
@@ -347,9 +372,9 @@ test("决策 459：不是 git 仓库时，派出的会话在当前目录里干�
   assert.equal(opened?.sharedDir, true);
   assert.equal(readFileSync(join(root, "made.txt"), "utf8"), "made\n", "改动直接在当前目录里");
   assert.equal(lockCount(home), 0, "不持有工作树的在用锁");
-  assert.equal(existsSync(join(root, ".pigeon", "wt")), false, "没有建独立工作树目录");
+  assert.equal(existsSync(worktreesDirOf(root)), false, "没有建工作树目录");
   const id = opened?.id ?? "";
-  assert.match(await pool.take(id), /s1 has no worktree; nothing to take/);
+  assert.match(await pool.take(id), new RegExp(`${opened?.name} has no worktree; nothing to take`));
   await pool.stop(id);
   assert.equal(pool.list()[0]?.state, "stopped");
   assert.equal(readFileSync(join(root, "made.txt"), "utf8"), "made\n", "停下不动目录里的改动");
@@ -416,7 +441,7 @@ test("决策 484：会话核换手——在面板里审批写明来源、卡片�
   cleanups.push(() => pool.closeAll());
   await pool.spawn("写 a1");
   await until(() => pool.list()[0]?.state === "idle", "第一轮跑完");
-  assert.equal(requests[0]?.pooled?.name, "s1");
+  assert.equal(requests[0]?.pooled?.name, pool.list()[0]?.name);
   assert.deepEqual(states, ["waiting"]);
   const id = pool.list()[0]?.id ?? "";
   // 取出、成为当前会话：审批不再写来源，打转检测挂到壳上
@@ -433,6 +458,6 @@ test("决策 484：会话核换手——在面板里审批写明来源、卡片�
   pool.adopt(pooledRuntimeOf(context, core), { name: core.name, task: core.task });
   assert.equal(await pool.send(id, "写 a3"), undefined);
   await until(() => requests.length === 3 && pool.list()[0]?.state === "idle", "第三轮跑完");
-  assert.equal(requests[2]?.pooled?.name, "s1");
+  assert.equal(requests[2]?.pooled?.name, pool.list()[0]?.name);
   assert.equal(states[2], "waiting");
 });

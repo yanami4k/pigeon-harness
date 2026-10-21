@@ -224,12 +224,13 @@ test("目标设置已有同一节且内容不同：报错停下，什么都不�
   });
 });
 
-test("旧位置的程序状态挪进 .pigeon/state/；worker 工作树经 git worktree move 挪位，git worktree list 指向新位置；旧学到的记忆挪进备份", () => {
+test("旧位置的程序状态挪进 .pigeon/state/；旧位置的工作树不迁移（决策 494），旧学到的记忆挪进备份", () => {
   const root = repo();
   const homeDir = home();
   write(join(root, ".pigeon", "sessions", "enc", "s.jsonl"), "{}\n");
   write(join(root, ".pigeon", "learned", "MEMORY.md"), "- x\n");
   write(join(root, ".pigeon", "tui-history.json"), '{"version":1,"entries":[]}');
+  // 决策 494：旧位置的树一概不认，迁移命令不碰它
   const legacyTree = join(root, ".pigeon", "worktrees", "sess-w1");
   git(root, "worktree", "add", "-q", "-b", "pigeon/w1", legacyTree);
   migrate(root, homeDir);
@@ -242,23 +243,16 @@ test("旧位置的程序状态挪进 .pigeon/state/；worker 工作树经 git wo
     "旧学到的记忆原文进备份"
   );
   assert.ok(existsSync(promptHistoryPathOf(root)));
-  const moved = join(worktreesDirOf(root), "sess-w1");
-  assert.ok(existsSync(join(moved, "a.txt")));
-  assert.ok(!existsSync(join(root, ".pigeon", "worktrees")), "空的旧目录删掉");
-  // git worktree list 输出的路径用正斜杠，Windows 下与 path.join 的反斜杠不一致，统一成正斜杠再比对
-  const listed = git(root, "worktree", "list", "--porcelain").replaceAll("\\", "/");
-  const movedSlash = moved.replaceAll("\\", "/");
-  const legacySlash = legacyTree.replaceAll("\\", "/");
-  assert.ok(listed.includes(`worktree ${movedSlash}`), listed);
-  assert.ok(!listed.includes(`worktree ${legacySlash}`), listed);
-  assert.equal(git(moved, "rev-parse", "--abbrev-ref", "HEAD"), "pigeon/w1");
+  // 旧位置原样留着，也不出现在 /worktrees 的清单里（只认 .pigeon/trees）
+  assert.ok(existsSync(join(legacyTree, "a.txt")), "旧位置的树没被动过");
+  assert.equal(existsSync(worktreesDirOf(root)), false, "新目录不会被凭空建出来");
   // 决策 444：不再写 .pigeon/.gitignore，忽略规则写进全局 git 排除文件（测试总装把它指到临时的 XDG 目录）
   assert.equal(existsSync(join(root, ".pigeon", ".gitignore")), false);
   assert.match(globalIgnoreText(), /\*\*\/\.pigeon\/state\//);
   assert.deepEqual(findLegacyLayout(root), []);
 });
 
-test("锁被存活进程占用（有会话或 worker 正在运行）或工作树被锁定：拒绝并说明，什么都不改", () => {
+test("锁被存活进程占用（有会话在运行）：拒绝并说明，什么都不改；旧位置的工作树不再参与迁移（决策 494）", () => {
   const root = repo();
   write(
     join(root, ".pigeon", "sessions", "enc", "s.jsonl.lock"),
@@ -267,10 +261,11 @@ test("锁被存活进程占用（有会话或 worker 正在运行）或工作树
   assert.throws(() => migrate(root), /lock held by a running/);
   assert.ok(existsSync(join(root, ".pigeon", "sessions")));
   rmSync(join(root, ".pigeon", "sessions"), { recursive: true });
+  // 旧位置被 git 锁住的工作树不再拦迁移：它根本不在迁移范围里
   const legacyTree = join(root, ".pigeon", "worktrees", "sess-w2");
   git(root, "worktree", "add", "-q", "-b", "pigeon/w2", legacyTree);
   git(root, "worktree", "lock", legacyTree);
-  assert.throws(() => migrate(root), /worktree is locked/);
+  migrate(root);
   assert.ok(existsSync(legacyTree));
 });
 

@@ -84,6 +84,8 @@ export class SessionPicker {
   // 决策 474：就地改名——改的是哪个会话、输入框里的字；改不成的原因写在标题下面
   private renaming: { sessionId: string; text: string } | undefined;
   private renameNote = "";
+  // 标题（缺省是续接用的那句；/take 借这个列表时换成自己的说法）
+  private header = HEADER;
 
   isOpen(): boolean {
     return this.list !== undefined;
@@ -95,8 +97,10 @@ export class SessionPicker {
     items: RecentSession[],
     onPick: (session: RecentSession | undefined) => void,
     maxRows: () => number = () => PICKER_VISIBLE_ROWS,
-    filter?: PickerFilter
+    filter?: PickerFilter,
+    header: string = HEADER
   ): void {
+    this.header = header;
     this.onPick = onPick;
     this.maxRows = maxRows;
     this.sessions = items;
@@ -175,8 +179,8 @@ export class SessionPicker {
     }
     const head =
       this.query === ""
-        ? secondary(HEADER)
-        : `${secondary(`${HEADER} · filter: `)}${sanitizeTerminalText(this.query)}`;
+        ? secondary(this.header)
+        : `${secondary(`${this.header} · filter: `)}${sanitizeTerminalText(this.query)}`;
     const lines = [clipToWidth(` ${head}`, width)];
     if (this.renaming !== undefined) {
       lines.push(

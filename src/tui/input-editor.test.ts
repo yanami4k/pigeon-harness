@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { test } from "vitest";
 import { promptHistoryStore } from "../application/prompt-history.ts";
 import { newSessionId } from "../state/ids.ts";
+import { slashCommandItems } from "./input-editor.ts";
 import { ScriptedRuntime } from "./runtime-fixtures.ts";
 import { PigeonTuiShell } from "./shell.ts";
 import { MockTerminal, screenText, settle } from "./testing.ts";
@@ -198,4 +199,35 @@ test("输入历史存储：条数上限 100、连续重复只记一次、畸形�
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+// 决策 490：`/take ` 的参数候选走 pi-tui 的 getArgumentCompletions，列表出现在输入框下方（不另开整屏列表）。
+test("命令参数补全：只有 /take 带参数补全，候选由调用方给（值就是会话号）", async () => {
+  const items = slashCommandItems((command, prefix) =>
+    command === "take"
+      ? [
+          { value: "01M55M13BH9PCSN7ZRE80986QS", label: "myapp-e5gj", description: "~" },
+          {
+            value: "01M55M13BH9PCSN7ZRE80986QT",
+            label: "otherapp-2651",
+            description: "~/wt",
+          },
+        ].filter((item) => prefix === "" || item.value.startsWith(prefix))
+      : null
+  );
+  const take = items.find((item) => item.name === "take");
+  assert.ok(take?.getArgumentCompletions !== undefined, "/take 应有参数补全");
+  const all = await take.getArgumentCompletions("");
+  assert.deepEqual(
+    all?.map((item) => item.value),
+    ["01M55M13BH9PCSN7ZRE80986QS", "01M55M13BH9PCSN7ZRE80986QT"]
+  );
+  const narrowed = await take.getArgumentCompletions("01M55M13BH9PCSN7ZRE80986QT");
+  assert.deepEqual(
+    narrowed?.map((item) => item.label),
+    ["otherapp-2651"]
+  );
+  // 别的命令带着补全器，但拿不到候选（返回 null）——pi-tui 据此不弹列表
+  const resume = items.find((item) => item.name === "resume");
+  assert.equal(await resume?.getArgumentCompletions?.(""), null);
 });

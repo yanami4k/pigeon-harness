@@ -1,5 +1,5 @@
-// 路径模块（决策 325）：程序状态在 .pigeon/state/ 下、用户主目录可注入、快照与叠加只排除程序状态与个人设置、
-// 旧会话记着的旧工作树位置按旧前缀映射到新前缀。
+// 路径模块（决策 325、494）：程序状态在 .pigeon/state/ 下、用户主目录可注入、快照与叠加只排除程序状态与个人设置、
+// 工作树统一在 .pigeon/trees/ 下（旧位置一概不认，没有映射）。
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "vitest";
@@ -7,19 +7,17 @@ import {
   configTrustPathOf,
   isProgramOwnedPath,
   isUnderPigeonDir,
-  mapLegacyWorktreePath,
   migrationBackupDirOf,
   projectLocalSettingsPath,
   sessionSearchCacheDirOf,
   sessionsDirOf,
-  userMigrationBackupDirOf,
   userSettingsPath,
   worktreesDirOf,
 } from "./paths.ts";
 
 test("位置：程序状态在 .pigeon/state/ 下；用户级在注入的主目录下", () => {
   assert.equal(sessionsDirOf("/p"), join("/p", ".pigeon", "state", "sessions"));
-  assert.equal(worktreesDirOf("/p"), join("/p", ".pigeon", "state", "worktrees"));
+  assert.equal(worktreesDirOf("/p"), join("/p", ".pigeon", "trees"));
   assert.equal(sessionSearchCacheDirOf("/p"), join("/p", ".pigeon", "state", "search-cache"));
   assert.equal(projectLocalSettingsPath("/p"), join("/p", ".pigeon", "settings.local.json"));
   assert.equal(userSettingsPath("/h"), join("/h", ".pigeon", "settings.json"));
@@ -34,12 +32,6 @@ test("迁移备份在用户级程序状态下按项目分开：目录名为项�
   assert.notEqual(a, b);
   assert.equal(migrationBackupDirOf("/w/one/app", "/h"), a, "同一项目总是同一目录");
   assert.match(migrationBackupDirOf("/w/my app:x", "/h"), /my_app_x-[0-9a-f]{12}$/);
-  // 决策 431：不属于某个项目的用户级文件进同一目录下的 user/（项目目录名总带哈希后缀，不相撞）
-  assert.equal(
-    userMigrationBackupDirOf("/h"),
-    join("/h", ".pigeon", "state", "migration-backup", "user")
-  );
-  assert.doesNotMatch(userMigrationBackupDirOf("/h"), /-[0-9a-f]{12}$/);
 });
 
 test("快照与叠加排除的只是程序状态与个人设置；可提交的设置与技能不排除", () => {
@@ -53,14 +45,8 @@ test("快照与叠加排除的只是程序状态与个人设置；可提交的�
   assert.equal(isUnderPigeonDir("src/.pigeon/x"), false);
 });
 
-test("旧工作树位置映射：旧前缀下的换到新前缀，其余原样", () => {
-  assert.equal(
-    mapLegacyWorktreePath("/p", join("/p", ".pigeon", "worktrees", "s-w1")),
-    join("/p", ".pigeon", "state", "worktrees", "s-w1")
-  );
-  assert.equal(
-    mapLegacyWorktreePath("/p", join("/p", ".pigeon", "state", "worktrees", "s-w1")),
-    join("/p", ".pigeon", "state", "worktrees", "s-w1")
-  );
-  assert.equal(mapLegacyWorktreePath("/p", "/elsewhere/wt"), "/elsewhere/wt");
+test("工作树目录只有一处：.pigeon/trees/（决策 494）", () => {
+  assert.equal(worktreesDirOf("/p"), join("/p", ".pigeon", "trees"));
+  // 工作树目录属于程序状态：快照与叠加一律排除
+  assert.equal(isProgramOwnedPath(".pigeon/trees/feat"), true);
 });

@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, test } from "vitest";
 import { LocalSessionPool, type PooledRuntime } from "../application/session-pool.ts";
 import { createFixtureSession } from "../application/session-store-fixtures.ts";
@@ -83,12 +83,16 @@ test("本进程没开的会话列成 idle 卡片：摘要取最后一条回复�
   list.refresh();
   const cards = list.list();
   assert.deepEqual(
-    cards.map((card) => [card.id, card.state, card.task, card.summary, card.place !== undefined]),
+    cards.map((card) => [card.id, card.state, card.task, card.summary]),
     [
-      [local, "idle", "修登录", "登录修好了", false],
-      [remote, "idle", "查日志", "日志看过了", true],
+      [local, "idle", "修登录", "登录修好了"],
+      [remote, "idle", "查日志", "日志看过了"],
     ]
   );
+  // 决策 489：每张卡都写它干活的目录（与当前会话的工作区相同时由面板省掉）
+  const workspaceOf = (id: string) => cards.find((card) => card.id === id)?.workspace ?? "";
+  assert.ok(workspaceOf(local).endsWith(basename(here)));
+  assert.ok(workspaceOf(remote).endsWith(basename(there)));
   assert.ok(cards.every((card) => card.dormant === true));
   const peek = await list.peek(remote);
   assert.ok(peek.includes("> 查日志"));

@@ -52,21 +52,28 @@ function nameCellWidth(cell: CardCells): number {
   );
 }
 
-function cellsOf(card: PooledSessionCard, extraTags: readonly string[]): CardCells {
+// currentWorkspace：当前会话的工作区（展示写法）；卡上的工作区与它相同即不写（决策 489）
+function cellsOf(
+  card: PooledSessionCard,
+  extraTags: readonly string[],
+  currentWorkspace?: string
+): CardCells {
   const detail =
     card.state === "waiting" && card.waiting !== undefined
       ? `waiting: ${oneLine(card.waiting)}`
       : card.state === "failed" && card.error !== undefined
         ? `failed: ${oneLine(card.error)}`
         : oneLine(card.summary);
-  // 决策 459、485；决策 489：状态由分组表达，卡上只留临时标签（current、cancelling）与工作区一类的属性；
-  // 共用目录的会话直接写它用的工作区（写不出来才退回 "shared dir"）；同样的字只写一次
+  // 决策 459、485；决策 489：状态由分组表达，卡上只留临时标签（current、cancelling）与工作区一类的属性。
+  // 工作区只写一个值：它干活的目录，与当前会话的工作区相同则不写；拿不到路径的共用目录会话退回 "shared dir"；
+  // 同样的字只写一次
+  const where =
+    card.workspace ?? card.place ?? (card.sharedDir === true ? "shared dir" : undefined);
   const tags = [
     ...extraTags,
     ...(card.cancelling === true ? ["cancelling"] : []),
-    ...(card.sharedDir === true ? [card.workspace ?? "shared dir"] : []),
     ...(card.elsewhere === true ? ["open elsewhere"] : []),
-    ...(card.place !== undefined ? [card.place] : []),
+    ...(where !== undefined && where !== currentWorkspace ? [where] : []),
   ].filter((tag, index, all) => all.indexOf(tag) === index);
   return { name: card.name, tags, task: oneLine(card.task), detail };
 }
@@ -99,9 +106,12 @@ export interface CardColumns {
 // 按本次要画的卡算列宽：名字取最长的那个（有上限），任务取剩余的部分，剩下的留给概要
 export function cardColumns(
   entries: readonly { card: PooledSessionCard; main: boolean }[],
-  available: number
+  available: number,
+  currentWorkspace?: string
 ): CardColumns {
-  const cells = entries.map((entry) => cellsOf(entry.card, entry.main ? ["current"] : []));
+  const cells = entries.map((entry) =>
+    cellsOf(entry.card, entry.main ? ["current"] : [], currentWorkspace)
+  );
   const name = Math.min(NAME_COLUMN_MAX, Math.max(0, ...cells.map((cell) => nameCellWidth(cell))));
   const rest = Math.max(0, available - name - COLUMN_GAP);
   const longestTask = Math.max(0, ...cells.map((cell) => visibleWidth(cell.task)));
@@ -116,9 +126,10 @@ export function cardColumns(
 export function sessionCardText(
   card: PooledSessionCard,
   extraTags: readonly string[] = [],
-  columns?: CardColumns
+  columns?: CardColumns,
+  currentWorkspace?: string
 ): string {
-  const cell = cellsOf(card, extraTags);
+  const cell = cellsOf(card, extraTags, currentWorkspace);
   if (columns === undefined) {
     // 不给列宽时按自然宽度画（另一处只做一行文本的用处）：标签照常带上
     const tags = cell.tags.length > 0 ? ` ${secondary(cell.tags.join(" · "))}` : "";
@@ -141,6 +152,10 @@ export interface SessionPanelSourceView {
   peek(id: string): string[];
   // 决策 458：当前窗口的主会话（缺省 = 不列）
   main?(): PooledSessionCard | undefined;
+  // 决策 489：当前会话的工作区（展示写法）；卡上与它相同的工作区不写
+  currentWorkspace?(): string | undefined;
+  // 决策 490：占位会话号开好之后的会话号（缺省原样）
+  currentId?(id: string): string;
 }
 
 // 决策 458、489：当前会话的卡——状态由分组表达，这里只多一个临时标签 current（它照旧落在自己的状态组里）
@@ -151,8 +166,6 @@ export function currentSessionCardText(card: PooledSessionCard, columns?: CardCo
 export class SessionPanel implements Component {
   private readonly source: SessionPanelSourceView;
   private selectedId: string | undefined;
-  // 刚派出的会话：会话号开好才定，先按名字选
-  private selectedName: string | undefined;
   private peeking = false;
   private note = "";
 
@@ -180,10 +193,13 @@ export class SessionPanel implements Component {
 
   selected(): PooledSessionCard | undefined {
     const cards = this.ordered();
+    // 决策 490：会话号变了（准备中的会话开好）按占位号换成现在的会话号找回，不按名字认
+    const id =
+      this.selectedId !== undefined
+        ? (this.source.currentId?.(this.selectedId) ?? this.selectedId)
+        : undefined;
     return (
-      cards.find((card) => card.id === this.selectedId) ??
-      // 会话号变了（准备中的会话开好）按名字找回；当前会话那张卡不按名字认（它可能与面板会话同名）
-      cards.find((card) => card.name === this.selectedName && !this.isMain(card)) ??
+      cards.find((card) => card.id === id) ??
       // 决策 470：还没选过时落在当前会话那张卡上（它现在按状态落在组里，不再排在最前）
       this.source.main?.() ??
       cards[0]
@@ -199,21 +215,18 @@ export class SessionPanel implements Component {
     );
     const next = cards[Math.max(0, Math.min(cards.length - 1, current + delta))];
     this.selectedId = next?.id;
-    this.selectedName = next !== undefined && !this.isMain(next) ? next.name : undefined;
     this.note = "";
   }
 
+  // 决策 490：刚派出的会话——按占位的会话号选中，开好之后会话号换了按 currentId 找回
+  followSpawn(id: string): void {
+    this.selectedId = id;
+    this.note = "";
+  }
   // 决策 470：按 ← 打开面板时光标落在刚才所在的会话上（按会话号）
   selectId(id: string): void {
     this.selectedId = id;
-    this.selectedName = undefined;
     this.note = "";
-  }
-
-  // 新派出的会话：光标落在它上面（按名字）
-  selectName(name: string): void {
-    this.selectedId = undefined;
-    this.selectedName = name;
   }
 
   togglePeek(): void {
@@ -250,9 +263,11 @@ export class SessionPanel implements Component {
     let cursorLine = 0;
     const others = this.grouped();
     // 决策 489：名字、任务、概要各占一列，列宽按本次要画的卡算（行首缩进 2 + 光标位与空格共 4 列）
+    const currentWorkspace = this.source.currentWorkspace?.();
     const columns = cardColumns(
       others.map((card) => ({ card, main: card.id === main?.id })),
-      Math.max(24, width - 4)
+      Math.max(24, width - 4),
+      currentWorkspace
     );
     for (const state of GROUPS) {
       const group = others.filter((card) => card.state === state);
@@ -260,7 +275,12 @@ export class SessionPanel implements Component {
       body.push(clipToWidth(`  ${GROUP_LABEL[state]} (${group.length})`, width));
       for (const card of group) {
         if (card.id === selected?.id) cursorLine = body.length;
-        const text = sessionCardText(card, card.id === main?.id ? ["current"] : [], columns);
+        const text = sessionCardText(
+          card,
+          card.id === main?.id ? ["current"] : [],
+          columns,
+          currentWorkspace
+        );
         // 决策 489：组标题缩进 2，卡片的名字对齐在它下面一格；一行放不下即以 … 省略，不折行
         body.push(clipToWidth(`  ${card.id === selected?.id ? ">" : " "} ${text}`, width, "…"));
       }

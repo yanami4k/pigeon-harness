@@ -54,11 +54,6 @@ export function holdWorktreeInUse(path: string, homeDir?: string): () => void {
   };
 }
 
-// 决策 484：本进程里还有会话持有这个工作树（同一进程里几个会话可以在同一个工作树里）
-export function worktreeHeldHere(path: string): boolean {
-  return (heldByThisProcess.get(keyOf(path)) ?? 0) > 0;
-}
-
 // 别的仍在的进程持有这个工作树（本进程的不算）；进程已不在的标记顺手删掉
 export function worktreeInUseByOthers(
   path: string,

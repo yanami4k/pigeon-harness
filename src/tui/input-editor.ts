@@ -5,6 +5,7 @@
 // 搜索要本机有 fd 程序，没有即不出结果）。光标前没打字（输入框空、或刚敲完空格）时 Tab 什么都不做，不弹整个目录的文件列表。补全只改输入框里的文字：发出时 @路径 原样作为文字，不自动附上文件内容。
 // 边框与滚动提示换成 ASCII（spike 纪律：歧义宽字符不进 chrome）。历史跨启动保留由 application/prompt-history.ts 负责。
 import {
+  type AutocompleteItem,
   CombinedAutocompleteProvider,
   Editor,
   type EditorTheme,
@@ -37,23 +38,66 @@ export interface PromptAutocomplete {
   basePath: string;
   // fd 程序的路径（@ 引用的文件搜索用）；没有即 null
   fdPath: string | null;
+  // 决策 490：命令参数的补全（例如 `/take ` 之后列出能取回改动的会话）；返回 null 即这条命令没有参数补全
+  arguments?: (command: string, prefix: string) => AutocompleteItem[] | null;
 }
 
 // pi-tui 的文件补全分隔符（空白、引号、等号）：光标前最后一个分隔符之后是"当前词"
 const PATH_DELIMITERS = /[\s"'=]/;
 
-// Tab 只补全已打了半截的词：当前词为空时不触发（pi-tui 缺省会列出工作区根下的全部文件）
+// Tab 只补全已打了半截的词：当前词为空时不触发（pi-tui 缺省会列出工作区根下的全部文件）。
+// 决策 490：带参数补全的命令（`/take `）例外——Tab 弹出它的参数候选（pi-tui 的 Tab 走文件补全，这里改走参数补全）
 export class PromptAutocompleteProvider extends CombinedAutocompleteProvider {
+  readonly #argumentsOf: PromptAutocomplete["arguments"];
+
+  constructor(
+    commands: SlashCommand[],
+    basePath: string,
+    fdPath: string | null,
+    argumentsOf?: PromptAutocomplete["arguments"]
+  ) {
+    super(commands, basePath, fdPath);
+    this.#argumentsOf = argumentsOf;
+  }
+
+  // 光标前是 "/<命令> <参数>"、且这条命令有参数补全时为真
+  #inArguments(lines: string[], cursorLine: number, cursorCol: number): boolean {
+    const before = (lines[cursorLine] ?? "").slice(0, cursorCol);
+    const match = /^\/(\S+) /.exec(before);
+    if (match === null || this.#argumentsOf === undefined) return false;
+    return this.#argumentsOf(match[1] ?? "", before.slice(match[0].length)) !== null;
+  }
+
   override shouldTriggerFileCompletion(
     lines: string[],
     cursorLine: number,
     cursorCol: number
   ): boolean {
+    if (this.#inArguments(lines, cursorLine, cursorCol)) return true;
     const before = (lines[cursorLine] ?? "").slice(0, cursorCol);
     const last = before.at(-1);
     if (last === undefined || PATH_DELIMITERS.test(last)) return false;
     return super.shouldTriggerFileCompletion(lines, cursorLine, cursorCol);
   }
+
+  override getSuggestions(
+    lines: string[],
+    cursorLine: number,
+    cursorCol: number,
+    options: { signal: AbortSignal; force?: boolean }
+  ): ReturnType<CombinedAutocompleteProvider["getSuggestions"]> {
+    const force = options.force === true && !this.#inArguments(lines, cursorLine, cursorCol);
+    return super.getSuggestions(lines, cursorLine, cursorCol, { ...options, force });
+  }
+}
+
+// 决策 490：程序填好命令之后直接弹出它的参数候选（同打字时自动弹出的那一套；只有一项时也列出来、不自动补上）。
+// pi-tui 没有公开这一步，取不到时退回按一下 Tab
+export function openArgumentCompletions(editor: Editor): void {
+  const trigger = (editor as unknown as { tryTriggerAutocomplete?: () => void })
+    .tryTriggerAutocomplete;
+  if (typeof trigger === "function") trigger.call(editor);
+  else editor.handleInput("\t");
 }
 
 export function createPromptEditor(
@@ -67,9 +111,10 @@ export function createPromptEditor(
   if (autocomplete !== undefined) {
     editor.setAutocompleteProvider(
       new PromptAutocompleteProvider(
-        slashCommandItems(),
+        slashCommandItems(autocomplete.arguments),
         autocomplete.basePath,
-        autocomplete.fdPath
+        autocomplete.fdPath,
+        autocomplete.arguments
       )
     );
   }
@@ -83,16 +128,32 @@ export function setPromptAutocompleteRoot(
   basePath: string
 ): void {
   editor.setAutocompleteProvider(
-    new PromptAutocompleteProvider(slashCommandItems(), basePath, autocomplete.fdPath)
+    new PromptAutocompleteProvider(
+      slashCommandItems(autocomplete.arguments),
+      basePath,
+      autocomplete.fdPath,
+      autocomplete.arguments
+    )
   );
 }
 
-// 补全用的命令表：按命令词首段去重（"grants save" 归在 grants 下），说明取用法
-export function slashCommandItems(): SlashCommand[] {
+// 补全用的命令表：按命令词首段去重（"grants save" 归在 grants 下），说明取用法。
+// 决策 490：命令带参数时把参数候选交给 pi-tui 的 getArgumentCompletions——列表就出现在输入框下方
+export function slashCommandItems(
+  argumentsOf?: (command: string, prefix: string) => AutocompleteItem[] | null
+): SlashCommand[] {
   const seen = new Map<string, SlashCommand>();
   for (const spec of SLASH_COMMANDS) {
     const name = spec.name.split(" ")[0] ?? spec.name;
-    if (!seen.has(name)) seen.set(name, { name, description: spec.usage });
+    if (!seen.has(name)) {
+      seen.set(name, {
+        name,
+        description: spec.usage,
+        ...(argumentsOf !== undefined
+          ? { getArgumentCompletions: (prefix: string) => argumentsOf(name, prefix) }
+          : {}),
+      });
+    }
   }
   return [...seen.values()];
 }

@@ -64,9 +64,8 @@ function messageText(message: unknown): string {
     .join("\n");
 }
 
-// 一条消息里人亲手输入的话：开工状态块、程序送进对话的通知（打转提醒、worker / 脚本 / 后台作业通知、跨会话消息与回告、
-// 只有 [Pigeon] 附注的）与续跑提示都不是（undefined）；随输入前缀的程序附注去掉，/orchestrate 发起的还原成人敲的
-// "/orchestrate <任务>"（回退时放回输入框的就是它，见 history.ts 的 userTextParts）
+// 一条消息里人亲手输入的话：开工状态块、程序送进对话的通知（打转提醒、后台作业通知、只有 [Pigeon] 附注的）与续跑提示都
+// 不是（undefined）；随输入前缀的程序附注去掉（回退时放回输入框的就是剩下的，见 history.ts 的 userTextParts）
 export function humanInputText(message: unknown): string | undefined {
   if ((message as { role?: unknown }).role !== "user" || isStatusMessage(message)) return undefined;
   // 决策 480：agent 之间的传话（按消息上的标记认）

@@ -9,7 +9,7 @@ import type { CostTally } from "../application/session-cost.ts";
 import { secondary, warning } from "./style.ts";
 
 export interface StatusBarState {
-  // 决策 469、487：当前会话的审批模式（写在最前面：ask 暗色、auto 醒目）；缺省不写
+  // 决策 469、499：当前会话的审批模式（写在最前面：ask 暗色、bypass 醒目）；缺省不写
   mode?: "prompt" | "yolo" | undefined;
   context?: { tokens: number; contextWindow: number } | undefined;
   // 本会话累计的用量（记账在 application/session-cost.ts；这里只取其中的 token 数）
@@ -46,9 +46,11 @@ function contextSegment(context: StatusBarState["context"], short: boolean): str
     : `ctx ${percent}% (${compactNumber(context.tokens)}/${compactNumber(context.contextWindow)})`;
 }
 
-// 审批模式在状态栏里的写法（决策 487：放手档显示成 auto；内部值仍是 yolo，记录与 trace 不变）
-function modeLabel(mode: StatusBarState["mode"]): string | undefined {
-  return mode === undefined ? undefined : mode === "yolo" ? "auto" : "ask";
+// 审批模式在界面上的写法（决策 499：放手档显示成 bypass；内部值仍是 yolo，记录、--yolo 与 trace 不变）。/status 同一写法
+export function modeLabel(mode: "prompt" | "yolo"): "ask" | "bypass";
+export function modeLabel(mode: StatusBarState["mode"]): "ask" | "bypass" | undefined;
+export function modeLabel(mode: StatusBarState["mode"]): "ask" | "bypass" | undefined {
+  return mode === undefined ? undefined : mode === "yolo" ? "bypass" : "ask";
 }
 
 // 一行状态栏文本（不含左边距）；width 为可用宽度
@@ -97,9 +99,9 @@ export class StatusBar implements Component {
   render(width: number): string[] {
     const text = statusBarText(this.state, Math.max(0, width - 2));
     if (text === "") return [""];
-    // 决策 469、487：放手档（显示 auto）用醒目颜色，其余照旧暗色
-    if (this.state.mode === "yolo" && text.startsWith("auto")) {
-      return [` ${warning("auto")}${secondary(text.slice("auto".length))}`];
+    // 决策 469、499：放手档（显示 bypass）用醒目颜色，其余照旧暗色
+    if (this.state.mode === "yolo" && text.startsWith("bypass")) {
+      return [` ${warning("bypass")}${secondary(text.slice("bypass".length))}`];
     }
     return [` ${secondary(text)}`];
   }

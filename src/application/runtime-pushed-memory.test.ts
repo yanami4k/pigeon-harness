@@ -148,44 +148,6 @@ test("只推送：推送段在开工状态块里、排在人写的说明与 Skil
     }
   }));
 
-test("读到旧格式的记忆文件（决策 431）：开工状态块里是新格式（英文尾巴），文件已改写、原文已备份；迁移的说明走运行期告警的出口、只说一次", () =>
-  withRoot("pigeon-pushed-legacy-", async (root) => {
-    writeMemory(
-      root,
-      "project",
-      "# 学到的记忆（本项目）\n" +
-        "<!-- 由 Pigeon 的 update_memory 维护，也可以用终端界面的 /memory edit project 修改。一行一条：编号、内容，〔〕里是记下的日期、来源与会话编号。 -->\n" +
-        "\n" +
-        "- [P1] 提交信息用英文祈使句 〔2026-09-30 · 终端界面 · 会话 sess_A〕\n"
-    );
-    writeMemory(
-      root,
-      "user",
-      `${MEMORY_FILE_HEADERS.user}- [U1] 回复用中文 〔2026-09-30 · 命令行对话 · 会话 sess_B〕\n`
-    );
-    const warnings: string[] = [];
-    const streamFn = createFakeStreamFn({ replies: [{ text: "好" }, { text: "好" }] });
-    const bundle = buildRuntime(
-      deps(root, { learnedMemory: {}, streamFn, storeWarn: (line) => warnings.push(line) })
-    );
-    try {
-      await bundle.adapter.run("你好");
-      await bundle.adapter.run("再来");
-      const prompt = statusTextOf(streamFn.calls[0]);
-      assert.ok(prompt.includes(PROJECT_ENTRY.trimEnd()), prompt);
-      assert.ok(prompt.includes(USER_ENTRY.trimEnd()), prompt);
-      assert.doesNotMatch(prompt, /〔|终端界面 ·|命令行对话 ·/);
-    } finally {
-      await disposeRuntime(bundle);
-    }
-    assert.equal(readMemory(root, "project"), MEMORY_FILE_HEADERS.project + PROJECT_ENTRY);
-    assert.equal(readMemory(root, "user"), MEMORY_FILE_HEADERS.user + USER_ENTRY);
-    assert.deepEqual(
-      warnings.map((line) => line.replace(/备份在 .*$/, "备份在 …")),
-      []
-    );
-  }));
-
 test("关着（缺省）：没有推送段、不注册 update_memory、Run 开始条目不带推送的记忆", () =>
   withRoot("pigeon-pushed-off-", async (root) => {
     seed(root);

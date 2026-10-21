@@ -759,7 +759,6 @@ function fileChangesOf(candidate: Pick<Candidate, "toolName" | "result">): strin
   const text = candidate.result.content
     .map((block) => (block.type === "text" ? block.text : ""))
     .join("");
-  // 决策 428：新结果是英文，旧会话记录里是中文，两种都认
   const at = lastFileChangesAt(text);
   return at >= 0 ? text.slice(at) : "";
 }

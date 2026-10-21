@@ -19,14 +19,12 @@ import { test } from "vitest";
 import { newSessionId } from "../state/ids.ts";
 import {
   addWorktree,
-  branchTailFor,
   copyWorktreeIncludes,
   deleteBranch,
   listWorktrees,
   removeWorktree,
   removeWorktreeAndBranch,
   WorktreeError,
-  worktreeBranchFor,
   worktreePathFor,
   worktreePristine,
   worktreeStartRefFor,
@@ -49,16 +47,16 @@ function makeRepo(): { repo: string; cleanup: () => void } {
   return { repo, cleanup: () => rmSync(repo, { recursive: true, force: true }) };
 }
 
-// 决策 447：分支名 pigeon/<会话号后 8 位，小写>-<名字>
-test("工作树：目录在 .pigeon/state/worktrees/<会话>-<名字>、分支 pigeon/<会话号后 8 位>-<名字>，隔离写入，移除后清单不再列出", () => {
+// 决策 494：工作树只有一种形状——目录 .pigeon/trees/<名字>、分支 pigeon/<名字>
+test("工作树：目录在 .pigeon/trees/<名字>、分支 pigeon/<名字>，隔离写入，移除后清单不再列出", () => {
   const { repo, cleanup } = makeRepo();
   try {
     const sessionId = newSessionId();
     const handle = addWorktree({ repoRoot: repo, sessionId, name: "fix-a" });
-    const branch = `pigeon/${sessionId.slice(-8).toLowerCase()}-fix-a`;
-    assert.equal(handle.path, join(repo, ".pigeon", "state", "worktrees", `${sessionId}-fix-a`));
+    const branch = "pigeon/fix-a";
+    assert.equal(handle.path, join(repo, ".pigeon", "trees", "fix-a"));
     assert.equal(handle.branch, branch);
-    assert.equal(worktreeBranchFor(sessionId, "fix-a"), branch);
+    assert.equal(branch, "pigeon/fix-a");
     assert.equal(readFileSync(join(handle.path, "a.txt"), "utf8"), "alpha\n");
     assert.equal(git(handle.path, ["branch", "--show-current"]).trim(), branch);
 
@@ -82,18 +80,17 @@ test("工作树：目录在 .pigeon/state/worktrees/<会话>-<名字>、分支 p
   }
 });
 
-// 决策 447：以前同名分支由 git 拒绝（另一个会话派过同名 worker，再派即失败）；分支带会话号后两个会话的同名 worker 各建各的
-test("工作树：目录名与分支名都带会话编号，两个会话的同名 worker 都建得起来；显式给的同名分支仍由 git 响亮拒绝", () => {
+// 决策 494：名字即位置——同名工作树第二次建时由 git 响亮拒绝（撞名时由调用方另挑一个名字）
+test("工作树：名字即位置，同名再建即失败；显式给的已存在分支同样被拒", () => {
   const { repo, cleanup } = makeRepo();
   try {
-    const first = newSessionId();
-    const second = newSessionId();
-    assert.notEqual(worktreePathFor(repo, first, "x"), worktreePathFor(repo, second, "x"));
-    const a = addWorktree({ repoRoot: repo, sessionId: first, name: "x" });
-    const b = addWorktree({ repoRoot: repo, sessionId: second, name: "x" });
-    assert.notEqual(a.branch, b.branch);
+    const sessionId = newSessionId();
+    assert.equal(worktreePathFor(repo, "x"), worktreePathFor(repo, "x"));
+    const a = addWorktree({ repoRoot: repo, sessionId, name: "x" });
+    assert.equal(a.path, join(repo, ".pigeon", "trees", "x"));
+    assert.throws(() => addWorktree({ repoRoot: repo, sessionId, name: "x" }), WorktreeError);
     assert.throws(
-      () => addWorktree({ repoRoot: repo, sessionId: newSessionId(), name: "x", branch: a.branch }),
+      () => addWorktree({ repoRoot: repo, sessionId, name: "y", branch: a.branch }),
       (error: unknown) => error instanceof WorktreeError && error.message.includes(a.branch)
     );
   } finally {
@@ -104,7 +101,7 @@ test("工作树：目录名与分支名都带会话编号，两个会话的同�
 test("工作树：非法名字在调用 git 之前拒绝", () => {
   const { repo, cleanup } = makeRepo();
   try {
-    for (const name of ["", "../evil", "-f", "a b", "A", "x/y", "a".repeat(41)]) {
+    for (const name of ["", "../evil", "-f", "_x", "a b", "A", "x/y", "a".repeat(65)]) {
       assert.throws(
         () => addWorktree({ repoRoot: repo, sessionId: newSessionId(), name }),
         WorktreeError,
@@ -124,31 +121,36 @@ test("工作树：非法名字在调用 git 之前拒绝", () => {
   }
 });
 
-// 决策 279：worker 起点快照的引用与分支同名，随分支一并删除
-test("起点引用 refs/pigeon/worker-start/<会话号后 8 位>-<名>：删分支时一并删除；没有引用的分支照删；旧命名照删；非法名字拒绝", () => {
+// 决策 279、483、486：起点快照的引用与取回起点（panel/、agent/）都与工作树同名，随分支一并删除
+test("起点引用 refs/pigeon/worker-start/<名字> 与取回起点 refs/pigeon/{panel,agent}/<名字>：删分支时一并删除；没有引用的分支照删；非法名字拒绝", () => {
   const { repo, cleanup } = makeRepo();
   try {
     const head = git(repo, ["rev-parse", "HEAD"]).trim();
     const sessionId = newSessionId();
-    const tail = branchTailFor(sessionId, "fix-a");
+    // 决策 494：分支是 pigeon/<名字>，起点引用的 tail 就是名字
+    const tail = "fix-a";
     const ref = worktreeStartRefFor(tail);
     assert.equal(ref, `refs/pigeon/worker-start/${tail}`);
     git(repo, ["update-ref", ref, head]);
+    git(repo, ["update-ref", `refs/pigeon/panel/${tail}`, head]);
+    git(repo, ["update-ref", `refs/pigeon/agent/${tail}`, head]);
+    // 别的树的取回起点不动
+    git(repo, ["update-ref", "refs/pigeon/panel/other", head]);
     const first = addWorktree({ repoRoot: repo, sessionId, name: "fix-a", baseRef: head });
     removeWorktree({ repoRoot: repo, path: first.path, force: true });
     deleteBranch({ repoRoot: repo, branch: first.branch });
     assert.equal(git(repo, ["for-each-ref", "refs/pigeon/worker-start/"]).trim(), "", "引用已删");
+    assert.equal(
+      git(repo, ["for-each-ref", "--format=%(refname)", "refs/pigeon/"]).trim(),
+      "refs/pigeon/panel/other",
+      "同名的取回起点一并删，别的树的不动"
+    );
     assert.equal(git(repo, ["for-each-ref", "refs/heads/pigeon/"]).trim(), "", "分支已删");
 
     const second = addWorktree({ repoRoot: repo, sessionId: newSessionId(), name: "fix-b" });
     removeWorktree({ repoRoot: repo, path: second.path, force: true });
     deleteBranch({ repoRoot: repo, branch: second.branch });
-    // 决策 447 之前的旧分支 pigeon/<名字> 照样能删（连同旧的起点引用）
-    git(repo, ["branch", "pigeon/old-one"]);
-    git(repo, ["update-ref", worktreeStartRefFor("old-one"), head]);
-    deleteBranch({ repoRoot: repo, branch: "pigeon/old-one" });
     assert.equal(git(repo, ["for-each-ref", "refs/heads/pigeon/"]).trim(), "");
-    assert.equal(git(repo, ["for-each-ref", "refs/pigeon/worker-start/"]).trim(), "");
     assert.throws(() => worktreeStartRefFor("../x"), WorktreeError);
     assert.throws(() => deleteBranch({ repoRoot: repo, branch: "main" }), WorktreeError);
   } finally {
@@ -437,11 +439,8 @@ test(".worktreeinclude 复制出错（目标位置在检出里是个文件）：
       () => addWorktree({ repoRoot: repo, sessionId, name: "rollback", baseRef: old }),
       /\.worktreeinclude/
     );
-    assert.equal(existsSync(worktreePathFor(repo, sessionId, "rollback")), false);
-    assert.equal(
-      git(repo, ["branch", "--list", worktreeBranchFor(sessionId, "rollback")]).trim(),
-      ""
-    );
+    assert.equal(existsSync(worktreePathFor(repo, "rollback")), false);
+    assert.equal(git(repo, ["branch", "--list", "pigeon/rollback"]).trim(), "");
     assert.equal(listWorktrees(repo).length, 1);
   } finally {
     cleanup();

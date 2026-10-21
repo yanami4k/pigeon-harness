@@ -10,6 +10,7 @@ import { execFileSync, spawn } from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -23,9 +24,11 @@ import { NotGitWorkspaceError } from "../orchestration/checkpoint.ts";
 import { sessionFileLockPath } from "../persistence/session-lock.ts";
 import { listSessionFiles, locateSessionFile } from "../persistence/session-reader.ts";
 import { type LoadedStoreSession, loadStoreSession } from "../persistence/session-view.ts";
+import { worktreeInUse } from "../persistence/worktree-in-use.ts";
 import { createFakeStreamFn, type FakeStreamFn } from "../pi-runtime/fixtures.ts";
 import type { StreamFn } from "../pi-runtime/index.ts";
 import { newSessionId } from "../state/ids.ts";
+import { worktreesDirOf } from "../state/paths.ts";
 import { ForkError, runForkBranch } from "./fork.ts";
 import { runHeadless } from "./headless-core.ts";
 import type { McpSession } from "./mcp.ts";
@@ -139,7 +142,15 @@ test("分叉续跑：来源先记分叉条目，从分叉点前最近的快照�
     });
     let branch: Awaited<ReturnType<typeof runForkBranch>>;
     let taskSeq = 0;
-    const branchModel = createFakeStreamFn({ replies: [edit("new\n"), { text: "这次对了" }] });
+    const branchReplies = createFakeStreamFn({ replies: [edit("new\n"), { text: "这次对了" }] });
+    // 决策 494：分叉在跑期间持有它工作树的在用标记（/worktrees clean 不删在跑的分叉）
+    const inUseDuringRun: boolean[] = [];
+    const treesDir = worktreesDirOf(dir);
+    const forkTrees = () => readdirSync(treesDir).map((name) => join(treesDir, name));
+    const branchModel: StreamFn = (...args) => {
+      inUseDuringRun.push(forkTrees().some((tree) => worktreeInUse(tree, { homeDir: home })));
+      return branchReplies(...args);
+    };
     try {
       await opened.bundle.adapter.run("把 a.txt 改成 new");
       // 决策 350：快照在后台拍，先等它拍完
@@ -173,6 +184,8 @@ test("分叉续跑：来源先记分叉条目，从分叉点前最近的快照�
     } finally {
       await disposeRuntime(opened.bundle);
     }
+    assert.ok(inUseDuringRun.length > 0 && inUseDuringRun.every(Boolean), "跑时持有在用标记");
+    assert.equal(worktreeInUse(branch.workspace.path, { homeDir: home }), false, "跑完释放");
     const storeSource = storeSession(dir, sourceId);
     const storeBranch = storeSession(dir, branch.branchSessionId);
     assert.equal(storeSource.view.forks.length, 1, "来源会话先记一条分叉条目");
@@ -202,7 +215,7 @@ test("分叉续跑：来源先记分叉条目，从分叉点前最近的快照�
     assert.equal(branch.label, "Unknown", "无验证而正常完成记未知（决策 322）");
 
     // 分支初始消息只到分叉点（任务消息）；开工状态块与分支开工时的状态追加不算对话
-    const firstCall = (branchModel.calls[0]?.context.messages ?? []).filter(
+    const firstCall = (branchReplies.calls[0]?.context.messages ?? []).filter(
       (message) => !isStatusMessage(message)
     );
     assert.equal(firstCall.length, 1, "分支初始消息只到分叉点（任务消息）");
@@ -227,7 +240,8 @@ test("分叉续跑：来源先记分叉条目，从分叉点前最近的快照�
       ["assistant", "toolResult", "assistant"],
       "分支自己的消息（改文件、工具结果、收尾回复）全部写进分支文件"
     );
-    assert.equal(existsSync(join(dir, ".pigeon", "trees")), false);
+    // 决策 494：退出不删工作树，分叉出来的树留着（收尾交给 /worktrees clean）
+    assert.equal(existsSync(join(dir, ".pigeon", "trees")), true);
   } finally {
     cleanup();
   }
@@ -337,7 +351,7 @@ test("冷会话被另一进程持有：来源分叉条目写不成，在建工�
       worktreesBefore,
       "没有建任何工作树"
     );
-    assert.equal(existsSync(join(dir, ".pigeon", "state", "worktrees")), false);
+    assert.equal(existsSync(worktreesDirOf(dir)), false);
     assert.equal(readFileSync(sourcePath, "utf8"), sourceBefore, "来源会话文件原样不动");
     assert.equal(listSessionFiles(sessionsDir).length, 1, "不建分支会话文件");
     assert.ok(existsSync(sessionFileLockPath(sourcePath)), "持有进程的锁没有被误删");

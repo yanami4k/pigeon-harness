@@ -32,10 +32,24 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     whileRunning: { allow: true },
     scope: "session",
   },
-  // 决策 488：开一个新会话，当前会话还在干活时退到面板接着跑；工作区跟当前会话所在的项目
+  // 决策 496：原地换一段新对话（工作目录不变）；当前会话还在干活时退到面板接着跑
+  {
+    name: "clear",
+    usage: "/clear",
+    whileRunning: { allow: true },
+    scope: "session",
+  },
+  // 决策 496：在 path 开新会话（不给即项目根），等同在那里启动 pigeon；当前会话还在干活时退到面板接着跑
   {
     name: "new",
-    usage: "/new",
+    usage: "/new [path]",
+    whileRunning: { allow: true },
+    scope: "session",
+  },
+  // 决策 491、495：只读列出这个会话的标识、项目与工作目录、记录与设置、审批模式、用量、git、沙箱与子 agent
+  {
+    name: "status",
+    usage: "/status",
     whileRunning: { allow: true },
     scope: "session",
   },
@@ -65,7 +79,7 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   },
   {
     name: "take",
-    usage: "/take <session>",
+    usage: "/take [session ID]",
     whileRunning: { allow: false },
     scope: "session",
   },
@@ -106,7 +120,7 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   // 决策 448：列出只读；删除只动留下的工作树（在用的不删），不碰主会话与主工作目录，运行中可用
   {
     name: "worktrees",
-    usage: "/worktrees [clean [N...] [--all] | confirm]",
+    usage: "/worktrees [clean [N...] [--all]]",
     whileRunning: { allow: true },
     scope: "global",
   },

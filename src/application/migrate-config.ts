@@ -16,17 +16,7 @@
 //      配置示例（分步配置按各步命令以 && 连接）。
 // 有锁被存活进程占用（会话正开着、worker 正在运行）或工作树被锁定时拒绝并说明。可重复执行：没有要做的事即如实说明。
 
-import { execFileSync } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  realpathSync,
-  renameSync,
-  rmdirSync,
-  statSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { writeFileAtomic } from "../persistence/atomic-write.ts";
@@ -53,15 +43,12 @@ import {
   projectSettingsPath,
   SETTINGS_FILE,
   STATE_DIR,
-  sessionsDirOf,
   userAgentsMdPath,
   userPreferencesPath,
   verifyConfigPathOf,
-  worktreesDirOf,
 } from "../state/paths.ts";
 import { type SettingsLayer, validateSettingsLayer } from "../state/settings.ts";
 import { WEB_KEY_FIELDS } from "../state/web-config.ts";
-import { hardenedGitArgs } from "../tools/git-hardening.ts";
 
 export const MIGRATE_CONFIG_USAGE = "usage: pigeon migrate-config [--root <project root>]";
 
@@ -378,7 +365,8 @@ function liveLocksUnder(target: string): string[] {
   return found;
 }
 
-const MOVED_STATE = LEGACY_STATE_ENTRIES.filter((entry) => entry.name !== "worktrees");
+// 决策 494：工作树不再有迁移这一步（旧的 .pigeon/worktrees 与 .pigeon/state/worktrees 一概不认）
+const MOVED_STATE = LEGACY_STATE_ENTRIES;
 
 export const legacyStateStep: MigrationStep = {
   id: "legacy-state",
@@ -490,117 +478,7 @@ export const userPreferencesStep: MigrationStep = {
   },
 };
 
-interface WorktreeInfo {
-  path: string;
-  locked: boolean;
-}
-
-function gitWorktrees(root: string): WorktreeInfo[] {
-  let out: string;
-  try {
-    out = execFileSync("git", [...hardenedGitArgs(root), "worktree", "list", "--porcelain"], {
-      cwd: root,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  } catch {
-    return [];
-  }
-  const list: WorktreeInfo[] = [];
-  for (const block of out.split(/\n\n/)) {
-    const lines = block.split("\n");
-    const head = lines.find((line) => line.startsWith("worktree "));
-    if (head === undefined) continue;
-    list.push({
-      path: head.slice("worktree ".length),
-      locked: lines.some((line) => line === "locked" || line.startsWith("locked ")),
-    });
-  }
-  return list;
-}
-
-function realOrSelf(target: string): string {
-  try {
-    return realpathSync(target);
-  } catch {
-    return path.resolve(target);
-  }
-}
-
-function legacyWorktreeDirs(root: string): string[] {
-  const dir = legacyStatePath(root, "worktrees");
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => path.join(dir, entry.name));
-}
-
-export const legacyWorktreesStep: MigrationStep = {
-  id: "legacy-worktrees",
-  title: `move worker worktrees into ${pigeonRel(STATE_DIR, "worktrees")}`,
-  plan(ctx) {
-    const legacyDir = legacyStatePath(ctx.root, "worktrees");
-    if (!existsSync(legacyDir)) return { todo: [], blockers: [] };
-    const todo: string[] = [];
-    const blockers: string[] = [];
-    const known = new Map(gitWorktrees(ctx.root).map((tree) => [realOrSelf(tree.path), tree]));
-    for (const dir of legacyWorktreeDirs(ctx.root)) {
-      const target = path.join(worktreesDirOf(ctx.root), path.basename(dir));
-      if (existsSync(target)) {
-        blockers.push(
-          `worktree target exists: ${path.relative(ctx.root, target)}; not overwritten`
-        );
-        continue;
-      }
-      const tree = known.get(realOrSelf(dir));
-      if (tree?.locked === true) {
-        blockers.push(`worktree is locked (git worktree lock): ${dir}`);
-        continue;
-      }
-      todo.push(
-        `${path.relative(ctx.root, dir)} → ${path.relative(ctx.root, target)} (${tree !== undefined ? "git worktree move" : "not a registered worktree; plain move"})`
-      );
-    }
-    // worker 正在运行：它的会话锁在旧会话目录或新会话目录里
-    for (const lock of [
-      ...liveLocksUnder(legacyStatePath(ctx.root, "sessions")),
-      ...liveLocksUnder(sessionsDirOf(ctx.root)),
-    ]) {
-      blockers.push(`a Pigeon session or worker is running (lock held: ${lock})`);
-    }
-    if (todo.length === 0 && blockers.length === 0) {
-      todo.push(`remove empty directory ${pigeonRel("worktrees")}`);
-    }
-    return { todo, blockers };
-  },
-  apply(ctx) {
-    const lines: string[] = [];
-    const known = new Map(gitWorktrees(ctx.root).map((tree) => [realOrSelf(tree.path), tree]));
-    for (const dir of legacyWorktreeDirs(ctx.root)) {
-      const target = path.join(worktreesDirOf(ctx.root), path.basename(dir));
-      mkdirSync(path.dirname(target), { recursive: true });
-      ensureProjectStateDir(ctx.root, (line) => lines.push(line));
-      if (known.has(realOrSelf(dir))) {
-        execFileSync("git", [...hardenedGitArgs(ctx.root), "worktree", "move", dir, target], {
-          cwd: ctx.root,
-          stdio: ["ignore", "pipe", "pipe"],
-        });
-        lines.push(
-          `moved ${path.relative(ctx.root, dir)} → ${path.relative(ctx.root, target)} (git worktree move)`
-        );
-      } else {
-        renameSync(dir, target);
-        lines.push(`moved ${path.relative(ctx.root, dir)} → ${path.relative(ctx.root, target)}`);
-      }
-    }
-    const legacyDir = legacyStatePath(ctx.root, "worktrees");
-    if (existsSync(legacyDir) && readdirSync(legacyDir).length === 0) {
-      rmdirSync(legacyDir);
-      lines.push(`removed empty directory ${pigeonRel("worktrees")}`);
-    }
-    return lines;
-  },
-};
+// 决策 494：工作树不再迁移（旧位置的树一概不认），这一步随之删除
 
 // ---- ⑥ 退役的 verify.json（决策 322 / 325）----
 
@@ -699,7 +577,6 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
   legacyStateStep,
   obsoleteMemoryStep,
   userPreferencesStep,
-  legacyWorktreesStep,
   verifyJsonStep,
 ];
 

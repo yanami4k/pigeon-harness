@@ -3,7 +3,6 @@
 // - 只给有人对话的入口（终端界面主会话含沙箱会话）；pigeon run、worker 与跑批器只推送、不注册（331）。
 // - 写入不审批（331），写入后经 onWritten 交给入口在消息区显示一行（记下的内容与层级）。
 // - agent 只写内容；编号、日期、来源（入口的英文短名）与会话编号由工具补在行尾（332、431）。内容完全相同即不新增。
-// - 决策 431：锁内现读时遇到旧格式的记忆文件，先一次性迁移（备份、改写）再写；迁移出错即照常抛出，不在没有备份时覆盖旧文件。
 // - 写满判定在锁内：拿到锁后现读现判。新增被拒与替换被拒分开写（328）：新增写当前用量、该条字数与还差多少；替换写被替换
 //   条目现有字数、新内容字数、替换后总数与超出多少；两种都附现有条目编号与各条字数。替换后不比替换前长（改短或等长）时
 //   一律放行，即使该层已超上限（人手改出来的）。
@@ -32,12 +31,12 @@ import {
   availableMemoryLayers,
   type MemoryLocation,
   memoryLocation,
+  readMemoryFile,
   readMemoryMaxId,
   withMemoryLock,
   writeMemoryFile,
   writeMemoryMaxId,
 } from "./learned-store.ts";
-import { migrateMemoryFileLocked } from "./memory-migration.ts";
 
 export const UPDATE_MEMORY_TOOL = "update_memory";
 
@@ -263,8 +262,7 @@ export async function applyMemoryUpdate(
   const result = await withMemoryLock(
     location.lock,
     () => {
-      // 决策 431：旧格式先在锁内一次性迁移（备份、改写），之后按新格式读
-      const current = migrateMemoryFileLocked(location);
+      const current = readMemoryFile(location.file);
       const parsed = parseMemory(current.text, layer);
       if (!parsed.ok) {
         return reply(UPDATE_MEMORY_TEXTS.broken(location.display, parsed.line, layer), {

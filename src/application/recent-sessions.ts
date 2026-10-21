@@ -34,8 +34,8 @@ const FIRST_INPUT_CHARS = 60;
 
 function firstInputOf(view: SessionView): string {
   for (const message of view.messages) {
-    // 决策 363：开工状态块（按消息上的标记认）不是人输入的话；程序送进对话的通知与附注同样不算，/orchestrate 发起的取人敲的
-    // 命令（同回看历史，见 history.ts 的 userTextParts）
+    // 决策 363：开工状态块（按消息上的标记认）不是人输入的话；程序送进对话的通知与附注同样不算（同回看历史，见 history.ts
+    // 的 userTextParts）
     if (message.role !== "user" || isStatusMessage(message.raw)) continue;
     // 决策 480：agent 之间的传话（按消息上的标记认）不是人输入的话
     if (agentMessageMarkOf(message.raw) !== undefined) continue;

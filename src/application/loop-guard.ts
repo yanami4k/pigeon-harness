@@ -7,9 +7,6 @@ import type { LoopGuardSettings } from "../state/loop-guard-config.ts";
 import { summarizeArgs } from "./format.ts";
 
 export const LOOP_REMINDER_PREFIX = "[Loop reminder] ";
-// 决策 428 之前的说法：回看旧会话时据此认出程序通知
-// 旧会话里的中文原文，只用来认出旧记录
-export const LEGACY_LOOP_REMINDER_PREFIX = "[打转提醒] ";
 
 // 结果摘要取前几行，每行至多多少字符
 const RESULT_HEAD_LINES = 3;
@@ -103,7 +100,7 @@ export function attachLoopGuard(
   target: LoopGuardTarget,
   settings: LoopGuardSettings | undefined,
   onStop: (stop: LoopStop) => void,
-  // 提醒递出时另交一份原文（终端界面据此在消息区显示成系统消息，同 worker 通知的样式）
+  // 提醒递出时另交一份原文（终端界面据此在消息区显示成系统消息，同后台作业通知的样式）
   onReminder?: (text: string) => void
 ): () => void {
   if (settings === undefined || !settings.enabled) {

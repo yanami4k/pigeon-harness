@@ -1,6 +1,5 @@
 // worker 工作树管理（M5.5 S1，决策 040）：隔离工作区第一版为 git 工作树。
-// 目录 <治理根>/.pigeon/state/worktrees/<sessionId>-<name>（带会话编号：两个窗口的同名 worker 不撞目录），
-// 分支 pigeon/<会话号后 8 位>-<name>（决策 447：与目录同一规则，跨会话不撞名）。git 经参数数组直接调用，不经 shell；
+// 目录 <治理根>/.pigeon/trees/<name>（决策 494：工作树只有一种形状），分支 pigeon/<名字>。git 经参数数组直接调用，不经 shell；
 // 名字先按白名单校验再进参数，杜绝被当成选项或路径穿越。合并由人用 git 完成，本模块不合并。
 // 决策 449：建好后把项目根 .worktreeinclude 列出、又被 git 忽略的文件从来源工作目录复制进去。
 import { execFileSync } from "node:child_process";
@@ -25,8 +24,9 @@ import { insideGitMetadata } from "../tools/paths.ts";
 
 export class WorktreeError extends Error {}
 
-// worker 名：小写字母数字开头，小写字母数字与连字符，最长 40
-const WORKER_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
+// 决策 494：工作树名（也是分支 pigeon/<名字> 的后半段与起点引用的名字）：小写字母数字开头，小写字母数字、下划线与连字符，
+// 最长 64（与 named-worktree.ts 的名字规则同一条）
+const WORKER_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 export interface WorktreeHandle {
   name: string;
@@ -45,33 +45,20 @@ export interface WorktreeEntry {
 export function assertWorkerName(name: string): void {
   if (!WORKER_NAME.test(name)) {
     throw new WorktreeError(
-      `Invalid worker name: ${JSON.stringify(name)} (it must start with a lowercase letter or digit, contain only lowercase letters, digits, and hyphens, and be at most 40 characters)`
+      `Invalid worktree name: ${JSON.stringify(name)} (it must start with a lowercase letter or digit, contain only lowercase letters, digits, underscores and hyphens, and be at most 64 characters)`
     );
   }
 }
 
-export function worktreePathFor(
-  governanceRoot: string,
-  sessionId: SessionId,
-  name: string
-): string {
-  return join(worktreesDirOf(governanceRoot), `${sessionId}-${name}`);
+// 决策 494：工作树目录一棵一个名字，不再带会话号前缀（撞名由调用方挑一个可用名字）
+export function worktreePathFor(governanceRoot: string, name: string): string {
+  return join(worktreesDirOf(governanceRoot), name);
 }
 
 export const WORKER_BRANCH_PREFIX = "pigeon/";
 
-// 分支名去掉 pigeon/ 之后的部分：<会话号后 8 位>-<名字>；旧分支（决策 447 之前）只有 <名字>
-const BRANCH_TAIL = /^[a-z0-9][a-z0-9-]{0,48}$/;
-
-// 决策 447：<会话号后 8 位，小写>-<名字>。会话号后 8 位是 ULID 的随机部分，各次派出不同
-export function branchTailFor(sessionId: SessionId, name: string): string {
-  assertWorkerName(name);
-  return `${sessionId.slice(-8).toLowerCase()}-${name}`;
-}
-
-export function worktreeBranchFor(sessionId: SessionId, name: string): string {
-  return `${WORKER_BRANCH_PREFIX}${branchTailFor(sessionId, name)}`;
-}
+// 分支名去掉 pigeon/ 之后的部分：就是工作树名（决策 494）
+const BRANCH_TAIL = WORKER_NAME;
 
 function assertBranchTail(tail: string): void {
   if (!BRANCH_TAIL.test(tail)) {
@@ -79,11 +66,10 @@ function assertBranchTail(tail: string): void {
   }
 }
 
-// 决策 279、480：工作树起点快照的引用（以前 worker 的、现在子 agent 临时工作树的；快照提交挂在这里防止被 git 回收；与分支
-// 同名、随分支一并删除）。引用的目录名沿用 worker-start，旧的照样认得、删得掉
+// 决策 279、480：子 agent 临时工作树起点快照的引用（快照提交挂在这里防止被 git 回收；与分支同名、随分支一并删除）
 export const WORKTREE_START_REF_PREFIX = "refs/pigeon/worker-start/";
 
-// tail 为分支名去掉 pigeon/ 的部分（branchTailFor 给出；旧分支即 worker 名）
+// tail 为分支名去掉 pigeon/ 的部分，即工作树名
 export function worktreeStartRefFor(tail: string): string {
   assertBranchTail(tail);
   return `${WORKTREE_START_REF_PREFIX}${tail}`;
@@ -101,14 +87,13 @@ function assertExplicitBranch(branch: string): void {
 export interface AddWorktreeInput {
   // 主仓库根：工作树与分支建在它上面
   repoRoot: string;
-  // M6.5 S2（决策 057）：工作树目录所在的治理根（放在其 .pigeon/state/worktrees 下）；缺省同仓库根（主会话派 worker）。
-  // Eval 的治理根是输出目录，与仓库根分开
+  // M6.5 S2（决策 057）：工作树目录所在的治理根（放在其 .pigeon/trees 下）；缺省同仓库根
   governanceRoot?: string;
   sessionId: SessionId;
   name: string;
   // 起点提交；缺省 HEAD
   baseRef?: string;
-  // 分支名；缺省 worktreeBranchFor(sessionId, name)（/fork 给自己的 pigeon/fork-<会话号后 8 位>）
+  // 分支名；缺省 pigeon/<名字>（/fork 也一样，见 494）
   branch?: string;
   // 决策 449：.worktreeinclude 的来源工作目录；缺省仓库根
   includeSource?: string;
@@ -120,13 +105,13 @@ export function addWorktree(input: AddWorktreeInput): WorktreeHandle {
   if (baseRef.startsWith("-")) {
     throw new WorktreeError(`invalid base commit: ${baseRef}`);
   }
-  const path = worktreePathFor(input.governanceRoot ?? input.repoRoot, input.sessionId, input.name);
+  const path = worktreePathFor(input.governanceRoot ?? input.repoRoot, input.name);
   let branch: string;
   if (input.branch !== undefined) {
     assertExplicitBranch(input.branch);
     branch = input.branch;
   } else {
-    branch = worktreeBranchFor(input.sessionId, input.name);
+    branch = `${WORKER_BRANCH_PREFIX}${input.name}`;
   }
   createWorktreeAt({
     repoRoot: input.repoRoot,
@@ -135,6 +120,13 @@ export function addWorktree(input: AddWorktreeInput): WorktreeHandle {
     baseRef,
     includeSource: input.includeSource ?? input.repoRoot,
   });
+  // 决策 494：起点记进仓库配置（与独立工作树同一个键），清理时据此判断有没有未取走的改动
+  try {
+    const commit = resolveCommit(input.repoRoot, baseRef) ?? baseRef;
+    runGit(input.repoRoot, ["config", "--local", `branch.${branch}.pigeonBase`, commit]);
+  } catch {
+    // 记不下就按"不明"处理（缺省清理不删）
+  }
   return { name: input.name, sessionId: input.sessionId, path, branch };
 }
 
@@ -396,20 +388,29 @@ export function removeWorktree(input: { repoRoot: string; path: string; force?: 
   }
 }
 
-// 删除 worker 分支（M6.5 S2：Eval 每次运行收尾清理工作树与分支）；只接受 pigeon/<会话号后 8 位>-<名字> 与旧的 pigeon/<名字>。
-// 决策 279：起点快照的引用随分支一并删除（引用不存在也算删掉）
+// 删除工作树分支 pigeon/<名字>（M6.5 S2：Eval 每次运行收尾清理工作树与分支）。决策 279、483、486：与它同名的起点快照引用、
+// 完整取回后前移的起点（面板会话的 panel/<名字>、子 agent 的 agent/<名字>）随分支一并删除（引用不存在也算删掉）。
+// 面板会话的取回起点只在这里（清理工作树时）删，关会话不删（决策 494）
 export function deleteBranch(input: { repoRoot: string; branch: string }): void {
   const tail = input.branch.startsWith(WORKER_BRANCH_PREFIX)
     ? input.branch.slice(WORKER_BRANCH_PREFIX.length)
     : "";
   assertBranchTail(tail);
   runGit(input.repoRoot, ["branch", "-D", input.branch]);
-  runGit(input.repoRoot, ["update-ref", "-d", worktreeStartRefFor(tail)]);
-  // 决策 486：子 agent 工作树完整取回后前移的起点（refs/pigeon/agent/<tail>）一并删
-  runGit(input.repoRoot, ["update-ref", "-d", `${TAKE_BASE_REF_ROOT}agent/${tail}`]);
+  dropTreeRefs(input.repoRoot, tail);
 }
 
-// 决策 483、486：完整取回后前移的起点挂在这下面（panel/<工作树名>、agent/<分支名去掉 pigeon/>），删分支时一并删
+// 与工作树同名的起点引用与取回起点（worker-start/、agent/、panel/ 下）一并删（不存在也算删掉）。删树时删；新建同名的树之前
+// 也先删——上一棵同名的树被人手删（git worktree remove、git branch -D）时它们会留下，新树不能接手别人的起点
+export function dropTreeRefs(repoRoot: string, name: string): void {
+  assertBranchTail(name);
+  runGit(repoRoot, ["update-ref", "-d", worktreeStartRefFor(name)]);
+  for (const scope of ["agent", "panel"]) {
+    runGit(repoRoot, ["update-ref", "-d", `${TAKE_BASE_REF_ROOT}${scope}/${name}`]);
+  }
+}
+
+// 决策 483、486：完整取回后前移的起点挂在这下面（panel/<工作树名>、agent/<工作树名>），删分支时一并删
 const TAKE_BASE_REF_ROOT = "refs/pigeon/";
 
 // 决策 448：删一个工作树连同它的分支。目录在不在都按登记删（目录已被手删的只删登记），不跟随链接；分支已不在不算失败；
@@ -424,21 +425,18 @@ export function removeWorktreeAndBranch(input: {
   }
   const branch = input.branch;
   if (branch === undefined || branch.startsWith("-")) return;
-  if (resolveCommit(input.repoRoot, `refs/heads/${branch}`) === undefined) return;
   const tail = branch.startsWith(WORKER_BRANCH_PREFIX)
     ? branch.slice(WORKER_BRANCH_PREFIX.length)
     : "";
+  // 分支已不在：同名的引用照样清掉
+  if (resolveCommit(input.repoRoot, `refs/heads/${branch}`) === undefined) {
+    if (BRANCH_TAIL.test(tail)) dropTreeRefs(input.repoRoot, tail);
+    return;
+  }
   if (BRANCH_TAIL.test(tail)) {
     deleteBranch({ repoRoot: input.repoRoot, branch });
   } else {
     runGit(input.repoRoot, ["branch", "-D", branch]);
-    // 面板会话的独立工作树（pigeon-wt/<名字>）：取回起点引用一并删
-    if (branch.startsWith("pigeon-wt/")) {
-      const name = branch.slice("pigeon-wt/".length);
-      if (BRANCH_TAIL.test(name)) {
-        runGit(input.repoRoot, ["update-ref", "-d", `${TAKE_BASE_REF_ROOT}panel/${name}`]);
-      }
-    }
   }
 }
 

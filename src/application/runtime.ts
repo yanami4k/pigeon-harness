@@ -210,7 +210,6 @@ import {
 import {
   escapeStatusText,
   STATUS_AUTHORITY_SENTENCE,
-  STATUS_AUTHORITY_SENTENCE_ZH,
   type StatusHashes,
   type StatusSectionName,
   type StatusState,
@@ -242,7 +241,7 @@ import {
 } from "./tool-environment.ts";
 import { toolExecutionModeOf } from "./tool-execution-modes.ts";
 import { budgetRemainingMs, budgetStatus, type WallClockBudget } from "./wall-clock-status.ts";
-import { onceEachLine, stderrWarn, type WarnSink } from "./warnings.ts";
+import { stderrWarn, type WarnSink } from "./warnings.ts";
 import { createModelDistiller, type WebToolsConfig } from "./web-tools.ts";
 
 export interface RuntimeDeps {
@@ -801,9 +800,6 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
   // 决策 331：只有带写入配置的会话注册记忆工具（写档、只写两层记忆文件、免审批）；子 agent 只推送
   const memoryLimits = learned?.limits ?? memoryLimitsOf(settings);
   const memoryWrite = learned?.write;
-  // 决策 431：推送记忆读到旧格式文件时一次性迁移，迁移的结果与没能落盘的告警走运行期告警的出口；同一行本运行面只说一次
-  // （没能落盘时每个 Run 开始都会重试）
-  const memoryReport = onceEachLine(deps.storeWarn ?? stderrWarn);
   if (memoryWrite !== undefined) {
     registry.register(
       updateMemoryRegistration({
@@ -882,7 +878,6 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
           limits: memoryLimits,
           writable: memoryWrite !== undefined,
           ...(learned.layers !== undefined ? { layers: learned.layers } : {}),
-          report: memoryReport,
         }))
       : undefined;
   // 决策 480：子 agent 的工具范围在场时提示只介绍范围里的工具；缺省工具一律在场，提示不变
@@ -1010,7 +1005,6 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
           limits: memoryLimits,
           writable: memoryWrite !== undefined,
           ...(learned.layers !== undefined ? { layers: learned.layers } : {}),
-          report: memoryReport,
         }).section
       : "";
   // 决策 473：开工状态块重读 git 状态时（Run 开始、写档与命令档工具之后）顺带记下分支，变了才记一条（分离头指针记短提交号；
@@ -1111,9 +1105,7 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
   // 状态变化通道：首次与压缩之后给完整块，其余只给变了的节；起点见 statusSent。沿用的是旧会话的系统提示（没有权威层级
   // 说明，还带"开局冻结"的旧说法）时，首次的完整块开头另加一句以本状态块为准
   const statusTracker = new StatusTracker(deps.statusSent, {
-    legacyNote:
-      !systemPrompt.includes(STATUS_AUTHORITY_SENTENCE) &&
-      !systemPrompt.includes(STATUS_AUTHORITY_SENTENCE_ZH),
+    legacyNote: !systemPrompt.includes(STATUS_AUTHORITY_SENTENCE),
   });
   // 每次发出（状态消息进了会话记录）与记成已发都把当时的各节哈希记进会话记录，续跑与分叉从记录取
   const recordStatus = (hashes: StatusHashes | undefined) => {

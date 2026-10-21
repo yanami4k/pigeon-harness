@@ -19,9 +19,9 @@ export const STATE_DIR = "state";
 // 设置文件名
 export const SETTINGS_FILE = "settings.json";
 export const LOCAL_SETTINGS_FILE = "settings.local.json";
-// 决策 445（暂定改名，待确认）：独立工作树所在目录名（相对 .pigeon）。不用 worktrees——那是决策 325 之前 worker 工作树的旧位置，
-// 旧布局检查与迁移命令按"目录在即旧布局"处理它
-export const NAMED_WORKTREES_DIR = "wt";
+// 决策 494：工作树统一放在 .pigeon/trees/ 下（不再分保留型与随会话型，也没有 kind）。不用 worktrees——那是决策 325 之前
+// worker 工作树的旧位置，旧布局检查按"目录在即旧布局"处理它；旧位置留下的树一概不认
+export const WORKTREES_DIR = "trees";
 
 // 决策 444、445：写进使用者全局 git 排除文件的规则，与各自探测是否已被忽略的路径（相对治理根，正斜杠）
 export const GLOBAL_IGNORE_ENTRIES: readonly { rule: string; probe: string }[] = [
@@ -31,8 +31,8 @@ export const GLOBAL_IGNORE_ENTRIES: readonly { rule: string; probe: string }[] =
     probe: `${PIGEON_DIR}/${LOCAL_SETTINGS_FILE}`,
   },
   {
-    rule: `**/${PIGEON_DIR}/${NAMED_WORKTREES_DIR}/`,
-    probe: `${PIGEON_DIR}/${NAMED_WORKTREES_DIR}/probe`,
+    rule: `**/${PIGEON_DIR}/${WORKTREES_DIR}/`,
+    probe: `${PIGEON_DIR}/${WORKTREES_DIR}/probe`,
   },
 ];
 
@@ -122,13 +122,9 @@ export function learnedLockPathOf(root: string): string {
   return path.join(projectStateDir(root), "learned.lock");
 }
 
+// 决策 494：工作树目录（pigeon --worktree、enter_worktree、面板会话、/fork 都在这里）
 export function worktreesDirOf(root: string): string {
-  return path.join(projectStateDir(root), "worktrees");
-}
-
-// 决策 445：独立工作树（pigeon --worktree、enter_worktree）放在项目的 .pigeon/wt/ 下（暂定名），与 worker 的分开
-export function namedWorktreesDirOf(root: string): string {
-  return path.join(root, PIGEON_DIR, NAMED_WORKTREES_DIR);
+  return path.join(root, PIGEON_DIR, WORKTREES_DIR);
 }
 
 // 旧的补做复盘记录（决策 331 删除补做；迁移命令挪出仓库进用户级备份）
@@ -196,8 +192,8 @@ export function isUnderPigeonDir(relativePosixPath: string): boolean {
 export const PROGRAM_OWNED_PATHS: readonly string[] = [
   pigeonRel(STATE_DIR),
   pigeonRel(LOCAL_SETTINGS_FILE),
-  // 决策 445：独立工作树（全局排除失效时也不被主检出的快照当内嵌仓库收进去）
-  pigeonRel(NAMED_WORKTREES_DIR),
+  // 决策 494：工作树目录（全局排除失效时也不被主检出的快照当内嵌仓库收进去）
+  pigeonRel(WORKTREES_DIR),
 ];
 
 export function isProgramOwnedPath(relativePosixPath: string): boolean {
@@ -229,12 +225,6 @@ export function migrationBackupDirOf(normalizedRoot: string, homeDir: string = h
     "migration-backup",
     `${name}-${sha256Hex(normalizedRoot).slice(0, 12)}`
   );
-}
-
-// 不属于某个项目的用户级文件的迁移备份（决策 431：用户级学到的记忆的一次性迁移）：同一目录下的 user/。
-// 项目的目录名总带"-哈希"后缀，与它不相撞
-export function userMigrationBackupDirOf(homeDir: string = homedir()): string {
-  return path.join(userStateDir(homeDir), "migration-backup", "user");
 }
 
 // 决策 485：用户级的会话工作清单（进过会话面板的会话，跨工作区、跨重启）
@@ -298,7 +288,7 @@ export function legacyConfigPath(root: string, file: string): string {
 // 旧学到的记忆与补做复盘记录不在此列：决策 331、341 起由迁移命令直接挪出仓库进用户级备份
 export const LEGACY_STATE_ENTRIES = [
   { name: "sessions", target: (root: string) => sessionsDirOf(root) },
-  { name: "worktrees", target: (root: string) => worktreesDirOf(root) },
+
   { name: "tui-history.json", target: (root: string) => promptHistoryPathOf(root) },
   // 终端界面日志（文件名由终端界面库给出）
   { name: "pi-debug.log", target: (root: string) => path.join(tuiLogDirOf(root), "pi-debug.log") },
@@ -307,14 +297,4 @@ export const LEGACY_STATE_ENTRIES = [
 
 export function legacyStatePath(root: string, name: string): string {
   return path.join(root, PIGEON_DIR, name);
-}
-
-// 旧会话里记着的 worker 工作树绝对路径：旧前缀 <根>/.pigeon/worktrees/ 映射到 <根>/.pigeon/state/worktrees/。
-// 启动时已拒绝旧布局（须先迁移），故旧前缀下的路径一律按新位置读取；不在旧前缀下的原样返回
-export function mapLegacyWorktreePath(governanceRoot: string, recorded: string): string {
-  const legacyPrefix = path.join(governanceRoot, PIGEON_DIR, "worktrees") + path.sep;
-  if (!recorded.startsWith(legacyPrefix)) {
-    return recorded;
-  }
-  return path.join(worktreesDirOf(governanceRoot), recorded.slice(legacyPrefix.length));
 }

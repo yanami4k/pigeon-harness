@@ -41,11 +41,12 @@ export function spawnAgentDescription(catalog: AgentTypeCatalog): string {
 }
 
 export const SEND_MESSAGE_DESCRIPTION =
-  "Send a message to another agent in this process by name: a sub-agent you started (to give it more instructions, or to continue it after it finished), the agent that started you, or another session's agent. " +
+  "Send a message to another agent in this process: a sub-agent you started (to give it more instructions, or to continue it after it finished), the agent that started you, or another session's agent. " +
+  "Address a sub-agent by its name and a session by its full session ID (list_agents shows both). " +
   "A running agent gets the message when its current turn ends; a sub-agent that has stopped starts working again. Replies come back as messages.";
 
 export const LIST_AGENTS_DESCRIPTION =
-  "List the agents in this process: sessions and sub-agents, with each sub-agent's type, state and the agent that started it.";
+  "List the agents in this process: sessions with their full session IDs, and sub-agents with each one's type, state and the agent that started it.";
 
 export const STOP_AGENT_DESCRIPTION =
   "Stop a running sub-agent you started (its own sub-agents stop too). It can be continued later with send_message.";
@@ -54,11 +55,12 @@ export const TAKE_CHANGES_DESCRIPTION =
   "Bring the changes a sub-agent you started made in its worktree into your own working directory: everything changed since it started (committed or not, new files included) is merged file by file. " +
   "Files that can't be merged cleanly are left in its worktree and listed; files it deleted are listed, not deleted here. " +
   "Call it after the sub-agent has finished; calling it again later takes only what changed since. " +
-  "A session's main agent can also take a session from the session panel in the same repository by its name.";
+  "A session's main agent can also take a session from the session panel in the same repository by its full session ID (see list_agents).";
 
 export const TakeChangesParamsSchema = Type.Object({
-  name: Type.String({
-    description: "The name of the sub-agent (or panel session) to take changes from",
+  target: Type.String({
+    description:
+      "The name of the sub-agent, or the full session ID of a session in the session panel, to take changes from",
   }),
 });
 
@@ -92,7 +94,9 @@ export const SpawnAgentParamsSchema = Type.Object({
 });
 
 export const SendMessageParamsSchema = Type.Object({
-  to: Type.String({ description: "The name of the agent to send to" }),
+  to: Type.String({
+    description: "The sub-agent's name, or the session's full session ID, to send to",
+  }),
   message: Type.String({ description: "The message" }),
 });
 
@@ -111,7 +115,7 @@ export function renderAgentList(items: readonly AgentListing[]): string {
   return items
     .map((item) =>
       item.kind === "session"
-        ? `${item.name}: session`
+        ? `${item.name}: session ${item.sessionId ?? "(unknown ID)"}`
         : `${item.name}: ${item.type ?? "agent"}, ${item.state ?? "unknown"}, started by ${item.parent ?? "unknown"}`
     )
     .join("\n");
@@ -188,7 +192,7 @@ export function createAgentTools(host: AgentToolsHost): PigeonAgentTool<TSchema,
     parameters: TakeChangesParamsSchema,
     executionMode: "sequential",
     async execute(_id, params) {
-      return result(host.take(params.name));
+      return result(host.take(params.target));
     },
   };
   tools.push(

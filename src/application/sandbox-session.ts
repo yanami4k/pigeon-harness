@@ -39,6 +39,9 @@ export const SANDBOX_FORK_UNSUPPORTED = "/fork not available in the sandbox";
 export const SANDBOX_TAKE_UNSUPPORTED = "/take not available in the sandbox";
 export const SANDBOX_RESUME_UNSUPPORTED =
   "/resume not available in the sandbox; use pigeon --sandbox --resume <session ID>";
+// 决策 496：沙箱里没有会话面板，旧会话无处可去（同 /resume）
+export const SANDBOX_NEW_UNSUPPORTED = "/new not available in the sandbox";
+export const SANDBOX_CLEAR_UNSUPPORTED = "/clear not available in the sandbox";
 
 // 测试注入：docker 调用前缀、镜像来源、容器内工作区根与缓存卷
 export type SandboxOverrides = Pick<

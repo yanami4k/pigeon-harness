@@ -1,18 +1,10 @@
 // 记忆工具 update_memory（决策 328、329、331、332、428）：说明、参数与返回文字为记忆文字 v5；两层各自增、按编号替换与删除；
 // 编号、日期、来源与会话编号由工具补在行内；新增被拒与替换被拒分开写、数字准确；替换后不比替换前长即放行；写满判定在锁内；
 // 人改坏格式时拒写并指出行号；写入后经 onWritten 交出一行提示；等锁超时按固定文字回话；两个进程同时写同一层，条目不丢不重。
-// 决策 431：尾巴为英文 (recorded 日期 · 来源短名 · session 会话号)，内容里的括号原样；锁内读到旧格式先迁移再写。
+// 决策 431：尾巴为英文 (recorded 日期 · 来源短名 · session 会话号)，内容里的括号原样。
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "vitest";
@@ -410,46 +402,6 @@ test("内容本身以形如尾巴的文字结尾：工具照常补真尾巴，�
     ]);
     // 同样的内容再加一次：按内容判重
     assert.equal((await fx.call({ action: "add", content })).details.rejected, "duplicate");
-  }));
-
-// 决策 431 之前的旧格式
-const LEGACY_PROJECT =
-  "# 学到的记忆（本项目）\n" +
-  "<!-- 由 Pigeon 的 update_memory 维护，也可以用终端界面的 /memory edit project 修改。一行一条：编号、内容，〔〕里是记下的日期、来源与会话编号。 -->\n" +
-  "\n" +
-  "- [P1] 甲 〔2026-09-30 · 命令行对话 · 会话 sess_OLD〕\n" +
-  "- [P2] 人手加的\n";
-
-test("锁内读到旧格式（推送时没能迁移）：先备份、整份改写成新格式，再照常写入；之后不再备份", () =>
-  withFixture(async (fx) => {
-    const location = memoryLocation("project", { governanceRoot: fx.root, homeDir: fx.home });
-    mkdirSync(dirname(location.file), { recursive: true });
-    writeFileSync(location.file, LEGACY_PROJECT);
-    await fx.call({ action: "add", content: "乙" });
-    assert.equal(
-      fx.read("project"),
-      `${MEMORY_FILE_HEADERS.project}` +
-        "- [P1] 甲 (recorded 2026-09-30 · cli · session sess_OLD)\n" +
-        "- [P2] 人手加的\n" +
-        `- [P3] 乙${ORIGIN}\n`
-    );
-    const backup = join(location.backupDir, "state", "memory.md");
-    assert.equal(readFileSync(backup, "utf8"), LEGACY_PROJECT);
-    await fx.call({ action: "remove", id: "P3" });
-    assert.deepEqual(readdirSync(join(location.backupDir, "state")), ["memory.md"]);
-  }));
-
-test("锁内读到旧格式而备份不成：照常抛出、不写文件（没有备份时不覆盖旧文件）", () =>
-  withFixture(async (fx) => {
-    const location = memoryLocation("project", { governanceRoot: fx.root, homeDir: fx.home });
-    mkdirSync(dirname(location.file), { recursive: true });
-    writeFileSync(location.file, LEGACY_PROJECT);
-    // 备份目录的位置被一个普通文件占着：建不了目录
-    mkdirSync(dirname(location.backupDir), { recursive: true });
-    writeFileSync(location.backupDir, "占位");
-    await assert.rejects(fx.call({ action: "add", content: "乙" }));
-    assert.equal(fx.read("project"), LEGACY_PROJECT);
-    assert.equal(fx.notices.length, 0);
   }));
 
 // 子进程：等开跑文件出现后，向同一项目级记忆连续新增若干条（argv：被测模块、治理根、主目录、标签、条数、开跑文件）

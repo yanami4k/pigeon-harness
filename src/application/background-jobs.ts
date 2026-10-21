@@ -1,5 +1,5 @@
 // 后台作业的应用层接法（决策 365）。作业表本身在 tools/background-jobs.ts，这里接通知、会话记录、收尾与善后：
-// - 结束通知：作业结束经运行面的通知队列告诉模型（与 worker 通知同一条队列）；还没递出时又有作业结束的，撤回重发、合并成
+// - 结束通知：作业结束经运行面的通知队列告诉模型（与打转提醒同一条队列）；还没递出时又有作业结束的，撤回重发、合并成
 //   一条；结束状态已经由 job_output / job_kill 交回的，不再通知（还没递出的撤回）。终端界面里模型空闲时经 wake 叫醒它。
 // - 会话记录：作业启动与结束各写一条（pigeon.background-job）。
 // - 无人值守收尾（headless 与 worker 的运行面）：一次运行结束后还有作业在跑的，先交一条"仍在跑"的通知让模型处理一轮
@@ -51,8 +51,6 @@ export interface DrainTarget<R> {
 }
 
 export const JOB_NOTICE_PREFIX = "[Background job notice] ";
-// 决策 428 之前的中文原文，只用来认出旧会话里的通知（回看历史、回退）
-export const LEGACY_JOB_NOTICE_PREFIX = "[后台作业通知] ";
 // 通知里带的输出末尾
 const NOTICE_TAIL_BYTES = 2048;
 

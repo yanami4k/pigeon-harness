@@ -17,6 +17,7 @@ import {
 } from "../orchestration/checkpoint.ts";
 import { addWorktree, mainRepoRoot } from "../orchestration/worktree.ts";
 import { loadStoreSession, loadStoreSessionFile } from "../persistence/session-view.ts";
+import { holdWorktreeInUse } from "../persistence/worktree-in-use.ts";
 import { type PruneSeed, pruneSeedFromEntries } from "../pi-runtime/context-prune.ts";
 import type { AgentMessage } from "../pi-runtime/index.ts";
 import { sessionContextMessages } from "../pi-runtime/session-store.ts";
@@ -53,6 +54,8 @@ export interface ForkRequest {
   settleCheckpoints?: () => Promise<void>;
   // 分叉点末条是助手消息时必须给新输入
   input?: string;
+  // 在用标记所在的主目录（测试注入；缺省用户主目录）
+  homeDir?: string;
 }
 
 export interface PreparedFork {
@@ -66,6 +69,8 @@ export interface PreparedFork {
   pruneSeed: PruneSeed;
   // 不给新输入，从已有消息续跑
   continueFromHistory: boolean;
+  // 决策 494：分叉工作树的在用标记（建好即持有，/worktrees clean 不删它），续跑完由调用方释放
+  releaseInUse: () => void;
 }
 
 export async function prepareFork(request: ForkRequest): Promise<PreparedFork> {
@@ -154,6 +159,7 @@ export async function prepareFork(request: ForkRequest): Promise<PreparedFork> {
   if (storeFork === undefined) {
     throw new ForkError(`writing the fork entry to session ${sourceSessionId} failed; not forked`);
   }
+  let releaseInUse: () => void = () => {};
   try {
     // c. 独立工作树：从分叉点之前最近的快照开出
     const name = `fork-${branchSessionId.slice(-8).toLowerCase()}`;
@@ -166,6 +172,7 @@ export async function prepareFork(request: ForkRequest): Promise<PreparedFork> {
       branch: `pigeon/${name}`,
       baseRef: checkpoint.commit,
     });
+    releaseInUse = holdWorktreeInUse(worktree.path, request.homeDir);
     const workspace: GitWorktreeWorkspace = {
       kind: "git-worktree",
       path: worktree.path,
@@ -198,7 +205,11 @@ export async function prepareFork(request: ForkRequest): Promise<PreparedFork> {
       statusSent: statusFromEntries(branch.main),
       pruneSeed: pruneSeedFromEntries(branch.main),
       continueFromHistory,
+      releaseInUse,
     };
+  } catch (error) {
+    releaseInUse();
+    throw error;
   } finally {
     await storeFork.release();
   }
@@ -234,6 +245,7 @@ export interface ForkBranchResult {
 export async function runForkBranch(request: ForkBranchRequest): Promise<ForkBranchResult> {
   const { input, ...run } = request.run;
   const prepared = await prepareFork({
+    ...(run.homeDir !== undefined ? { homeDir: run.homeDir } : {}),
     governanceRoot: request.governanceRoot,
     sourceSessionId: request.sourceSessionId,
     ...(request.sourceStore !== undefined ? { sourceStore: request.sourceStore } : {}),
@@ -245,25 +257,32 @@ export async function runForkBranch(request: ForkBranchRequest): Promise<ForkBra
       : {}),
     ...(input !== undefined ? { input } : {}),
   });
-  const result = await runHeadless({
-    ...run,
-    task: input ?? "",
-    governanceRoot: request.governanceRoot,
-    workspaceRoot: prepared.workspace.path,
-    sessionId: prepared.branchSessionId,
-    initialMessages: prepared.initialMessages,
-    ...(prepared.statusSent !== undefined ? { statusSent: prepared.statusSent } : {}),
-    pruneSeed: prepared.pruneSeed,
-    continueFromHistory: prepared.continueFromHistory,
-    branchHeader: {
-      sourceSessionId: request.sourceSessionId,
-      forkPoint: request.forkPoint,
-      checkpoint: prepared.checkpoint,
-      workspace: prepared.workspace,
-      trigger: request.trigger,
-      startedAt: Date.now(),
-    },
-  });
+  // 决策 494：分叉在跑期间持有它工作树的在用标记（/worktrees clean 不删在跑的分叉；建树时即已持有），跑完释放
+  const release = prepared.releaseInUse;
+  let result: Awaited<ReturnType<typeof runHeadless>>;
+  try {
+    result = await runHeadless({
+      ...run,
+      task: input ?? "",
+      governanceRoot: request.governanceRoot,
+      workspaceRoot: prepared.workspace.path,
+      sessionId: prepared.branchSessionId,
+      initialMessages: prepared.initialMessages,
+      ...(prepared.statusSent !== undefined ? { statusSent: prepared.statusSent } : {}),
+      pruneSeed: prepared.pruneSeed,
+      continueFromHistory: prepared.continueFromHistory,
+      branchHeader: {
+        sourceSessionId: request.sourceSessionId,
+        forkPoint: request.forkPoint,
+        checkpoint: prepared.checkpoint,
+        workspace: prepared.workspace,
+        trigger: request.trigger,
+        startedAt: Date.now(),
+      },
+    });
+  } finally {
+    release();
+  }
   return {
     branchSessionId: prepared.branchSessionId,
     checkpoint: prepared.checkpoint,
