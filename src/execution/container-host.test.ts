@@ -238,7 +238,7 @@ test("容器执行端（替身）：OCI 报程序不存在还原为 ENOENT；命
 
 test("容器执行端（本机执行的假 docker）：文件清单跳过工作区根下的 .pigeon，治理目录里的新增与修改不进文件变化，别处与子目录里同名的普通文件夹照常报出", async () => {
   const root = mkdtempSync(join(tmpdir(), "pigeon-container-listing-"));
-  const churn = seedGovernanceChurn(root);
+  const churn = seedGovernanceChurn(root, { posix: true });
   const docker = localDockerHost(root);
   try {
     assert.deepEqual(

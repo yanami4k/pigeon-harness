@@ -325,6 +325,8 @@ function makeRepo(gitignore: string): string {
 const MISSED_BY_LISTING: Array<{
   name: string;
   posixOnly?: boolean;
+  // 产品在 Windows 上同样拍不到（文件清单看不出改动），见 docs/spec/sessions.md 的 Known limitations
+  windowsUnsupported?: boolean;
   setup?: (root: string) => void;
   change: (root: string) => void;
   check: (root: string, commit: string) => void;
@@ -387,6 +389,7 @@ const MISSED_BY_LISTING: Array<{
   },
   {
     name: "保留修改时间的同长度覆盖",
+    windowsUnsupported: true,
     change: (root) => {
       const file = join(root, "a.txt");
       const { atime, mtime } = statSync(file);
@@ -398,37 +401,36 @@ const MISSED_BY_LISTING: Array<{
 ];
 
 for (const item of MISSED_BY_LISTING) {
-  test.skipIf(item.posixOnly === true && process.platform === "win32")(
-    `run_command 之后照拍，文件变化报告为空也拍到：${item.name}`,
-    async () => {
-      const root = makeRepo(".pigeon/state/\n.pigeon/settings.local.json\n");
-      try {
-        item.setup?.(root);
-        const fake = fakeHost();
-        const attached = attachCheckpoints({
-          bundle: fake.host,
+  test.skipIf(
+    (item.posixOnly === true || item.windowsUnsupported === true) && process.platform === "win32"
+  )(`run_command 之后照拍，文件变化报告为空也拍到：${item.name}`, async () => {
+    const root = makeRepo(".pigeon/state/\n.pigeon/settings.local.json\n");
+    try {
+      item.setup?.(root);
+      const fake = fakeHost();
+      const attached = attachCheckpoints({
+        bundle: fake.host,
+        workspaceRoot: root,
+        checkpointer: createCheckpointer({
           workspaceRoot: root,
-          checkpointer: createCheckpointer({
-            workspaceRoot: root,
-            sessionId: fake.host.adapter.sessionId,
-          }),
-        });
-        assert.ok(attached !== undefined);
-        fake.propose("run_command");
-        await fake.gate();
-        item.change(root);
-        fake.result("run_command", "c1", false, noChanges);
-        await fake.gate();
-        const last = fake.entries.at(-1);
-        assert.ok(last?.customType === SessionEntryType.Checkpoint, JSON.stringify(fake.rows()));
-        item.check(root, (last.data as CheckpointData).commit);
-        assert.deepEqual(attached.errors(), []);
-        await attached.close();
-      } finally {
-        rmSync(root, { recursive: true, force: true });
-      }
+          sessionId: fake.host.adapter.sessionId,
+        }),
+      });
+      assert.ok(attached !== undefined);
+      fake.propose("run_command");
+      await fake.gate();
+      item.change(root);
+      fake.result("run_command", "c1", false, noChanges);
+      await fake.gate();
+      const last = fake.entries.at(-1);
+      assert.ok(last?.customType === SessionEntryType.Checkpoint, JSON.stringify(fake.rows()));
+      item.check(root, (last.data as CheckpointData).commit);
+      assert.deepEqual(attached.errors(), []);
+      await attached.close();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
-  );
+  });
 }
 
 // ---- 真实运行面 ----

@@ -30,6 +30,19 @@ import { createRunCommandTool, RunCommandTimeoutError } from "../tools/run-comma
 import { createContainerWorkspaceHost, KILL_MARKED_SCRIPT } from "./container-host.ts";
 import { localDockerHost } from "./local-docker-fixtures.ts";
 
+// Windows 上建符号链接要开发者模式或管理员；没有就跳过
+const NO_SYMLINKS = (() => {
+  const dir = mkdtempSync(join(tmpdir(), "pigeon-round-trips-symlink-"));
+  try {
+    symlinkSync(join(dir, "target"), join(dir, "lnk"));
+    return false;
+  } catch {
+    return "Windows 上建符号链接需要额外权限";
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
+
 const COUNTING_DOCKER = `
 import { appendFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -125,25 +138,28 @@ test("审批之后原文被改动：写入脚本按检视时的 cksum 拦下，�
   }
 });
 
-test("受保护路径判定检视到的是符号链接：编辑时直接据此拒写，两端都不变", async () => {
-  const h = counted();
-  try {
-    writeFileSync(join(h.root, "target.txt"), "keep\n");
-    symlinkSync("target.txt", join(h.root, "link.txt"));
-    await createHostProtectedPathResolver(h.host)("link.txt");
-    await assert.rejects(
-      createReplaceEditTool(h.host).execute("e", {
-        path: "link.txt",
-        old_string: "keep",
-        new_string: "changed",
-      }),
-      WorkspaceWriteRefusedError
-    );
-    assert.equal(readFileSync(join(h.root, "target.txt"), "utf8"), "keep\n");
-  } finally {
-    h.cleanup();
+test.skipIf(NO_SYMLINKS)(
+  "受保护路径判定检视到的是符号链接：编辑时直接据此拒写，两端都不变",
+  async () => {
+    const h = counted();
+    try {
+      writeFileSync(join(h.root, "target.txt"), "keep\n");
+      symlinkSync("target.txt", join(h.root, "link.txt"));
+      await createHostProtectedPathResolver(h.host)("link.txt");
+      await assert.rejects(
+        createReplaceEditTool(h.host).execute("e", {
+          path: "link.txt",
+          old_string: "keep",
+          new_string: "changed",
+        }),
+        WorkspaceWriteRefusedError
+      );
+      assert.equal(readFileSync(join(h.root, "target.txt"), "utf8"), "keep\n");
+    } finally {
+      h.cleanup();
+    }
   }
-});
+);
 
 test("跑命令 1 次：git 工作区的文件变化（被忽略的不报）与内存计数随命令一起取到；仿造的分隔标记不起作用", async () => {
   const counter = join(mkdtempSync(join(tmpdir(), "pigeon-round-trips-oom-")), "memory.events");

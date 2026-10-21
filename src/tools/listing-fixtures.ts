@@ -1,6 +1,7 @@
 // 测试夹具：文件清单跳过工作区根下治理目录（.pigeon）的场景，本地与容器执行端的用例共用。只供测试使用。
 // 命令执行期间：治理目录里的会话文件被追加、新建记忆文件；工作区别处新增、修改、删除；子目录里名为 .pigeon 的普通
 // 文件夹新增与修改。
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,8 +28,12 @@ export const CHURN_FILE_CHANGES = {
   truncated: false,
 };
 
-// 在 root 下布好执行前的文件；返回造成上述变化的 run_command 命令串（node 执行放在工作区外的脚本）与清理函数
-export function seedGovernanceChurn(root: string): { command: string; cleanup: () => void } {
+// 在 root 下布好执行前的文件；返回造成上述变化的 run_command 命令串（node 执行放在工作区外的脚本）与清理函数。
+// posix 为真时命令串供假容器的 sh 使用：Windows 上把程序与脚本路径转成 MSYS 形式。
+export function seedGovernanceChurn(
+  root: string,
+  options: { posix?: boolean } = {}
+): { command: string; cleanup: () => void } {
   mkdirSync(join(root, ".pigeon", "state", "sessions"), { recursive: true });
   mkdirSync(join(root, "sub", ".pigeon"), { recursive: true });
   writeFileSync(join(root, ".pigeon", "state", "sessions", "s.jsonl"), "{}\n");
@@ -38,8 +43,12 @@ export function seedGovernanceChurn(root: string): { command: string; cleanup: (
   const dir = mkdtempSync(join(tmpdir(), "pigeon-listing-script-"));
   const script = join(dir, "churn.mjs");
   writeFileSync(script, CHURN_SCRIPT);
+  const asPosix = (path: string): string =>
+    options.posix === true && process.platform === "win32"
+      ? execFileSync("sh", ["-c", 'cygpath -u "$1"', "sh", path], { encoding: "utf8" }).trim()
+      : path;
   return {
-    command: `"${process.execPath}" "${script}"`,
+    command: `"${asPosix(process.execPath)}" "${asPosix(script)}"`,
     cleanup: () => rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }),
   };
 }

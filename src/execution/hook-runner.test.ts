@@ -175,8 +175,8 @@ test("经执行端执行：/bin/sh -c 包一层容器内 timeout（先试 -k、�
       options: { env: NodeJS.ProcessEnv; stdin?: string | undefined; timeoutMs: number }
     ): Promise<HostExecResult> {
       if (plan.args[1]?.includes("SLOW")) {
-        // 模拟容器内 timeout 到期：用满限时后以 124 退出
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        // 模拟容器内 timeout 到期：用满限时后以 124 退出（比限时多一点，分开与到点判定的竞态）
+        await new Promise((resolve) => setTimeout(resolve, 1200));
         return {
           spawned: true,
           exitCode: 124,

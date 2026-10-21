@@ -6,16 +6,32 @@
 // 卷：run 带 -v <名>:<路径> 时自动建卷（与真 docker 一致）；volume rm 在有容器挂着时按"volume is in use"失败；
 // system df -v --format '{{json .Volumes}}' 按真 docker 的字段名（Name、Size、Links）输出卷清单。
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const SANDBOX_DOCKER = `
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 const [stateFile, ...args] = process.argv.slice(2);
+// 每条调用独占状态文件：同目录的锁目录（mkdir 是原子的），结束时释放；写入先写临时文件再改名
+const lockDir = stateFile + ".lock";
+const pause = new Int32Array(new SharedArrayBuffer(4));
+const lockStarted = Date.now();
+for (;;) {
+  try { mkdirSync(lockDir); break; } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    if (Date.now() - lockStarted > 30_000) throw new Error("fake docker: state lock timeout");
+    Atomics.wait(pause, 0, 0, 10);
+  }
+}
+process.on("exit", () => rmSync(lockDir, { recursive: true, force: true }));
 const state = JSON.parse(readFileSync(stateFile, "utf8"));
-const save = () => writeFileSync(stateFile, JSON.stringify(state, null, 2));
+const save = () => {
+  const temp = stateFile + ".tmp-" + process.pid;
+  writeFileSync(temp, JSON.stringify(state, null, 2));
+  renameSync(temp, stateFile);
+};
 state.calls.push(args);
 save();
 const fail = (code, text) => { process.stderr.write(text + "\\n"); process.exit(code); };
@@ -195,6 +211,27 @@ export function fakeSandboxDocker(initial: Partial<FakeDockerState> = {}): FakeS
     ...initial,
   };
   writeFileSync(stateFile, JSON.stringify(state));
+  // 假 docker 进程之外（测试进程里）的读改写也取同一把锁，避免丢写入；读取靠改名的原子性
+  const lockDir = `${stateFile}.lock`;
+  const withLock = <T>(fn: () => T): T => {
+    const pause = new Int32Array(new SharedArrayBuffer(4));
+    const started = Date.now();
+    for (;;) {
+      try {
+        mkdirSync(lockDir);
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        if (Date.now() - started > 30_000) throw new Error("fake docker: state lock timeout");
+        Atomics.wait(pause, 0, 0, 10);
+      }
+    }
+    try {
+      return fn();
+    } finally {
+      rmSync(lockDir, { recursive: true, force: true });
+    }
+  };
   // Windows 上"容器内"路径取 MSYS 形式（sh 脚本里的 mkdir、git 都认）
   const insideForm = (local: string): string =>
     process.platform === "win32"
@@ -215,9 +252,13 @@ export function fakeSandboxDocker(initial: Partial<FakeDockerState> = {}): FakeS
     localConfigHome: join(dir, "container-config"),
     state: read,
     update(change) {
-      const current = read();
-      change(current);
-      writeFileSync(stateFile, JSON.stringify(current));
+      withLock(() => {
+        const current = read();
+        change(current);
+        const temp = `${stateFile}.tmp-${process.pid}`;
+        writeFileSync(temp, JSON.stringify(current));
+        renameSync(temp, stateFile);
+      });
     },
     cleanup: () => rmSync(dir, { recursive: true, force: true }),
   };
