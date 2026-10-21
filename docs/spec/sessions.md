@@ -137,4 +137,4 @@ Flags: `--continue`, `--resume [id]`, `--history-limit <n>`, `--no-persist-think
 - If Pigeon is killed between moving the branch and recording grants, a revoked grant may return after resume.
 - Empty directories are removed only where their creation time can be read.
 - On case-insensitive file systems, files differing only in case are never written by a restore.
-- A same-length overwrite that also restores the modification time is not captured on Windows; the file listing sees no change.
+- A same-length overwrite that also restores the modification time is not captured on Windows: Git for Windows records ctime as the creation time, so the git status cache that checkpoint snapshots rely on does not see the overwrite.

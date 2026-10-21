@@ -325,7 +325,7 @@ function makeRepo(gitignore: string): string {
 const MISSED_BY_LISTING: Array<{
   name: string;
   posixOnly?: boolean;
-  // 产品在 Windows 上同样拍不到（文件清单看不出改动），见 docs/spec/sessions.md 的 Known limitations
+  // 产品在 Windows 上同样拍不到：Git for Windows 记录的 ctime 是创建时间，检查点快照依赖的 git 状态缓存看不出同长度且保留修改时间的覆盖（见 docs/spec/sessions.md 的 Known limitations）
   windowsUnsupported?: boolean;
   setup?: (root: string) => void;
   change: (root: string) => void;
