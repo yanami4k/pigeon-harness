@@ -21,7 +21,7 @@ const pause = new Int32Array(new SharedArrayBuffer(4));
 let held = false;
 const release = () => {
   if (!held) return;
-  rmSync(lockDir, { recursive: true, force: true });
+  rmSync(lockDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   held = false;
 };
 const releaseOnExit = () => {
@@ -35,8 +35,8 @@ let tempSeq = 0;
 const takeOverDeadHolder = () => {
   let pid;
   try { pid = Number(readFileSync(holderFile, "utf8")); } catch { return false; }
-  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
-  if (holderAlive(pid)) return false;
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (pid !== process.pid && holderAlive(pid)) return false;
   const quarantine = lockDir + ".stale-" + process.pid + "-" + tempSeq++;
   try { renameSync(lockDir, quarantine); } catch { return false; }
   let quarantined;
@@ -277,8 +277,8 @@ export function fakeSandboxDocker(initial: Partial<FakeDockerState> = {}): FakeS
     } catch {
       return false;
     }
-    if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
-    if (holderAlive(pid)) return false;
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    if (pid !== process.pid && holderAlive(pid)) return false;
     const quarantine = `${lockDir}.stale-${process.pid}-${tempSeq++}`;
     try {
       renameSync(lockDir, quarantine);
@@ -342,7 +342,7 @@ export function fakeSandboxDocker(initial: Partial<FakeDockerState> = {}): FakeS
       return fn();
     } finally {
       if (held) {
-        rmSync(lockDir, { recursive: true, force: true });
+        rmSync(lockDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
         held = false;
       }
     }
