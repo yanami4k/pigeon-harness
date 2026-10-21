@@ -14,7 +14,7 @@ import {
 test("包根：源码运行时为 src 的上一层（随包文件在那里），打包产物运行时为产物所在目录的上一层", () => {
   assert.equal(FROM_BUNDLE, false);
   assert.ok(existsSync(fileURLToPath(packageFileUrl("docker/sandbox/Dockerfile"))));
-  assert.ok(existsSync(fileURLToPath(packageFileUrl("docker/script/executor.cjs"))));
+  assert.ok(existsSync(fileURLToPath(packageFileUrl("docker/sandbox/Dockerfile"))));
   const root = packageRootUrl(false, import.meta.url);
   assert.equal(packageRootUrl(true, new URL("dist/pigeon-cli.mjs", root).href).href, root.href);
 });

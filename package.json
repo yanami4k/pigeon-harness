@@ -14,7 +14,10 @@
     "dist/pigeon.mjs",
     "dist/pigeon-cli.mjs",
     "dist/pigeon-cli.mjs.map",
+    "dist/deepseek-stream-fn.mjs",
     "dist/photon_rs_bg.wasm",
+    "third_party/",
+    "THIRD_PARTY_LICENSES.md",
     "docker/"
   ],
   "engines": {
