@@ -1,6 +1,6 @@
 // 决策 513：会话中途切换思考强度——/effort [档位]（不带参数时在输入框下方列出档位、标出当前档位；非法档位报错；运行中可用）、
 // Alt+T 在 off → low → medium → high → xhigh 之间轮换（minimal 的下一档为 low；模型不支持推理时不切换），状态栏紧跟审批模式
-// 写 effort <档位>、/status 的 mode 行同列；子 agent 视图里改的是那个子 agent 的档位。
+// 只写档位（如 high）、/status 的 mode 行写 effort <档位>；子 agent 视图里改的是那个子 agent 的档位。
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
