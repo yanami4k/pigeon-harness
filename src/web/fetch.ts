@@ -2,6 +2,7 @@
 // 与正文字符数；HTML 转成 Markdown 正文，其余文本类型原样；非文本内容拒绝。抓到的正文只交给提炼，不直接交回模型。
 // 来源：@amaster.ai/pi-web-access 0.1.19 的 dist/fetch.js（Apache-2.0，见 third_party/pi-web-access/），已修改：
 // 去掉 Jina Reader 中转与按服务商抓取的分支；加上限与截断；跳转与非文本的处理按上述规则。
+import { packageVersion } from "../state/package-version.ts";
 import { extractTitle, htmlToMarkdown } from "./html.ts";
 import {
   type DnsLookup,
@@ -40,7 +41,8 @@ export type FetchPageOutcome =
     }
   | { kind: "cross-host-redirect"; from: string; to: string; toHost: string };
 
-const USER_AGENT = "Mozilla/5.0 (compatible; Pigeon/1.0; +https://github.com/pigeon-harness)";
+const REPOSITORY_URL = "https://github.com/yamani4k/pigeon-harness";
+const USER_AGENT = `Mozilla/5.0 (compatible; Pigeon/${packageVersion()}; +${REPOSITORY_URL})`;
 const ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5";
 
 // 文本类内容：text/*、JSON、XML、JavaScript 及其变体

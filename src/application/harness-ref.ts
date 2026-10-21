@@ -1,21 +1,12 @@
 // Pigeon 自身的代码版本：pigeon --version 输出版本时带上这一项（构建戳或包根的 HEAD）
-import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describeHead } from "../orchestration/worktree.ts";
 import { packageFileUrl } from "../state/package-paths.ts";
+import { packageVersion } from "../state/package-version.ts";
 
 // pigeon --version 与终端界面欢迎头（决策 451）：包根下 package.json 的版本（源码与打包产物运行时都在包根下）；
 // 读不出时如实写 unknown
-export function pigeonVersion(): string {
-  try {
-    const parsed = JSON.parse(readFileSync(packageFileUrl("package.json"), "utf8")) as {
-      version?: unknown;
-    };
-    return typeof parsed.version === "string" ? parsed.version : "unknown";
-  } catch {
-    return "unknown";
-  }
-}
+export const pigeonVersion = packageVersion;
 
 // 代码版本：Pigeon 仓库 HEAD 短号与是否有未提交改动
 export interface HarnessRef {

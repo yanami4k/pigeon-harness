@@ -1,6 +1,9 @@
 {
   "name": "pigeon-harness",
-  "version": "0.0.0",
+  "version": "0.0.1",
+  "description": "A research-oriented terminal coding agent written in TypeScript.",
+  "license": "MIT",
+  "repository": "https://github.com/yamani4k/pigeon-harness",
   "private": true,
   "type": "module",
   "packageManager": "npm@11.6.2",

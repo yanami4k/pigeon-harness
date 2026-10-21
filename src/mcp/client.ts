@@ -18,13 +18,14 @@ import {
   ToolListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { McpLaunch, McpServerConfig } from "../state/mcp-config.ts";
+import { packageVersion } from "../state/package-version.ts";
 
 export const DEFAULT_MCP_MAX_RESTARTS = 3;
 export const DEFAULT_MCP_CONNECT_TIMEOUT_MS = 30_000;
 // 清单分页上限：防 server 无限给 nextCursor
 const MAX_LIST_PAGES = 100;
 
-export const MCP_CLIENT_INFO = { name: "pigeon-harness", version: "0.0.0" };
+export const MCP_CLIENT_INFO = { name: "pigeon-harness", version: packageVersion() };
 
 // server 不可用（启动失败、重启中、超过重启上限、已关闭、调用中断线）——环境类
 export class McpServerUnavailableError extends Error {
