@@ -14,18 +14,39 @@ const SANDBOX_DOCKER = `
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 const [stateFile, ...args] = process.argv.slice(2);
-// 每条调用独占状态文件：同目录的锁目录（mkdir 是原子的），结束时释放；写入先写临时文件再改名
+// 状态文件的锁：锁目录（mkdir 原子）+ 持有者 pid。只在读、改、写这段持锁；exec 记下调用后放锁再起进程。
 const lockDir = stateFile + ".lock";
+const holderFile = lockDir + "/pid";
 const pause = new Int32Array(new SharedArrayBuffer(4));
+const release = () => {
+  try { rmSync(lockDir, { recursive: true, force: true }); } catch {}
+};
+process.on("exit", release);
+const holderAlive = (pid) => {
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; }
+};
+const takeOverDeadHolder = () => {
+  let pid;
+  try { pid = Number(readFileSync(holderFile, "utf8")); } catch { return false; }
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
+  if (holderAlive(pid)) return false;
+  release();
+  return true;
+};
 const lockStarted = Date.now();
 for (;;) {
-  try { mkdirSync(lockDir); break; } catch (error) {
-    if (error.code !== "EEXIST") throw error;
+  try {
+    mkdirSync(lockDir);
+    writeFileSync(holderFile, String(process.pid));
+    break;
+  } catch (error) {
+    const code = error.code;
+    if (code !== "EEXIST" && code !== "EPERM" && code !== "EACCES") throw error;
+    if (takeOverDeadHolder()) continue;
     if (Date.now() - lockStarted > 30_000) throw new Error("fake docker: state lock timeout");
     Atomics.wait(pause, 0, 0, 10);
   }
 }
-process.on("exit", () => rmSync(lockDir, { recursive: true, force: true }));
 const state = JSON.parse(readFileSync(stateFile, "utf8"));
 const save = () => {
   const temp = stateFile + ".tmp-" + process.pid;
@@ -108,6 +129,7 @@ if (sub === "ps") {
   process.exit(0);
 }
 if (sub !== "exec") fail(1, "fake docker: unsupported " + sub);
+release();
 let i = 1;
 let cwd = process.cwd();
 let interactive = false;
@@ -213,15 +235,43 @@ export function fakeSandboxDocker(initial: Partial<FakeDockerState> = {}): FakeS
   writeFileSync(stateFile, JSON.stringify(state));
   // 假 docker 进程之外（测试进程里）的读改写也取同一把锁，避免丢写入；读取靠改名的原子性
   const lockDir = `${stateFile}.lock`;
+  const holderFile = join(lockDir, "pid");
+  const holderAlive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "EPERM";
+    }
+  };
+  const takeOverDeadHolder = (): boolean => {
+    let pid: number;
+    try {
+      pid = Number(readFileSync(holderFile, "utf8"));
+    } catch {
+      return false;
+    }
+    if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
+    if (holderAlive(pid)) return false;
+    try {
+      rmSync(lockDir, { recursive: true, force: true });
+    } catch {
+      return false;
+    }
+    return true;
+  };
   const withLock = <T>(fn: () => T): T => {
     const pause = new Int32Array(new SharedArrayBuffer(4));
     const started = Date.now();
     for (;;) {
       try {
         mkdirSync(lockDir);
+        writeFileSync(holderFile, String(process.pid));
         break;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "EEXIST" && code !== "EPERM" && code !== "EACCES") throw error;
+        if (takeOverDeadHolder()) continue;
         if (Date.now() - started > 30_000) throw new Error("fake docker: state lock timeout");
         Atomics.wait(pause, 0, 0, 10);
       }
@@ -229,7 +279,11 @@ export function fakeSandboxDocker(initial: Partial<FakeDockerState> = {}): FakeS
     try {
       return fn();
     } finally {
-      rmSync(lockDir, { recursive: true, force: true });
+      try {
+        rmSync(lockDir, { recursive: true, force: true });
+      } catch {
+        // 清理失败不改写调用方的结果
+      }
     }
   };
   // Windows 上"容器内"路径取 MSYS 形式（sh 脚本里的 mkdir、git 都认）
