@@ -31,24 +31,41 @@ process.on("exit", releaseOnExit);
 const holderAlive = (pid) => {
   try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; }
 };
+let tempSeq = 0;
 const takeOverDeadHolder = () => {
   let pid;
   try { pid = Number(readFileSync(holderFile, "utf8")); } catch { return false; }
   if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
   if (holderAlive(pid)) return false;
-  try { rmSync(lockDir, { recursive: true, force: true }); } catch { return false; }
-  return true;
+  const quarantine = lockDir + ".stale-" + process.pid + "-" + tempSeq++;
+  try { renameSync(lockDir, quarantine); } catch { return false; }
+  let quarantined;
+  try { quarantined = Number(readFileSync(quarantine + "/pid", "utf8")); } catch { quarantined = NaN; }
+  if (quarantined === pid) {
+    rmSync(quarantine, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    return true;
+  }
+  try { renameSync(quarantine, lockDir); } catch {}
+  return false;
 };
 const lockStarted = Date.now();
 for (;;) {
+  const tempDir = lockDir + ".tmp-" + process.pid + "-" + tempSeq++;
   try {
-    mkdirSync(lockDir);
-    writeFileSync(holderFile, String(process.pid));
+    mkdirSync(tempDir);
+    writeFileSync(tempDir + "/pid", String(process.pid));
+  } catch (error) {
+    try { rmSync(tempDir, { recursive: true, force: true }); } catch {}
+    throw error;
+  }
+  try {
+    renameSync(tempDir, lockDir);
     held = true;
     break;
   } catch (error) {
+    try { rmSync(tempDir, { recursive: true, force: true }); } catch {}
     const code = error.code;
-    if (code !== "EEXIST" && code !== "EPERM" && code !== "EACCES") throw error;
+    if (code !== "EEXIST" && code !== "EPERM" && code !== "EACCES" && code !== "ENOTEMPTY") throw error;
     if (takeOverDeadHolder()) continue;
     if (Date.now() - lockStarted > 30_000) throw new Error("fake docker: state lock timeout");
     Atomics.wait(pause, 0, 0, 10);
@@ -244,6 +261,7 @@ export function fakeSandboxDocker(initial: Partial<FakeDockerState> = {}): FakeS
   // 假 docker 进程之外（测试进程里）的读改写也取同一把锁，避免丢写入；读取靠改名的原子性
   const lockDir = `${stateFile}.lock`;
   const holderFile = join(lockDir, "pid");
+  let tempSeq = 0;
   const holderAlive = (pid: number): boolean => {
     try {
       process.kill(pid, 0);
@@ -261,26 +279,60 @@ export function fakeSandboxDocker(initial: Partial<FakeDockerState> = {}): FakeS
     }
     if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
     if (holderAlive(pid)) return false;
+    const quarantine = `${lockDir}.stale-${process.pid}-${tempSeq++}`;
     try {
-      rmSync(lockDir, { recursive: true, force: true });
+      renameSync(lockDir, quarantine);
     } catch {
       return false;
     }
-    return true;
+    let quarantined: number;
+    try {
+      quarantined = Number(readFileSync(join(quarantine, "pid"), "utf8"));
+    } catch {
+      quarantined = Number.NaN;
+    }
+    if (quarantined === pid) {
+      rmSync(quarantine, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+      return true;
+    }
+    try {
+      renameSync(quarantine, lockDir);
+    } catch {
+      // 无法改回原名时保留被挪开的目录，下一次再来
+    }
+    return false;
   };
   const withLock = <T>(fn: () => T): T => {
     const pause = new Int32Array(new SharedArrayBuffer(4));
     let held = false;
     const started = Date.now();
     for (;;) {
+      const tempDir = `${lockDir}.tmp-${process.pid}-${tempSeq++}`;
       try {
-        mkdirSync(lockDir);
-        writeFileSync(holderFile, String(process.pid));
+        mkdirSync(tempDir);
+        writeFileSync(join(tempDir, "pid"), String(process.pid));
+      } catch (error) {
+        try {
+          rmSync(tempDir, { recursive: true, force: true });
+        } catch {
+          // 临时目录没建成或删不掉时保留原错误
+        }
+        throw error;
+      }
+      try {
+        renameSync(tempDir, lockDir);
         held = true;
         break;
       } catch (error) {
+        try {
+          rmSync(tempDir, { recursive: true, force: true });
+        } catch {
+          // 删不掉临时目录不影响判断锁
+        }
         const code = (error as NodeJS.ErrnoException).code;
-        if (code !== "EEXIST" && code !== "EPERM" && code !== "EACCES") throw error;
+        if (code !== "EEXIST" && code !== "EPERM" && code !== "EACCES" && code !== "ENOTEMPTY") {
+          throw error;
+        }
         if (takeOverDeadHolder()) continue;
         if (Date.now() - started > 30_000) throw new Error("fake docker: state lock timeout");
         Atomics.wait(pause, 0, 0, 10);
