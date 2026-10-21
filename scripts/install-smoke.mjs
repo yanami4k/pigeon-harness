@@ -33,7 +33,8 @@ const REQUIRED = [
   "third_party/pi-web-access/NOTICE.md",
 ];
 const FORBIDDEN_PATHS = ["docs/notes", ".pigeon/state"];
-const SECRET_FILE = /(^|\/)(?:\.env(?:\..*)?|.*\.pem|.*\.key|id_rsa.*)$/i;
+const SECRET_FILE =
+  /(^|\/)(?:\.env(?:\..*)?|\.npmrc|secrets\.json|.*\.pem|.*\.key|id_rsa.*|id_ed25519(?:\..*)?|id_e.*)$/i;
 
 function fail(message) {
   throw new Error(message);
