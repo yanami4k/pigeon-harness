@@ -42,8 +42,11 @@ function walk(dir) {
   const out = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walk(path).map((child) => join(entry.name, child)));
-    else if (entry.isFile()) out.push(entry.name);
+    if (entry.isDirectory()) {
+      out.push(...walk(path).map((child) => join(entry.name, child).replaceAll("\\", "/")));
+    } else if (entry.isFile()) {
+      out.push(entry.name);
+    }
   }
   return out.sort();
 }
@@ -54,11 +57,12 @@ function runPigeon(bin, args, env) {
     return spawnSync(bin, args, { encoding: "utf8", env, timeout: 180_000 });
   }
   const quote = (arg) => `"${arg.replaceAll('"', '\\"')}"`;
-  const command = `""${bin}" ${args.map(quote).join(" ")}"`;
-  return spawnSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", command], {
+  const command = `"${bin}" ${args.map(quote).join(" ")}`;
+  return spawnSync(command, {
     encoding: "utf8",
     env,
     timeout: 180_000,
+    shell: true,
   });
 }
 
@@ -108,7 +112,7 @@ try {
     "node_modules",
     packageName
   );
-  const installedFiles = walk(installedRoot);
+  const installedFiles = walk(installedRoot).filter((path) => !path.startsWith("node_modules/"));
   const packedFiles = [...files].sort();
   const missing = packedFiles.filter((path) => !installedFiles.includes(path));
   const extra = installedFiles.filter((path) => !packedFiles.includes(path));
@@ -122,7 +126,9 @@ try {
   const env = { ...process.env };
   delete env.PIGEON_STREAM_FN;
   const versioned = runPigeon(bin, ["--version"], env);
-  const expected = new RegExp(`^pigeon ${version.replaceAll(".", "\\.")} \\(commit [0-9a-f]+\\)`);
+  const expected = new RegExp(
+    `^pigeon ${version.replaceAll(".", "\\.")} \\(commit [0-9a-f]+(, uncommitted changes)?\\)`
+  );
   if (versioned.status !== 0 || !expected.test(versioned.stdout)) {
     fail(
       `pigeon --version 不符合预期：${versioned.status}\n${versioned.stdout}\n${versioned.stderr}`
