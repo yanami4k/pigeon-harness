@@ -60,7 +60,9 @@
 | `npm run test` | 快档 |
 | `npm run test:slow` | 慢档 |
 | `npm run verify` | lint + check + 快档 + deps（开发中的快速检查） |
-| `npm run verify:full` | lint + check + 快档与慢档 + deps（交付与合并前必跑） |
+| `npm run verify:full` | lint + check + 规格引用检查 + 第三方许可汇总校验 + 锁文件源检查 + 快档与慢档 + deps（交付与合并前必跑） |
+
+- 依赖变动后先运行 `node scripts/third-party-licenses.mjs --write` 重新生成汇总，再跑 `verify:full`。
 
 - **交付与合并前必须跑 `npm run verify:full`**，不论改了哪个目录：慢档里的文件也会跑到其他目录的代码。
   `npm run verify` 只用于开发中的快速检查，不能代替交付前的全量验证。
