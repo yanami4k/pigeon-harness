@@ -79,7 +79,7 @@ export function statusBarText(state: StatusBarState, width: number): string {
   const build = (short: boolean): string =>
     [
       modeLabel(state.mode),
-      state.effort !== undefined ? `effort ${state.effort}` : undefined,
+      state.effort,
       contextSegment(state.context, short),
       short ? tokens : `${tokens} tokens`,
     ]
@@ -131,7 +131,7 @@ export class StatusBar implements Component {
     const effort = this.state.effort;
     if (effort !== undefined) {
       const separator = out === "" ? "" : " · ";
-      const segment = `effort ${effort}`;
+      const segment = effort;
       if (rest.startsWith(`${separator}${segment}`)) {
         out += `${secondary(separator)}${colored(EFFORT_COLOR[effort], segment)}`;
         rest = rest.slice(separator.length + segment.length);

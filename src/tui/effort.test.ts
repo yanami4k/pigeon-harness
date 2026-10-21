@@ -115,11 +115,11 @@ test("Alt+T 轮换主代理的档位，状态栏紧跟审批模式当场更新�
   const { term, cleanup } = makeShell(main);
   try {
     await settle();
-    assert.match(statusLine(term), /^ask · effort minimal · /);
+    assert.match(statusLine(term), /^ask · minimal · /);
     for (const expected of ["low", "medium", "high", "xhigh", "off", "low"]) {
       term.input(ALT_T);
       await settle();
-      assert.match(statusLine(term), new RegExp(`^ask · effort ${expected} · `));
+      assert.match(statusLine(term), new RegExp(`^ask · ${expected} · `));
     }
     assert.deepEqual(main.sets, ["low", "medium", "high", "xhigh", "off", "low"]);
   } finally {
@@ -132,7 +132,7 @@ test("Alt+T 轮换主代理的档位，状态栏紧跟审批模式当场更新�
     unsupported.term.input(ALT_T);
     await settle();
     assert.deepEqual(fixed.sets, []);
-    assert.match(statusLine(unsupported.term), /^ask · effort off · /);
+    assert.match(statusLine(unsupported.term), /^ask · off · /);
     assert.doesNotMatch(screenText(unsupported.term), /reasoning/, "不提示");
   } finally {
     unsupported.cleanup();
@@ -146,7 +146,7 @@ test("/effort <档位> 切换并写一行；同档、非法档位与不支持推
     await settle();
     await command(term, "/effort low");
     assert.match(screenText(term), /effort set to low \(from the next request\)/);
-    assert.match(statusLine(term), /^ask · effort low · /);
+    assert.match(statusLine(term), /^ask · low · /);
     await command(term, "/effort low");
     assert.match(screenText(term), /effort is already low/);
     await command(term, "/effort turbo");
@@ -225,15 +225,15 @@ test("子 agent 视图里 /effort 与 Alt+T 改的是那个子 agent 的档位�
     term.input("\x1b");
     await settle();
     assert.equal(shell.currentView(), "agent");
-    assert.match(statusLine(term), /^ask · effort low/);
+    assert.match(statusLine(term), /^ask · low/);
     term.input(ALT_T);
     await settle();
     await command(term, "/effort xhigh");
     assert.deepEqual(sub.sets, ["medium", "xhigh"]);
     assert.deepEqual(main.sets, []);
-    assert.match(statusLine(term), /^ask · effort xhigh/);
+    assert.match(statusLine(term), /^ask · xhigh/);
     // 决策 514：子 agent 视图里的状态栏同样上色
-    assert.ok(term.writes.join("").includes("\x1b[31meffort xhigh\x1b[39m"));
+    assert.ok(term.writes.join("").includes("\x1b[31mxhigh\x1b[39m"));
   } finally {
     cleanup();
   }

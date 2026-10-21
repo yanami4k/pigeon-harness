@@ -18,7 +18,7 @@ cancelling; the input box, queue and history; scrolling and search; and the key 
 
 ## Status bar
 
-- **VIEWS-010** The status bar shall be one line at the bottom of every view, below the input box where there is one, reading "<mode> · effort <level> · ctx <P>% (<used>/<window>) · <N> tokens" and leaving out segments without data; the separators, the context segment and the token count are dim.
+- **VIEWS-010** The status bar shall be one line at the bottom of every view, below the input box where there is one, reading "<mode> · <level> · ctx <P>% (<used>/<window>) · <N> tokens" — the effort segment is the level alone — and leaving out segments without data; the separators, the context segment and the token count are dim.
 - **VIEWS-011** The mode segment shall read "ask" in cyan or "bypass" in orange (256-colour 208); without an approval mode it is omitted.
 - **VIEWS-060** The effort segment shall be in the normal foreground colour for `off`, green for `low` and `minimal`, yellow for `medium`, magenta for `high`, and red for `xhigh` and `max`.
 - **VIEWS-061** A mode or effort segment cut short by the width shall stay dim without its colour; subagent and read-only views colour their status bar the same way, and the `mode` line of "/status" carries no colour.

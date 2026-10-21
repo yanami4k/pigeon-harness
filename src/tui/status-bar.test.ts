@@ -14,6 +14,7 @@ import { RuntimeEventKind } from "../state/runtime-events.ts";
 import { ScriptedRuntime, usageOf } from "./runtime-fixtures.ts";
 import { PigeonTuiShell } from "./shell.ts";
 import { clipToWidth, StatusBar, statusBarText } from "./status-bar.ts";
+import { statusReportText } from "./status-report.ts";
 import { MockTerminal, screenText, settle } from "./testing.ts";
 
 function lastLine(term: MockTerminal): string {
@@ -324,7 +325,30 @@ test("clipToWidth（决策 439 改用 truncateToWidth）：按显示宽度硬截
   assert.ok(Date.now() - started < 500);
 });
 
-test("决策 514：状态栏上色——ask 青色、bypass 橙色（38;5;208）；effort off 正常前景色、low 绿、medium 黄、high 品红、xhigh 红；其余暗色", () => {
+test("状态栏的思考强度段只写档位（VIEWS-010）；/status 的 mode 行仍写 effort <档位>", () => {
+  assert.equal(
+    statusBarText({ mode: "prompt", effort: "high", cost: emptyCostTally() }, 200),
+    "ask · high · 0 tokens"
+  );
+  assert.equal(
+    statusBarText({ mode: "yolo", effort: "off", cost: emptyCostTally() }, 200),
+    "bypass · off · 0 tokens"
+  );
+  assert.match(
+    statusReportText({
+      sessionId: "sess_01M55M13BH9PCSN7ZRE80986QS",
+      project: "~",
+      cwd: "",
+      settings: [],
+      mode: "prompt",
+      effort: "high",
+    }),
+    /^mode {5}ask · effort high$/m
+  );
+});
+
+// spec: VIEWS-060, VIEWS-061
+test("决策 514：状态栏上色——ask 青色、bypass 橙色（38;5;208）；off 正常前景色、low 绿、medium 黄、high 品红、xhigh 红；其余暗色", () => {
   const render = (mode: "prompt" | "yolo", effort?: "off" | "low" | "medium" | "high" | "xhigh") =>
     new StatusBar({
       mode,
@@ -335,20 +359,20 @@ test("决策 514：状态栏上色——ask 青色、bypass 橙色（38;5;208）
   assert.equal(render("yolo"), " \x1b[38;5;208mbypass\x1b[39m\x1b[2m · 0 tokens\x1b[22m");
   assert.equal(
     render("prompt", "off"),
-    " \x1b[36mask\x1b[39m\x1b[2m · \x1b[22meffort off\x1b[2m · 0 tokens\x1b[22m",
+    " \x1b[36mask\x1b[39m\x1b[2m · \x1b[22moff\x1b[2m · 0 tokens\x1b[22m",
     "off 不上色、也不暗"
   );
   const colors = { low: "32", medium: "33", high: "35", xhigh: "31" } as const;
   for (const [level, code] of Object.entries(colors)) {
     assert.equal(
       render("yolo", level as keyof typeof colors),
-      ` \x1b[38;5;208mbypass\x1b[39m\x1b[2m · \x1b[22m\x1b[${code}meffort ${level}\x1b[39m\x1b[2m · 0 tokens\x1b[22m`,
+      ` \x1b[38;5;208mbypass\x1b[39m\x1b[2m · \x1b[22m\x1b[${code}m${level}\x1b[39m\x1b[2m · 0 tokens\x1b[22m`,
       level
     );
   }
   // 窄到档位只剩半截：那一截不上色
   const narrow = new StatusBar({ mode: "prompt", effort: "high", cost: emptyCostTally() }).render(
-    12
+    10
   )[0];
   assert.ok(narrow?.includes("\x1b[36mask\x1b[39m"));
   assert.ok(!narrow?.includes("\x1b[35m"), narrow);
