@@ -90,9 +90,9 @@
 
 ### A.3 两组的版本与接入
 
-- P：Pigeon 提交 `a2c5ea1109e8527de59239a3dabface04bb2901a`；打包产物清单 sha256 `fd0fb274bc1dfb801a8260b3ed38da05aa58053d514f7ce2954d88275bed1106`；安装包 sha256 `c2d2a1949e54a7adf9e3a5e690cdf5b99d4340bd83e5b32beb536d574ed71849`；随包 Node v24.12.0。
-- D：对照 harness 锁定版本的安装包 sha256 `9a5ec13e56497febfa4f9d7c845689d4120bbdb45a7d067df61bfc623c25d630`。
-- 适配器（两组共用的安装、下载配置、网关登记与计量在同一模块）sha256：共用模块 `0e38c8c9e72192525ce95a58a59bc3da3576e2e321991291074cefe8abe868ec`，下载配置 `41c9aaa0d61a221049ee6d5e023a0a63539c383e541bec9d63171a827593a4c0`，P `f6f4dc6f0128716498b891f51aa09d9a412d3fdc8cb4a17036f2c2954f2b61af`，D `4b7e00837985cf35fb29be2c0747560e64687175c5dfd4b69ae3190491d17639`，参考解 `12128fd6f4ed39c9c3778553489288752550e1bb9e573188eb2373404d93426c`；两家同时启动的跑批脚本 `476355e97e09eeb44d0c312f8ffc4a85f306ccd5d7b8cce97ca8b60ae6e47c62`。
+- P：Pigeon 提交 `a2c5ea1109e8527de59239a3dabface04bb2901a`；打包产物清单 sha256 `fd0fb274bc1dfb801a8260b3ed38da05aa58053d514f7ce2954d88275bed1106`；安装包 sha256 see local records；随包 Node v24.12.0。
+- D：对照 harness 锁定版本的安装包 sha256 see local records。
+- 适配器（两组共用的安装、下载配置、网关登记与计量在同一模块）sha256 see local records。
 - 两组的命令都不改 PATH，题目镜像里的 python、pytest 等对两家相同；容器内只有占位密钥，真实密钥只在宿主上的网关里。
 - 并发：两家各 2，同时启动。
 - 网关只记录与转发：两组的请求体都原样转发（对照组另只读地核对模型名）；计价按服务商价目。网关代码取自提交 `bd3ea14`。

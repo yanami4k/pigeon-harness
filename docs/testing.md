@@ -69,9 +69,9 @@
 - 测试步的并发数（Vitest 的 worker 数）用环境变量 `TEST_CONCURRENCY` 给，例如
   `TEST_CONCURRENCY=6 npm run verify:full`。
 - 只跑某几个测试文件：`npm run test -- <文件或 glob…>`（给了文件就只跑这些，不分档；例如
-  `npm run test -- src/tui/script-ui.test.ts`）。其余以 `-` 开头的参数原样交给 `vitest run`，例如按名称筛选
+  `npm run test -- src/tui/status-bar.test.ts`）。其余以 `-` 开头的参数原样交给 `vitest run`，例如按名称筛选
   `npm run test -- -t 审批`。
-- 真容器用例与全量验收在验证服务器上跑；本机只跑改动涉及的单个文件。
+- 真容器用例与全量验收在有 Docker 的机器上跑；本机只跑改动涉及的单个文件。
 
 ## 覆盖率与基准
 
@@ -82,7 +82,7 @@
 ## 量具
 
 - `node scripts/test-timing.mjs [--concurrency N] [--out 结果.json] [文件或 glob…]`：跑一次 Vitest（JSON 报告），
-  记每个测试文件的墙钟、测试项数与每个测试的耗时，打印最慢的文件。判断一个文件是否超过 10 秒，在验证服务器上用
+  记每个测试文件的墙钟、测试项数与每个测试的耗时，打印最慢的文件。判断一个文件是否超过 10 秒，在有 Docker 的机器上用
   `--concurrency 1` 单独量。
 - `node scripts/test-coverage.mjs [--concurrency N] [--module 路径前缀…] [文件或 glob…]`：逐文件跑 Vitest 的 v8 覆盖率，
   算出每个文件独有覆盖的产品代码行与指定模块的行覆盖率。独有行为 0 只是"删了也不影响覆盖"的候选：
