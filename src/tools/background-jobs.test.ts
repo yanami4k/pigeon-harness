@@ -423,7 +423,7 @@ test.skipIf(LINUX ? false : "按 /proc 认进程")(
 );
 
 test.skipIf(
-  process.platform === "win32" ? false : "要 Windows 的 CIM（PowerShell），验证服务器是 Linux"
+  process.platform === "win32" ? false : "只在 Windows 上跑（要 Windows 的 CIM / PowerShell）"
 )("Windows：认进程按 CreationDate 与命令行，任一不符即判不同", async () => {
   const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" });
   try {
@@ -437,7 +437,7 @@ test.skipIf(
   }
 });
 
-test.skipIf(process.platform === "darwin" ? false : "要 macOS 的 ps，验证服务器是 Linux")(
+test.skipIf(process.platform === "darwin" ? false : "只在 macOS 上跑（要 macOS 的 ps）")(
   "macOS：认进程按 ps 的 lstart 与环境里的标记，任一不符即判不同",
   async () => {
     const marker = "ab".repeat(12);
