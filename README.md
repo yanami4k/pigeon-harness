@@ -13,7 +13,7 @@ resume, inspect and fork.
 ## Install
 
 Download the package file from the
-[GitHub Releases](https://github.com/yamani4k/pigeon-harness/releases) page, then install it
+[GitHub Releases](https://github.com/yanami4k/pigeon-harness/releases) page, then install it
 globally:
 
 ```sh
