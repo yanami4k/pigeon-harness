@@ -21,8 +21,7 @@
     "docker/"
   ],
   "engines": {
-    "node": ">=22.19.0 <25",
-    "npm": ">=11 <12"
+    "node": ">=22.19.0 <25"
   },
   "scripts": {
     "bundle": "node scripts/build-bundle.mjs",
