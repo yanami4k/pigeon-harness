@@ -41,7 +41,8 @@ export type FetchPageOutcome =
     }
   | { kind: "cross-host-redirect"; from: string; to: string; toHost: string };
 
-const USER_AGENT = `Mozilla/5.0 (compatible; Pigeon/${packageVersion()}; +${packageRepository()})`;
+const REPOSITORY = packageRepository();
+const USER_AGENT = `Mozilla/5.0 (compatible; Pigeon/${packageVersion()}${REPOSITORY === undefined ? "" : `; +${REPOSITORY}`})`;
 const ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5";
 
 // 文本类内容：text/*、JSON、XML、JavaScript 及其变体
