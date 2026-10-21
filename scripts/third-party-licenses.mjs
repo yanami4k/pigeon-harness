@@ -1,13 +1,42 @@
-// 运行时依赖的第三方许可汇总（发版）：从 package-lock.json 的所有非 dev 条目生成，含各平台的可选依赖。
-// 输出只依据 lockfile，不含本机安装状态，因此在任何平台上生成与校验的结果一致。
+// 运行时依赖的第三方许可汇总（发版）：把真正打进包里的依赖连同完整许可正文列出，另列只在安装时由 npm
+// 按平台获取的依赖。生成依据是 esbuild 的 metafile 与 package-lock.json，不依赖本机安装状态以外的判断。
 // 用法：node scripts/third-party-licenses.mjs（打印）；--write（写入）；--check（与仓库里的文件比对）。
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { build } from "esbuild";
+import { bundleOptions } from "./bundle-options.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const LOCKFILE = join(root, "package-lock.json");
 const OUTPUT = join(root, "THIRD_PARTY_LICENSES.md");
+const FALLBACK_DIR = join(root, "third_party", "licenses");
+const LICENSE_FILE = /^(LICENSE|LICENCE|COPYING|NOTICE)/i;
+
+function compare(a, b) {
+  if (a !== b) return a < b ? -1 : 1;
+  return 0;
+}
+
+function normalizeEol(text) {
+  return text.replace(/\r\n?/g, "\n");
+}
+
+function licenseOf(entry) {
+  if (typeof entry.license === "string") return entry.license;
+  if (typeof entry.license === "object" && entry.license !== null) {
+    const type = entry.license.type;
+    if (typeof type === "string") return type;
+  }
+  if (Array.isArray(entry.licenses)) {
+    return entry.licenses
+      .map((item) => (typeof item?.type === "string" ? item.type : ""))
+      .filter((item) => item !== "")
+      .join(", ");
+  }
+  return "unknown";
+}
 
 function packageNameOf(key) {
   const marker = "node_modules/";
@@ -15,42 +44,122 @@ function packageNameOf(key) {
   return index >= 0 ? key.slice(index + marker.length) : key;
 }
 
-function compare(a, b) {
-  if (a !== b) return a < b ? -1 : 1;
-  return 0;
-}
-
 function escapeCell(text) {
   return text.replaceAll("|", "\\|");
 }
 
-export function generateThirdPartyLicenses(lockfile) {
-  const packages = Object.entries(lockfile.packages)
+function bundledPackagesOf(results) {
+  const packages = new Map();
+  for (const result of results) {
+    for (const input of Object.keys(result.metafile.inputs)) {
+      const key = input.replaceAll("\\", "/");
+      const marker = "node_modules/";
+      const index = key.lastIndexOf(marker);
+      if (index < 0) continue;
+      const rest = key.slice(index + marker.length);
+      const parts = rest.split("/");
+      const name = parts[0].startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];
+      if (packages.has(name)) continue;
+      const packageDir = resolve(key.slice(0, index + marker.length + name.length));
+      const manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
+      packages.set(name, {
+        name,
+        version: typeof manifest.version === "string" ? manifest.version : "unknown",
+        license: licenseOf({ license: manifest.license }),
+        dir: packageDir,
+      });
+    }
+  }
+  return [...packages.values()].sort((a, b) => compare(a.name, b.name));
+}
+
+function licenseSourcesOf(pkg) {
+  const files = readdirSync(pkg.dir)
+    .filter((file) => LICENSE_FILE.test(file))
+    .sort(compare);
+  if (files.length > 0) {
+    return files.map((file) => ({
+      label: file,
+      text: normalizeEol(readFileSync(join(pkg.dir, file), "utf8")),
+    }));
+  }
+  const fallbackName = `${pkg.name.replaceAll("/", "__")}.txt`;
+  const fallback = join(FALLBACK_DIR, fallbackName);
+  if (!existsSync(fallback)) {
+    throw new Error(
+      `bundled package ${pkg.name}@${pkg.version} has no license file and no ${fallbackName} fallback`
+    );
+  }
+  return [
+    {
+      label: `third_party/licenses/${fallbackName}`,
+      text: normalizeEol(readFileSync(fallback, "utf8")),
+    },
+  ];
+}
+
+function installedPackagesOf(lockfile, bundledNames) {
+  return Object.entries(lockfile.packages)
     .filter(
       ([key, entry]) =>
-        key !== "" && entry.dev !== true && entry.link !== true && typeof entry.version === "string"
+        key !== "" &&
+        entry.dev !== true &&
+        entry.devOptional !== true &&
+        entry.link !== true &&
+        entry.inBundle !== true &&
+        typeof entry.version === "string" &&
+        !bundledNames.has(packageNameOf(key))
     )
     .map(([key, entry]) => ({
       name: packageNameOf(key),
       version: entry.version,
-      license: typeof entry.license === "string" ? entry.license : "unknown",
+      license: licenseOf(entry),
     }))
     .sort(
       (a, b) =>
         compare(a.name, b.name) || compare(a.version, b.version) || compare(a.license, b.license)
     );
+}
+
+function withTrailingNewline(text) {
+  return text.endsWith("\n") ? text : `${text}\n`;
+}
+
+export function renderThirdPartyLicenses({ bundled, installed }) {
   const lines = [
     "# Third-party licenses for runtime dependencies",
     "",
-    "This file is generated by `scripts/third-party-licenses.mjs` from `package-lock.json`.",
-    "It lists every non-dev package entry, including optional packages for every platform.",
+    "This file is generated by `scripts/third-party-licenses.mjs` from the bundled module graph",
+    "and `package-lock.json`. The first section lists every package included in the bundle with",
+    "its full license text. The second lists packages that npm installs at install time for the",
+    "current platform and that are not distributed with Pigeon.",
     "",
-    `Packages: ${packages.length}`,
+    "## Bundled with Pigeon",
+    "",
+  ];
+  for (const pkg of bundled) {
+    lines.push(`### \`${pkg.name}\` ${pkg.version}`, "", `License: ${pkg.license}`, "");
+    for (const source of pkg.sources) {
+      lines.push(
+        `License file: ${source.label}`,
+        "",
+        "```text",
+        withTrailingNewline(source.text),
+        "```",
+        ""
+      );
+    }
+    if (pkg.name === "@silvia-odwyer/photon-node") {
+      lines.push("The copied `dist/photon_rs_bg.wasm` is covered by this license.", "");
+    }
+  }
+  lines.push(
+    "## Installed by npm at install time, not distributed with Pigeon",
     "",
     "| Package | Version | License |",
-    "| --- | --- | --- |",
-  ];
-  for (const pkg of packages) {
+    "| --- | --- | --- |"
+  );
+  for (const pkg of installed) {
     lines.push(
       `| \`${escapeCell(pkg.name)}\` | ${escapeCell(pkg.version)} | ${escapeCell(pkg.license)} |`
     );
@@ -59,11 +168,27 @@ export function generateThirdPartyLicenses(lockfile) {
   return lines.join("\n");
 }
 
+async function compute(lockfile) {
+  const outDir = join(tmpdir(), "pigeon-third-party-licenses");
+  const options = bundleOptions(outDir);
+  const results = await Promise.all(
+    options.map((option) => build({ ...option, write: false, metafile: true, logLevel: "silent" }))
+  );
+  const bundled = bundledPackagesOf(results).map((pkg) => ({
+    ...pkg,
+    sources: licenseSourcesOf(pkg),
+  }));
+  const installed = installedPackagesOf(lockfile, new Set(bundled.map((pkg) => pkg.name)));
+  return { bundled, installed, content: renderThirdPartyLicenses({ bundled, installed }) };
+}
+
 const isMain =
-  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+  process.argv[1] !== undefined &&
+  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
 if (isMain) {
   const lockfile = JSON.parse(readFileSync(LOCKFILE, "utf8"));
-  const expected = generateThirdPartyLicenses(lockfile);
+  const { bundled, installed, content } = await compute(lockfile);
+  const summary = `third-party licenses: ${bundled.length} bundled, ${installed.length} installed by npm`;
   if (process.argv.includes("--check")) {
     let current = "";
     try {
@@ -71,18 +196,18 @@ if (isMain) {
     } catch {
       // 缺文件按不一致处理
     }
-    if (current.replaceAll("\r\n", "\n") !== expected) {
+    if (normalizeEol(current) !== content) {
+      console.error(`${summary}`);
       console.error(
-        "THIRD_PARTY_LICENSES.md 与 package-lock.json 不一致；运行 node scripts/third-party-licenses.mjs --write 重新生成"
+        "THIRD_PARTY_LICENSES.md 与当前依赖不一致；运行 node scripts/third-party-licenses.mjs --write 重新生成"
       );
       process.exit(1);
     }
+    console.log(summary);
   } else if (process.argv.includes("--write")) {
-    writeFileSync(OUTPUT, expected);
-    console.log(
-      `已生成 THIRD_PARTY_LICENSES.md：${expected.match(/^Packages: (\d+)$/m)?.[1] ?? "?"} 个包`
-    );
+    writeFileSync(OUTPUT, content);
+    console.log(summary);
   } else {
-    process.stdout.write(expected);
+    process.stdout.write(content);
   }
 }

@@ -9,13 +9,13 @@
 // 里由 import.meta.url 算出的产物所在目录；wasm 文件（photon_rs_bg.wasm）复制到产物旁边。其余模块不受影响。
 // 用法：npm run bundle（npm 安装本包时经 prepare 也跑）；--out <目录> 把产物打到另一个目录（真容器测试用当前源码打一份）
 import { chmodSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { describeHead } from "../src/orchestration/worktree.ts";
 import { UPSTREAM_PACKAGES } from "../src/pi-runtime/upstream-version.ts";
+import { bundleOptions, createPhotonDirnamePlugin } from "./bundle-options.mjs";
 
 const root = new URL("../", import.meta.url);
 const at = (relative) => fileURLToPath(new URL(relative, root));
@@ -44,65 +44,27 @@ const outDir =
 const out = (name) => join(outDir, name);
 mkdirSync(outDir, { recursive: true });
 
-// photon 的包目录与它的入口、wasm
+// photon 的包目录与它的 wasm
 const photonDir = dirname(
   createRequire(import.meta.url).resolve("@silvia-odwyer/photon-node/package.json")
 );
 const PHOTON_WASM = "photon_rs_bg.wasm";
-let photonPatched = false;
-const photonDirname = {
-  name: "photon-dirname",
-  setup(pluginBuild) {
-    pluginBuild.onLoad(
-      { filter: /[\\/]@silvia-odwyer[\\/]photon-node[\\/]photon_rs\.js$/ },
-      async (args) => {
-        photonPatched = true;
-        const source = await readFile(args.path, "utf8");
-        return { contents: `var __dirname = __pigeonBundleDir;\n${source}`, loader: "js" };
-      }
-    );
-  },
-};
 // 自带的 DeepSeek 接入（决策 380、389、390）：模型接入模块不进包、运行时动态导入，只有 dist/ 而没有源码与依赖时（例如
 // 无人值守地在容器里用 DeepSeek 跑 Pigeon）没有可指的接入模块，因此单独打成自包含产物，经 --stream-fn 指向它
 // （端点根可经 DEEPSEEK_BASE_URL 改指）
-await build({
-  entryPoints: [at("src/pi-runtime/deepseek-stream-fn.ts")],
-  outfile: out("deepseek-stream-fn.mjs"),
-  bundle: true,
-  platform: "node",
-  format: "esm",
-  target: "node22",
-  logLevel: "warning",
-});
-await build({
-  entryPoints: [at("src/bundle-entry.ts")],
-  outfile: out("pigeon-cli.mjs"),
-  bundle: true,
-  platform: "node",
-  format: "esm",
-  target: "node22",
-  sourcemap: true,
-  sourcesContent: false,
-  // 打进包的 CommonJS 依赖里的 require 要有出处（ESM 产物里没有 require）；产物所在目录供 photon 找 wasm
-  banner: {
-    js: [
-      'import { createRequire as __pigeonCreateRequire } from "node:module";',
-      'import { fileURLToPath as __pigeonFileURLToPath } from "node:url";',
-      "const require = __pigeonCreateRequire(import.meta.url);",
-      'const __pigeonBundleDir = __pigeonFileURLToPath(new URL(".", import.meta.url));',
-    ].join("\n"),
-  },
-  plugins: [photonDirname],
+const photon = createPhotonDirnamePlugin();
+const [deepseekOptions, cliOptions] = bundleOptions(outDir, {
+  photonDirname: photon.plugin,
   define: {
     __PIGEON_BUNDLE__: "true",
     __PIGEON_UPSTREAM_VERSIONS__: JSON.stringify(upstreamVersions),
     __PIGEON_HARNESS_REF__: JSON.stringify(harnessRef),
   },
-  logLevel: "warning",
 });
+await build(deepseekOptions);
+await build(cliOptions);
 console.log("已生成 dist/deepseek-stream-fn.mjs（自带 DeepSeek 接入的自包含产物）");
-if (!photonPatched) {
+if (!photon.state.patched) {
   throw new Error(
     "photon 的入口没有经过 photonDirname 插件：包的文件布局变了，打包产物里会找不到 wasm"
   );
