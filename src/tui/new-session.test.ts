@@ -173,7 +173,10 @@ test("/new 的路径：~ 展开、相对当前工作目录解析；不存在或�
     writeFileSync(join(cwd, "notes.txt"), "x");
     assert.equal(newSessionDir(cwd, "~", home), home);
     assert.equal(newSessionDir(cwd, "~/code/myapp", home), join(home, "code", "myapp"));
-    assert.equal(newSessionDir(cwd, "~\\code\\myapp", home), join(home, "code", "myapp"));
+    // On POSIX, "\" is an ordinary file name character, so only Windows treats it as a separator.
+    if (process.platform === "win32") {
+      assert.equal(newSessionDir(cwd, "~\\code\\myapp", home), join(home, "code", "myapp"));
+    }
     // Tab 补全给带空格的路径加了引号
     mkdirSync(join(cwd, "my app"));
     assert.equal(newSessionDir(cwd, '"my app/"', home), join(cwd, "my app"));
