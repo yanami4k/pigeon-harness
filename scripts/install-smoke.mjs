@@ -34,7 +34,7 @@ const REQUIRED = [
 ];
 const FORBIDDEN_PATHS = ["docs/notes", ".pigeon/state"];
 const SECRET_FILE =
-  /(^|\/)(?:\.env(?:\..*)?|\.npmrc|secrets\.json|.*\.pem|.*\.key|id_rsa.*|id_ed25519(?:\..*)?|id_e.*)$/i;
+  /(^|\/)(?:\.env(?:\..*)?|\.npmrc|\.netrc|secrets\.json|.*\.pem|.*\.key|.*\.p12|.*\.pfx|id_rsa.*|id_ed25519(?:\..*)?|id_e.*)$/i;
 
 function fail(message) {
   throw new Error(message);
