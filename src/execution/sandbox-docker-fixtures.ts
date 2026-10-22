@@ -351,12 +351,20 @@ export function fakeSandboxDocker(initial: Partial<FakeDockerState> = {}): FakeS
     }
   };
   // Windows 上"容器内"路径取 MSYS 形式（sh 脚本里的 mkdir、git 都认）
-  const insideForm = (local: string): string =>
-    process.platform === "win32"
-      ? execFileSync("sh", ["-c", 'mkdir -p -- "$1" && cd -- "$1" && readlink -f .', "sh", local], {
-          encoding: "utf8",
-        }).trim()
-      : local;
+  const insideForm = (local: string): string => {
+    if (process.platform !== "win32") {
+      // The fake docker uses this directory as the exec cwd, so it has to exist.
+      mkdirSync(local, { recursive: true });
+      return local;
+    }
+    return execFileSync(
+      "sh",
+      ["-c", 'mkdir -p -- "$1" && cd -- "$1" && readlink -f .', "sh", local],
+      {
+        encoding: "utf8",
+      }
+    ).trim();
+  };
   const containerRoot = insideForm(localRoot);
   const cacheRoot = insideForm(localCacheRoot);
   const read = (): FakeDockerState =>
