@@ -559,7 +559,12 @@ export async function openSandbox(options: OpenSandboxOptions): Promise<Sandbox>
     throw new Error("sandbox needs a repository with at least one commit");
   }
   // 治理根在仓库的子目录里时，容器里的工作区根对应到同一个子目录
-  const relative = path.relative(repo, realpathSync(options.repoRoot)).split(path.sep).join("/");
+  // Both sides have to be spelled the way the native realpath resolves them: git reports the native form, while
+  // the plain realpath keeps an 8.3 short name, and mixing the two makes path.relative return a chain of "..".
+  const relative = path
+    .relative(repo, realpathSync.native(options.repoRoot))
+    .split(path.sep)
+    .join("/");
   const cloneRoot = options.containerRoot ?? SANDBOX_ROOT;
   const workspaceRoot = relative === "" ? cloneRoot : path.posix.join(cloneRoot, relative);
 
