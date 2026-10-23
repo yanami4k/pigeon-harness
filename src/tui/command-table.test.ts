@@ -24,3 +24,13 @@ test("MODEL-033 /login and /logout are program-level commands refused while runn
   assert.equal(names.filter((name) => name === "login").length, 1);
   assert.equal(names.filter((name) => name === "logout").length, 1);
 });
+
+test("MODEL-039 /model is a main-only command allowed while running", () => {
+  assert.deepEqual(lookupSlashCommand(slashTokens("/model")), {
+    name: "model",
+    usage: "/model [provider/model]",
+    whileRunning: { allow: true },
+    scope: "main",
+  });
+  assert.equal(rejectWhileRunning("/model deepseek/x"), undefined);
+});

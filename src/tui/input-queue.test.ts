@@ -162,6 +162,8 @@ test("命令放行表：只读类与 /quit 运行中可用，其余逐条说明�
     "rename",
     // 决策 513：思考强度从下一次请求起生效
     "effort",
+    // 决策 550：/model 运行中也允许，下一轮生效
+    "model",
   ]);
   const rejected = SLASH_COMMANDS.filter((spec) => !spec.whileRunning.allow).map(
     (spec) => spec.name

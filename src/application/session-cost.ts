@@ -1,7 +1,6 @@
-// 会话花费（决策 286 第 2 项，终端界面状态栏）：价格来源是会话记录里模型回复自带的用量与价格（usage.cost，显示为 $）。
-// DeepSeek 接入（provider deepseek）的回复自带价格为 0，这类回复按官方人民币价目
-// （state/model-pricing.ts，含高峰时段）与该条回复的开始、结束时刻计价，单列为人民币（显示为 ¥）。其余价格为零而用了 token 的
-// 记作"无价格的 token"，状态栏据此注明无价格，不当作免费。
+// 会话花费（决策 286 第 2 项、决策 551）：价格来源是 pi-ai 按模型对象的 cost 算出的每条回复用量（usage.cost，美元，显示为 $）。
+// 没有自带价格而用了 token 的记作“无价格的 token”；状态栏与 /status 只在有价格时写金额。
+// 不再做人民币计价与“cost 为 0 就当 DeepSeek”的启发式（决策 551）。
 // 本会话花费 = 会话自己的消息 + 它（连同各层）派出的子 agent 的会话（决策 480，在它名下的 subagents 文件夹里；带上下文起步时
 // 复制来的那一段不计）+ 从它分叉出的复盘会话。旧会话里的 worker 会话不再计入（决策 457）。/fork 分支是独立的会话，不计入。
 // 只读会话文件，不写任何记录。
@@ -12,8 +11,6 @@ import {
   sessionRefTime,
 } from "../persistence/session-catalog.ts";
 import type { SessionFileRef } from "../persistence/session-reader.ts";
-import { DEEPSEEK_PROVIDER } from "../pi-runtime/deepseek-model.ts";
-import { requestCostCny } from "../state/model-pricing.ts";
 import { subagentSessionsDir } from "../state/paths.ts";
 import type { SessionView } from "../state/session-view.ts";
 import { toolResultModelUsage } from "../state/tool-usage.ts";
@@ -29,39 +26,22 @@ export interface UsageLike {
 }
 
 export interface CostTally {
-  // 回复自带价格的金额（与 usage.cost 同一币种单位，显示为 $）
+  // 回复自带价格的金额（美元，usage.cost.total）
   cost: number;
   // 有自带价格的 token
   pricedTokens: number;
-  // DeepSeek 回复按官方人民币价目计的金额（元）与其 token
-  cny: number;
-  cnyTokens: number;
   // 用了 token 但没有价格可依的部分
   unpricedTokens: number;
 }
 
-// 计价需要的这条回复的来历：模型接入与请求的开始、结束时刻（Unix 毫秒；缺一取另一个）
-export interface UsageOrigin {
-  provider?: string;
-  startMs?: number;
-  endMs?: number;
-}
-
 export function emptyCostTally(): CostTally {
-  return { cost: 0, pricedTokens: 0, cny: 0, cnyTokens: 0, unpricedTokens: 0 };
+  return { cost: 0, pricedTokens: 0, unpricedTokens: 0 };
 }
 
-export function addUsage(tally: CostTally, usage: UsageLike, origin: UsageOrigin = {}): void {
+export function addUsage(tally: CostTally, usage: UsageLike): void {
   if (usage.cost.total > 0) {
     tally.cost += usage.cost.total;
     tally.pricedTokens += usage.totalTokens;
-    return;
-  }
-  const at = origin.endMs ?? origin.startMs;
-  if (origin.provider === DEEPSEEK_PROVIDER && at !== undefined && usage.totalTokens > 0) {
-    // 开始或结束任一落在高峰即按高峰价
-    tally.cny += requestCostCny(usage, origin.startMs ?? at, at).cny;
-    tally.cnyTokens += usage.totalTokens;
     return;
   }
   tally.unpricedTokens += usage.totalTokens;
@@ -70,46 +50,24 @@ export function addUsage(tally: CostTally, usage: UsageLike, origin: UsageOrigin
 export function mergeCostTally(into: CostTally, from: CostTally): void {
   into.cost += from.cost;
   into.pricedTokens += from.pricedTokens;
-  into.cny += from.cny;
-  into.cnyTokens += from.cnyTokens;
   into.unpricedTokens += from.unpricedTokens;
 }
 
-function numberOr(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 // 一个会话视图自己的花费：助手消息的用量，加工具执行中另发的模型请求（web_fetch 的提炼等）；分叉复制段不计（视图已跳过）。
-// 助手消息的模型接入取消息自带的 provider，开始时刻取消息自带的 timestamp、结束时刻取写入时刻；工具另发的请求沿用
-// 其前最近一条助手消息的模型接入，时刻取工具结果的写入时刻
-// counted：已计过的消息条目（多条分支共有的前段只计一次），计过的照常用来定模型接入
+// counted：已计过的消息条目（多条分支共有的前段只计一次）
 export function costTallyOfView(view: SessionView, counted?: Set<string>): CostTally {
   const tally = emptyCostTally();
-  let provider: string | undefined;
   for (const message of view.messages) {
-    if (message.role === "assistant" && typeof message.raw.provider === "string") {
-      provider = message.raw.provider;
-    }
     if (counted !== undefined) {
       if (counted.has(message.entryId)) continue;
       counted.add(message.entryId);
     }
     if (message.usage !== undefined) {
-      const startMs = numberOr(message.raw.timestamp);
-      addUsage(tally, message.usage, {
-        ...(provider !== undefined ? { provider } : {}),
-        ...(startMs !== undefined ? { startMs } : {}),
-        endMs: message.timestamp,
-      });
+      addUsage(tally, message.usage);
     }
     if (message.role === "toolResult") {
       const extra = toolResultModelUsage(message.raw.details);
-      if (extra !== undefined) {
-        addUsage(tally, extra, {
-          ...(provider !== undefined ? { provider } : {}),
-          endMs: message.timestamp,
-        });
-      }
+      if (extra !== undefined) addUsage(tally, extra);
     }
   }
   return tally;

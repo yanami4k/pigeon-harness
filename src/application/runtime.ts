@@ -141,7 +141,7 @@ import {
   thinkingSectionOf,
   truncationContinuationOf,
 } from "../state/settings.ts";
-import { resolveThinkingLevel } from "../state/thinking-config.ts";
+import { resolveThinkingLevel, thinkingLevelsFor } from "../state/thinking-config.ts";
 import {
   JOB_KILL_TOOL,
   JOB_OUTPUT_TOOL,
@@ -478,13 +478,13 @@ export interface RuntimeBundle {
     get(): ApprovalMode;
     set(mode: ApprovalMode): void;
   };
-  // 决策 513：会话中途切换思考强度：切换写一条会话记录，下一次请求起按新档位。supported 为 false（已知模型不支持推理）时
-  // 固定 off、set 不改；chosen：这个会话选过的档位（续接或 /reload 沿用的也算；没选过为 undefined）；adopt：接过别处已记下的
-  // 选择（重建换手的间隙里落在旧运行面上的切换），不再记一条
+  // 决策 513、553：会话中途切换思考强度：切换写一条会话记录，下一次请求起按新档位。levels 是这个型号可用的档位；
+  // 只有 ["off"]（已知模型不支持推理）时固定 off、set 不改；chosen：这个会话选过的档位（续接或 /reload 沿用的也算；
+  // 没选过为 undefined）；adopt：接过别处已记下的选择（重建换手的间隙里落在旧运行面上的切换），不再记一条
   thinking: {
     get(): ThinkingLevel;
     set(level: ThinkingLevel): void;
-    supported: boolean;
+    levels: readonly ThinkingLevel[];
     chosen(): ThinkingLevel | undefined;
     adopt(level: ThinkingLevel): void;
   };
@@ -613,19 +613,36 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     : {};
   // 决策 422：压缩所用的窗口取自模型信息（运行参数显式给的优先）；配置畸形在打开会话文件之前响亮失败
   const compactionConfig = resolveCompactionConfig(deps.compaction, modelInfo.contextWindow);
-  // 决策 390：本运行面的推理档位——启动参数 > 设置 > 按模型信息的缺省（支持推理的 high，其余 off）。
-  // 决策 513：会话里切换过的优先；已知模型不支持推理时固定 off
-  const reasoningSupported = !(
-    modelInfo.reasoning.source !== "unknown" && modelInfo.reasoning.value === false
-  );
-  const thinkingLevel = !reasoningSupported
-    ? "off"
-    : (deps.sessionThinkingLevel ??
-      resolveThinkingLevel({
-        requested: deps.thinkingLevel,
-        section: thinkingSectionOf(settings),
-        reasoning: modelInfo.reasoning.source === "unknown" ? undefined : modelInfo.reasoning.value,
-      }));
+  // 决策 390、553：本运行面的推理档位——启动参数 > 设置 > 按模型信息的缺省（可用档里最高）。
+  // 可用档位取自目录（pi-ai 的 getSupportedThinkingLevels）；已知不支持推理只有 off。
+  // 显式给的档位不支持即报错并列出可用档（不静默夹取）；会话记下的档位（续接、/reload）不支持时回到缺省并告警
+  const modelReasoning =
+    modelInfo.reasoning.source === "unknown" ? undefined : modelInfo.reasoning.value;
+  const thinkingLevels = thinkingLevelsFor({
+    levels:
+      modelInfo.thinkingLevels.source === "unknown" ? undefined : modelInfo.thinkingLevels.value,
+    reasoning: modelReasoning,
+  });
+  const explicitThinking = deps.thinkingLevel ?? thinkingSectionOf(settings)?.level;
+  if (explicitThinking !== undefined && !thinkingLevels.includes(explicitThinking)) {
+    throw new Error(
+      `effort "${explicitThinking}" is not supported by this model (use ${thinkingLevels.join(", ")})`
+    );
+  }
+  let thinkingLevel = resolveThinkingLevel({
+    ...(explicitThinking !== undefined ? { requested: explicitThinking } : {}),
+    reasoning: modelReasoning,
+    levels: thinkingLevels,
+  });
+  if (deps.sessionThinkingLevel !== undefined) {
+    if (thinkingLevels.includes(deps.sessionThinkingLevel)) {
+      thinkingLevel = deps.sessionThinkingLevel;
+    } else {
+      deps.storeWarn?.(
+        `effort "${deps.sessionThinkingLevel}" is not supported by ${modelInfo.provider}/${modelInfo.id}; using "${thinkingLevel}"`
+      );
+    }
+  }
   // 决策 513：这个会话选过的思考强度（续接、/reload 时沿用）；没选过为 undefined
   let thinkingChosen = deps.sessionThinkingLevel;
   // 推理开启时温度不生效：pi-ai 的 anthropic-messages 线路开思考时不发 temperature，DeepSeek 文档也写明思考模式下
@@ -1238,14 +1255,12 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
       }
     : deps.beforeCompaction;
   // 决策 420：模型请求的失败重试——主请求、压缩摘要与网页提炼都传设置里的重试次数（缺省 4）；接入模块声明的线路接受自带 fetch
-  // 时，每次重试记一条进会话记录
+  // 时，每次重试记一条进会话记录。决策 552：另加 60 秒空闲超时与内容未流出时的重试一次（各线路都生效，记录同上）
   const requestStreamFn = withRequestRetries(deps.streamFn, {
     maxRetries: modelRequestMaxRetriesOf(settings),
-    ...(retriesObservable(access?.declared?.api)
-      ? {
-          onRetry: (retry) => sessionStore.append(requestRetryEntry(retry, adapter.currentRunId())),
-        }
-      : {}),
+    idleTimeoutMs: 60_000,
+    observeFetch: retriesObservable(access?.declared?.api),
+    onRetry: (retry) => sessionStore.append(requestRetryEntry(retry, adapter.currentRunId())),
   });
   // 占位模型对象（真实模型元数据在模型接入插件里）：压缩摘要请求与网页提炼请求共用
   const placeholderModel = {
@@ -1605,7 +1620,7 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
       get: () => adapter.thinkingLevel(),
       set: (level: ThinkingLevel) => {
         const from = adapter.thinkingLevel();
-        if (!reasoningSupported || level === from) return;
+        if (!thinkingLevels.includes(level) || level === from) return;
         if (!adapter.setThinkingLevel(level)) return;
         thinkingChosen = level;
         sessionStore.append({
@@ -1613,11 +1628,11 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
           data: { version: SESSION_ENTRY_VERSION, from, to: level, changedAt: Date.now() },
         });
       },
-      supported: reasoningSupported,
+      levels: thinkingLevels,
       chosen: () => thinkingChosen,
       adopt: (level: ThinkingLevel) => {
         thinkingChosen = level;
-        if (reasoningSupported) adapter.setThinkingLevel(level);
+        if (thinkingLevels.includes(level)) adapter.setThinkingLevel(level);
       },
     },
     adapter,
@@ -1761,11 +1776,18 @@ export type ModelAccessOutcome =
   | { kind: "failed"; text: string; models?: string[] };
 
 // /login 列表的一行（决策 546）：随包或自定义、环境变量名、当前 key 来自哪
-interface ModelProviderChoice {
+export interface ModelProviderChoice {
   id: string;
   envName?: string;
   source?: "env" | "file";
   custom: boolean;
+}
+
+// /model 列表的一行（决策 550）：只列有凭据的随包服务商的目录型号
+export interface ModelChoiceRow {
+  provider: string;
+  id: string;
+  contextWindow?: number;
 }
 
 interface ModelAccessContext {
@@ -1820,6 +1842,33 @@ export async function listModelProviders(
       : {}),
     custom: context.custom.some((provider) => provider.id === id),
   }));
+}
+
+// 决策 550：/model 的候选——只列有凭据（env 或文件）的随包服务商的目录型号；自定义服务商不列表（用 provider/id 直接给）
+export async function listCredentialedModels(
+  request: Pick<PackagedModelAccessRequest, "settings" | "env" | "homeDir" | "warn">
+): Promise<ModelChoiceRow[]> {
+  const context = await loadModelAccessContext({ ...request, credentialsFile: true });
+  const rows: ModelChoiceRow[] = [];
+  for (const provider of context.facts.names()) {
+    if (context.custom.some((entry) => entry.id === provider)) continue;
+    if (context.source.sourceOf(provider) === undefined) continue;
+    for (const id of context.facts.modelsOf(provider)) {
+      const window = context.catalog?.(provider, id)?.contextWindow;
+      rows.push({ provider, id, ...(window !== undefined ? { contextWindow: window } : {}) });
+    }
+  }
+  return rows.sort((a, b) =>
+    a.provider === b.provider
+      ? a.id < b.id
+        ? -1
+        : a.id > b.id
+          ? 1
+          : 0
+      : a.provider < b.provider
+        ? -1
+        : 1
+  );
 }
 
 export async function resolvePackagedModelAccess(

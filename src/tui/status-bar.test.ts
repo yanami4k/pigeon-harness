@@ -54,7 +54,7 @@ function makeShell(options: { cols?: number; sessionId?: SessionId; root?: strin
   };
 }
 
-test("状态栏在输入框下方：上下文用量随最近一次回复与压缩更新、本会话 token 数按轮累计；不写模型名与花费", async () => {
+test("状态栏在输入框下方：上下文用量随最近一次回复与压缩更新、本会话 token 数与美元花费按轮累计", async () => {
   const { shell, term, runtime, cleanup } = makeShell({});
   try {
     runtime.context = { tokens: 0, contextWindow: 200_000 };
@@ -72,7 +72,7 @@ test("状态栏在输入框下方：上下文用量随最近一次回复与压�
       usage: usageOf(50_000, 0.0123),
     });
     await settle();
-    assert.equal(lastLine(term).trim(), "ctx 25% (50k/200k) · 50k tokens");
+    assert.equal(lastLine(term).trim(), "ctx 25% (50k/200k) · 50k tokens · $0.0123");
     runtime.emit(RuntimeEventKind.TurnCompleted, {
       stopReason: "stop",
       syntheticFailure: false,
@@ -82,14 +82,14 @@ test("状态栏在输入框下方：上下文用量随最近一次回复与压�
     runtime.context = { tokens: 8000, contextWindow: 200_000 };
     runtime.compacted(50_000, 8000);
     await settle();
-    assert.equal(lastLine(term).trim(), "ctx 4% (8.0k/200k) · 51k tokens");
-    assert.doesNotMatch(lastLine(term), /cost|\$|deepseek/);
+    assert.equal(lastLine(term).trim(), "ctx 4% (8.0k/200k) · 51k tokens · $0.0130");
+    assert.doesNotMatch(lastLine(term), /cost|deepseek|¥/);
   } finally {
     cleanup();
   }
 });
 
-test("有价格与没有价格的回复一样计 token 数，不写价格；没有上下文窗口信息时只写 token 数", async () => {
+test("没有自带价格的回复只计 token；有价格的加写美元（决策 551）；没有上下文窗口信息时只写 token 与美元", async () => {
   const { shell, term, runtime, cleanup } = makeShell({});
   try {
     shell.start();
@@ -110,52 +110,41 @@ test("有价格与没有价格的回复一样计 token 数，不写价格；没�
       usage: usageOf(100, 0.5),
     });
     await settle();
-    assert.equal(lastLine(term).trim(), "12k tokens");
-    assert.doesNotMatch(lastLine(term), /no price|\$/);
+    assert.equal(lastLine(term).trim(), "12k tokens · $0.5000");
   } finally {
     cleanup();
   }
 });
 
-test("DeepSeek 会话：按人民币价目计的部分同样计 token 数，状态栏不写金额", async () => {
-  const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-status-deepseek-"));
-  const sessionId = newSessionId();
-  const term = new MockTerminal(100, 30);
-  const runtime = new ScriptedRuntime(sessionId);
-  const shell = new PigeonTuiShell({
-    terminal: term,
-    runtime,
-    sessionId,
-    logDir,
-    provider: "deepseek",
-  });
-  // 2026-09-29（周二）北京时间 10:00 为高峰、20:00 为空闲
-  const peak = Date.UTC(2026, 8, 29, 2, 0, 0);
-  const offPeak = Date.UTC(2026, 8, 29, 12, 0, 0);
-  const completed = { stopReason: "stop", syntheticFailure: false, usage: usageOf(1_000_000, 0) };
+test("MODEL-040 决策 551：自带价格按 pi-ai 的美元金额相加；没有价格的一轮只加 token", async () => {
+  const { shell, term, runtime, cleanup } = makeShell({});
   try {
     shell.start();
     await settle();
     term.input("任务");
     term.input("\r");
-    // 高峰：缓存未命中输入 100 万 token，¥1 × 2
-    runtime.emit(RuntimeEventKind.TurnStarted, {}, peak);
-    runtime.emit(RuntimeEventKind.TurnCompleted, completed, peak + 5000);
+    runtime.emit(RuntimeEventKind.TurnStarted, {});
+    runtime.emit(RuntimeEventKind.TurnCompleted, {
+      stopReason: "stop",
+      syntheticFailure: false,
+      usage: usageOf(1_000_000, 0.5),
+    });
     await settle();
-    assert.equal(lastLine(term).trim(), "1.0M tokens");
+    assert.equal(lastLine(term).trim(), "1.0M tokens · $0.5000");
     assert.doesNotMatch(lastLine(term), /¥/);
-    // 空闲：¥1
-    runtime.emit(RuntimeEventKind.TurnStarted, {}, offPeak);
-    runtime.emit(RuntimeEventKind.TurnCompleted, completed, offPeak + 5000);
+    runtime.emit(RuntimeEventKind.TurnCompleted, {
+      stopReason: "stop",
+      syntheticFailure: false,
+      usage: usageOf(250_000, 0),
+    });
     await settle();
-    assert.equal(lastLine(term).trim(), "2.0M tokens");
+    assert.equal(lastLine(term).trim(), "1.3M tokens · $0.5000");
   } finally {
-    shell.stop();
-    rmSync(logDir, { recursive: true, force: true });
+    cleanup();
   }
 });
 
-test("DeepSeek 会话续接：主会话与复盘的用量同样累计；旧会话里的 worker 不再计入（决策 457）", async () => {
+test("没有价格的会话续接：主会话与复盘的用量同样累计；旧会话里的 worker 不再计入（决策 457）", async () => {
   const root = mkdtempSync(join(tmpdir(), "pigeon-tui-cost-deepseek-"));
   try {
     const sessionsDir = join(root, ".pigeon", "state", "sessions");
@@ -240,7 +229,7 @@ test("续接会话从会话记录累计已有用量：主会话 + 其复盘；�
       assert.equal(lastLine(term).trim(), "0 tokens", "新开时从零算");
       shell.announceResumed(root, ["续跑报告"]);
       await settle();
-      assert.equal(lastLine(term).trim(), "1.3k tokens");
+      assert.equal(lastLine(term).trim(), "1.3k tokens · $0.0530");
       assert.ok(screenText(term).includes("续跑报告"));
     } finally {
       cleanup();
@@ -290,16 +279,15 @@ test("窄终端换短写法、不折行，最后硬截；上下文用量在最�
     context: { tokens: 46_000, contextWindow: 200_000 },
     cost: {
       cost: 1.23456,
-      pricedTokens: 1_000_000,
-      cny: 0.5,
-      cnyTokens: 150_000,
+      pricedTokens: 1_150_000,
       unpricedTokens: 50_000,
     },
   };
-  assert.equal(statusBarText(state, 200), "ctx 23% (46k/200k) · 1.2M tokens");
-  assert.equal(statusBarText(state, 20), "ctx 23% · 1.2M");
+  assert.equal(statusBarText(state, 200), "ctx 23% (46k/200k) · 1.2M tokens · $1.2346");
+  assert.equal(statusBarText(state, 22), "ctx 23% · 1.2M · $1.23");
+  assert.equal(statusBarText(state, 20), "ctx 23% · 1.2M · $1.");
   assert.equal(statusBarText(state, 5), "ctx 2");
-  assert.equal(statusBarText({ cost: state.cost }, 200), "1.2M tokens");
+  assert.equal(statusBarText({ cost: state.cost }, 200), "1.2M tokens · $1.2346");
 
   const { shell, term, runtime, cleanup } = makeShell({ cols: 40 });
   try {
@@ -416,7 +404,11 @@ test("MODEL-031 the subagent view keeps the owning session's model until per-sub
         // 子 agent 自己有另一个型号：M1 里状态栏仍写所属会话的
         modelId: "agent-own-model",
         bundle: {
-          thinking: { get: () => "high", set: () => {}, supported: true },
+          thinking: {
+            get: () => "high",
+            set: () => {},
+            levels: ["off", "low", "medium", "high", "xhigh"],
+          },
           adapter: { contextUsage: () => ({ tokens: 10, contextWindow: 1000 }) },
           sessionStore: { filePath: async () => undefined },
           grantStore: {},

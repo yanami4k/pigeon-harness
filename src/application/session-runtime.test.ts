@@ -9,7 +9,7 @@ import { createFakeStreamFn } from "../pi-runtime/fixtures.ts";
 import { newSessionId } from "../state/ids.ts";
 import type { McpSession } from "./mcp.ts";
 import { disposeRuntime } from "./runtime.ts";
-import { openSessionRuntime } from "./session-runtime.ts";
+import { modelFromEntries, openSessionRuntime } from "./session-runtime.ts";
 
 function fakeMcp(): { session: McpSession; closed: () => boolean } {
   let closed = false;
@@ -92,6 +92,79 @@ test("MODEL-013, MODEL-014 the session record keeps the model and a resume uses 
         modelId: "custom",
         persistThinking: true,
       },
+      startMcp: async () => fakeMcp().session,
+    });
+    try {
+      const snapshot = resumed.bundle.adapter.snapshot();
+      assert.equal(snapshot.model.provider, "deepseek");
+      assert.equal(snapshot.model.id, "deepseek-chat");
+    } finally {
+      await disposeRuntime(resumed.bundle);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MODEL-039 modelFromEntries takes the last of a model switch and a run start", () => {
+  const runStart = (provider: string, id: string) => ({
+    type: "custom",
+    customType: "pigeon.run-start",
+    data: { model: { provider, id } },
+  });
+  const switched = (provider: string, id: string) => ({
+    type: "custom",
+    customType: "pigeon.model-switch",
+    data: { to: { provider, id } },
+  });
+  assert.deepEqual(modelFromEntries([]), undefined);
+  assert.deepEqual(modelFromEntries([runStart("a", "1"), switched("b", "2")]), {
+    provider: "b",
+    id: "2",
+  });
+  assert.deepEqual(modelFromEntries([switched("b", "2"), runStart("c", "3")]), {
+    provider: "c",
+    id: "3",
+  });
+});
+
+test("MODEL-039 /model switch recorded in the session; a resume without explicit flags uses it", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pigeon-session-runtime-switch-"));
+  try {
+    const sessionId = newSessionId();
+    const first = await openSessionRuntime({
+      governanceRoot: root,
+      sessionId,
+      streamFn: createFakeStreamFn({ replies: [{ text: "好" }] }),
+      flags: {
+        yolo: true,
+        provider: "anthropic",
+        modelId: "claude-sonnet",
+        persistThinking: true,
+      },
+      startMcp: async () => fakeMcp().session,
+    });
+    try {
+      await first.bundle.adapter.run("hi");
+      first.bundle.sessionStore.append({
+        customType: "pigeon.model-switch",
+        data: {
+          version: 1,
+          from: { provider: "anthropic", id: "claude-sonnet" },
+          to: { provider: "deepseek", id: "deepseek-chat" },
+          changedAt: Date.now(),
+        },
+      });
+      await first.bundle.sessionStore.flush();
+    } finally {
+      await disposeRuntime(first.bundle);
+    }
+    const resumed = await openSessionRuntime({
+      governanceRoot: root,
+      sessionId,
+      resume: true,
+      streamFn: createFakeStreamFn({ replies: [{ text: "ok" }] }),
+      flags: { yolo: true, provider: "custom", modelId: "custom", persistThinking: true },
       startMcp: async () => fakeMcp().session,
     });
     try {

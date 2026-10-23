@@ -17,6 +17,7 @@ import {
   UNKNOWN_CACHE_RULE,
   type Unknown,
 } from "./cache-rules.ts";
+import type { ThinkingLevel } from "./runtime-events.ts";
 
 const Closed = { additionalProperties: false } as const;
 const Price = () => Type.Number({ minimum: 0 });
@@ -154,6 +155,15 @@ export interface ModelCost {
   currency: string;
 }
 
+// 没有 thinkingLevelMap 时的可用档位（pi-ai 的规则：xhigh/max 需要 map 显式给出）
+export const DEFAULT_THINKING_LEVELS: readonly ThinkingLevel[] = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+];
+
 // 一个来源能给出的值（各项可缺）
 export interface ModelInfoValues {
   cost?: ModelCost;
@@ -164,6 +174,8 @@ export interface ModelInfoValues {
   // 请求线路（pi-ai 的 api 标识）与地址：接入声明与目录给得出，设置里可覆盖线路
   api?: string;
   baseUrl?: string;
+  // 这个型号支持的思考档位（pi-ai 的 getSupportedThinkingLevels；只有目录给得出）
+  thinkingLevels?: readonly ThinkingLevel[];
 }
 
 // pi-ai 自带目录的查询：按 provider 与模型名，查不到为 undefined
@@ -199,6 +211,8 @@ export interface ResolvedModelInfo {
   // 请求线路与地址（目录外的型号靠它们决定发到哪里）
   api: Sourced<string>;
   baseUrl: Sourced<string>;
+  // 支持的思考档位；未知时由调用方按 reasoning 兜底
+  thinkingLevels: Sourced<readonly ThinkingLevel[]>;
   cache: ResolvedCacheRule;
 }
 
@@ -247,6 +261,8 @@ export function resolveModelInfo(inputs: ModelInfoInputs): ResolvedModelInfo {
     }
     return { source: "unknown" };
   };
+  const reasoning = pick("reasoning");
+  const levels = pick("thinkingLevels");
   return {
     provider,
     id,
@@ -254,10 +270,20 @@ export function resolveModelInfo(inputs: ModelInfoInputs): ResolvedModelInfo {
     cost: pick("cost"),
     contextWindow: pick("contextWindow"),
     maxTokens: pick("maxTokens"),
-    reasoning: pick("reasoning"),
+    reasoning,
     input: pick("input"),
     api: pick("api"),
     baseUrl: pick("baseUrl"),
+    // 可用档位：目录给出的优先；没有就按已知的推理支持推导（不支持只有 off；支持且没有 map 时 xhigh/max 不可用）
+    thinkingLevels:
+      levels.source !== "unknown"
+        ? levels
+        : reasoning.source !== "unknown"
+          ? {
+              source: reasoning.source,
+              value: reasoning.value ? DEFAULT_THINKING_LEVELS : ["off"],
+            }
+          : { source: "unknown" },
     cache: resolveCacheRule(provider, id, declared, entry?.cache),
   };
 }

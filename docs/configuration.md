@@ -85,6 +85,16 @@
 { "web": { "enabled": false } }
 ```
 
+## 模型接入
+
+- **凭据**：环境变量优先（如 `DEEPSEEK_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`）；终端界面里 `/login` 选服务商、粘贴 key，存在 `~/.pigeon/credentials.json`（只有本账户能读），`/logout <provider>` 删掉。`pigeon run` 只认环境变量。
+- **选服务商与型号**：只有一家有凭据时自动用它；多家有凭据又没指定时 `pigeon run` 报错，终端界面打出候选后退出。没给型号时用用户设置的 `model.lastUsed`；都定不下来时列出该服务商的目录型号。
+- **`/model`**：会话中途换型号，只列有凭据的随包服务商的目录型号；`/model <provider>/<id>` 直接给（自定义服务商只能这样给）。从下一次请求起生效，记进会话记录并在续接时恢复；运行中也可用（本轮结束后换）。沙箱会话与子 agent 视图里不可用。
+- **随包线路**：anthropic、openai、openai-compatible、google；目录外的型号按所选服务商的线路发。`--stream-fn` 仍可换成自带模型的接入模块（高级用法）。
+- **自定义服务商**：只认用户层设置的 `model.providers.<id>`，字段 `api`（`openai-completions` 或 `anthropic-messages`）、`baseUrl`（http/https）、`keyEnv`（环境变量名）；项目层写了即报错；id 不得与随包服务商重名。
+- **代理**：设了 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` 任一即所有线路走同一代理（加载失败报错，不静默直连）。
+- **花费**：状态栏与 `/status` 写 pi-ai 按模型价目算出的美元金额，有价才写；不做人民币计价与峰谷价。
+
 ## 单轮输出上限
 
 不配置时 Pigeon 不另设单轮输出上限：按模型定义的上限发，由 provider 按剩余上下文收窄。自带的 DeepSeek 接入按官方上限 393,216 发。"模型定义没有上限（`maxTokens` 缺失或不为正）时发 32,000"只适用于第三方模块自构的模型对象，不涉及自带的 DeepSeek。启动参数 `--max-output-tokens <n>` 设了上限时，取它与模型上限中较小的那个；设了的值记进注入快照与运行开始条目的 model 段，没设的不记（表示跟模型）。
@@ -103,9 +113,11 @@
 
 每次重试在会话记录里写一条 `pigeon.request-retry`（第几次重试、上一次的 HTTP 状态码，连接失败时记错误文字、两次之间实测等待的毫秒数），`pigeon trace` 与 `pigeon replay` 各列一行。记录靠接管请求选项里的 `fetch` 得来，只在接入模块声明的线路（`modelInfo.api`）为 `anthropic-messages`、`openai-completions`、`openai-responses`、`azure-openai-responses` 时进行（自带的 DeepSeek 接入声明 `anthropic-messages`）；pi-ai 的 Google 线路不接受自带的 `fetch`，其余线路照样重试，只是不记。第三方模块须把调用选项原样转交 pi-ai，重试次数与记录才生效。
 
+**空闲超时与内容前的重试**（决策 552）：一次模型请求 60 秒没有任何事件即中止这次尝试；还没收到正文、思考或工具调用内容时，遇到错误或空闲超时自动重发一次；已经有内容时收到错误按失败收尾、已收到的内容保留，不重试；调用方自己中止（Esc、墙钟上限）不重试。重试同样记一条 `pigeon.request-retry`（`error` 写原错误或 `idle timeout after 60000ms`）。这套适用于每条线路，包括不收自带 fetch 的 Google。
+
 ## 推理档位（思考）
 
-Pigeon 缺省开思考（决策 390）：模型信息表明支持推理（`reasoning` 为真）的模型，缺省档位为 `high`；不支持推理或不知道是否支持的模型缺省为 `off`，不发任何思考参数，行为与以前相同。是否支持推理按下文"模型信息"的取法定；自带的 DeepSeek 接入声明支持推理，缺省即开思考。
+Pigeon 缺省开思考（决策 390）：模型信息表明支持推理（`reasoning` 为真）的模型，缺省档位为 `high`；不支持推理或不知道是否支持的模型缺省为 `off`，不发任何思考参数，行为与以前相同。是否支持推理按下文"模型信息"的取法定；自带的 DeepSeek 接入声明支持推理。启动参数或设置给的档位不在该型号的可用档里时启动即报错并列出可用档（决策 553，不静默换成相邻档）。
 
 档位可选 `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`。取值优先级从高到低：
 
@@ -166,7 +178,7 @@ export const modelInfo = {
 };
 ```
 
-`currency` 缺省为 USD。不导出 `modelInfo` 的老模块照常可用；导出了但字段不合规，启动时报错并指出字段。价格、窗口、输出上限、是否支持推理与输入类型都声明了就不加载 pi-ai 目录。自带的 DeepSeek 接入声明官方人民币非高峰价（`currency` 为 CNY；高峰加价由计费另算）；它交给 pi-ai 的模型对象价格仍为 0，现有的花费计算与状态栏不变。它按服务商文档声明 `deepseek-flash` 能看图（`input` 为 `["text", "image"]`，交给 pi-ai 的模型对象与声明取同一份，否则 pi-ai 发请求前会把图片换成占位文字），其他型号只收文字。
+`currency` 缺省为 USD。不导出 `modelInfo` 的老模块照常可用；导出了但字段不合规，启动时报错并指出字段。价格、窗口、输出上限、是否支持推理与输入类型都声明了就不加载 pi-ai 目录。自带的 DeepSeek 接入不声明价格（决策 551：不做人民币计价）；它交给 pi-ai 的模型对象价格仍为 0，这类回复只计 token、状态栏不写金额。它按服务商文档声明 `deepseek-flash` 能看图（`input` 为 `["text", "image"]`，交给 pi-ai 的模型对象与声明取同一份，否则 pi-ai 发请求前会把图片换成占位文字），其他型号只收文字。
 
 ### 设置里的覆盖值
 
@@ -455,7 +467,7 @@ config/secrets.json
 - 顶部没有标题行（决策 460）：主视图不显示会话名与会话号（当前会话的名字在会话面板的卡片上可见；`/rename` 改名，改成了在消息区写一行暗色的 `renamed to <名字>`）。进入面板会话时，顶上有一行暗色的说明，只写在哪、怎么回去：`session <名字> · esc to go back to the panel`。
 - 状态行只写状态词：`running`、`cancelling`（按 Esc 之后等这一轮收尾）、`resuming`；空闲与审批挂着时不写字。会话面板上写会话数与在等回应的数（如 `panel: 3 sessions, 1 waiting`）；进入的子 agent 写它的名字与状态。
 - 审批（决策 467、472、509）：挂着时整块显示在它所属会话的视图底部的审批区（在输入框上方；不是浮层，不进消息流），回答键归它。审批区画一个圆角边框（暗色）：第一行是工具名（加粗），接着是要批的那件事本身（`run_command` 的命令、改文件的路径、联网的网站，正常色）与警示（受保护路径、工作区外，正常色）；来源、其余参数（`args: …`）与细节（`argv`、`cwd` 等）一律暗色；改动预览的增行绿、删行红；最后是按键行，按键字母正常色、说明暗色。已经专门显示过的字段（命令、路径）不在参数里重复，`run_command` 预览里重复命令的那行也去掉；原始参数里有、专门显示没覆盖的照旧列出，不藏东西；内容一律先经 036 净化。框线用的是圆角与横竖线字符，把这类字符按两格宽显示的终端里会错位。审批区的高度上限按窗口高度取，内容太长（改动预览等）时留开头与末尾的按键行，中间写明省略了几行，输入框与状态行不会被挤掉。答完审批区即收起，消息流里只留一行暗色的结论，按宽度截断，例如 `✓ approved run_command: npm test`、`✓ allowed for this session: run_command npm test`、`✗ rejected write_file: a.txt (理由)`；子 agent 的请求在前面标路径（`[general-1] …`）。完整内容在会话记录里，`pigeon trace` 可查；回看历史时审批只显示那一行结论，不还原整块。
-- 状态栏（决策 468、469、499、513、514）：输入框下方一行，写当前会话的审批模式、正在看的代理的思考强度、上下文用量与本会话累计的 token 数，例如 `bypass · high · ctx 23% (46k/200k) · 1.2M tokens`，窄时 `bypass · high · ctx 23% · 1.2M`；思考强度切换时当场更新，子 agent 视图里写那个子 agent 的，只看历史的视图里写那个会话记录里最后的档位。审批模式 `ask`（询问）或 `bypass`（放手：除拒绝名单与硬性禁区外一律直接放行，不经任何判断）。配色（决策 514）：`ask` 青色、`bypass` 橙色（256 色 208 号）；思考强度 `off` 正常前景色、`low` 绿、`medium` 黄、`high` 品红、`xhigh` 红（`minimal` 同 `low`，`max`（只能在设置或启动参数里给）同 `xhigh`）；上下文用量、token 数与分隔的圆点照旧暗色。窄到模式或档位只剩半截时那一截不上色。子 agent 视图与只看历史的视图里的状态栏同样上色；`/status` 的 `mode` 行是纯文字，不上色，仍写 `effort <档位>`。`bypass` 就是 `--yolo` 那一档：内部值、会话记录（`pigeon.approval-mode`）、`--yolo` 与 `--sandbox-approval yolo|prompt` 的写法都不变，`pigeon trace` 照写 `yolo`；`ask` 对应内部值 `prompt`；token 数是本会话累计用量（每次请求的输入含缓存读写与输出之和，含本会话的复盘），续接后接着累计；没有上下文窗口信息时只写 token 数。不写模型名（在欢迎头里）与花费（花费只对按量计费的 key 有意义；会话记录里的用量照旧记，`pigeon trace` 可查）。`pigeon trace` 与 `pigeon session list` 同样只写 token 数、不写金额（决策 476）：trace 每轮写输入、输出、缓存读写各多少与这一轮合计（如 `| 1.2k tokens`），session list 每行写会话合计（如 `12k tokens`），写法与状态栏相同。
+- 状态栏（决策 468、469、499、513、514）：输入框下方一行，写当前会话的审批模式、正在看的代理的思考强度、上下文用量与本会话累计的 token 数，例如 `bypass · high · ctx 23% (46k/200k) · 1.2M tokens · $0.0123`，窄时 `bypass · high · ctx 23% · 1.2M · $0.01`；思考强度切换时当场更新，子 agent 视图里写那个子 agent 的，只看历史的视图里写那个会话记录里最后的档位。审批模式 `ask`（询问）或 `bypass`（放手：除拒绝名单与硬性禁区外一律直接放行，不经任何判断）。配色（决策 514）：`ask` 青色、`bypass` 橙色（256 色 208 号）；思考强度 `off` 正常前景色、`low` 绿、`medium` 黄、`high` 品红、`xhigh` 红（`minimal` 同 `low`，`max`（只能在设置或启动参数里给）同 `xhigh`）；上下文用量、token 数与分隔的圆点照旧暗色。窄到模式或档位只剩半截时那一截不上色。子 agent 视图与只看历史的视图里的状态栏同样上色；`/status` 的 `mode` 行是纯文字，不上色，仍写 `effort <档位>`。`bypass` 就是 `--yolo` 那一档：内部值、会话记录（`pigeon.approval-mode`）、`--yolo` 与 `--sandbox-approval yolo|prompt` 的写法都不变，`pigeon trace` 照写 `yolo`；`ask` 对应内部值 `prompt`；token 数是本会话累计用量（每次请求的输入含缓存读写与输出之和，含本会话的复盘），续接后接着累计；没有上下文窗口信息时只写 token 数。美元花费取 pi-ai 按模型价目算出的金额（决策 551），有价才写、太窄或写不下时省略；不做人民币换算、没有峰谷价。`pigeon trace` 与 `pigeon session list` 同样只写 token 数、不写金额（决策 476）：trace 每轮写输入、输出、缓存读写各多少与这一轮合计（如 `| 1.2k tokens`），session list 每行写会话合计（如 `12k tokens`），写法与状态栏相同。
 - 审批模式（决策 469、499）：`Shift+Tab` 在询问与放手之间切换（按键说明写 `(ask / bypass)`），当场生效，只对当前会话，之后的工具调用按新模式判定；已经挂着的审批照旧要答（挂着时按键归审批，`Shift+Tab` 不切换）。每次切换在会话记录里记一条（时刻、从什么到什么），`pigeon trace` 可见；续接（重新启动程序）时模式按启动参数定（`--yolo`；沙箱缺省放手，`--sandbox-approval prompt` 改回询问），不沿用记录里最后的模式。`/reload`、换进工作树、`/resume` 换会话都沿用当前模式。面板派出的会话沿用派出时当前会话的模式，之后各切各的；会话在当前与面板之间换手时带着自己的模式。切换不改审批规则：受保护路径等硬性规则在放手模式下照旧；`run_command` 的说明文字与写工具能否写工作区外按开会话时的模式。
 - 模型名（决策 453）：欢迎头里写作"模型 id · 服务商"，例如 `deepseek-flash · deepseek`，取运行面的模型信息：接入模块声明了模型（见下文"模型信息"）即用它，否则用启动参数 `--provider`、`--model`；两者都没给（只有占位的 `custom`）时不显示模型。
 - 收尾行（决策 452）：一次工作（从发出消息到 agent 干完，含收尾钩子拦下后接着跑的各轮，以及刚收尾就由通知接着跑的一轮，例如换进工作树后自动续上的那轮）结束时，消息区落一行：正常为 `done · 1m 23s`；按 Esc 打断为 `interrupted · 12s`；请求出错为 `error · 45s · 原因`（原因只取第一行）；续跑到上限仍被截断为 `stopped: output limit · 2m 3s`；被打转检测叫停为 `stopped: looping`。不再逐轮显示轮次标记，也不显示失败分类（分类照样记在会话记录里，`pigeon trace` 可查）。`/resume` 回看历史时每次运行各一行，用时取那次运行的开始与收尾时刻。
