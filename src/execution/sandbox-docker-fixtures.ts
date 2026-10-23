@@ -5,15 +5,52 @@
 // 按 timeout 找不到程序失败）。
 // 卷：run 带 -v <名>:<路径> 时自动建卷（与真 docker 一致）；volume rm 在有容器挂着时按"volume is in use"失败；
 // system df -v --format '{{json .Volumes}}' 按真 docker 的字段名（Name、Size、Links）输出卷清单。
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const SANDBOX_DOCKER = `
+// 假 docker 用本机的 POSIX shell 跑"容器内"的命令。Windows 上开局定一次绝对路径：先看同一目录，再看 git
+// 旁边的 usr\bin 与 bin（Git for Windows 的 sh 在那里）。不能让子进程再按 PATH 找一遍——GitHub 的
+// Windows runner 上这一找就是 spawnSync sh ENOENT。
+function localShell(): string {
+  if (process.platform !== "win32") {
+    return "/bin/sh";
+  }
+  const dirs = (process.env.PATH ?? "").split(";").filter((dir) => dir !== "");
+  const relative = [
+    ["sh.exe"],
+    ["..", "usr", "bin", "sh.exe"],
+    ["..", "bin", "sh.exe"],
+    ["usr", "bin", "sh.exe"],
+  ];
+  for (const dir of dirs) {
+    for (const segments of relative) {
+      const candidate = join(dir, ...segments);
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  throw new Error(
+    "the sandbox tests need a POSIX shell: install Git for Windows or put its usr\\bin on PATH"
+  );
+}
+
+const SANDBOX_DOCKER = (shell: string): string => `
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 const [stateFile, ...args] = process.argv.slice(2);
+// The POSIX shell for the "container" commands, resolved to an absolute path once by the fixture: a bare \`sh\`
+// is looked up again in the PATH the child gets, and on the GitHub Windows runner that lookup fails with ENOENT.
+const SHELL = ${JSON.stringify(shell)};
 // 状态文件的锁：锁目录（mkdir 原子）+ 持有者 pid。只在读、改、写这段持锁；exec 记下调用后放锁再起进程。
 const lockDir = stateFile + ".lock";
 const holderFile = lockDir + "/pid";
@@ -158,13 +195,19 @@ release();
 let i = 1;
 let cwd = process.cwd();
 let interactive = false;
+// "容器内"路径（MSYS 形式）换回本机 Windows 路径：/c/a/b → C:\\a\\b。在 JS 里算，不经 sh/cygpath，
+// 它们都要再查一次 PATH。
+const msysToWindows = (value) => {
+  const match = /^\\/([A-Za-z])(\\/.*)?$/.exec(value);
+  if (match === null) return value;
+  const rest = (match[2] ?? "/").split("/").join("\\\\");
+  return match[1].toUpperCase() + ":" + rest;
+};
 for (;;) {
   if (args[i] === "-i") { interactive = true; i++; continue; }
   if (args[i] === "-w") {
     cwd = args[i + 1];
-    if (process.platform === "win32" && cwd.startsWith("/")) {
-      cwd = spawnSync("sh", ["-c", 'cygpath -w "$1"', "sh", cwd]).stdout.toString().trim();
-    }
+    if (process.platform === "win32" && cwd.startsWith("/")) cwd = msysToWindows(cwd);
     i += 2;
     continue;
   }
@@ -181,8 +224,8 @@ if (inner === "git" && state.noGit.includes(container.image)) {
   if (wrapped) fail(127, "timeout: failed to run command 'git': No such file or directory");
   fail(127, 'OCI runtime exec failed: exec failed: unable to start container process: exec: "git": executable file not found in $PATH: unknown');
 }
-if (program === "/bin/sh" && process.platform === "win32") program = "sh";
-if (process.platform === "win32" && (program === "sh" || program === "/bin/sh") && rest[0] === "-c") {
+if (process.platform === "win32" && (program === "sh" || program === "/bin/sh")) program = SHELL;
+if (process.platform === "win32" && program === SHELL && rest[0] === "-c") {
   rest[1] = 'export PATH="/usr/bin:$PATH"\\n' + rest[1];
 }
 // "容器内"用户的配置目录指到假 docker 自己的临时目录（不写跑测试的用户的 ~/.config）
@@ -244,7 +287,7 @@ export function fakeSandboxDocker(initial: Partial<FakeDockerState> = {}): FakeS
   const stateFile = join(dir, "state.json");
   const localRoot = join(dir, "container-workspace");
   const localCacheRoot = join(dir, "container-cache");
-  writeFileSync(script, SANDBOX_DOCKER);
+  writeFileSync(script, SANDBOX_DOCKER(localShell()));
   const state: FakeDockerState = {
     images: ["sandbox-test:latest"],
     imageUsers: { "sandbox-test:latest": "pigeon" },
@@ -350,20 +393,16 @@ export function fakeSandboxDocker(initial: Partial<FakeDockerState> = {}): FakeS
       }
     }
   };
-  // Windows 上"容器内"路径取 MSYS 形式（sh 脚本里的 mkdir、git 都认）
+  // Windows 上"容器内"路径取 MSYS 形式（sh 脚本里的 mkdir、git 都认）。换算在 JS 里做，不经 sh——
+  // 这台机器上未必有 sh 在 PATH 里（GitHub 的 Windows runner 就是这样）。目录照旧建出来：假 docker 拿它当 cwd。
   const insideForm = (local: string): string => {
+    mkdirSync(local, { recursive: true });
     if (process.platform !== "win32") {
-      // The fake docker uses this directory as the exec cwd, so it has to exist.
-      mkdirSync(local, { recursive: true });
       return local;
     }
-    return execFileSync(
-      "sh",
-      ["-c", 'mkdir -p -- "$1" && cd -- "$1" && readlink -f .', "sh", local],
-      {
-        encoding: "utf8",
-      }
-    ).trim();
+    const slashed = local.replace(/\\/g, "/");
+    const drive = /^([A-Za-z]):(\/.*)?$/.exec(slashed);
+    return drive === null ? slashed : `/${(drive[1] ?? "").toLowerCase()}${drive[2] ?? "/"}`;
   };
   const containerRoot = insideForm(localRoot);
   const cacheRoot = insideForm(localCacheRoot);
