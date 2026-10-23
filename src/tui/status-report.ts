@@ -31,7 +31,12 @@ export interface StatusReport {
   // 决策 513：思考强度（mode 行紧跟审批模式）
   effort?: string;
   model?: string;
-  usage?: { context?: { tokens: number; window: number } | undefined; tokens: number };
+  usage?: {
+    context?: { tokens: number; window: number } | undefined;
+    tokens: number;
+    // 决策 551：pi-ai 算出的美元花费（有价才写）
+    cost?: number;
+  };
   git?: { branch?: string; commit: string; dirty: boolean };
   // approval 是沙箱的审批档（--sandbox-approval 的值），显示与 mode 同一写法（决策 499）
   sandbox?: { image?: string; network?: string; approval?: SandboxApproval };
@@ -66,10 +71,11 @@ function line(label: string, value: string): string {
 
 function usageText(usage: NonNullable<StatusReport["usage"]>): string {
   const tokens = `${compactNumber(usage.tokens)} tokens`;
+  const cost = usage.cost !== undefined && usage.cost > 0 ? ` · $${usage.cost.toFixed(4)}` : "";
   const context = usage.context;
-  if (context === undefined || context.window <= 0) return tokens;
+  if (context === undefined || context.window <= 0) return `${tokens}${cost}`;
   const percent = Math.min(999, Math.round((context.tokens / context.window) * 100));
-  return `ctx ${percent}% (${compactNumber(context.tokens)}/${compactNumber(context.window)}) · ${tokens}`;
+  return `ctx ${percent}% (${compactNumber(context.tokens)}/${compactNumber(context.window)}) · ${tokens}${cost}`;
 }
 
 export function statusReportText(report: StatusReport): string {

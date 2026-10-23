@@ -18,16 +18,49 @@ export type ThinkingSection = Static<typeof ThinkingSectionSchema>;
 // 支持推理的模型的缺省档位
 export const REASONING_DEFAULT_THINKING_LEVEL: ThinkingLevel = "high";
 
+// 全部档位，按由弱到强（也是 pi-ai 的 ModelThinkingLevel 全集）
+export const ALL_THINKING_LEVELS: readonly ThinkingLevel[] = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+
+// 一个模型可用的档位（决策 553）：目录给出了就用它；否则已知不支持推理只有 off，未知或支持时不限制。
+// 不做静默夹取：调用方拿到列表后自己拒绝不支持的档位。
+export function thinkingLevelsFor(input: {
+  levels?: readonly ThinkingLevel[] | undefined;
+  reasoning?: boolean | undefined;
+}): readonly ThinkingLevel[] {
+  if (input.levels !== undefined) return input.levels;
+  if (input.reasoning === false) return ["off"];
+  return ALL_THINKING_LEVELS;
+}
+
+// 没给档位时的缺省：high 可用用 high，否则取最高的非 off 档；只支持 off 时 off
+export function defaultThinkingLevel(levels: readonly ThinkingLevel[]): ThinkingLevel {
+  if (levels.includes(REASONING_DEFAULT_THINKING_LEVEL)) return REASONING_DEFAULT_THINKING_LEVEL;
+  const usable = levels.filter((level) => level !== "off");
+  return usable.at(-1) ?? "off";
+}
+
 export function resolveThinkingLevel(input: {
   // 启动参数或调用方显式给的
   requested?: ThinkingLevel | undefined;
   section?: ThinkingSection | undefined;
   // 模型信息里的"是否支持推理"；undefined 为不知道
   reasoning: boolean | undefined;
+  // 可用档位（决策 553）；没给显式值时取支持的最高可用缺省
+  levels?: readonly ThinkingLevel[] | undefined;
 }): ThinkingLevel {
-  return (
-    input.requested ??
-    input.section?.level ??
-    (input.reasoning === true ? REASONING_DEFAULT_THINKING_LEVEL : "off")
-  );
+  const explicit = input.requested ?? input.section?.level;
+  if (explicit !== undefined) return explicit;
+  // 未知是否支持推理时仍缺省 off（决策 390、553：不知道就不请求推理；切换仍允许）
+  if (input.reasoning !== true) return "off";
+  return input.levels !== undefined
+    ? defaultThinkingLevel(input.levels)
+    : REASONING_DEFAULT_THINKING_LEVEL;
 }

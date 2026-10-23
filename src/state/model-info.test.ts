@@ -191,6 +191,15 @@ test("设置的 modelInfo 一节：键须为 provider/模型名，价格须带�
   }
 });
 
+test("MODEL-041 the supported thinking levels come from the catalog", () => {
+  const info = resolveModelInfo({
+    launch: { provider: "acme", id: "m1" },
+    catalog: () => ({ reasoning: true, thinkingLevels: ["off", "low"] }),
+  });
+  assert.deepEqual(info.thinkingLevels, { source: "catalog", value: ["off", "low"] });
+  assert.deepEqual(info.reasoning, { source: "catalog", value: true });
+});
+
 test("MODEL-019, MODEL-021 the route and address come from the catalog and modelInfo.api overrides the route", () => {
   const facts: CatalogLookup = () => ({
     api: "openai-completions",

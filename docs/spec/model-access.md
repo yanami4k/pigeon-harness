@@ -42,10 +42,16 @@ unit and is not covered here.
 - **MODEL-020** When the context window of the model is unknown, the status bar shall leave out the context percentage (see VIEWS-012).
 - **MODEL-021** The `modelInfo` setting shall be able to supply the facts of a model the catalog does not describe (its context window, output limit, prices and route), and a supplied fact shall be used in place of the unknown one.
 
+## Switching models mid-session
+
+- **MODEL-039** When a session switches its model with `/model`, the candidate list shall contain only the catalog models of packaged providers that hold a credential; a custom provider shall be named directly as `/model <provider>/<id>`. The switch shall take effect from the next request, be written to the session record (and restored when the session is resumed), and be accepted while a turn is running (applying once it ends); `/model` shall be unavailable in a sandbox session and in the subagent view.
+
 ## Showing the choice
 
 - **MODEL-022** The status bar shall show the model the session is talking to, in dim text, after the mode segment and before the effort segment (see VIEWS-010).
 - **MODEL-023** `/status` shall list the model the session is talking to.
+- **MODEL-040** Costs shall be shown in US dollars as computed by pi-ai when a response carries a price: in the status bar after the token count and in the `/status` usage line, and omitted when the price is zero. No price shall be converted to yuan, no peak-hour multiplier applied, and no cost-zero heuristic used to infer a provider.
+- **MODEL-041** `/effort` and Alt+T shall offer only the thinking levels the current model supports (taken from the catalog); an explicitly given unsupported level shall be refused with the supported ones listed rather than silently clamped, and the same refusal shall apply at startup to `--thinking` or `thinking.level`.
 
 ## Routes
 
@@ -59,6 +65,10 @@ unit and is not covered here.
 ## Proxy
 
 - **MODEL-037** When any of `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` or `NO_PROXY` (in either case) is set, every route shall go through that proxy; if the proxy support cannot be loaded, the run shall fail instead of connecting directly.
+
+## Request failures
+
+- **MODEL-042** A model request that produces no content for 60 seconds shall be aborted and retried once; an error or idle timeout after content has streamed shall be reported without retrying while the received content is kept; a request aborted by the user shall not be retried; each such retry shall be recorded in the session.
 
 ## Settings
 

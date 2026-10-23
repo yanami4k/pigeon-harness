@@ -21,27 +21,13 @@ export interface StatusBarState {
   cost: CostTally;
 }
 
-// 本会话累计的 token 数（有价格、按人民币价目计与没有价格的三部分之和）
+// 本会话累计的 token 数（有价格与没有价格的两部分之和）
 export function totalTokens(tally: CostTally): number {
-  return tally.pricedTokens + tally.cnyTokens + tally.unpricedTokens;
+  return tally.pricedTokens + tally.unpricedTokens;
 }
 
 // 1234 → 1.2k；1234567 → 1.2M（决策 476：pigeon trace 与 session list 同一种写法，放在 application/format.ts）
 export { compactNumber } from "../application/format.ts";
-
-// 花费：回复自带价格的部分写 $，DeepSeek 按官方人民币价目计的部分写 ¥，没有价格的写 token 数并注明；三者并存时相加写出
-export function formatCost(tally: CostTally, short: boolean): string {
-  const digits = short ? 2 : 4;
-  const parts: string[] = [];
-  if (tally.cost > 0 || tally.pricedTokens > 0) parts.push(`$${tally.cost.toFixed(digits)}`);
-  if (tally.cny > 0 || tally.cnyTokens > 0) parts.push(`¥${tally.cny.toFixed(digits)}`);
-  if (tally.unpricedTokens > 0) {
-    const unpriced = `${compactNumber(tally.unpricedTokens)} tok`;
-    parts.push(short ? `${unpriced} no price` : `${unpriced} (no price)`);
-  }
-  if (parts.length === 0) return "$0";
-  return parts.join(short ? "+" : " + ");
-}
 
 function contextSegment(context: StatusBarState["context"], short: boolean): string | undefined {
   if (context === undefined || context.contextWindow <= 0) return undefined;
@@ -49,6 +35,12 @@ function contextSegment(context: StatusBarState["context"], short: boolean): str
   return short
     ? `ctx ${percent}%`
     : `ctx ${percent}% (${compactNumber(context.tokens)}/${compactNumber(context.contextWindow)})`;
+}
+
+// 决策 551：pi-ai 按模型价目算出的美元花费（有价才写；token 之后）
+function costSegment(tally: CostTally, short: boolean): string | undefined {
+  if (tally.cost <= 0) return undefined;
+  return short ? `$${tally.cost.toFixed(2)}` : `$${tally.cost.toFixed(4)}`;
 }
 
 // 审批模式在界面上的写法（决策 499：放手档显示成 bypass；内部值仍是 yolo，记录、--yolo 与 trace 不变）。/status 同一写法
@@ -85,6 +77,7 @@ export function statusBarText(state: StatusBarState, width: number): string {
       state.effort,
       contextSegment(state.context, short),
       short ? tokens : `${tokens} tokens`,
+      costSegment(state.cost, short),
     ]
       .filter((segment): segment is string => segment !== undefined)
       .join(" · ");

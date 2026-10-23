@@ -104,6 +104,8 @@ export interface CommandsHost {
   // 决策 546：/login、/logout（缺省 = 不可用，沙箱里壳自己给出原因）
   beginLogin?(provider?: string): void;
   logoutCommand?(provider?: string): void;
+  // 决策 550：/model [provider/model]（缺省 = 不可用，沙箱里壳自己给出原因）
+  modelCommand?(arg?: string): void;
   // 决策 458：当前会话的名字（/take 用到它时说明不用取回）
   currentSessionName?(): string | undefined;
 }
@@ -122,6 +124,11 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
     }
     if (tokens[0] === "logout") {
       host.logoutCommand?.(tokens[1]);
+      return;
+    }
+    // 决策 550：/model [provider/model]
+    if (tokens[0] === "model") {
+      host.modelCommand?.(tokens.length > 1 ? tokens.slice(1).join(" ") : undefined);
       return;
     }
     // S5+（裁决 033）：/quit 与双击 Ctrl+C 同一优雅退出路径（busy 语义不开旁路：

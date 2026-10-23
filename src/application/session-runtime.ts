@@ -83,6 +83,33 @@ export function thinkingLevelFromEntries(
   return undefined;
 }
 
+// 决策 550：会话记录主分支上最后一条“型号”的记录——Run 开始条目（data.model）或 /model 切换（data.to）；都没有为 undefined。
+// 续接按它恢复（比只知道最后一个 Run 更准：切换后没开跑就续接时不回旧型号）
+export function modelFromEntries(
+  entries: ReadonlyArray<{ type: string; customType?: unknown; data?: unknown }>
+): { provider: string; id: string } | undefined {
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index];
+    if (entry?.type !== "custom") continue;
+    if (entry.customType === SessionEntryType.ModelSwitch) {
+      const to = (entry.data as { to?: { provider?: unknown; id?: unknown } } | undefined)?.to;
+      if (typeof to?.provider === "string" && typeof to.id === "string") {
+        return { provider: to.provider, id: to.id };
+      }
+      return undefined;
+    }
+    if (entry.customType === SessionEntryType.RunStart) {
+      const model = (entry.data as { model?: { provider?: unknown; id?: unknown } } | undefined)
+        ?.model;
+      if (typeof model?.provider === "string" && typeof model.id === "string") {
+        return { provider: model.provider, id: model.id };
+      }
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 // 决策 480：子 agent 续接时的放权——派出方此刻的（种子不落盘，续接时重新带上）加上它自己会话里给的，按放权号去重
 function mergeGrants(seed: readonly ActiveGrant[], own: readonly ActiveGrant[]): ActiveGrant[] {
   const byId = new Map<string, ActiveGrant>();
@@ -266,7 +293,9 @@ export async function openSessionRuntime(
     request.flags.modelFlag !== undefined || request.flags.providerFlag !== undefined;
   const recordedModel =
     request.resume === true && !explicitModel
-      ? (recordedStart?.modelInfo ?? recordedStart?.model)
+      ? ((recorded !== undefined ? modelFromEntries(recorded.main) : undefined) ??
+        recordedStart?.modelInfo ??
+        recordedStart?.model)
       : undefined;
   // 决策 365：/reload 接着管旧运行面的后台作业；续跑时取会话记录里上一进程的作业（已丢失的与用过的作业号）
   const reloadJobs = request.reloadFrom?.jobs;

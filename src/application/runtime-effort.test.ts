@@ -84,7 +84,7 @@ test("决策 513：切换后下一次请求带新档位；记一条 pigeon.think
     const { fake, streamFn } = model([{ text: "好" }], true);
     const opened = await open(root, sessionId, streamFn);
     const thinking = opened.bundle.thinking;
-    assert.equal(thinking.supported, true);
+    assert.deepEqual(thinking.levels, ["off", "minimal", "low", "medium", "high"]);
     assert.equal(thinking.get(), "high");
     assert.equal(thinking.chosen(), undefined);
     await opened.bundle.adapter.run("一");
@@ -211,7 +211,7 @@ test("决策 513：已知模型不支持推理——固定 off，切换不改也
     const { fake, streamFn } = model([{ text: "好" }], false);
     const opened = await open(root, sessionId, streamFn);
     const thinking = opened.bundle.thinking;
-    assert.equal(thinking.supported, false);
+    assert.deepEqual(thinking.levels, ["off"]);
     thinking.set("high");
     assert.equal(thinking.get(), "off");
     await opened.bundle.adapter.run("一");
@@ -226,16 +226,18 @@ test("决策 513：已知模型不支持推理——固定 off，切换不改也
   }
 });
 
-test("决策 513 审查：已知不支持推理的模型——设置或启动参数给了档位也固定 off；选过的档位记着，重建换回支持推理的模型即按它", async () => {
+test("决策 553：显式档位不受支持时启动报错；会话里记下的档位保留，换回支持推理的模型即按它", async () => {
   const { root, cleanup } = workspace();
   try {
     const sessionId = newSessionId();
-    const viaSettings = await open(root, sessionId, model([{ text: "好" }], false).streamFn, {
-      settings: settingsWith(root, "medium"),
-      flags: { thinkingLevel: "high" },
-    });
-    assert.equal(viaSettings.bundle.thinking.get(), "off");
-    await disposeRuntime(viaSettings.bundle);
+    await assert.rejects(
+      () =>
+        open(root, sessionId, model([{ text: "好" }], false).streamFn, {
+          settings: settingsWith(root, "medium"),
+          flags: { thinkingLevel: "high" },
+        }),
+      /effort "high" is not supported by this model \(use off\)/
+    );
     const other = newSessionId();
     const first = await open(root, other, model([{ text: "好" }], true).streamFn);
     first.bundle.thinking.set("low");
@@ -327,5 +329,28 @@ test("决策 513 审查：重建换手的间隙里落在旧运行面上的切换
     assert.equal(sessionOf(root, sessionId)?.view.runs.at(-1)?.start.model.thinkingLevel, "medium");
   } finally {
     cleanup();
+  }
+});
+
+test("MODEL-041 决策 553：显式档位不受支持时启动报错并列出可用档；缺省取最高可用档", async () => {
+  const root = workspace();
+  try {
+    const streamFn = registerModelAccess(createFakeStreamFn({ replies: [{ text: "好" }] }), {
+      declared: { reasoning: true },
+      catalog: () => ({ reasoning: true, thinkingLevels: ["off", "low"] }),
+    });
+    await assert.rejects(
+      () => open(root.root, newSessionId(), streamFn, { flags: { thinkingLevel: "high" } }),
+      /effort "high" is not supported by this model \(use off, low\)/
+    );
+    const opened = await open(root.root, newSessionId(), streamFn);
+    try {
+      assert.deepEqual(opened.bundle.thinking.levels, ["off", "low"]);
+      assert.equal(opened.bundle.thinking.get(), "low");
+    } finally {
+      await disposeRuntime(opened.bundle);
+    }
+  } finally {
+    root.cleanup();
   }
 });

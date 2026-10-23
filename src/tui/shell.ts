@@ -136,7 +136,7 @@ import {
   type TuiMemoryFace,
 } from "./commands.ts";
 import { ConfigPanel } from "./config-panel.ts";
-import { applyEffort, EFFORT_LEVELS, nextEffort, type ThinkingControl } from "./effort.ts";
+import { applyEffort, effortChoices, nextEffort, type ThinkingControl } from "./effort.ts";
 import type { TuiHooksFace } from "./hooks-view.ts";
 import {
   createPromptEditor,
@@ -175,7 +175,7 @@ import {
 } from "./resume-view.ts";
 import { SessionPanel } from "./session-panel.ts";
 import { SessionPicker } from "./session-picker.ts";
-import { clipToWidth, StatusBar } from "./status-bar.ts";
+import { clipToWidth, StatusBar, totalTokens } from "./status-bar.ts";
 import type { StatusReport } from "./status-report.ts";
 import { statusReportText } from "./status-report.ts";
 import { secondary } from "./style.ts";
@@ -255,6 +255,11 @@ export interface TuiShellOptions {
     logout(provider: string): Promise<string>;
     stored(): string[];
   };
+  // 决策 550：/model 的候选与切换（沙箱不给）；只列有凭据的随包服务商的目录型号
+  models?: {
+    list(): Promise<Array<{ provider: string; id: string; contextWindow?: number }>>;
+    apply(provider: string, id: string): Promise<string>;
+  };
   // S5+（裁决 033）：优雅退出回调——双击 Ctrl+C / /quit 触发；壳先 stop() 再回调。
   // 注入使测试绝不真退进程；缺省 = 退出只停壳（装配方必须注入真实退出路径）
   onExit?: () => void;
@@ -285,8 +290,6 @@ export interface TuiShellOptions {
   wheelScrollLines?: () => number | undefined;
   // 决策 501：只看历史的会话多久看一次它的会话记录有没有追加（毫秒；缺省 1000，测试改小）
   recordPollMs?: number;
-  // 决策 286：主 agent 的模型接入（DeepSeek 回复自带价格为 0 时按官方人民币价目计会话花费）；缺省不另计价
-  provider?: string;
   // MODEL-022、MODEL-031：当前会话的型号标签（状态栏用；子 agent 视图暂时也取所属会话的）
   model?: () => string | undefined;
   // 决策 286：输入历史的跨启动存储（按项目）；缺省只在本次启动内保留
@@ -360,7 +363,8 @@ export type ShellView =
   | "elsewhere"
   | "config"
   | "resume"
-  | "login";
+  | "login"
+  | "model";
 
 // 决策 469：一个会话的审批模式——取当前模式、切换（切换写一条会话记录，之后的工具调用按新模式判定）
 export interface ApprovalModeControl {
@@ -688,6 +692,104 @@ export class LoginPanel implements Component {
   }
 }
 
+// 决策 550：/model 的整屏视图——列有凭据的随包服务商的目录型号，↑↓ 选、回车切换、Esc 退出
+export class ModelPanel implements Component {
+  readonly view: Component = {
+    invalidate: () => {},
+    render: (width: number) => this.render(width),
+  };
+  private rows: Array<{ provider: string; id: string; contextWindow?: number }> | undefined;
+  private index = 0;
+  private note: string | undefined;
+  private busy = false;
+  private readonly face: NonNullable<TuiShellOptions["models"]>;
+  private readonly done: (line: string) => void;
+  private readonly cancelled: () => void;
+  private readonly maxRows: number;
+
+  constructor(
+    face: NonNullable<TuiShellOptions["models"]>,
+    done: (line: string) => void,
+    cancelled: () => void,
+    maxRows: number
+  ) {
+    this.face = face;
+    this.done = done;
+    this.cancelled = cancelled;
+    this.maxRows = maxRows;
+    void this.face.list().then(
+      (rows) => {
+        this.rows = rows;
+      },
+      (error: unknown) => {
+        this.note = `reading models failed: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    );
+  }
+
+  invalidate(): void {}
+
+  handleInput(data: string): void {
+    if (this.busy) return;
+    const rows = this.rows ?? [];
+    if (matchesKey(data, "up")) {
+      this.index = (this.index - 1 + rows.length) % Math.max(1, rows.length);
+      return;
+    }
+    if (matchesKey(data, "down")) {
+      this.index = (this.index + 1) % Math.max(1, rows.length);
+      return;
+    }
+    if (matchesKey(data, "escape")) {
+      this.cancelled();
+      return;
+    }
+    if (!matchesKey(data, "enter")) return;
+    const row = rows[this.index];
+    if (row === undefined) return;
+    this.busy = true;
+    void this.face.apply(row.provider, row.id).then(
+      (line) => {
+        this.busy = false;
+        this.done(line);
+      },
+      (error: unknown) => {
+        this.busy = false;
+        this.note = `switching the model failed: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    );
+  }
+
+  render(width: number): string[] {
+    const lines: string[] = ["model", ""];
+    if (this.note !== undefined) lines.push(this.note, "");
+    lines.push("up/down select · Enter switch · Esc close", "");
+    const rows = this.rows;
+    if (rows === undefined) {
+      lines.push("reading models...");
+      return lines.map((line) => clipToWidth(line, width));
+    }
+    if (rows.length === 0) {
+      lines.push("no packaged provider has a credential; run /login first");
+      return lines.map((line) => clipToWidth(line, width));
+    }
+    const visible = Math.max(1, Math.min(this.maxRows, rows.length));
+    const start = Math.min(
+      Math.max(0, this.index - visible + 1),
+      Math.max(0, rows.length - visible)
+    );
+    for (let at = start; at < start + visible; at++) {
+      const row = rows[at];
+      if (row === undefined) break;
+      const marker = at === this.index ? "> " : "  ";
+      const window =
+        row.contextWindow !== undefined ? ` · ${Math.round(row.contextWindow / 1000)}k` : "";
+      lines.push(clipToWidth(`${marker}${row.provider}/${row.id}${window}`, width));
+    }
+    return lines;
+  }
+}
+
 export class PigeonTuiShell
   implements TuiApprovalFace, ModalHost, CommandsHost, ResumeViewHost<TuiSessionBinding>
 {
@@ -701,6 +803,8 @@ export class PigeonTuiShell
   private view: ShellView = "main";
   // 决策 546：/login 的整屏视图（不开放时为 undefined）
   private loginPanel: LoginPanel | undefined;
+  // 决策 550：/model 的整屏视图（不开放时为 undefined）
+  private modelPanel: ModelPanel | undefined;
   // 决策 435：消息树（会话回退）与双击 Esc 的上一下
   private readonly messageTree: MessageTree;
   // 决策 443：会话面板与进入的会话
@@ -754,8 +858,6 @@ export class PigeonTuiShell
   private costBase: CostTally = emptyCostTally();
   private costLive: CostTally = emptyCostTally();
   private childCosts: ChildSessionCosts | undefined;
-  // 本轮开始的时刻（DeepSeek 计价看开始与结束是否落在高峰）
-  private turnStartedAt: number | undefined;
   private readonly title: Text;
   // 当前会话上下文（S4）：/resume 换绑整体替换——运行面、治理上下文、sessionId 一体，
   // 绝不换一半（grants 命令与提交必须落在同一会话上）
@@ -965,48 +1067,50 @@ export class PigeonTuiShell
         ? [fill(this.messageTree), keep(this.approvalBox), this.statusBar]
         : this.view === "login" && this.loginPanel !== undefined
           ? [fill(this.loginPanel.view), keep(this.approvalBox), ...status, this.statusBar]
-          : this.view === "config"
-            ? [fill(this.configPanel.view), keep(this.approvalBox), ...status, this.statusBar]
-            : this.view === "resume"
-              ? [fill(this.picker.view), keep(this.approvalBox), ...status, this.statusBar]
-              : this.view === "panel"
-                ? [
-                    fill(this.sessionPanel),
-                    keep(this.approvalBox),
-                    ...status,
-                    keep(this.input),
-                    this.statusBar,
-                  ]
-                : this.view === "agent" && this.agentSession !== undefined
+          : this.view === "model" && this.modelPanel !== undefined
+            ? [fill(this.modelPanel.view), keep(this.approvalBox), ...status, this.statusBar]
+            : this.view === "config"
+              ? [fill(this.configPanel.view), keep(this.approvalBox), ...status, this.statusBar]
+              : this.view === "resume"
+                ? [fill(this.picker.view), keep(this.approvalBox), ...status, this.statusBar]
+                : this.view === "panel"
                   ? [
-                      // 决策 503：子 agent 视图没有标题行，输入框下方照样是子 agent 面板
-                      fill(this.agentSession.flow.view),
-                      ...(this.loader !== undefined ? [this.loader] : []),
+                      fill(this.sessionPanel),
                       keep(this.approvalBox),
                       ...status,
                       keep(this.input),
-                      ...agents,
                       this.statusBar,
                     ]
-                  : this.view === "elsewhere" && this.elsewhereSession !== undefined
+                  : this.view === "agent" && this.agentSession !== undefined
                     ? [
-                        this.title,
-                        fill(this.elsewhereSession.flow.view),
-                        keep(this.approvalBox),
-                        ...status,
-                        keep(this.input),
-                        this.statusBar,
-                      ]
-                    : [
-                        fill(this.flow.view),
+                        // 决策 503：子 agent 视图没有标题行，输入框下方照样是子 agent 面板
+                        fill(this.agentSession.flow.view),
                         ...(this.loader !== undefined ? [this.loader] : []),
-                        this.queue.view,
                         keep(this.approvalBox),
                         ...status,
                         keep(this.input),
                         ...agents,
                         this.statusBar,
-                      ];
+                      ]
+                    : this.view === "elsewhere" && this.elsewhereSession !== undefined
+                      ? [
+                          this.title,
+                          fill(this.elsewhereSession.flow.view),
+                          keep(this.approvalBox),
+                          ...status,
+                          keep(this.input),
+                          this.statusBar,
+                        ]
+                      : [
+                          fill(this.flow.view),
+                          ...(this.loader !== undefined ? [this.loader] : []),
+                          this.queue.view,
+                          keep(this.approvalBox),
+                          ...status,
+                          keep(this.input),
+                          ...agents,
+                          this.statusBar,
+                        ];
     // 决策 441：每个视图一个 VStack 作布局根——中间的滚动区占满剩余高度，其余各条按自身高度排在上下
     this.tui.setLayoutRoot(new VStack(children));
   }
@@ -1698,10 +1802,7 @@ export class PigeonTuiShell
         if (event.kind === RuntimeEventKind.TurnCompleted) {
           const usage = (event.payload as TurnCompletedPayload).usage;
           if (usage !== undefined) {
-            addUsage(session.cost, usage, {
-              ...(this.options.provider !== undefined ? { provider: this.options.provider } : {}),
-              endMs: event.timestamp,
-            });
+            addUsage(session.cost, usage);
           }
         }
         this.updateStatus();
@@ -1937,6 +2038,56 @@ export class PigeonTuiShell
     this.showView("login");
   }
 
+  // 决策 550：/model [provider/model]——整屏列出有凭据的随包服务商的目录型号；带参数即直接切（自定义服务商这样给）
+  modelCommand(arg?: string): void {
+    const face = this.options.models;
+    if (face === undefined) {
+      this.viewFlow().addSystem("can't use /model in a sandbox session");
+      this.tui.requestRender();
+      return;
+    }
+    if (arg !== undefined) {
+      const slash = arg.indexOf("/");
+      if (slash <= 0 || slash === arg.length - 1) {
+        this.viewFlow().addSystem("usage: /model [provider/model]");
+        this.tui.requestRender();
+        return;
+      }
+      const provider = arg.slice(0, slash);
+      const id = arg.slice(slash + 1);
+      void face.apply(provider, id).then(
+        (line) => {
+          this.viewFlow().addSystem(line);
+          this.tui.requestRender();
+        },
+        (error: unknown) => {
+          this.viewFlow().addAlert(
+            `switching the model failed: ${error instanceof Error ? error.message : String(error)}`
+          );
+          this.tui.requestRender();
+        }
+      );
+      return;
+    }
+    this.modelPanel = new ModelPanel(
+      face,
+      (line) => {
+        this.modelPanel = undefined;
+        this.showView("main");
+        this.viewFlow().addSystem(line);
+        this.tui.requestRender();
+      },
+      () => {
+        this.modelPanel = undefined;
+        this.showView("main");
+        this.viewFlow().addSystem("model switch cancelled");
+        this.tui.requestRender();
+      },
+      Math.max(3, this.options.terminal.rows - 5)
+    );
+    this.showView("model");
+  }
+
   // 决策 546：/logout [provider]——不带参数时列出文件里存着的服务商；沙箱里不可用
   logoutCommand(provider?: string): void {
     const face = this.options.login;
@@ -2152,11 +2303,25 @@ export class PigeonTuiShell
       .map((card) => ({ value: card.id, label: card.name, description: card.id }));
   }
 
-  // 决策 491：/status 的文本（数据由装配方给；这里只管取与格式化）
+  // 决策 491：/status 的文本（数据由装配方给；这里只管取与格式化）。决策 551：usage 行带上本会话的美元花费
   async statusCommand(): Promise<string> {
     const report = this.options.status;
     if (report === undefined) return "/status is not available in this session";
-    return statusReportText(await report());
+    const base = await report();
+    const cost = this.mainCost;
+    const usage = base.usage ?? {
+      ...(this.mainContext !== undefined
+        ? {
+            context: {
+              tokens: this.mainContext.tokens,
+              window: this.mainContext.contextWindow,
+            },
+          }
+        : {}),
+      tokens: totalTokens(cost),
+      ...(cost.cost > 0 ? { cost: cost.cost } : {}),
+    };
+    return statusReportText({ ...base, usage });
   }
 
   // 决策 490：/take 不带参数时列出"现在能取"的会话——面板里在工作树里干活的（共用目录的、没有工作树的不列）
@@ -3055,11 +3220,13 @@ export class PigeonTuiShell
       : this.options.thinking?.();
   }
 
-  // 决策 513：Alt+T 在 off → low → medium → high → xhigh 之间轮换；模型不支持推理时不切换（不提示）
+  // 决策 513、553：Alt+T 只在当前型号可用的档位里轮换；不支持推理（只有 off）时不切换（不提示）
   private cycleEffort(): void {
     const control = this.viewThinking();
-    if (control === undefined || !control.supported) return;
-    control.set(nextEffort(control.get()));
+    if (control === undefined || control.levels.every((level) => level === "off")) return;
+    const next = nextEffort(control.get(), control.levels);
+    if (next === control.get()) return;
+    control.set(next);
     this.updateStatus();
     this.tui.requestRender();
   }
@@ -3090,13 +3257,14 @@ export class PigeonTuiShell
     this.tui.requestRender();
   }
 
-  // 决策 513：/effort 的档位候选（当前档位标 current）
+  // 决策 513、553：/effort 的档位候选（只列可用档位，当前档位标 current）
   private effortArgumentItems(prefix: string): AutocompleteItem[] {
-    const current = this.viewThinking()?.get();
-    return EFFORT_LEVELS.filter((level) => level.startsWith(prefix)).map((level) => ({
-      value: level,
-      label: level,
-      ...(level === current ? { description: "current" } : {}),
+    const control = this.viewThinking();
+    const current = control?.get();
+    return effortChoices(control?.levels ?? [], prefix).map((choice) => ({
+      value: choice.value,
+      label: choice.label,
+      ...(choice.value === current ? { description: "current" } : {}),
     }));
   }
 
@@ -3110,6 +3278,12 @@ export class PigeonTuiShell
   }
 
   private handleViewKey(data: string): { consume: true } | undefined {
+    // 决策 550：型号视图开着时按键全归它
+    if (this.modelPanel !== undefined) {
+      this.modelPanel.handleInput(data);
+      this.tui.requestRender();
+      return { consume: true };
+    }
     // 决策 546：登录视图开着时按键全归它
     if (this.loginPanel !== undefined) {
       this.loginPanel.handleInput(data);
@@ -3172,10 +3346,7 @@ export class PigeonTuiShell
     // 工具执行中另发的模型请求（web_fetch 的提炼等）计入本会话花费
     const extra = toolResultModelUsage(notice.details);
     if (extra !== undefined) {
-      addUsage(this.costLive, extra, {
-        ...(this.options.provider !== undefined ? { provider: this.options.provider } : {}),
-        endMs: Date.now(),
-      });
+      addUsage(this.costLive, extra);
       this.refreshCost();
     }
     this.tui.requestRender();
@@ -4179,6 +4350,8 @@ export class PigeonTuiShell
     if (view !== "resume" && this.picker.isOpen()) this.picker.close();
     // 决策 546：离开登录视图即关它
     if (view !== "login") this.loginPanel = undefined;
+    // 决策 550：离开型号视图即关它
+    if (view !== "model") this.modelPanel = undefined;
     this.view = view;
     // 决策 458：在面板里中断主会话时留着的排队内容，回到主视图时放进输入框（排队在前、草稿在后）
     if (view === "main" && this.heldQueue.length > 0 && !this.stayingInPanel) {
@@ -4239,6 +4412,8 @@ export class PigeonTuiShell
     if (this.configPanel.isOpen()) return undefined;
     // 决策 546：登录视图的按键归它（在 handleViewKey）
     if (this.view === "login") return undefined;
+    // 决策 550：型号视图的按键归它（在 handleViewKey）
+    if (this.view === "model") return undefined;
     // 有一方接管了 Esc（/memory edit 排队保存时）：Esc 归它，排在视图与取消键之前
     if (
       this.escapeCapture !== undefined &&
@@ -4480,18 +4655,13 @@ export class PigeonTuiShell
     // 消息区的投影在 message-flow.ts；活动 Run、花费与上下文用量在此记
     if (event.kind === RuntimeEventKind.TurnStarted) {
       this.activeRunId = event.runId;
-      this.turnStartedAt = event.timestamp;
     }
     projectRuntimeEvent(this.flow, event);
     if (event.kind === RuntimeEventKind.TurnCompleted) {
       const payload = event.payload as TurnCompletedPayload;
       // 286：主 agent 每轮的用量与价格计入本会话花费；上下文用量按最近一次回复重算
       if (payload.usage !== undefined) {
-        addUsage(this.costLive, payload.usage, {
-          ...(this.options.provider !== undefined ? { provider: this.options.provider } : {}),
-          ...(this.turnStartedAt !== undefined ? { startMs: this.turnStartedAt } : {}),
-          endMs: event.timestamp,
-        });
+        addUsage(this.costLive, payload.usage);
         this.refreshCost();
       }
       this.refreshContext();

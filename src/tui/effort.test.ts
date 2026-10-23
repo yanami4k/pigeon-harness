@@ -10,6 +10,7 @@ import type { SubagentRecord } from "../application/subagents.ts";
 import { SessionGrantStore } from "../approvals/grant-store.ts";
 import { newSessionId } from "../state/ids.ts";
 import type { ThinkingLevel } from "../state/runtime-events.ts";
+import { ALL_THINKING_LEVELS } from "../state/thinking-config.ts";
 import { nextEffort, type ThinkingControl } from "./effort.ts";
 import { ScriptedRuntime } from "./runtime-fixtures.ts";
 import { PigeonTuiShell, type TuiAgentsFace } from "./shell.ts";
@@ -18,15 +19,18 @@ import { MockTerminal, screenText, settle } from "./testing.ts";
 
 const ALT_T = "\x1bt";
 
-function control(start: ThinkingLevel, supported = true): ThinkingControl & { sets: string[] } {
+function control(
+  start: ThinkingLevel,
+  levels: readonly ThinkingLevel[] = ALL_THINKING_LEVELS
+): ThinkingControl & { sets: string[] } {
   let level = start;
   const sets: string[] = [];
   return {
     sets,
-    supported,
+    levels,
     get: () => level,
     set: (next) => {
-      if (!supported) return;
+      if (!levels.includes(next)) return;
       sets.push(next);
       level = next;
     },
@@ -104,7 +108,7 @@ async function command(term: MockTerminal, text: string): Promise<void> {
 test("轮换顺序：off → low → medium → high → xhigh → off；minimal 的下一档为 low，max 的下一档为 off", () => {
   assert.deepEqual(
     ["off", "low", "medium", "high", "xhigh", "minimal", "max"].map((level) =>
-      nextEffort(level as ThinkingLevel)
+      nextEffort(level as ThinkingLevel, ALL_THINKING_LEVELS)
     ),
     ["low", "medium", "high", "xhigh", "off", "low", "off"]
   );
@@ -125,7 +129,7 @@ test("Alt+T 轮换主代理的档位，状态栏紧跟审批模式当场更新�
   } finally {
     cleanup();
   }
-  const fixed = control("off", false);
+  const fixed = control("off", ["off"]);
   const unsupported = makeShell(fixed);
   try {
     await settle();
@@ -171,14 +175,14 @@ test("/effort <档位> 切换并写一行；同档、非法档位与不支持推
   } finally {
     cleanup();
   }
-  const fixed = control("off", false);
+  const fixed = control("off", ["off"]);
   const unsupported = makeShell(fixed);
   try {
     await settle();
     await command(unsupported.term, "/effort high");
     assert.match(
       screenText(unsupported.term),
-      /this model doesn't support reasoning; effort stays off/
+      /effort "high" is not supported by this model \(use off\)/
     );
     assert.deepEqual(fixed.sets, []);
   } finally {

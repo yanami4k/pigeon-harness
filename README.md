@@ -22,7 +22,8 @@ npm install -g <package-file>
 
 ## Get started
 
-Model and key configuration: see [docs/configuration.md](docs/configuration.md).
+
+Model access: set a provider key in the environment (for example `DEEPSEEK_API_KEY`) and pass `--model`, or start `pigeon` and run `/login` to pick a provider, then `/model` to switch models inside a session. Custom providers are declared under `model.providers` in the user-level settings. See [docs/configuration.md](docs/configuration.md).
 
 ## Documentation
 

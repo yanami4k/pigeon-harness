@@ -60,6 +60,7 @@ import {
 } from "../application/rewind.ts";
 import {
   disposeRuntime,
+  listCredentialedModels,
   listModelProviders,
   loadStreamFn,
   type MemoryWriteConfig,
@@ -129,6 +130,7 @@ import {
   tuiLogDirOf,
   userSettingsPath,
 } from "../state/paths.ts";
+import { SESSION_ENTRY_VERSION, SessionEntryType } from "../state/session-entries.ts";
 import {
   keybindingsSectionOf,
   loopGuardSettingsOf,
@@ -1058,7 +1060,6 @@ export async function main(argv: string[]): Promise<void> {
       ...(modelLabel !== undefined ? { model: modelLabel } : {}),
       cwd: tildePath(startCore.workspaceRoot, homedir()),
     },
-    provider: flags.provider,
     // MODEL-022：状态栏的型号段（暗色，在模式之后）
     model: currentModelLabel,
     promptHistory: promptHistoryStore(governanceRoot),
@@ -1118,6 +1119,16 @@ export async function main(argv: string[]): Promise<void> {
               return `logged out ${provider}; ${line}`;
             },
             stored: () => storedProviders({ homeDir: homedir() }),
+          },
+          // 决策 550：/model 的候选（只列有凭据的随包服务商的目录型号）与切换
+          models: {
+            list: () =>
+              listCredentialedModels({
+                settings: settingsOfCore(current),
+                env: process.env,
+                homeDir: homedir(),
+              }),
+            apply: applyModel,
           },
         }
       : {}),
@@ -1257,6 +1268,39 @@ export async function main(argv: string[]): Promise<void> {
     await rebuildMain(settingsOfCore(current));
     const who = provider !== undefined ? provider : access.provider;
     return `logged in ${who}; this session now uses ${access.provider}/${access.modelId}`;
+  }
+
+  // 决策 550：/model 切换——解析新型号、写一条会话记录；空闲立即重建，运行中本轮结束后重建（与 /reload 同一机制）
+  async function applyModel(provider: string, id: string): Promise<string> {
+    const access = await resolvePackagedModelAccess({
+      settings: settingsOfCore(current),
+      env: process.env,
+      homeDir: homedir(),
+      credentialsFile: true,
+      provider,
+      model: id,
+    });
+    if (access.kind === "failed") throw new Error(access.text);
+    const from = { provider: flags.provider, id: flags.modelId };
+    const to = { provider: access.provider, id: access.modelId };
+    if (from.provider === to.provider && from.id === to.id) {
+      return `model is already ${to.provider}/${to.id}`;
+    }
+    streamFn = access.streamFn;
+    flags.provider = to.provider;
+    flags.modelId = to.id;
+    needsLogin = false;
+    coreBundle(current).sessionStore.append({
+      customType: SessionEntryType.ModelSwitch,
+      data: { version: SESSION_ENTRY_VERSION, from, to, changedAt: Date.now() },
+    });
+    const line = `model set to ${to.provider}/${to.id} (from the next request)`;
+    if (shellHolder.current?.isRunning() === true) {
+      current.settingsStale = true;
+      return line;
+    }
+    await rebuildMain(settingsOfCore(current));
+    return line;
   }
 
   // 决策 484：/reload、/config 对面板里的会话同样生效——空闲的马上重建，在跑的这一轮跑完后重建；它的子 agent 在跑时等它们停下。

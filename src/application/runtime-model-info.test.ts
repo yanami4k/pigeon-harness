@@ -15,7 +15,6 @@ import {
   modelAccessOf,
   registerModelAccess,
 } from "../pi-runtime/model-access.ts";
-import { PRICE_CNY_PER_MTOK } from "../state/model-pricing.ts";
 import { type RunStartData, SessionEntryType } from "../state/session-entries.ts";
 import { emptySettingsSnapshot } from "../state/settings.ts";
 import { runHeadless } from "./headless-core.ts";
@@ -73,6 +72,8 @@ test("pi-ai 目录查询：取价格（美元）、窗口、上限与是否支�
     maxTokens: 64_000,
     reasoning: true,
     input: ["text", "image"],
+    // 目录没给 thinkingLevelMap：xhigh/max 要高到显式给出，其余档都可用
+    thinkingLevels: ["off", "minimal", "low", "medium", "high"],
   });
   assert.equal(lookup?.("acme", "m2"), undefined);
   const failing = await loadCatalogLookup(warn, async () => {
@@ -142,15 +143,9 @@ test("Run 开始条目记下本次的模型信息与每一项的来源（设置�
     assert.match(tools.find((tool) => tool.name === "read_file")?.description ?? "", /Images.*PNG/);
   }));
 
-test("自带的 DeepSeek 接入：声明官方人民币非高峰价与服务方，模型对象价格仍为 0", () => {
+test("自带的 DeepSeek 接入：不声明价格（决策 551），服务方与推理/输入仍与模型对象一致", () => {
   const info = deepseekModelInfo();
-  assert.deepEqual(info.cost, {
-    input: PRICE_CNY_PER_MTOK.cacheMiss,
-    output: PRICE_CNY_PER_MTOK.output,
-    cacheRead: PRICE_CNY_PER_MTOK.cacheHit,
-    cacheWrite: PRICE_CNY_PER_MTOK.cacheMiss,
-    currency: "CNY",
-  });
+  assert.equal(info.cost, undefined);
   assert.equal(info.servedBy, "deepseek");
   // 决策 390：声明与模型对象一致地支持推理（缺省档位据此为 high）
   assert.equal(info.reasoning, deepseekModel().reasoning);

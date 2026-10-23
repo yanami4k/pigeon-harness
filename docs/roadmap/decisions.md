@@ -563,6 +563,10 @@
 | 547 | 自定义服务商：只认用户层 `model.providers`，字段 id / api / baseUrl / keyEnv，id 不得与随包重名，地址必须 http(s)；凭据环境变量（keyEnv）优先于 `/login` | 模型接入 | 设置 |
 | 548 | 代理：任一标准代理变量非空时动态加载 undici 的 EnvHttpProxyAgent 包一层 global fetch，所有线路走同一代理；加载失败响亮报错，不静默直连 | 模型接入 | 运行 |
 | 549 | `pigeon run` 只认环境变量凭据（不读 `/login` 文件），零凭据与指定服务商无凭据的两条文案末尾指向终端界面的 `/login` | 模型接入 | 运行 |
+| 550 | `/model` 会话内切换：只列有凭据的随包服务商的目录型号，自定义服务商按 `/model <provider>/<id>` 直接给；下一次请求生效，写进会话记录并在续接时恢复；运行中允许（本轮结束后换），只主代理，沙箱不可用 | 模型接入 | 终端界面 |
+| 551 | 删人民币计价、高峰加价与“cost 为 0 就当 DeepSeek”的启发式；pi-ai 算出的美元花费有价就显示（状态栏 token 之后与 `/status` 的 usage 行，cost 为 0 不写） | 模型接入 | 终端界面 |
+| 552 | 模型请求空闲 60 秒即中止；尚未流出 text/thinking/toolcall 内容时自动重试一次；已流出则报错并保留已收内容；调用方中止不重试；每次重试记一条会话记录 | 模型接入 | 运行 |
+| 553 | `/effort` 与 Alt+T 只列当前型号支持的档位（目录的 thinkingLevelMap）；显式给的档位不支持时报错并列出可用档，不静默夹取；启动时的 `--thinking` / `thinking.level` 同样 | 模型接入 | 终端界面 |
 
 ## 条目
 
@@ -4838,3 +4842,27 @@
 - 结论：同表格行。
 - 理由：无人值守运行不该隐式使用交互登录留下的 key（可能属于另一个账户）；两条固定文案末尾指向终端界面的 /login，告诉人该去哪儿。
 - 锚点：src/cli/index.ts、src/pi-runtime/model-access.ts、src/application/runtime.ts。
+
+### 550 会话内切换型号
+
+- 结论：同表格行。
+- 理由：换型号要连模型信息（价格、窗口、压缩触发点）一起换，所以走与 /reload 同一条重建路；用户层记住的选择能接上（last-used），但续接以会话记录为准。只列有凭据的随包服务商的型号，是因为别家的 key 没配上也发不出去；自定义服务商不进列表，但允许直接点名。
+- 锚点：src/application/runtime.ts、src/application/session-runtime.ts、src/state/session-entries.ts、src/tui/shell.ts、src/tui/main.ts。
+
+### 551 金额只用 pi-ai 的美元价
+
+- 结论：同表格行。
+- 理由：自维的人民币价目与高峰时段只对一家服务商成立，换到其它服务商就是错的；现在价格随模型对象走（目录里就有），有就写、没有就只写 token，口径统一且不靠“价格为 0”猜是哪家。
+- 锚点：src/application/session-cost.ts、src/tui/status-bar.ts、src/tui/status-report.ts、src/pi-runtime/deepseek-model.ts。
+
+### 552 空闲超时与内容前的重试
+
+- 结论：同表格行。
+- 理由：流中途断开、服务方不回包，现有 pi-ai 重试都管不到；还没流出任何内容时重发不会重复工具调用与已显示的文字，所以只在这一刻重试一次；已有内容时宁可报错也不丢已经给出的东西。
+- 锚点：src/pi-runtime/request-retry.ts、src/application/runtime.ts。
+
+### 553 思考档位只列可用的
+
+- 结论：同表格行。
+- 理由：pi-ai 的 clampThinkingLevel 会把不支持的档位静默换成相邻档，用户会以为设上了；改为先拿目录给出的真实可用档，不支持的显式值直接报错并列出可用的，启动参数也一样。
+- 锚点：src/state/model-info.ts、src/state/thinking-config.ts、src/pi-runtime/model-access.ts、src/application/runtime.ts、src/tui/effort.ts。

@@ -3,6 +3,8 @@
 // 目录用 pi-ai 0.84.4 公开的 providers/all 查询函数，不碰其内部；只在声明没给全时才动态加载（日常的 DeepSeek 接入声明齐全，
 // 不加载）。加载失败退回没有目录（各项按未知处理）并告警，不挡接入模块启动。
 import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { streamSimple as anthropicMessages } from "@earendil-works/pi-ai/api/anthropic-messages";
 import { streamSimple as googleGenerativeAi } from "@earendil-works/pi-ai/api/google-generative-ai";
 import { streamSimple as openaiCompletions } from "@earendil-works/pi-ai/api/openai-completions";
@@ -16,6 +18,7 @@ import {
   ModelInfoDeclarationSchema,
   type ModelInfoValues,
 } from "../state/model-info.ts";
+import type { ThinkingLevel } from "../state/runtime-events.ts";
 import type { CustomProvider } from "../state/settings.ts";
 
 export interface ModelAccessInfo {
@@ -115,6 +118,11 @@ export async function loadCatalogLookup(
     if (positiveInteger(model.contextWindow)) values.contextWindow = model.contextWindow;
     if (positiveInteger(model.maxTokens)) values.maxTokens = model.maxTokens;
     if (typeof model.reasoning === "boolean") values.reasoning = model.reasoning;
+    if (typeof model.reasoning === "boolean") {
+      values.thinkingLevels = getSupportedThinkingLevels(
+        model as unknown as Model<Api>
+      ) as readonly ThinkingLevel[];
+    }
     if (typeof model.api === "string" && model.api !== "") values.api = model.api;
     if (typeof model.baseUrl === "string" && model.baseUrl !== "") values.baseUrl = model.baseUrl;
     const input = model.input;

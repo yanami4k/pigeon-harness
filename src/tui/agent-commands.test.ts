@@ -38,7 +38,11 @@ function record(open: boolean): SubagentRecord {
                 configGrants: [],
                 settings: { grants: [] },
                 taskList: { items: () => [] },
-                thinking: { get: () => "high", set: () => {}, supported: true },
+                thinking: {
+                  get: () => "high",
+                  set: () => {},
+                  levels: ["off", "low", "medium", "high", "xhigh"],
+                },
               },
             },
           },

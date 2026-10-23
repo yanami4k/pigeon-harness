@@ -52,6 +52,7 @@ export const SessionEntryType = {
   RewindStep: "pigeon.rewind-step",
   ApprovalMode: "pigeon.approval-mode",
   ThinkingLevel: "pigeon.thinking-level",
+  ModelSwitch: "pigeon.model-switch",
   GitHead: "pigeon.git-head",
   AgentMessage: "pigeon.agent-message",
 } as const;
@@ -607,6 +608,26 @@ export const ThinkingLevelDataSchema = Type.Object({
 });
 export type ThinkingLevelData = Static<typeof ThinkingLevelDataSchema>;
 
+// 决策 550：会话中途切换型号（/model）：从哪家哪个到什么、何时。下一次请求起生效；续接按主分支最后一条恢复
+const ModelIdentitySchema = Type.Object(
+  {
+    provider: Type.String({ minLength: 1 }),
+    id: Type.String({ minLength: 1 }),
+  },
+  { additionalProperties: false }
+);
+export const ModelSwitchDataSchema = Type.Object(
+  {
+    version: VERSION,
+    from: ModelIdentitySchema,
+    to: ModelIdentitySchema,
+    changedAt: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false }
+);
+export type ModelSwitchData = Static<typeof ModelSwitchDataSchema>;
+export type ModelSwitchIdentity = Static<typeof ModelIdentitySchema>;
+
 // 决策 473：工作区当前的 git 分支（分离头指针时为短提交号），变了才记一条；/resume 列表取会话最后记的那条。非 git 目录不记
 export const GitHeadDataSchema = Type.Object({
   version: VERSION,
@@ -653,6 +674,7 @@ export type SessionCustomEntry =
   | { customType: typeof SessionEntryType.RewindStep; data: RewindStepData }
   | { customType: typeof SessionEntryType.ApprovalMode; data: ApprovalModeData }
   | { customType: typeof SessionEntryType.ThinkingLevel; data: ThinkingLevelData }
+  | { customType: typeof SessionEntryType.ModelSwitch; data: ModelSwitchData }
   | { customType: typeof SessionEntryType.GitHead; data: GitHeadData }
   | { customType: typeof SessionEntryType.AgentMessage; data: AgentMessageData };
 
@@ -679,6 +701,7 @@ export const SESSION_ENTRY_SCHEMAS = {
   [SessionEntryType.RewindStep]: RewindStepDataSchema,
   [SessionEntryType.ApprovalMode]: ApprovalModeDataSchema,
   [SessionEntryType.ThinkingLevel]: ThinkingLevelDataSchema,
+  [SessionEntryType.ModelSwitch]: ModelSwitchDataSchema,
   [SessionEntryType.GitHead]: GitHeadDataSchema,
   [SessionEntryType.AgentMessage]: AgentMessageDataSchema,
 } as const;

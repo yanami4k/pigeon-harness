@@ -173,6 +173,13 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     whileRunning: { allow: false },
     scope: "program",
   },
+  // 决策 550：会话中途切换型号——整屏列有凭据的随包服务商的目录型号，或直接给 provider/model；运行中也可用（下一轮生效）
+  {
+    name: "model",
+    usage: "/model [provider/model]",
+    whileRunning: { allow: true },
+    scope: "main",
+  },
   // 只在沙箱会话里有（手动交回改动，决策 245）；沙箱不开子 agent，子 agent 视图里照常报未知命令
   {
     name: "export",

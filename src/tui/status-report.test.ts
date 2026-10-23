@@ -70,6 +70,17 @@ test("MODEL-023 /status lists the model the session is talking to", () => {
   );
 });
 
+test("MODEL-040 /status shows the dollar cost in the usage line when there is one", () => {
+  assert.match(
+    statusReportText({ ...BASE, usage: { tokens: 1_200_000, cost: 0.25 } }),
+    /^usage {4}1\.2M tokens · \$0\.2500$/m
+  );
+  assert.match(
+    statusReportText({ ...BASE, usage: { tokens: 1_200_000 } }),
+    /^usage {4}1\.2M tokens$/m
+  );
+});
+
 test("statusCwd：与项目根相同为空串，树里与子目录写相对路径（分隔符 /），项目外写 ~ 缩写的原路径", () => {
   const home = join(tmpdir(), "home");
   const project = join(home, "myapp");
