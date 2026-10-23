@@ -87,7 +87,7 @@ test("不在 .pigeon/worktrees 下的目录不认：回到项目根", async () =
 // 决策 494：项目开在仓库的子目录里（.pigeon 在子目录），工作树照样在主仓库根的 .pigeon/worktrees 下——续接认得回去
 test("子目录项目：文件头记着主仓库根下的工作树（含其中的子目录），续接回到那里", async () => {
   await withRoot(async (base) => {
-    const repo = realpathSync(base);
+    const repo = realpathSync.native(base);
     execFileSync("git", ["init", "-q"], { cwd: repo });
     const project = join(repo, "packages", "web");
     mkdirSync(project, { recursive: true });
