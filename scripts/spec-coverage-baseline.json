@@ -1,0 +1,18 @@
+{
+  "areas": {
+    "APPROVALS": 95,
+    "CLI": 69,
+    "CONTEXT": 93,
+    "HOOKS": 79,
+    "MEMORY": 81,
+    "PANEL": 76,
+    "RENDERING": 69,
+    "SANDBOX": 81,
+    "SESSIONS": 82,
+    "SETTINGS": 80,
+    "SUBAGENTS": 85,
+    "TOOLS": 123,
+    "VIEWS": 58,
+    "WORKTREES": 87
+  }
+}
