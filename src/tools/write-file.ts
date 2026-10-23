@@ -11,6 +11,9 @@ import { asWorkspaceHost } from "./local-host.ts";
 import {
   assertWritePathText,
   OUTSIDE_WRITE_SENTENCE,
+  type OutsideWriteTool,
+  outsideWritesNow,
+  WorkspacePathError,
   type WritePathOptions,
   type WriteToolOptions,
 } from "./paths.ts";
@@ -57,27 +60,36 @@ export function writeFileDescription(outsideWrites: boolean): string {
 }
 
 // 决策 098：workspace 给目录即本地工作区，给执行端实现即由它承接读写；reads 为本会话的读取记录
+type WriteFileTool = PigeonAgentTool<typeof WriteFileParamsSchema, WriteFileDetails> &
+  PreviewableTool &
+  OutsideWriteTool;
+
 export function createWriteFileTool(
   workspace: string | WorkspaceHost,
   reads: FileReadTracker,
   options: WriteToolOptions = {}
-): PigeonAgentTool<typeof WriteFileParamsSchema, WriteFileDetails> & PreviewableTool {
+): WriteFileTool {
   const host = asWorkspaceHost(workspace);
-  const outside = options.outsideWrites === true;
-  const pathOptions: WritePathOptions = { outside };
-  return {
+  // 能力现取：审批模式在会话中途可切换（见 paths.ts 的 outsideWritesNow）
+  const pathOptions = (): WritePathOptions => ({ outside: outsideWritesNow(options) });
+  const tool: WriteFileTool = {
     name: WRITE_FILE_TOOL,
     label: WRITE_FILE_TOOL,
-    description: writeFileDescription(outside),
+    get description() {
+      return writeFileDescription(outsideWritesNow(options));
+    },
     parameters: WriteFileParamsSchema,
     executionMode: "sequential",
+    // 这次调用的目标是否落在工作区之外：治理层据此在弹审批之前拒掉（见 governance.ts）
+    inspectOutsideWrite: (args: unknown) => outsideTarget(host, args),
     async preview(params) {
-      return (await planWrite(host, reads, Value.Parse(WriteFileParamsSchema, params), pathOptions))
-        .diff;
+      return (
+        await planWrite(host, reads, Value.Parse(WriteFileParamsSchema, params), pathOptions())
+      ).diff;
     },
     async execute(_toolCallId, params, signal): Promise<PigeonToolResult<WriteFileDetails>> {
       const args = Value.Parse(WriteFileParamsSchema, params);
-      const plan = await planWrite(host, reads, args, pathOptions);
+      const plan = await planWrite(host, reads, args, pathOptions());
       signal?.throwIfAborted();
       if (plan.created) {
         await (host.createText as NonNullable<WorkspaceHost["createText"]>)(
@@ -110,6 +122,25 @@ export function createWriteFileTool(
       };
     },
   };
+  return tool;
+}
+
+// 目标是否落在工作区以外：按执行端自己的解析口径试一次（只读、不写），越界即交出路径。
+// 其它问题（没读过、符号链接等）不在这里判，留给执行时——治理层只关心"能不能越界写"。
+async function outsideTarget(host: WorkspaceHost, args: unknown): Promise<string | undefined> {
+  const target = (args as { path?: unknown } | null)?.path;
+  if (typeof target !== "string" || target === "" || host.resolveForCreate === undefined) {
+    return undefined;
+  }
+  try {
+    await host.resolveForCreate(target, {});
+    return undefined;
+  } catch (error) {
+    // 越界时两个执行端都抛同一个说法（见 paths.ts 与 container-host.ts）
+    return error instanceof WorkspacePathError && /outside the workspace root/.test(error.message)
+      ? target
+      : undefined;
+  }
 }
 
 function linesText(count: number): string {

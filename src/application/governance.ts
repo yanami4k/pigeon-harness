@@ -29,6 +29,7 @@ import {
 } from "../state/tool-execution.ts";
 import { type GrantMatchOutcome, matchConfigGrants } from "../tools/grants.ts";
 import type { HostScopedTool } from "../tools/host-scope.ts";
+import type { OutsideWriteTool } from "../tools/paths.ts";
 import { evaluateToolPolicy } from "../tools/policy.ts";
 import type { OutsideReadTool } from "../tools/read-file.ts";
 import { ToolRegistry } from "../tools/registry.ts";
@@ -277,6 +278,9 @@ class GovernedToolCalls implements ToolGovernance {
     const host = this.#inspectHost(toolName, rawArgs);
     // 决策 355：读档工具这次要读工作区以外的文件（真实路径）——read 层不自动放行，放行时按调用授予工具
     const outsidePath = await this.#inspectOutsideRead(toolName, rawArgs);
+    // 写档工具这次要写工作区以外的文件：放权模式（yolo）以外一律拒绝，而且必须在这里拒——进了人工审批，
+    // 人批准之后路径层照样拒写，等于拿一次注定失败的审批打扰人
+    const outsideWrite = await this.#inspectOutsideWrite(toolName, rawArgs);
     // 决策 326 ①：写入类文件工具写受保护路径——放权（会话与配置）一概不参与求值
     const protectedTarget = await this.#protectedTargetOf(toolName, rawArgs);
     const grantHit =
@@ -311,6 +315,21 @@ class GovernedToolCalls implements ToolGovernance {
       });
       this.#executions.set(toolCallId, record);
       return this.#blockWithBreaker(toolName, rawArgs, decision.reason, "tool");
+    }
+
+    // 越界写只在放手模式下成立（决策 407）：拒绝名单之后、任何放行与人工审批之前就地拒绝。
+    // 按当下的模式判（切换即时生效），审批面板因此不会为一个注定写不下去的调用弹出来
+    if (outsideWrite !== undefined && policy.approvalMode !== "yolo") {
+      const reason = `Writing outside the workspace needs bypass mode (yolo); refused: ${outsideWrite}`;
+      record = recordDecision(record, {
+        outcome: "rejected",
+        approvedBy: "policy:deny",
+        reason,
+        reasonSource: "system-default",
+        decidedAt: Date.now(),
+      });
+      this.#executions.set(toolCallId, record);
+      return this.#blockWithBreaker(toolName, rawArgs, reason, "tool");
     }
 
     // 自动放行：grant 命中（human:grant / policy:config，回指出处）> 免审批的写档工具（policy:auto）> yolo 批发授权
@@ -530,6 +549,23 @@ class GovernedToolCalls implements ToolGovernance {
     }
     try {
       return await (tool as unknown as OutsideReadTool).inspectOutsideRead(args);
+    } catch {
+      return undefined;
+    }
+  }
+
+  // 写档工具的越界检查（决策 407）；工具无此能力或检查失败返回 undefined（按工作区内处理，工具执行时自会拒写）
+  async #inspectOutsideWrite(toolName: string, args: unknown): Promise<string | undefined> {
+    const tool = this.#host.tools.get(toolName);
+    if (
+      tool === undefined ||
+      !("inspectOutsideWrite" in tool) ||
+      typeof tool.inspectOutsideWrite !== "function"
+    ) {
+      return undefined;
+    }
+    try {
+      return await (tool as unknown as OutsideWriteTool).inspectOutsideWrite(args);
     } catch {
       return undefined;
     }

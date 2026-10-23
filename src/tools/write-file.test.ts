@@ -284,3 +284,28 @@ test("命令超出执行端能执行的长度：直接给出明确错误（建�
     assert.equal(commandTooLong("x".repeat(40_000), "linux", "direct", "linux"), undefined);
     assert.match(commandTooLong("x".repeat(40_000), "linux", "direct", "win32") ?? "", /Windows/);
   }));
+
+// The capability is read when the call arrives, not when the tool was created: switching the mode mid-session
+// changes both what the tool says about itself and what it accepts.
+test("outside writes and the tool's own note both follow the mode in force", () =>
+  withRoot(async (root) => {
+    const away = mkdtempSync(join(tmpdir(), "pigeon-write-outside-tool-"));
+    try {
+      const mode = { current: false };
+      const reads = new FileReadTracker();
+      const write = createWriteFileTool(root, reads, { outsideWrites: () => mode.current });
+      // the note and the capability say the same thing at every moment
+      assert.match(write.description, /within the workspace only/);
+      await assert.rejects(
+        () => write.execute("w1", { path: join(away, "out.txt"), content: "outside\n" }),
+        WorkspacePathError
+      );
+      mode.current = true;
+      assert.match(write.description, /Files outside the workspace can be written too/);
+      assert.doesNotMatch(write.description, /within the workspace only/);
+      await write.execute("w2", { path: join(away, "out.txt"), content: "outside\n" });
+      assert.equal(readFileSync(join(away, "out.txt"), "utf8"), "outside\n");
+    } finally {
+      rmSync(away, { recursive: true, force: true });
+    }
+  }));
