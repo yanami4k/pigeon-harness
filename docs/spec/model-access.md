@@ -1,14 +1,17 @@
 # Model access
 
 Purpose: how a session decides which service provider and which model it talks to; what it does
-with a model the packaged catalog does not describe; and where the choice is shown. Credentials are
-read from the environment only; logging in, custom providers and switching models mid-session are
-other units and are not covered here.
+with a model the packaged catalog does not describe; where the choice is shown; how credentials are
+stored; and how custom providers and proxies are declared. Switching models mid-session is another
+unit and is not covered here.
 
 ## Credentials
 
 - **MODEL-001** Model credentials shall be read from environment variables, and an environment variable shall take precedence over a credential stored anywhere else.
-- **MODEL-002** When no provider holds a credential, `pigeon run` shall fail with "no credentials: set an environment variable such as DEEPSEEK_API_KEY (routes: anthropic, openai, openai-compatible, google).".
+- **MODEL-002** When no provider holds a credential, `pigeon run` shall fail with "no credentials: set an environment variable such as DEEPSEEK_API_KEY (routes: anthropic, openai, openai-compatible, google), or start the terminal UI and run /login there.".
+- **MODEL-032** Credentials given with `/login` shall be stored in `~/.pigeon/credentials.json` as `{"providers": {"<id>": {"apiKey": "..."}}}`, and the file shall be readable only by the current account (mode 0600 on POSIX; on Windows inherited permissions removed and only the current user granted); a failure to set that protection shall fail the write.
+- **MODEL-033** `/login` shall list the providers, then accept a pasted key without echoing it and store it; `/logout` shall remove the stored key of the given provider, and without an argument list the stored ones; both shall be refused while the session is running and shall be unavailable in a sandbox session.
+- **MODEL-038** `pigeon run` shall read credentials from environment variables only and shall not read the `/login` file.
 
 ## Choosing the provider
 
@@ -17,7 +20,8 @@ other units and are not covered here.
 - **MODEL-005** When more than one provider holds a credential and nothing is given, the terminal UI shall present the same candidates and shall not pick one on its own.
 - **MODEL-006** A provider given on the command line shall be used whatever the other providers hold.
 - **MODEL-007** A provider whose route is not one the package ships shall be refused with "unknown provider \"<name>\"; packaged routes: anthropic, openai, openai-compatible, google.".
-- **MODEL-008** A provider given on the command line that holds no credential shall be refused with "no credential for provider \"<name>\"; set <ENV>." naming that provider's environment variable.
+- **MODEL-008** A provider given on the command line that holds no credential shall be refused with "no credential for provider \"<name>\"; set <ENV>, or start the terminal UI and run /login there." naming that provider's environment variable.
+- **MODEL-034** When no provider holds a credential, the terminal UI shall start with a placeholder model, refuse to send messages and tell the user to run `/login`, and after a successful login it shall rebuild the session with the newly chosen provider and model; it shall not pick a provider on its own.
 
 ## Choosing the model
 
@@ -47,6 +51,15 @@ other units and are not covered here.
 
 - **MODEL-026** The package shall ship the Anthropic, OpenAI, OpenAI-compatible and Google routes, and shall not offer Bedrock or subscription-account sign-in.
 
+## Custom providers
+
+- **MODEL-035** A user-level `model.providers.<id>` entry `{api, baseUrl, keyEnv}` shall declare a custom provider whose api is `openai-completions` or `anthropic-messages`; `model.providers` in the project or project-local settings shall be refused, and so shall an id a packaged provider already uses, an unknown api, a baseUrl that is not an http(s) URL, and a keyEnv that is not an environment variable name.
+- **MODEL-036** A custom provider's credential shall come from the environment variable named by its `keyEnv` or from `/login`, and the environment variable shall take precedence.
+
+## Proxy
+
+- **MODEL-037** When any of `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` or `NO_PROXY` (in either case) is set, every route shall go through that proxy; if the proxy support cannot be loaded, the run shall fail instead of connecting directly.
+
 ## Settings
 
 - **MODEL-024** The last used model shall be kept in the user-level settings only, as the pair `{provider, model}` under the key `model.lastUsed`.
@@ -55,7 +68,7 @@ other units and are not covered here.
 ## Known limitations
 
 - **MODEL-027** No default model is maintained for any provider, so a fresh install with one credentialed provider still asks for a model before it can send a request.
-- **MODEL-028** A provider address (`baseUrl`) and a custom provider declared by the user are not part of this unit; the packaged providers are used with their catalogued routes.
-- **MODEL-029** The full model picker, switching models mid-session and stored credentials are not part of this unit; until then the candidate list is text only.
+- **MODEL-028** A provider address (`baseUrl`) comes from the packaged catalog or from a user-level custom-provider declaration; project settings do not supply it.
+- **MODEL-029** The full model picker and switching models mid-session are not part of this unit; until then the candidate list is text only.
 - **MODEL-030** When `--stream-fn` (or `PIGEON_STREAM_FN`) names a module, that module shall supply the model, and the rules of this unit shall not choose one.
 - **MODEL-031** In the subagent view the status bar shows its owning session's model until per-subagent display lands.

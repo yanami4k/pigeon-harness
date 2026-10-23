@@ -3331,6 +3331,7 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 | `ts-algebra` | 2.0.0 | MIT |
 | `tslib` | 2.8.1 | 0BSD |
 | `type-is` | 2.1.0 | MIT |
+| `undici` | 7.16.0 | MIT |
 | `undici-types` | 7.18.2 | MIT |
 | `unpipe` | 1.0.0 | MIT |
 | `vary` | 1.1.2 | MIT |

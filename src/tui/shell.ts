@@ -175,7 +175,7 @@ import {
 } from "./resume-view.ts";
 import { SessionPanel } from "./session-panel.ts";
 import { SessionPicker } from "./session-picker.ts";
-import { StatusBar } from "./status-bar.ts";
+import { clipToWidth, StatusBar } from "./status-bar.ts";
 import type { StatusReport } from "./status-report.ts";
 import { statusReportText } from "./status-report.ts";
 import { secondary } from "./style.ts";
@@ -244,6 +244,17 @@ export interface TuiShellOptions {
   status?: () => Promise<StatusReport>;
   // 决策 340：/reload 重读设置——返回给人看的行（装配方实现：重读、确认、换上新快照并重建运行面）
   reload?: (args: readonly string[]) => Promise<string[]>;
+  // 决策 546：零凭据时拦下发消息；返回要提示的一行，undefined 即放行
+  sendBlocked?: () => string | undefined;
+  // 决策 546：/login、/logout 的服务商与写入（沙箱不给）
+  login?: {
+    providers(): Promise<
+      Array<{ id: string; envName?: string; source?: "env" | "file"; custom: boolean }>
+    >;
+    submit(provider: string, key: string): Promise<string>;
+    logout(provider: string): Promise<string>;
+    stored(): string[];
+  };
   // S5+（裁决 033）：优雅退出回调——双击 Ctrl+C / /quit 触发；壳先 stop() 再回调。
   // 注入使测试绝不真退进程；缺省 = 退出只停壳（装配方必须注入真实退出路径）
   onExit?: () => void;
@@ -341,7 +352,15 @@ const CONFIG_CHROME_ROWS = 4;
 const RESUME_CHROME_ROWS = 6;
 
 // 界面所处的视图——当前会话、整屏的会话回退（决策 435）、会话面板（443）、进入的子 agent（482）、设置（442）与续接（471）
-export type ShellView = "main" | "rewind" | "panel" | "agent" | "elsewhere" | "config" | "resume";
+export type ShellView =
+  | "main"
+  | "rewind"
+  | "panel"
+  | "agent"
+  | "elsewhere"
+  | "config"
+  | "resume"
+  | "login";
 
 // 决策 469：一个会话的审批模式——取当前模式、切换（切换写一条会话记录，之后的工具调用按新模式判定）
 export interface ApprovalModeControl {
@@ -513,6 +532,162 @@ export interface TuiSandboxFace {
   exportChanges(): Promise<string>;
 }
 
+// 决策 546：/login 的整屏视图——先选服务商，再粘 key（只显示 *，不回显）；Esc 退出。
+// /login <provider> 直接进粘贴 key 那一步
+interface LoginProviderRow {
+  id: string;
+  envName?: string;
+  source?: "env" | "file";
+  custom: boolean;
+}
+
+export class LoginPanel implements Component {
+  readonly view: Component = {
+    invalidate: () => {},
+    render: (width: number) => this.render(width),
+  };
+  private rows: LoginProviderRow[] | undefined;
+  private index = 0;
+  private mode: "loading" | "pick" | "key" = "loading";
+  private provider: string | undefined;
+  private buffer = "";
+  private note: string | undefined;
+  private busy = false;
+  private readonly face: NonNullable<TuiShellOptions["login"]>;
+  private readonly done: (line: string) => void;
+  private readonly cancelled: () => void;
+  private readonly maxRows: number;
+
+  constructor(
+    face: NonNullable<TuiShellOptions["login"]>,
+    done: (line: string) => void,
+    cancelled: () => void,
+    preset: string | undefined,
+    maxRows: number
+  ) {
+    this.face = face;
+    this.done = done;
+    this.cancelled = cancelled;
+    this.maxRows = maxRows;
+    if (preset !== undefined) {
+      this.mode = "key";
+      this.provider = preset;
+      return;
+    }
+    void this.face.providers().then(
+      (rows) => {
+        this.rows = rows;
+        this.mode = "pick";
+      },
+      (error: unknown) => {
+        this.note = `reading providers failed: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    );
+  }
+
+  invalidate(): void {}
+
+  handleInput(data: string): void {
+    if (this.busy) return;
+    if (this.mode === "key") {
+      this.keyMode(data);
+      return;
+    }
+    if (this.mode === "loading") {
+      if (matchesKey(data, "escape")) this.cancelled();
+      return;
+    }
+    const rows = this.rows ?? [];
+    if (matchesKey(data, "up")) {
+      this.index = (this.index - 1 + rows.length) % Math.max(1, rows.length);
+    } else if (matchesKey(data, "down")) {
+      this.index = (this.index + 1) % Math.max(1, rows.length);
+    } else if (matchesKey(data, "enter")) {
+      const row = rows[this.index];
+      if (row !== undefined) {
+        this.mode = "key";
+        this.provider = row.id;
+        this.buffer = "";
+        this.note = undefined;
+      }
+    } else if (matchesKey(data, "escape")) {
+      this.cancelled();
+    }
+  }
+
+  private keyMode(data: string): void {
+    if (matchesKey(data, "escape")) {
+      this.cancelled();
+      return;
+    }
+    if (matchesKey(data, "enter")) {
+      const provider = this.provider;
+      const key = this.buffer;
+      if (provider === undefined || key === "") {
+        this.note = "paste a key first";
+        return;
+      }
+      this.busy = true;
+      void this.face.submit(provider, key).then(
+        (line) => {
+          this.busy = false;
+          this.done(line);
+        },
+        (error: unknown) => {
+          this.busy = false;
+          this.note = `login failed: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      );
+      return;
+    }
+    if (matchesKey(data, "backspace")) {
+      this.buffer = [...this.buffer].slice(0, -1).join("");
+      return;
+    }
+    // 粘贴：去掉括号粘贴的标记；其余控制字符丢掉（key 里不会有）
+    const text = data.replaceAll("\x1b[200~", "").replaceAll("\x1b[201~", "");
+    const chars = [...text].filter((char) => {
+      const code = char.codePointAt(0) ?? 0;
+      return code >= 0x20 && code !== 0x7f;
+    });
+    if (chars.length > 0) this.buffer += chars.join("");
+  }
+
+  render(width: number): string[] {
+    const lines: string[] = ["login", ""];
+    if (this.note !== undefined) lines.push(this.note, "");
+    if (this.mode === "key") {
+      const shown = "*".repeat(Math.min([...this.buffer].length, 32));
+      lines.push(`provider: ${this.provider ?? ""}`);
+      lines.push(`key: ${shown}`);
+      lines.push("");
+      lines.push(this.busy ? "saving..." : "paste the key · Enter save · Esc cancel");
+      return lines.map((line) => clipToWidth(line, width));
+    }
+    if (this.mode === "loading") {
+      lines.push("reading providers...");
+      return lines.map((line) => clipToWidth(line, width));
+    }
+    lines.push("up/down select · Enter choose · Esc close", "");
+    const rows = this.rows ?? [];
+    const visible = Math.max(1, Math.min(this.maxRows, rows.length));
+    const start = Math.min(
+      Math.max(0, this.index - visible + 1),
+      Math.max(0, rows.length - visible)
+    );
+    for (let at = start; at < start + visible; at++) {
+      const row = rows[at];
+      if (row === undefined) break;
+      const marker = at === this.index ? "> " : "  ";
+      const where = row.source === "env" ? "env" : row.source === "file" ? "stored" : "no key";
+      const env = row.envName !== undefined ? ` (${row.envName})` : "";
+      const custom = row.custom ? " · custom" : "";
+      lines.push(clipToWidth(`${marker}${row.id} · ${where}${env}${custom}`, width));
+    }
+    return lines;
+  }
+}
+
 export class PigeonTuiShell
   implements TuiApprovalFace, ModalHost, CommandsHost, ResumeViewHost<TuiSessionBinding>
 {
@@ -524,6 +699,8 @@ export class PigeonTuiShell
   private readonly statusLine = new Text("", 1, 0, secondary);
   private readonly statusGap = new Spacer(1);
   private view: ShellView = "main";
+  // 决策 546：/login 的整屏视图（不开放时为 undefined）
+  private loginPanel: LoginPanel | undefined;
   // 决策 435：消息树（会话回退）与双击 Esc 的上一下
   private readonly messageTree: MessageTree;
   // 决策 443：会话面板与进入的会话
@@ -786,48 +963,50 @@ export class PigeonTuiShell
     const children: StackChild[] =
       this.view === "rewind"
         ? [fill(this.messageTree), keep(this.approvalBox), this.statusBar]
-        : this.view === "config"
-          ? [fill(this.configPanel.view), keep(this.approvalBox), ...status, this.statusBar]
-          : this.view === "resume"
-            ? [fill(this.picker.view), keep(this.approvalBox), ...status, this.statusBar]
-            : this.view === "panel"
-              ? [
-                  fill(this.sessionPanel),
-                  keep(this.approvalBox),
-                  ...status,
-                  keep(this.input),
-                  this.statusBar,
-                ]
-              : this.view === "agent" && this.agentSession !== undefined
+        : this.view === "login" && this.loginPanel !== undefined
+          ? [fill(this.loginPanel.view), keep(this.approvalBox), ...status, this.statusBar]
+          : this.view === "config"
+            ? [fill(this.configPanel.view), keep(this.approvalBox), ...status, this.statusBar]
+            : this.view === "resume"
+              ? [fill(this.picker.view), keep(this.approvalBox), ...status, this.statusBar]
+              : this.view === "panel"
                 ? [
-                    // 决策 503：子 agent 视图没有标题行，输入框下方照样是子 agent 面板
-                    fill(this.agentSession.flow.view),
-                    ...(this.loader !== undefined ? [this.loader] : []),
+                    fill(this.sessionPanel),
                     keep(this.approvalBox),
                     ...status,
                     keep(this.input),
-                    ...agents,
                     this.statusBar,
                   ]
-                : this.view === "elsewhere" && this.elsewhereSession !== undefined
+                : this.view === "agent" && this.agentSession !== undefined
                   ? [
-                      this.title,
-                      fill(this.elsewhereSession.flow.view),
-                      keep(this.approvalBox),
-                      ...status,
-                      keep(this.input),
-                      this.statusBar,
-                    ]
-                  : [
-                      fill(this.flow.view),
+                      // 决策 503：子 agent 视图没有标题行，输入框下方照样是子 agent 面板
+                      fill(this.agentSession.flow.view),
                       ...(this.loader !== undefined ? [this.loader] : []),
-                      this.queue.view,
                       keep(this.approvalBox),
                       ...status,
                       keep(this.input),
                       ...agents,
                       this.statusBar,
-                    ];
+                    ]
+                  : this.view === "elsewhere" && this.elsewhereSession !== undefined
+                    ? [
+                        this.title,
+                        fill(this.elsewhereSession.flow.view),
+                        keep(this.approvalBox),
+                        ...status,
+                        keep(this.input),
+                        this.statusBar,
+                      ]
+                    : [
+                        fill(this.flow.view),
+                        ...(this.loader !== undefined ? [this.loader] : []),
+                        this.queue.view,
+                        keep(this.approvalBox),
+                        ...status,
+                        keep(this.input),
+                        ...agents,
+                        this.statusBar,
+                      ];
     // 决策 441：每个视图一个 VStack 作布局根——中间的滚动区占满剩余高度，其余各条按自身高度排在上下
     this.tui.setLayoutRoot(new VStack(children));
   }
@@ -1090,6 +1269,16 @@ export class PigeonTuiShell
     if (!refused) {
       this.input.addToHistory(value);
       this.options.promptHistory?.add(value);
+    }
+    // 决策 546：零凭据时不许发消息（斜杠命令照旧，/login 要用），提示先 /login
+    if (!value.startsWith("/")) {
+      const blocked = this.options.sendBlocked?.();
+      if (blocked !== undefined) {
+        this.viewFlow().addAlert(blocked);
+        this.input.setText(value);
+        this.tui.requestRender();
+        return;
+      }
     }
     // 决策 482：子 agent 视图里的输入是使用者亲手打给它的话。决策 505：斜杠命令就地执行——代理级的作用于这个子 agent，
     // 程序级的与主视图一样，只对主代理的直接拒绝
@@ -1718,6 +1907,66 @@ export class PigeonTuiShell
       }
       this.applyConfig(assignment.id, assignment.value);
     };
+  }
+
+  // 决策 546：/login [provider]——整屏视图先选服务商，再粘 key（/login <provider> 直接粘）；沙箱里不可用
+  beginLogin(provider?: string): void {
+    const face = this.options.login;
+    if (face === undefined) {
+      this.viewFlow().addSystem("can't use /login in a sandbox session");
+      this.tui.requestRender();
+      return;
+    }
+    this.loginPanel = new LoginPanel(
+      face,
+      (line) => {
+        this.loginPanel = undefined;
+        this.showView("main");
+        this.viewFlow().addSystem(line);
+        this.tui.requestRender();
+      },
+      () => {
+        this.loginPanel = undefined;
+        this.showView("main");
+        this.viewFlow().addSystem("login cancelled");
+        this.tui.requestRender();
+      },
+      provider,
+      Math.max(3, this.options.terminal.rows - 5)
+    );
+    this.showView("login");
+  }
+
+  // 决策 546：/logout [provider]——不带参数时列出文件里存着的服务商；沙箱里不可用
+  logoutCommand(provider?: string): void {
+    const face = this.options.login;
+    if (face === undefined) {
+      this.viewFlow().addSystem("can't use /logout in a sandbox session");
+      this.tui.requestRender();
+      return;
+    }
+    if (provider === undefined) {
+      const stored = face.stored();
+      this.viewFlow().addSystem(
+        stored.length === 0
+          ? "no stored credentials"
+          : `stored credentials: ${stored.join(", ")} (use /logout <provider>)`
+      );
+      this.tui.requestRender();
+      return;
+    }
+    void face.logout(provider).then(
+      (line) => {
+        this.viewFlow().addSystem(line);
+        this.tui.requestRender();
+      },
+      (error: unknown) => {
+        this.viewFlow().addAlert(
+          `logout failed: ${error instanceof Error ? error.message : String(error)}`
+        );
+        this.tui.requestRender();
+      }
+    );
   }
 
   // 读面板各项；三层设置有一层坏了（不是合法 JSON 等）即如实说明、不抛
@@ -2861,6 +3110,12 @@ export class PigeonTuiShell
   }
 
   private handleViewKey(data: string): { consume: true } | undefined {
+    // 决策 546：登录视图开着时按键全归它
+    if (this.loginPanel !== undefined) {
+      this.loginPanel.handleInput(data);
+      this.tui.requestRender();
+      return { consume: true };
+    }
     // 决策 465：设置视图里正在就地输入或等新键：按键全归它（Shift+Tab 等也要能绑）
     if (
       this.configPanel.isOpen() &&
@@ -3922,6 +4177,8 @@ export class PigeonTuiShell
     if (view !== "config") this.configPanel.close();
     // 决策 471：离开续接视图即关掉列表，按没选处理
     if (view !== "resume" && this.picker.isOpen()) this.picker.close();
+    // 决策 546：离开登录视图即关它
+    if (view !== "login") this.loginPanel = undefined;
     this.view = view;
     // 决策 458：在面板里中断主会话时留着的排队内容，回到主视图时放进输入框（排队在前、草稿在后）
     if (view === "main" && this.heldQueue.length > 0 && !this.stayingInPanel) {
@@ -3980,6 +4237,8 @@ export class PigeonTuiShell
     }
     // 决策 442：设置面板开着时它独占方向键与回车
     if (this.configPanel.isOpen()) return undefined;
+    // 决策 546：登录视图的按键归它（在 handleViewKey）
+    if (this.view === "login") return undefined;
     // 有一方接管了 Esc（/memory edit 排队保存时）：Esc 归它，排在视图与取消键之前
     if (
       this.escapeCapture !== undefined &&

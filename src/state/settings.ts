@@ -118,10 +118,30 @@ const LastUsedModelSchema = Type.Object(
   ClosedModelSection
 );
 
-// settings.json 的 model 一节：lastUsed 的形如 {provider, model}
+// 自定义服务商（决策 547）：接口类型、地址与环境变量名；id 由它在 providers 里的键给出
+export const CUSTOM_PROVIDER_APIS = ["openai-completions", "anthropic-messages"] as const;
+const CustomProviderSchema = Type.Object(
+  {
+    api: Type.Union([Type.Literal("openai-completions"), Type.Literal("anthropic-messages")]),
+    baseUrl: Type.String({ minLength: 1 }),
+    keyEnv: Type.String({ pattern: "^[A-Z][A-Z0-9_]*$" }),
+  },
+  ClosedModelSection
+);
+export type CustomProviderSetting = Static<typeof CustomProviderSchema>;
+export type CustomProvider = CustomProviderSetting & { id: string };
+
+// settings.json 的 model 一节：lastUsed 的形如 {provider, model}；providers 是自定义服务商（只认用户层）
 export const ModelSectionSchema = Type.Object(
   {
     lastUsed: Type.Optional(LastUsedModelSchema),
+    providers: Type.Optional(
+      Type.Record(
+        Type.String({ pattern: "^[a-z0-9][a-z0-9._-]*$" }),
+        CustomProviderSchema,
+        ClosedModelSection
+      )
+    ),
   },
   ClosedModelSection
 );
@@ -286,6 +306,10 @@ export function validateSettingsLayer(
     if (key === "web") {
       problems.push(...webKeyProblems(section, where));
     }
+    // 决策 547：自定义服务商的地址必须是 http(s)（其余字段由 schema 校）
+    if (key === "model") {
+      problems.push(...customProviderProblems(section, where));
+    }
     // 钩子的 matcher 须是合法正则（其余由 schema 校验）
     if (key === "hooks") {
       problems.push(...hooksSectionProblems(section as HooksSection));
@@ -323,6 +347,28 @@ export function validateSettingsLayer(
     return { problems: schemaProblems(SettingsFileSchema, raw, `settings file ${where}: `) };
   }
   return { file: raw as SettingsFile };
+}
+
+// 自定义服务商：baseUrl 必须是 http 或 https（id 的字符集与 api 枚举由 schema 校）
+function customProviderProblems(section: Record<string, unknown>, where: string): string[] {
+  const problems: string[] = [];
+  const providers = section.providers;
+  if (!isPlainObject(providers)) return problems;
+  for (const [id, entry] of Object.entries(providers)) {
+    if (!isPlainObject(entry) || typeof entry.baseUrl !== "string") continue;
+    let protocol: string | undefined;
+    try {
+      protocol = new URL(entry.baseUrl).protocol;
+    } catch {
+      protocol = undefined;
+    }
+    if (protocol !== "http:" && protocol !== "https:") {
+      problems.push(
+        `settings file ${where}: model.providers.${id}.baseUrl must be an http or https URL`
+      );
+    }
+  }
+  return problems;
 }
 
 // web 一节里写了 key：逐个报出应设的环境变量
@@ -575,6 +621,14 @@ export function modelInfoSectionOf(snapshot: SettingsSnapshot): ModelInfoSection
 // 上次用过的型号（MODEL-024）：只取用户层记下的 {provider, model}；没记过为 undefined
 export function lastUsedModelOf(snapshot: SettingsSnapshot): LastUsedModelSetting | undefined {
   return snapshot.merged.model?.lastUsed;
+}
+
+// 自定义服务商（决策 547）：用户层声明的 model.providers，按 id 升序
+export function customProvidersOf(snapshot: SettingsSnapshot): CustomProvider[] {
+  const providers = snapshot.merged.model?.providers ?? {};
+  return Object.entries(providers)
+    .map(([id, entry]) => ({ id, ...entry }))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
 // 决策 361：上下文裁剪一节（缺省值与按模型信息算的价格比由 prune-config.ts 补）

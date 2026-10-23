@@ -369,7 +369,7 @@ test("MODEL-002 pigeon run without any credential fails with the fixed text", ()
     assert.notEqual(child.status, 0);
     assert.match(
       child.stderr,
-      /^no credentials: set an environment variable such as DEEPSEEK_API_KEY \(routes: anthropic, openai, openai-compatible, google\)\.$/m
+      /^no credentials: set an environment variable such as DEEPSEEK_API_KEY \(routes: anthropic, openai, openai-compatible, google\), or start the terminal UI and run \/login there\.$/m
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -412,7 +412,10 @@ test("MODEL-008 a credentialed provider given without a key names its environmen
   try {
     const child = runCliWithoutKeys(["run", "hi", "--root", root, "--provider", "deepseek"]);
     assert.notEqual(child.status, 0);
-    assert.match(child.stderr, /^no credential for provider "deepseek"; set DEEPSEEK_API_KEY\.$/m);
+    assert.match(
+      child.stderr,
+      /^no credential for provider "deepseek"; set DEEPSEEK_API_KEY, or start the terminal UI and run \/login there\.$/m
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -446,6 +449,35 @@ test("MODEL-030 --stream-fn supplies the model: the choice rules do not run even
     ]);
     assert.equal(child.status, 0, child.stderr);
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MODEL-038 pigeon run reads credentials from environment variables only, not the /login file", () => {
+  const home = mkdtempSync(join(tmpdir(), "pigeon-run-credentials-home-"));
+  const root = mkdtempSync(join(tmpdir(), "pigeon-run-credentials-root-"));
+  try {
+    mkdirSync(join(home, ".pigeon"), { recursive: true });
+    writeFileSync(
+      join(home, ".pigeon", "credentials.json"),
+      JSON.stringify({ providers: { deepseek: { apiKey: "sk-file" } } })
+    );
+    const env: Record<string, string | undefined> = {
+      ...process.env,
+      HOME: home,
+      USERPROFILE: home,
+    };
+    for (const name of Object.values(PROVIDER_KEY_ENV)) delete env[name];
+    const child = spawnSync(process.execPath, [CLI, "run", "hi", "--root", root], {
+      encoding: "utf8",
+      timeout: 60_000,
+      windowsHide: true,
+      env,
+    });
+    assert.notEqual(child.status, 0);
+    assert.match(child.stderr, /^no credentials: /m, "文件里的 key 不算");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
     rmSync(root, { recursive: true, force: true });
   }
 });

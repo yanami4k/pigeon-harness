@@ -23,6 +23,7 @@ import { runSessionListCommand } from "../application/session-list.ts";
 import { openSessionSettings, TRUST_CONFIG_FLAG } from "../application/session-settings.ts";
 import { prepareWorkspace } from "../application/workspace.ts";
 import { runWorktreesCommand } from "../application/worktree-cleanup.ts";
+import { installProxyFetch } from "../pi-runtime/model-access.ts";
 import { newSessionId } from "../state/ids.ts";
 import { BUNDLE_ROLE_ENV, FROM_BUNDLE } from "../state/package-paths.ts";
 import { pigeonRel } from "../state/paths.ts";
@@ -279,6 +280,8 @@ async function runMain(argv: string[]): Promise<void> {
   if (flags.noHooks) settings = withHooksDisabled(settings);
   // MODEL-030、MODEL-002…MODEL-019（决策 544）：给了 --stream-fn 时由插件提供模型、选择规则不介入；
   // 没给时按凭据、目录与上次选择定出型号（失败即抛规格原文）
+  // 决策 548：代理变量非空时先装上代理 fetch（加载失败响亮报错）；pigeon run 只认环境变量凭据（决策 549）
+  await installProxyFetch(process.env);
   const streamFn = await (async () => {
     if (flags.streamFnSpec !== undefined && flags.streamFnSpec !== "") {
       return loadStreamFn(resolveStreamFnSpec(flags, usage));

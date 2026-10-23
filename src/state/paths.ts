@@ -212,6 +212,13 @@ export function userSettingsPath(homeDir: string = homedir()): string {
   return path.join(homeDir, PIGEON_DIR, SETTINGS_FILE);
 }
 
+// 模型凭据文件（决策 545）：~/.pigeon/credentials.json，env 变量优先于它
+export const USER_CREDENTIALS_FILE = "credentials.json";
+
+export function userCredentialsPath(homeDir: string = homedir()): string {
+  return path.join(homeDir, PIGEON_DIR, USER_CREDENTIALS_FILE);
+}
+
 export function userStateDir(homeDir: string = homedir()): string {
   return path.join(homeDir, PIGEON_DIR, STATE_DIR);
 }

@@ -558,6 +558,11 @@
 | 542 | 型号选择的五条固定文案逐字照 MODEL-002、004、007、008、010 | 模型接入 | 运行 |
 | 543 | 单家有凭据、没给型号、没有上次选择：`pigeon run` 报错，终端界面列出该服务商的目录型号后退出 | 模型接入 | 终端界面 |
 | 544 | 没有 `--stream-fn` 时默认走随包的四类线路（pi-ai 目录模型 + streamSimple）；给了就由插件提供模型，本单元的选择规则不介入 | 模型接入 | 运行 |
+| 545 | 凭据文件 `~/.pigeon/credentials.json`，形如 `{providers:{<id>:{apiKey}}}`；POSIX 0600，Windows 去继承只给当前用户；环境变量优先 | 模型接入 | 安全 |
+| 546 | `/login`、`/logout`：整屏选服务商再粘 key（不回显），运行中拒绝，沙箱不可用；零凭据时终端界面起占位运行面、拦下发消息并提示 `/login`，登录后按 /reload 换手路径重建 | 模型接入 | 终端界面 |
+| 547 | 自定义服务商：只认用户层 `model.providers`，字段 id / api / baseUrl / keyEnv，id 不得与随包重名，地址必须 http(s)；凭据环境变量（keyEnv）优先于 `/login` | 模型接入 | 设置 |
+| 548 | 代理：任一标准代理变量非空时动态加载 undici 的 EnvHttpProxyAgent 包一层 global fetch，所有线路走同一代理；加载失败响亮报错，不静默直连 | 模型接入 | 运行 |
+| 549 | `pigeon run` 只认环境变量凭据（不读 `/login` 文件），零凭据与指定服务商无凭据的两条文案末尾指向终端界面的 `/login` | 模型接入 | 运行 |
 
 ## 条目
 
@@ -4803,3 +4808,33 @@
 - 结论：同表格行。
 - 理由：正式版不能要求每个使用者先写一个接入模块；随包四类线路覆盖常见服务商，--stream-fn 留给自建端点与实验接入，这时模型由插件提供，选择规则不参与。
 - 锚点：src/pi-runtime/model-access.ts、src/application/runtime.ts。
+
+### 545 凭据文件
+
+- 结论：同表格行。
+- 理由：环境变量适合 CI，日常使用要个只属于自己账户的文件；不改终端与 shell 的 umask 也能保证别人读不到，所以写入时就收紧（POSIX 0600、Windows 去继承），收不紧宁可报错也不落盘。
+- 锚点：src/persistence/credentials.ts、src/state/paths.ts、src/pi-runtime/model-access.ts。
+
+### 546 登录与登出
+
+- 结论：同表格行。
+- 理由：首次启动没有任何 key 时直接退出等于把人挡在门外；先给占位运行面、拦住发消息并提示 /login，登录后按 /reload 同一条换手路径重建，既不替人选自，也不用另建一套会话装配。key 只显示星号，避免录屏与回滚泄露。
+- 锚点：src/tui/shell.ts、src/tui/main.ts、src/tui/commands.ts、src/tui/command-table.ts、src/application/runtime.ts。
+
+### 547 自定义服务商
+
+- 结论：同表格行。
+- 理由：地址与线路属于使用者自己的环境，但必须留在用户层（项目里的文件会随仓库共享给旁人）；声明里只给必要的四项，id 与随包重名时宁可报错也不默默盖掉。
+- 锚点：src/state/settings.ts、src/pi-runtime/model-access.ts。
+
+### 548 代理
+
+- 结论：同表格行。
+- 理由：四条随包线路用的是 SDK 的全局 fetch，默认都不读代理变量，而 google 线路不接受注入的 fetch；只在有代理变量时包一层 global fetch，能让四条线路、MCP 与联网工具走同一代理，也避免无代理时白白加载依赖。
+- 锚点：src/pi-runtime/model-access.ts、src/cli/index.ts、src/tui/main.ts、package.json。
+
+### 549 pigeon run 只认环境变量
+
+- 结论：同表格行。
+- 理由：无人值守运行不该隐式使用交互登录留下的 key（可能属于另一个账户）；两条固定文案末尾指向终端界面的 /login，告诉人该去哪儿。
+- 锚点：src/cli/index.ts、src/pi-runtime/model-access.ts、src/application/runtime.ts。

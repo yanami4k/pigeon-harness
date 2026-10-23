@@ -16,6 +16,7 @@ import {
   ModelInfoDeclarationSchema,
   type ModelInfoValues,
 } from "../state/model-info.ts";
+import type { CustomProvider } from "../state/settings.ts";
 
 export interface ModelAccessInfo {
   declared?: ModelInfoDeclaration;
@@ -194,6 +195,54 @@ export function hasCredential(provider: string, env: Record<string, string | und
   return value !== undefined && value !== "";
 }
 
+// 凭据来源（MODEL-001、决策 545）：环境变量优先于 ~/.pigeon/credentials.json；自定义服务商的变量名由声明给出。
+// 文件内容延迟读（每次取 key 时读一次），所以 /login 写完不需要重建来源对象
+export interface CredentialSource {
+  envNameOf(provider: string): string | undefined;
+  keyOf(provider: string): string | undefined;
+  has(provider: string): boolean;
+  // key 从哪来（/login 的列表用）；没有为 undefined
+  sourceOf(provider: string): "env" | "file" | undefined;
+}
+
+export interface CredentialSourceInput {
+  env: Record<string, string | undefined>;
+  // 自定义服务商的变量名（provider → 环境变量名）；随包的用 PROVIDER_KEY_ENV
+  envNames?: Readonly<Record<string, string>>;
+  // 凭据文件的内容（延迟读；读失败直接上抛，不静默当没有）
+  stored?: () => Record<string, string>;
+}
+
+export function createCredentialSource(input: CredentialSourceInput): CredentialSource {
+  const envNameOf = (provider: string): string | undefined =>
+    input.envNames?.[provider] ?? PROVIDER_KEY_ENV[provider];
+  const keyOf = (provider: string): string | undefined => {
+    const name = envNameOf(provider);
+    const fromEnv = name !== undefined ? input.env[name] : undefined;
+    if (fromEnv !== undefined && fromEnv !== "") return fromEnv;
+    const fromFile = input.stored?.()[provider];
+    return fromFile !== undefined && fromFile !== "" ? fromFile : undefined;
+  };
+  return {
+    envNameOf,
+    keyOf,
+    has: (provider) => keyOf(provider) !== undefined,
+    sourceOf: (provider) => {
+      const name = envNameOf(provider);
+      const fromEnv = name !== undefined ? input.env[name] : undefined;
+      if (fromEnv !== undefined && fromEnv !== "") return "env";
+      const fromFile = input.stored?.()[provider];
+      return fromFile !== undefined && fromFile !== "" ? "file" : undefined;
+    },
+  };
+}
+
+function isCredentialSource(
+  value: CredentialSource | Record<string, string | undefined>
+): value is CredentialSource {
+  return typeof (value as CredentialSource).keyOf === "function";
+}
+
 // 随包 provider 目录的事实：线路、地址、目录里的型号（MODEL-007、MODEL-009、MODEL-019）
 export interface ProviderFacts {
   names(): string[];
@@ -268,6 +317,46 @@ export async function loadProviderFacts(
   };
 }
 
+// 没有任何随包服务商的事实（目录加载失败时仍可用自定义服务商）
+export function emptyProviderFacts(): ProviderFacts {
+  return {
+    names: () => [],
+    routeOf: () => undefined,
+    baseUrlOf: () => undefined,
+    modelsOf: () => [],
+    providersOffering: () => [],
+  };
+}
+
+// 把用户层声明的自定义服务商（决策 547）并在随包目录上：线路与地址取自声明，型号清单为空（目录外型号）。
+// id 与随包服务商重名即报错，不静默覆盖
+export function providerFactsWith(
+  base: ProviderFacts | undefined,
+  custom: readonly CustomProvider[]
+): ProviderFacts {
+  const packaged = base ?? emptyProviderFacts();
+  const packagedIds = new Set(packaged.names());
+  const byId = new Map<string, CustomProvider>();
+  for (const provider of custom) {
+    if (packagedIds.has(provider.id)) {
+      throw new Error(
+        `custom provider "${provider.id}" in model.providers collides with a packaged provider`
+      );
+    }
+    byId.set(provider.id, provider);
+  }
+  return {
+    names: () => [...new Set([...packaged.names(), ...byId.keys()])].sort(),
+    routeOf: (provider) => {
+      const declared = byId.get(provider);
+      return declared !== undefined ? routeOfApi(declared.api) : packaged.routeOf(provider);
+    },
+    baseUrlOf: (provider) => byId.get(provider)?.baseUrl ?? packaged.baseUrlOf(provider),
+    modelsOf: (provider) => (byId.has(provider) ? [] : packaged.modelsOf(provider)),
+    providersOffering: (modelId) => packaged.providersOffering(modelId),
+  };
+}
+
 export interface LastUsedModel {
   provider: string;
   model: string;
@@ -288,7 +377,10 @@ export type ModelChoiceFailure =
   | { reason: "no-model"; text: string; provider: string; models: string[] };
 
 export interface ModelChoiceInputs {
-  env: Record<string, string | undefined>;
+  // 凭据来源（env > 文件；决策 545）
+  credentials?: CredentialSource;
+  // 旧写法：直接给环境变量（等价于只看 env 的来源；测试与只认环境变量的入口用）
+  env?: Record<string, string | undefined>;
   facts: ProviderFacts;
   // 命令行给的（没给为 undefined）
   provider?: string;
@@ -302,16 +394,17 @@ function noModelText(provider: string): string {
 }
 
 export function chooseModel(inputs: ModelChoiceInputs): ModelChoice | ModelChoiceFailure {
-  const { env, facts, model, lastUsed } = inputs;
+  const credentials = inputs.credentials ?? createCredentialSource({ env: inputs.env ?? {} });
+  const { facts, model, lastUsed } = inputs;
   const credentialed = facts
     .names()
-    .filter((name) => hasCredential(name, env))
+    .filter((name) => credentials.has(name))
     .sort();
   // MODEL-016：上次用的那家没凭据（或线路不再随包）时当作没有记过
   const remembered =
     lastUsed !== undefined &&
     facts.routeOf(lastUsed.provider) !== undefined &&
-    hasCredential(lastUsed.provider, env)
+    credentials.has(lastUsed.provider)
       ? lastUsed
       : undefined;
   const provider = inputs.provider;
@@ -323,10 +416,10 @@ export function chooseModel(inputs: ModelChoiceInputs): ModelChoice | ModelChoic
         text: `unknown provider "${provider}"; packaged routes: ${PACKAGED_ROUTES}.`,
       };
     }
-    if (!hasCredential(provider, env)) {
+    if (!credentials.has(provider)) {
       return {
         reason: "no-credential",
-        text: `no credential for provider "${provider}"; set ${keyEnvOf(provider) ?? "an API key environment variable"}.`,
+        text: noCredentialText(provider, credentials.envNameOf(provider)),
       };
     }
     const chosen = model ?? (remembered?.provider === provider ? remembered.model : undefined);
@@ -350,7 +443,7 @@ export function chooseModel(inputs: ModelChoiceInputs): ModelChoice | ModelChoic
         candidates: offering,
       };
     }
-    if (offering.length === 1 && hasCredential(offering[0] as string, env)) {
+    if (offering.length === 1 && credentials.has(offering[0] as string)) {
       return { provider: offering[0] as string, model };
     }
     // 目录认不出这个型号（MODEL-019）或那一家没凭据：provider 当作没给
@@ -390,7 +483,12 @@ export function chooseModel(inputs: ModelChoiceInputs): ModelChoice | ModelChoic
   };
 }
 
-const NO_CREDENTIALS_TEXT = `no credentials: set an environment variable such as DEEPSEEK_API_KEY (routes: ${PACKAGED_ROUTES}).`;
+const NO_CREDENTIALS_TEXT = `no credentials: set an environment variable such as DEEPSEEK_API_KEY (routes: ${PACKAGED_ROUTES}), or start the terminal UI and run /login there.`;
+
+// MODEL-008、决策 549：指定了服务商却没有凭据；末尾一并指向终端界面的 /login
+function noCredentialText(provider: string, envName: string | undefined): string {
+  return `no credential for provider "${provider}"; set ${envName ?? "an API key environment variable"}, or start the terminal UI and run /login there.`;
+}
 
 function manyProvidersText(candidates: readonly string[]): string {
   return `no model selected: more than one provider has credentials (${candidates.join(", ")}); pass --provider and --model, or run the terminal UI to choose one.`;
@@ -406,11 +504,14 @@ const PACKAGED_STREAMS: Readonly<Record<PackagedApi, StreamFn>> = {
   "google-generative-ai": googleGenerativeAi as unknown as StreamFn,
 };
 
-// 没有 --stream-fn 时的接入：按快照里的 provider/型号查环境变量取 key，按模型对象上的 api 发（MODEL-003、MODEL-017、MODEL-019）
+// 没有 --stream-fn 时的接入：按凭据来源取 key（env > /login 文件），按模型对象上的 api 发（MODEL-003、MODEL-017、MODEL-019）
 export function createPackagedStreamFn(
-  env: Record<string, string | undefined>,
+  credentials: CredentialSource | Record<string, string | undefined>,
   streams: Readonly<Record<PackagedApi, StreamFn>> = PACKAGED_STREAMS
 ): StreamFn {
+  const source = isCredentialSource(credentials)
+    ? credentials
+    : createCredentialSource({ env: credentials });
   return (model, context, options) => {
     const stream = streams[model.api as PackagedApi];
     if (stream === undefined) {
@@ -418,13 +519,59 @@ export function createPackagedStreamFn(
         `model route "${model.api}" is not packaged; pass --stream-fn for a custom route (routes: ${PACKAGED_ROUTES})`
       );
     }
-    const keyEnv = PROVIDER_KEY_ENV[model.provider];
-    const apiKey = keyEnv !== undefined ? env[keyEnv] : undefined;
-    if (keyEnv === undefined || apiKey === undefined || apiKey === "") {
-      throw new Error(
-        `no credential for provider "${model.provider}"; set ${keyEnv ?? "an API key environment variable"}.`
-      );
+    const apiKey = source.keyOf(model.provider);
+    if (apiKey === undefined) {
+      throw new Error(noCredentialText(model.provider, source.envNameOf(model.provider)));
     }
     return stream(model, context, { ...options, apiKey });
   };
+}
+
+// ---- 代理（决策 548）----
+
+// 标准代理变量；任一非空即认为使用者要经代理
+const PROXY_ENV_KEYS = [
+  "HTTP_PROXY",
+  "http_proxy",
+  "HTTPS_PROXY",
+  "https_proxy",
+  "ALL_PROXY",
+  "all_proxy",
+  "NO_PROXY",
+  "no_proxy",
+] as const;
+
+export function proxyConfigured(env: Record<string, string | undefined>): boolean {
+  return PROXY_ENV_KEYS.some((key) => (env[key] ?? "") !== "");
+}
+
+interface UndiciModule {
+  fetch?: (input: unknown, init?: unknown) => unknown;
+  EnvHttpProxyAgent?: new () => unknown;
+}
+
+// 只在代理变量非空时动态加载 undici，并用 EnvHttpProxyAgent 包一层 globalThis.fetch：四条随包线路（含明确拒绝自定义
+// fetch 的 google）与 MCP/联网工具都走同一代理；加载失败响亮报错，不静默直连
+export async function installProxyFetch(
+  env: Record<string, string | undefined>,
+  importModule: (specifier: string) => Promise<unknown> = (specifier) => import(specifier)
+): Promise<boolean> {
+  if (!proxyConfigured(env)) return false;
+  let module: UndiciModule;
+  try {
+    module = (await importModule("undici")) as UndiciModule;
+  } catch (error) {
+    throw new Error(
+      `proxy environment is set but loading undici failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  const fetchImpl = module.fetch;
+  const Agent = module.EnvHttpProxyAgent;
+  if (typeof fetchImpl !== "function" || typeof Agent !== "function") {
+    throw new Error("proxy environment is set but undici has no EnvHttpProxyAgent/fetch");
+  }
+  const dispatcher = new Agent();
+  (globalThis as { fetch: unknown }).fetch = (input: unknown, init?: unknown) =>
+    fetchImpl(input, { ...(init as object | undefined), dispatcher });
+  return true;
 }

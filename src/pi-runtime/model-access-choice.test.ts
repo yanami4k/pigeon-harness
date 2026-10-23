@@ -5,10 +5,13 @@ import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { test } from "vitest";
 import {
   chooseModel,
+  createCredentialSource,
   createPackagedStreamFn,
   hasCredential,
+  installProxyFetch,
   loadProviderFacts,
   PROVIDER_KEY_ENV,
+  providerFactsWith,
   ROUTE_APIS,
   ROUTE_NAMES,
 } from "./model-access.ts";
@@ -51,7 +54,7 @@ test("MODEL-002 no provider holds a credential: the run fails with the fixed tex
   const choice = chooseModel({ env: {}, facts: single });
   assert.deepEqual(choice, {
     reason: "no-credentials",
-    text: "no credentials: set an environment variable such as DEEPSEEK_API_KEY (routes: anthropic, openai, openai-compatible, google).",
+    text: "no credentials: set an environment variable such as DEEPSEEK_API_KEY (routes: anthropic, openai, openai-compatible, google), or start the terminal UI and run /login there.",
   });
 });
 
@@ -111,7 +114,7 @@ test("MODEL-008 a given provider without a credential is refused naming its envi
   const choice = chooseModel({ env: {}, facts: single, provider: "deepseek" });
   assert.deepEqual(choice, {
     reason: "no-credential",
-    text: 'no credential for provider "deepseek"; set DEEPSEEK_API_KEY.',
+    text: 'no credential for provider "deepseek"; set DEEPSEEK_API_KEY, or start the terminal UI and run /login there.',
   });
 });
 
@@ -260,4 +263,107 @@ test("MODEL-029 the candidate list is text only: the failure carries the message
   assert.deepEqual("models" in choice ? choice.models : [], ["deepseek-chat"]);
   // 没有任何可交互的选项字段（选择器不在本单元）
   assert.equal(Object.hasOwn(choice, "options"), false);
+});
+
+test("MODEL-032 the environment wins over the credentials file", () => {
+  const source = createCredentialSource({
+    env: { DEEPSEEK_API_KEY: "env-key" },
+    stored: () => ({ deepseek: "file-key", mine: "file-mine" }),
+  });
+  assert.equal(source.keyOf("deepseek"), "env-key");
+  assert.equal(source.sourceOf("deepseek"), "env");
+  assert.equal(source.keyOf("mine"), "file-mine");
+  assert.equal(source.sourceOf("mine"), "file");
+  // 只有文件里的 key 也算有凭据（MODEL-003）
+  assert.deepEqual(
+    chooseModel({
+      credentials: source,
+      facts: factsOf({ mine: { route: "openai-compatible", models: [] } }),
+      provider: "mine",
+      model: "x",
+    }),
+    { provider: "mine", model: "x" }
+  );
+});
+
+test("MODEL-035 custom providers are declared in model.providers and cannot reuse a packaged id", () => {
+  const custom = [
+    {
+      id: "mine",
+      api: "openai-completions" as const,
+      baseUrl: "https://llm.test",
+      keyEnv: "MINE_KEY",
+    },
+  ];
+  const facts = providerFactsWith(single, custom);
+  assert.equal(facts.routeOf("mine"), "openai-compatible");
+  assert.equal(facts.baseUrlOf("mine"), "https://llm.test");
+  assert.deepEqual(facts.modelsOf("mine"), []);
+  assert.ok(facts.names().includes("mine"));
+  assert.throws(
+    () =>
+      providerFactsWith(single, [
+        { id: "deepseek", api: "openai-completions", baseUrl: "https://x.test", keyEnv: "X_KEY" },
+      ]),
+    /collides with a packaged provider/
+  );
+});
+
+test("MODEL-036 a custom provider takes its key from keyEnv or from /login", () => {
+  const facts = providerFactsWith(single, [
+    { id: "mine", api: "anthropic-messages", baseUrl: "https://llm.test", keyEnv: "MINE_KEY" },
+  ]);
+  const fromEnv = createCredentialSource({
+    env: { MINE_KEY: "sk-mine" },
+    envNames: { mine: "MINE_KEY" },
+  });
+  assert.deepEqual(chooseModel({ credentials: fromEnv, facts, provider: "mine", model: "x" }), {
+    provider: "mine",
+    model: "x",
+  });
+  const fromFile = createCredentialSource({
+    env: {},
+    envNames: { mine: "MINE_KEY" },
+    stored: () => ({ mine: "sk-login" }),
+  });
+  assert.deepEqual(chooseModel({ credentials: fromFile, facts, provider: "mine", model: "x" }), {
+    provider: "mine",
+    model: "x",
+  });
+  assert.equal(fromEnv.sourceOf("mine"), "env");
+  assert.equal(fromFile.sourceOf("mine"), "file");
+});
+
+test("MODEL-037 proxy support is loaded only when a proxy variable is set, and failures are loud", async () => {
+  const original = globalThis.fetch;
+  try {
+    assert.equal(
+      await installProxyFetch({}, async () => {
+        throw new Error("must not load");
+      }),
+      false
+    );
+    let seen: { dispatcher?: unknown } | undefined;
+    const fake = {
+      EnvHttpProxyAgent: class {},
+      fetch: (_input: unknown, init: { dispatcher?: unknown }) => {
+        seen = init;
+        return "ok";
+      },
+    };
+    assert.equal(
+      await installProxyFetch({ HTTPS_PROXY: "http://127.0.0.1:9" }, async () => fake),
+      true
+    );
+    await (globalThis.fetch as unknown as (input: string) => Promise<unknown>)(
+      "https://example.com"
+    );
+    assert.ok(seen?.dispatcher !== undefined);
+    await assert.rejects(
+      installProxyFetch({ HTTPS_PROXY: "http://127.0.0.1:9" }, async () => ({})),
+      /EnvHttpProxyAgent/
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
 });

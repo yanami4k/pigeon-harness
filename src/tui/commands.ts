@@ -101,6 +101,9 @@ export interface CommandsHost {
   beginTakePick?(): void;
   // 决策 513：/effort [档位]——不带参数时列出档位供选；缺省 = 不可用
   effortCommand?(arg: string | undefined): void;
+  // 决策 546：/login、/logout（缺省 = 不可用，沙箱里壳自己给出原因）
+  beginLogin?(provider?: string): void;
+  logoutCommand?(provider?: string): void;
   // 决策 458：当前会话的名字（/take 用到它时说明不用取回）
   currentSessionName?(): string | undefined;
 }
@@ -112,6 +115,15 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
     .filter((token) => token.length > 0);
   const grants = host.grants();
   try {
+    // 决策 546：/login、/logout（沙箱与未开放时由壳给出原因）
+    if (tokens[0] === "login") {
+      host.beginLogin?.(tokens[1]);
+      return;
+    }
+    if (tokens[0] === "logout") {
+      host.logoutCommand?.(tokens[1]);
+      return;
+    }
     // S5+（裁决 033）：/quit 与双击 Ctrl+C 同一优雅退出路径（busy 语义不开旁路：
     // 运行中提交在 handleSubmit 即被拒绝，退出键仍可用）
     if (tokens[0] === "quit") {
