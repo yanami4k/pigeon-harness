@@ -194,7 +194,9 @@ test("/new 的路径：~ 展开、相对当前工作目录解析；不存在或�
 });
 
 test("新会话的位置：/clear 工作目录不变；/new 不给 path 即项目根；path 在本仓库的工作树里（含子目录）归主检出这个项目", () => {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), "pigeon-new-place-")));
+  // The base has to be spelled the way the product resolves paths (the native realpath folds 8.3 short
+  // names, case and \\?\ prefixes), or every path derived from it below disagrees with the product.
+  const base = realpathSync.native(mkdtempSync(join(tmpdir(), "pigeon-new-place-")));
   try {
     const repo = join(base, "myapp");
     mkdirSync(repo);
