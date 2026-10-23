@@ -63,6 +63,13 @@ test("格式化：工作目录相对项目写；沙箱与子 agent 有值时逐�
   assert.doesNotMatch(text, /\((yolo|prompt)\)/, "不括注内部值");
 });
 
+test("MODEL-023 /status lists the model the session is talking to", () => {
+  assert.match(
+    statusReportText({ ...BASE, model: "deepseek-chat" }),
+    /^mode {5}bypass · model deepseek-chat$/m
+  );
+});
+
 test("statusCwd：与项目根相同为空串，树里与子目录写相对路径（分隔符 /），项目外写 ~ 缩写的原路径", () => {
   const home = join(tmpdir(), "home");
   const project = join(home, "myapp");

@@ -108,6 +108,8 @@ export const ModelOverrideSchema = Type.Object(
     ),
     contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
     maxTokens: Type.Optional(Type.Integer({ minimum: 1 })),
+    // 目录外的型号按这一项给出的线路发（pi-ai 的 api 标识，如 openai-completions）；MODEL-021
+    api: Type.Optional(Type.String({ minLength: 1 })),
     cache: Type.Optional(
       Type.Object(
         {
@@ -159,6 +161,9 @@ export interface ModelInfoValues {
   maxTokens?: number;
   reasoning?: boolean;
   input?: ModelInput;
+  // 请求线路（pi-ai 的 api 标识）与地址：接入声明与目录给得出，设置里可覆盖线路
+  api?: string;
+  baseUrl?: string;
 }
 
 // pi-ai 自带目录的查询：按 provider 与模型名，查不到为 undefined
@@ -191,6 +196,9 @@ export interface ResolvedModelInfo {
   maxTokens: Sourced<number>;
   reasoning: Sourced<boolean>;
   input: Sourced<ModelInput>;
+  // 请求线路与地址（目录外的型号靠它们决定发到哪里）
+  api: Sourced<string>;
+  baseUrl: Sourced<string>;
   cache: ResolvedCacheRule;
 }
 
@@ -217,11 +225,13 @@ export function resolveModelInfo(inputs: ModelInfoInputs): ResolvedModelInfo {
     ...(declared?.maxTokens !== undefined ? { maxTokens: declared.maxTokens } : {}),
     ...(declared?.reasoning !== undefined ? { reasoning: declared.reasoning } : {}),
     ...(declared?.input !== undefined ? { input: declared.input } : {}),
+    ...(declared?.api !== undefined ? { api: declared.api } : {}),
+    ...(declared?.baseUrl !== undefined ? { baseUrl: declared.baseUrl } : {}),
   });
   // 目录只在前两层没给全时才查
-  const needsCatalog = (["cost", "contextWindow", "maxTokens", "reasoning", "input"] as const).some(
-    (key) => fromSettings?.[key] === undefined && fromDeclared?.[key] === undefined
-  );
+  const needsCatalog = (
+    ["cost", "contextWindow", "maxTokens", "reasoning", "input", "api", "baseUrl"] as const
+  ).some((key) => fromSettings?.[key] === undefined && fromDeclared?.[key] === undefined);
   const fromCatalog = needsCatalog ? given(inputs.catalog?.(provider, id)) : undefined;
   const pick = <K extends keyof ModelInfoValues>(
     key: K
@@ -246,6 +256,8 @@ export function resolveModelInfo(inputs: ModelInfoInputs): ResolvedModelInfo {
     maxTokens: pick("maxTokens"),
     reasoning: pick("reasoning"),
     input: pick("input"),
+    api: pick("api"),
+    baseUrl: pick("baseUrl"),
     cache: resolveCacheRule(provider, id, declared, entry?.cache),
   };
 }

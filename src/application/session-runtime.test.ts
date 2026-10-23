@@ -1,7 +1,7 @@
 // 会话运行面装配（决策 067）：cli 与 tui 共用一份——作用域（worker 会话回到其工作树与委派策略）、
 // grant 种子、MCP 启动、运行面构建。装配失败时先关掉已启动的 MCP server 再上抛（先建后换语义不变）。
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
@@ -47,6 +47,60 @@ test("装配失败：先关掉已启动的 MCP server 再上抛（装配参数�
       })
     );
     assert.equal(mcp.closed(), true, "装配失败必须关闭已启动的 MCP server");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MODEL-013, MODEL-014 the session record keeps the model and a resume uses it", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pigeon-session-runtime-model-"));
+  try {
+    const sessionId = newSessionId();
+    const first = await openSessionRuntime({
+      governanceRoot: root,
+      sessionId,
+      streamFn: createFakeStreamFn({ replies: [{ text: "好" }] }),
+      flags: {
+        yolo: true,
+        provider: "deepseek",
+        modelId: "deepseek-chat",
+        persistThinking: true,
+      },
+      startMcp: async () => fakeMcp().session,
+    });
+    try {
+      await first.bundle.adapter.run("hi");
+      await first.bundle.sessionStore.flush();
+      // MODEL-014：Run 开始条目写下了本次的服务商与型号
+      const path = await first.bundle.sessionStore.filePath();
+      assert.ok(path !== undefined);
+      const text = readFileSync(path, "utf8");
+      assert.match(text, /"provider":"deepseek"/);
+      assert.match(text, /"id":"deepseek-chat"/);
+    } finally {
+      await disposeRuntime(first.bundle);
+    }
+    // MODEL-013：续接按会话记录里的型号（这里不给 --provider/--model）
+    const resumed = await openSessionRuntime({
+      governanceRoot: root,
+      sessionId,
+      resume: true,
+      streamFn: createFakeStreamFn({ replies: [{ text: "ok" }] }),
+      flags: {
+        yolo: true,
+        provider: "custom",
+        modelId: "custom",
+        persistThinking: true,
+      },
+      startMcp: async () => fakeMcp().session,
+    });
+    try {
+      const snapshot = resumed.bundle.adapter.snapshot();
+      assert.equal(snapshot.model.provider, "deepseek");
+      assert.equal(snapshot.model.id, "deepseek-chat");
+    } finally {
+      await disposeRuntime(resumed.bundle);
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

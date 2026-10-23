@@ -63,6 +63,7 @@ import {
   loadStreamFn,
   type MemoryWriteConfig,
   type RuntimeBundle,
+  resolvePackagedModelAccess,
 } from "../application/runtime.ts";
 import {
   closeSandbox,
@@ -224,7 +225,6 @@ export async function main(argv: string[]): Promise<void> {
     sandbox: true,
     subagents: true,
   });
-  const streamFn = await loadStreamFn(resolveStreamFnSpec(flags, USAGE));
   // 工作区准备（决策 034）：realpath 规范化，与 cli 入口同一份；
   // 它同时是治理根（.pigeon/ 恒在主仓库根，决策 040）。决策 445：--worktree 时治理根为主仓库根，工作区为独立工作树。
   // 决策 495、496：与 /new <path> 同一套认法——在某棵工作树里启动即归它所在仓库的主检出，工作目录是启动的目录
@@ -247,6 +247,25 @@ export async function main(argv: string[]): Promise<void> {
   });
   // 决策 324：--no-hooks 只对本次运行停用全部钩子（清单清空 + disableAllHooks，随快照冻进运行面）
   if (flags.noHooks) settings = withHooksDisabled(settings);
+  // MODEL-030、MODEL-002…MODEL-019（决策 544）：给了 --stream-fn 时由插件提供模型、选择规则不介入；
+  // 没给时按凭据、目录与上次选择定出型号。界面里没有选择器（MODEL-029），定不下来就把规格原文
+  // （单家时另列该服务商的目录型号）打到终端并以非零退出
+  const streamFn = await (async () => {
+    if (flags.streamFnSpec !== undefined && flags.streamFnSpec !== "") {
+      return loadStreamFn(resolveStreamFnSpec(flags, USAGE));
+    }
+    const access = await resolvePackagedModelAccess({
+      settings,
+      ...(flags.providerFlag !== undefined ? { provider: flags.providerFlag } : {}),
+      ...(flags.modelFlag !== undefined ? { model: flags.modelFlag } : {}),
+    });
+    if (access.kind === "failed") {
+      throw new Error([access.text, ...(access.models ?? [])].join("\n"));
+    }
+    flags.provider = access.provider;
+    flags.modelId = access.modelId;
+    return access.streamFn;
+  })();
   // 决策 445：建立或打开独立工作树（壳接管终端之前，提示打到 stderr）；起点档位取设置的 worktree 一节
   const namedWorktree =
     worktreeFlag.name !== undefined
@@ -807,6 +826,9 @@ export async function main(argv: string[]): Promise<void> {
   };
   // 决策 453：状态栏与欢迎头的模型名
   const modelLabel = modelLabelOf(startBundle.modelInfo);
+  // MODEL-022、MODEL-023：当前会话的型号标签（状态栏与 /status 同一份；续接的会话取它自己记录里的）
+  const currentModelLabel = (): string | undefined =>
+    modelLabelOf(current.opened?.bundle.modelInfo ?? startBundle.modelInfo);
   // 决策 491：/status 的数据（现取；读会话记录这类异步工作在这里做）
   async function statusReport(): Promise<StatusReport> {
     const core = current;
@@ -828,6 +850,7 @@ export async function main(argv: string[]): Promise<void> {
       git = undefined;
     }
     const running = agentHub?.runningUnder(core.sessionId) ?? 0;
+    const model = currentModelLabel();
     return {
       sessionId: core.sessionId,
       ...(core.name !== "" ? { name: core.name } : {}),
@@ -843,6 +866,7 @@ export async function main(argv: string[]): Promise<void> {
       settings: layers,
       mode: core.modeCell.current,
       ...(core.opened !== undefined ? { effort: core.opened.bundle.thinking.get() } : {}),
+      ...(model !== undefined ? { model } : {}),
       ...(git !== undefined ? { git } : {}),
       ...(sandbox !== undefined
         ? {
@@ -1013,6 +1037,8 @@ export async function main(argv: string[]): Promise<void> {
       cwd: tildePath(startCore.workspaceRoot, homedir()),
     },
     provider: flags.provider,
+    // MODEL-022：状态栏的型号段（暗色，在模式之后）
+    model: currentModelLabel,
     promptHistory: promptHistoryStore(governanceRoot),
     // S3：/grants /revoke /grants save 的命令上下文（命令层在 application/grants.ts）
     grants: bindingOf(startCore).grants,

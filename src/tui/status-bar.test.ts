@@ -7,10 +7,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
+import { MailGate } from "../application/agent-mail.ts";
+import { BUILT_IN_AGENT_TYPES } from "../application/agent-types.ts";
 import { emptyCostTally } from "../application/session-cost.ts";
 import { createFixtureSession, spawnFixtureWorker } from "../application/session-store-fixtures.ts";
+import type { SubagentInspect } from "../application/subagent-runtime.ts";
+import { AgentHub, type SubagentRuntime } from "../application/subagents.ts";
 import { newSessionId, type SessionId } from "../state/ids.ts";
 import { RuntimeEventKind } from "../state/runtime-events.ts";
+import { agentCommandsFace } from "./agent-commands.ts";
 import { ScriptedRuntime, usageOf } from "./runtime-fixtures.ts";
 import { PigeonTuiShell } from "./shell.ts";
 import { clipToWidth, StatusBar, statusBarText } from "./status-bar.ts";
@@ -345,6 +350,122 @@ test("状态栏的思考强度段只写档位（VIEWS-010）；/status 的 mode 
     }),
     /^mode {5}ask · effort high$/m
   );
+});
+
+test("MODEL-020 when the model's context window is unknown the status bar leaves out the context percentage", () => {
+  assert.equal(
+    statusBarText(
+      {
+        cost: { ...emptyCostTally(), pricedTokens: 12_000 },
+        context: { tokens: 12_000, contextWindow: 0 },
+      },
+      200
+    ),
+    "12k tokens"
+  );
+});
+
+test("MODEL-022 the status bar shows the model in dim text after the mode and before the effort", () => {
+  assert.equal(
+    statusBarText(
+      { mode: "prompt", model: "deepseek-chat", effort: "high", cost: emptyCostTally() },
+      200
+    ),
+    "ask · deepseek-chat · high · 0 tokens"
+  );
+  const bar = new StatusBar({
+    mode: "yolo",
+    model: "deepseek-chat",
+    effort: "low",
+    cost: emptyCostTally(),
+  }).render(80)[0];
+  assert.equal(
+    bar,
+    " \x1b[38;5;208mbypass\x1b[39m\x1b[2m · \x1b[22m\x1b[2mdeepseek-chat\x1b[22m\x1b[2m · \x1b[22m\x1b[32mlow\x1b[39m\x1b[2m · 0 tokens\x1b[22m"
+  );
+});
+
+test("MODEL-031 the subagent view keeps the owning session's model until per-subagent display lands", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pigeon-tui-model-agent-"));
+  const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-model-agent-log-"));
+  const hub = new AgentHub({ mail: new MailGate() });
+  const sessionId = newSessionId();
+  const inspections = new WeakMap<SubagentRuntime, SubagentInspect>();
+  const { host } = hub.registerSession({
+    sessionId,
+    name: () => "main",
+    deliver: () => {},
+    pendingNotices: () => 0,
+    record: () => {},
+    catalog: () => ({ types: BUILT_IN_AGENT_TYPES, problems: [] }),
+    limits: () => ({ maxConcurrent: 20, maxDepth: 3 }),
+    open: async () => {
+      const runtime: SubagentRuntime = {
+        sessionId: newSessionId(),
+        run: async () => ({ status: "completed" }),
+        runNotices: async () => ({ status: "completed" }),
+        notify: () => {},
+        pendingNotices: () => 0,
+        interrupt: async () => {},
+        reply: () => "done",
+        record: () => {},
+        close: async () => {},
+      };
+      inspections.set(runtime, {
+        governanceRoot: root,
+        // 子 agent 自己有另一个型号：M1 里状态栏仍写所属会话的
+        modelId: "agent-own-model",
+        bundle: {
+          thinking: { get: () => "high", set: () => {}, supported: true },
+          adapter: { contextUsage: () => ({ tokens: 10, contextWindow: 1000 }) },
+          sessionStore: { filePath: async () => undefined },
+          grantStore: {},
+          configGrants: [],
+          settings: { grants: [] },
+        },
+      } as unknown as SubagentInspect);
+      return runtime;
+    },
+  });
+  await host.spawn({ task: "find the parser", type: "explore" });
+  await settle(20);
+  const term = new MockTerminal(100, 30);
+  const historyDir = () => undefined;
+  const shell = new PigeonTuiShell({
+    terminal: term,
+    runtime: new ScriptedRuntime(sessionId),
+    sessionId,
+    logDir,
+    model: () => "owner-model",
+    agents: {
+      list: (id) => hub.agentsOf(id),
+      running: () => hub.runningTotal(),
+      stop: (record) => hub.stop(record),
+      send: (record, text) => hub.sendFromUser(record, text),
+      live: () => undefined,
+      historyDir,
+      ...agentCommandsFace({
+        hub,
+        historyDir,
+        projectOf: () => root,
+        inspect: (runtime) => (runtime !== undefined ? inspections.get(runtime) : undefined),
+      }),
+    },
+  });
+  shell.start();
+  try {
+    await settle();
+    term.input("\x1b[B");
+    term.input("\r");
+    await settle();
+    assert.equal(shell.currentView(), "agent");
+    assert.match(lastLine(term), /owner-model/);
+    assert.doesNotMatch(lastLine(term), /agent-own-model/);
+  } finally {
+    shell.stop();
+    rmSync(root, { recursive: true, force: true });
+    rmSync(logDir, { recursive: true, force: true });
+  }
 });
 
 // spec: VIEWS-060, VIEWS-061

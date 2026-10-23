@@ -276,6 +276,8 @@ export interface TuiShellOptions {
   recordPollMs?: number;
   // 决策 286：主 agent 的模型接入（DeepSeek 回复自带价格为 0 时按官方人民币价目计会话花费）；缺省不另计价
   provider?: string;
+  // MODEL-022、MODEL-031：当前会话的型号标签（状态栏用；子 agent 视图暂时也取所属会话的）
+  model?: () => string | undefined;
   // 决策 286：输入历史的跨启动存储（按项目）；缺省只在本次启动内保留
   promptHistory?: PromptHistoryStore;
   // 时钟（缺省 Date.now，测试注入）
@@ -2946,6 +2948,7 @@ export class PigeonTuiShell
       const commands = this.options.agents?.commands?.(agent.record);
       this.statusBar.update({
         mode: this.modeControl()?.get(),
+        model: this.options.model?.(),
         effort: commands?.thinking?.get(),
         context: commands?.contextUsage(),
         cost: agent.cost,
@@ -2953,6 +2956,7 @@ export class PigeonTuiShell
     } else if (elsewhere !== undefined) {
       this.statusBar.update({
         mode: elsewhere.status.mode,
+        model: this.options.model?.(),
         effort: elsewhere.status.effort,
         context: elsewhere.status.context,
         cost: elsewhere.status.cost,
@@ -2960,6 +2964,7 @@ export class PigeonTuiShell
     } else {
       this.statusBar.update({
         mode: this.modeControl()?.get(),
+        model: this.options.model?.(),
         effort: this.options.thinking?.()?.get(),
         context: this.mainContext,
         cost: this.mainCost,

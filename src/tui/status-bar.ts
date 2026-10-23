@@ -12,6 +12,8 @@ import { secondary } from "./style.ts";
 export interface StatusBarState {
   // 决策 469、499：当前会话的审批模式（写在最前面；决策 514：ask 青色、bypass 橙色）；缺省不写
   mode?: "prompt" | "yolo" | undefined;
+  // MODEL-022：正在看的会话所用型号（紧跟模式、暗色，在思考强度之前）；缺省不写
+  model?: string | undefined;
   // 决策 513：正在看的代理的思考强度（紧跟模式，按决策 514 的颜色）；缺省不写
   effort?: ThinkingLevel | undefined;
   context?: { tokens: number; contextWindow: number } | undefined;
@@ -79,6 +81,7 @@ export function statusBarText(state: StatusBarState, width: number): string {
   const build = (short: boolean): string =>
     [
       modeLabel(state.mode),
+      state.model,
       state.effort,
       contextSegment(state.context, short),
       short ? tokens : `${tokens} tokens`,
@@ -127,6 +130,15 @@ export class StatusBar implements Component {
     if (mode !== undefined && rest.startsWith(mode)) {
       out += colored(MODE_COLOR[mode], mode);
       rest = rest.slice(mode.length);
+    }
+    // MODEL-022：型号段在模式之后、思考强度之前，暗色
+    const model = this.state.model;
+    if (model !== undefined) {
+      const separator = out === "" ? "" : " · ";
+      if (rest.startsWith(`${separator}${model}`)) {
+        out += `${secondary(separator)}${secondary(model)}`;
+        rest = rest.slice(separator.length + model.length);
+      }
     }
     const effort = this.state.effort;
     if (effort !== undefined) {

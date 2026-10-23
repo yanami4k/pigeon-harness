@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { acceptsImages, type CatalogLookup, modelProfile, resolveModelInfo } from "./model-info.ts";
-import { validateSettingsLayer } from "./settings.ts";
+import { mergeSettingsLayers, validateSettingsLayer } from "./settings.ts";
 
 const USD = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75, currency: "USD" };
 const CNY = { input: 1, output: 4, cacheRead: 0.02, cacheWrite: 1, currency: "CNY" };
@@ -56,6 +56,9 @@ test("价格整体取：设置的价格连同币种盖掉声明的；声明不�
     maxTokens: 1,
     reasoning: false,
     input: ["text" as const],
+    // 线路与地址也算要查目录的一项：前两层给全（含它们）就不再加载目录
+    api: "openai-completions",
+    baseUrl: "https://acme.test",
   };
   const overridden = resolveModelInfo({
     launch: { provider: "acme", id: "m1" },
@@ -186,4 +189,44 @@ test("设置的 modelInfo 一节：键须为 provider/模型名，价格须带�
   ]) {
     assert.ok("problems" in validateSettingsLayer({ modelInfo: bad }, source));
   }
+});
+
+test("MODEL-019, MODEL-021 the route and address come from the catalog and modelInfo.api overrides the route", () => {
+  const facts: CatalogLookup = () => ({
+    api: "openai-completions",
+    baseUrl: "https://api.deepseek.com",
+  });
+  const inCatalog = resolveModelInfo({ launch: { provider: "deepseek", id: "x" }, catalog: facts });
+  assert.deepEqual(inCatalog.api, { source: "catalog", value: "openai-completions" });
+  assert.deepEqual(inCatalog.baseUrl, { source: "catalog", value: "https://api.deepseek.com" });
+  // 目录外的型号：目录没给就按设置里补的线路发
+  const outside = resolveModelInfo({
+    launch: { provider: "deepseek", id: "not-in-catalog" },
+    section: { models: { "deepseek/not-in-catalog": { api: "anthropic-messages" } } },
+  });
+  assert.deepEqual(outside.api, { source: "settings", value: "anthropic-messages" });
+});
+
+test("MODEL-025 model facts in modelInfo are taken from the settings layers", () => {
+  const source = (layer: "user" | "project") =>
+    layer === "user"
+      ? { layer, file: "~/.pigeon/settings.json" }
+      : { layer, file: ".pigeon/settings.json" };
+  const user = validateSettingsLayer(
+    { modelInfo: { models: { "deepseek/x": { contextWindow: 1000 } } } },
+    source("user")
+  );
+  const project = validateSettingsLayer(
+    { modelInfo: { models: { "deepseek/x": { maxTokens: 200 } } } },
+    source("project")
+  );
+  assert.ok("file" in user && "file" in project);
+  const merged = mergeSettingsLayers([
+    { layer: "user", file: user.file },
+    { layer: "project", file: project.file },
+  ]);
+  assert.deepEqual(merged.merged.modelInfo?.models?.["deepseek/x"], {
+    contextWindow: 1000,
+    maxTokens: 200,
+  });
 });

@@ -10,6 +10,7 @@ import { afterAll, test } from "vitest";
 import { HEADLESS_EXIT_CODES } from "../application/headless-core.ts";
 import { isStatusText } from "../application/status-fixtures.ts";
 import { loadSessionView } from "../persistence/session-catalog.ts";
+import { PROVIDER_KEY_ENV } from "../pi-runtime/model-access.ts";
 import { type StoreMessage, toolResultMark } from "../state/session-judge.ts";
 import { lineTag, snapshotTag } from "../tools/hashline.ts";
 
@@ -39,6 +40,25 @@ function runCli(args: string[], input?: string) {
     windowsHide: true,
     // 用户级目录指到临时目录（不读写真实的 ~/.pigeon）
     env: { ...process.env, HOME: CLI_HOME, USERPROFILE: CLI_HOME },
+  });
+}
+
+// 型号选择的用例要确定“环境里有哪些凭据”：把 pi-ai 目录的 key 全删掉，再按用例给
+function runCliWithoutKeys(args: string[], keys: Record<string, string> = {}) {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    HOME: CLI_HOME,
+    USERPROFILE: CLI_HOME,
+    ...keys,
+  };
+  for (const name of Object.values(PROVIDER_KEY_ENV)) {
+    if (keys[name] === undefined) delete env[name];
+  }
+  return spawnSync(process.execPath, [CLI, ...args], {
+    encoding: "utf8",
+    timeout: 60_000,
+    windowsHide: true,
+    env,
   });
 }
 
@@ -337,6 +357,94 @@ test("决策 325：启动遇旧配置文件即报错并提示 pigeon migrate-con
     );
     const ran = runCli(["run", "随便", "--root", root, "--stream-fn", streamFn, "--json"]);
     assert.equal(ran.status, 0, ran.stderr);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MODEL-002 pigeon run without any credential fails with the fixed text", () => {
+  const root = mkdtempSync(join(tmpdir(), "pigeon-run-model-none-"));
+  try {
+    const child = runCliWithoutKeys(["run", "hi", "--root", root]);
+    assert.notEqual(child.status, 0);
+    assert.match(
+      child.stderr,
+      /^no credentials: set an environment variable such as DEEPSEEK_API_KEY \(routes: anthropic, openai, openai-compatible, google\)\.$/m
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MODEL-004 pigeon run with several credentialed providers names them and picks none", () => {
+  const root = mkdtempSync(join(tmpdir(), "pigeon-run-model-many-"));
+  try {
+    const child = runCliWithoutKeys(["run", "hi", "--root", root], {
+      ANTHROPIC_API_KEY: "a",
+      DEEPSEEK_API_KEY: "d",
+    });
+    assert.notEqual(child.status, 0);
+    assert.match(
+      child.stderr,
+      /^no model selected: more than one provider has credentials \(anthropic, deepseek\); pass --provider and --model, or run the terminal UI to choose one\.$/m
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MODEL-007 a provider whose route is not packaged is refused", () => {
+  const root = mkdtempSync(join(tmpdir(), "pigeon-run-model-route-"));
+  try {
+    const child = runCliWithoutKeys(["run", "hi", "--root", root, "--provider", "bedrock"]);
+    assert.notEqual(child.status, 0);
+    assert.match(
+      child.stderr,
+      /^unknown provider "bedrock"; packaged routes: anthropic, openai, openai-compatible, google\.$/m
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MODEL-008 a credentialed provider given without a key names its environment variable", () => {
+  const root = mkdtempSync(join(tmpdir(), "pigeon-run-model-key-"));
+  try {
+    const child = runCliWithoutKeys(["run", "hi", "--root", root, "--provider", "deepseek"]);
+    assert.notEqual(child.status, 0);
+    assert.match(child.stderr, /^no credential for provider "deepseek"; set DEEPSEEK_API_KEY\.$/m);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MODEL-015 one credentialed provider and no model: pigeon run asks for --model", () => {
+  const root = mkdtempSync(join(tmpdir(), "pigeon-run-model-one-"));
+  try {
+    const child = runCliWithoutKeys(["run", "hi", "--root", root], {
+      DEEPSEEK_API_KEY: "d",
+    });
+    assert.notEqual(child.status, 0);
+    assert.match(child.stderr, /^no model selected for provider "deepseek"; pass --model\.$/m);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MODEL-030 --stream-fn supplies the model: the choice rules do not run even without keys", () => {
+  const root = mkdtempSync(join(tmpdir(), "pigeon-run-model-plugin-"));
+  try {
+    const streamFn = writeStreamFnModule(root, { replies: [{ text: "完成" }] });
+    const child = runCliWithoutKeys([
+      "run",
+      "hi",
+      "--root",
+      root,
+      "--stream-fn",
+      streamFn,
+      "--json",
+    ]);
+    assert.equal(child.status, 0, child.stderr);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

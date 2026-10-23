@@ -6,6 +6,7 @@ import { test } from "vitest";
 import {
   configGrantRulesOf,
   emptySettingsSnapshot,
+  lastUsedModelOf,
   memoryLimitsOf,
   mergedSettingsProblems,
   mergeSettingsLayers,
@@ -54,6 +55,21 @@ function snapshotOf(layers: Partial<Record<SettingsLayer, unknown>>): SettingsSn
   const merged = mergeSettingsLayers(ordered);
   return { ...emptySettingsSnapshot("/p"), ...merged };
 }
+
+test("MODEL-024 the last used model is kept in the user-level settings only", () => {
+  const snapshot = snapshotOf({
+    user: { model: { lastUsed: { provider: "deepseek", model: "deepseek-chat" } } },
+  });
+  assert.deepEqual(lastUsedModelOf(snapshot), { provider: "deepseek", model: "deepseek-chat" });
+  // 项目层与个人层不受理这一节
+  for (const layer of ["project", "local"] as const) {
+    const problems = problemsOf(layer, {
+      model: { lastUsed: { provider: "deepseek", model: "deepseek-chat" } },
+    });
+    assert.match(problems.join("\n"), /model is only allowed in user settings/);
+  }
+  assert.equal(lastUsedModelOf(emptySettingsSnapshot("/p")), undefined);
+});
 
 test("合并优先级：项目个人 > 项目共享 > 用户级；对象按键逐层合并，标量与数组由高优先层整体替换", () => {
   const { merged, sectionSources, commandSources } = snapshotOf({
