@@ -25,7 +25,7 @@ other units and are not covered here.
 - **MODEL-010** A model the catalog offers under more than one provider shall be refused with "model \"<id>\" is offered by more than one provider (<a>, <b>); pass --provider.".
 - **MODEL-011** The runtime shall not invent a default model for any provider.
 - **MODEL-012** When a new session is started without a model, the runtime shall use the last used model recorded in the user settings.
-- **MODEL-013** When a session is resumed, the runtime shall use the model recorded in that session, and the last used model shall not replace it.
+- **MODEL-013** When a session is resumed, the runtime shall use the model recorded in that session, and the last used model shall not replace it; a provider or model given on the command line takes precedence over the record.
 - **MODEL-014** The provider and model a session runs with shall be written to the session record, so a later resume can pick them up without asking again.
 - **MODEL-015** When exactly one provider holds a credential, no model is given and no last used model applies, `pigeon run` shall fail with "no model selected for provider \"<name>\"; pass --model.", and the terminal UI shall list that provider's catalog models as text.
 - **MODEL-016** The last used model shall apply only while its provider holds a credential; otherwise it shall be ignored and the rest of these rules applied as if it were absent.

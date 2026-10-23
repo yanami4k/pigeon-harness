@@ -106,6 +106,56 @@ test("MODEL-013, MODEL-014 the session record keeps the model and a resume uses 
   }
 });
 
+test("MODEL-013 a provider or model given on the command line takes precedence over the session record", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pigeon-session-runtime-model-flag-"));
+  try {
+    const sessionId = newSessionId();
+    const first = await openSessionRuntime({
+      governanceRoot: root,
+      sessionId,
+      streamFn: createFakeStreamFn({ replies: [{ text: "好" }] }),
+      flags: {
+        yolo: true,
+        provider: "deepseek",
+        modelId: "deepseek-chat",
+        persistThinking: true,
+      },
+      startMcp: async () => fakeMcp().session,
+    });
+    try {
+      await first.bundle.adapter.run("hi");
+      await first.bundle.sessionStore.flush();
+    } finally {
+      await disposeRuntime(first.bundle);
+    }
+    // 显式 --provider/--model：按显式值续接（决策 430 的换模型续接）
+    const resumed = await openSessionRuntime({
+      governanceRoot: root,
+      sessionId,
+      resume: true,
+      streamFn: createFakeStreamFn({ replies: [{ text: "ok" }] }),
+      flags: {
+        yolo: true,
+        provider: "anthropic",
+        modelId: "claude-sonnet",
+        providerFlag: "anthropic",
+        modelFlag: "claude-sonnet",
+        persistThinking: true,
+      },
+      startMcp: async () => fakeMcp().session,
+    });
+    try {
+      const snapshot = resumed.bundle.adapter.snapshot();
+      assert.equal(snapshot.model.provider, "anthropic");
+      assert.equal(snapshot.model.id, "claude-sonnet");
+    } finally {
+      await disposeRuntime(resumed.bundle);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("成功路径：返回运行面与作用域，MCP 启动提示交给调用方呈现", async () => {
   const root = mkdtempSync(join(tmpdir(), "pigeon-session-runtime-ok-"));
   try {
