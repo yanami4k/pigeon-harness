@@ -7,7 +7,6 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -703,18 +702,19 @@ test("MODEL-018 a model given to a subagent applies to that subagent's requests 
     ],
     [{ text: "found it in a.txt" }]
   );
-  const { opened } = await openTop(root, streamFn, delivered);
+  const { hub, sessionId, opened } = await openTop(root, streamFn, delivered);
   try {
     await opened.bundle.adapter.run("go");
     // 派出方的型号不变
     assert.equal(opened.bundle.adapter.snapshot().model.id, "custom");
-    // 子 agent 自己的 Run 开始条目写的是它的型号（会话在所属会话名下的 subagents 里）
-    const sessionsRoot = sessionsDirOf(root.dir);
-    const files = (readdirSync(sessionsRoot, { recursive: true }) as string[])
-      .filter((entry) => entry.endsWith(".jsonl"))
-      .map((entry) => join(sessionsRoot, entry));
-    const hits = files.filter((file) => readFileSync(file, "utf8").includes('"id":"agent-model"'));
-    assert.equal(hits.length, 1, "只有子 agent 的会话记下这个型号");
+    // 子 agent 的请求用它的型号（取它自己的运行面，不靠会话文件落盘时序）
+    const record = hub.agentsOf(sessionId)[0];
+    assert.ok(record !== undefined, "子 agent 已登记");
+    const runtime = record.runtime;
+    assert.ok(runtime !== undefined, "子 agent 的运行面在场");
+    const inspected = inspectSubagent(runtime);
+    assert.ok(inspected !== undefined);
+    assert.equal(inspected.bundle.adapter.snapshot().model.id, "agent-model");
   } finally {
     await disposeRuntime(opened.bundle).catch(() => {});
     root.cleanup();
