@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
 import type { SessionGrantStore } from "../approvals/grant-store.ts";
+import { writeProviderKey } from "../persistence/credentials.ts";
 import { loadStoreSession } from "../persistence/session-view.ts";
 import { loadSettings } from "../persistence/settings.ts";
 import { createFakeStreamFn } from "../pi-runtime/fixtures.ts";
@@ -49,6 +50,45 @@ test("MODEL-003, MODEL-012, MODEL-024 one credentialed provider is chosen and th
     if (second.kind !== "ok") return;
     assert.equal(second.provider, "anthropic");
     assert.equal(second.modelId, "claude-sonnet-4-5-20250929");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("MODEL-034, MODEL-038 the login hint, file credentials and the run-only environment rule", async () => {
+  const home = mkdtempSync(join(tmpdir(), "pigeon-runtime-credentials-"));
+  try {
+    const settings = loadSettings(home, { homeDir: home });
+    // 零凭据 + 允许登录：占位运行面 + needsLogin（TUI 拦住发消息并提示 /login）
+    const none = await resolvePackagedModelAccess({
+      settings,
+      env: {},
+      homeDir: home,
+      credentialsFile: true,
+      allowLogin: true,
+    });
+    assert.equal(none.kind, "ok");
+    if (none.kind !== "ok") return;
+    assert.equal(none.needsLogin, true);
+    assert.equal(none.provider, "custom");
+    assert.equal(none.modelId, "custom");
+    assert.equal(typeof none.streamFn, "function");
+    writeProviderKey("deepseek", "sk-file", { homeDir: home });
+    // MODEL-038：pigeon run 不给 credentialsFile，只认环境变量——文件里有 key 也不选它
+    const runOnly = await resolvePackagedModelAccess({ settings, env: {}, homeDir: home });
+    assert.equal(runOnly.kind, "failed");
+    // 终端界面读文件：/login 写入的 key 在没环境变量时生效
+    const fromFile = await resolvePackagedModelAccess({
+      settings,
+      env: {},
+      homeDir: home,
+      credentialsFile: true,
+      provider: "deepseek",
+      model: "deepseek-chat",
+    });
+    assert.equal(fromFile.kind, "ok");
+    if (fromFile.kind !== "ok") return;
+    assert.equal(fromFile.provider, "deepseek");
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

@@ -160,6 +160,19 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     whileRunning: { allow: true },
     scope: "agent",
   },
+  // 决策 546：凭据入口——整屏选服务商再粘 key，/logout 删掉该条目；运行中拒绝（与 /reload 同档），沙箱不可用
+  {
+    name: "login",
+    usage: "/login [provider]",
+    whileRunning: { allow: false },
+    scope: "program",
+  },
+  {
+    name: "logout",
+    usage: "/logout [provider]",
+    whileRunning: { allow: false },
+    scope: "program",
+  },
   // 只在沙箱会话里有（手动交回改动，决策 245）；沙箱不开子 agent，子 agent 视图里照常报未知命令
   {
     name: "export",

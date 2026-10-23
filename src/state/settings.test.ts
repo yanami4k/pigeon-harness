@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import {
   configGrantRulesOf,
+  customProvidersOf,
   emptySettingsSnapshot,
   lastUsedModelOf,
   memoryLimitsOf,
@@ -55,6 +56,41 @@ function snapshotOf(layers: Partial<Record<SettingsLayer, unknown>>): SettingsSn
   const merged = mergeSettingsLayers(ordered);
   return { ...emptySettingsSnapshot("/p"), ...merged };
 }
+
+test("MODEL-035 custom providers live in user-level model.providers and are validated", () => {
+  const snapshot = snapshotOf({
+    user: {
+      model: {
+        providers: {
+          mine: { api: "openai-completions", baseUrl: "https://llm.test", keyEnv: "MINE_KEY" },
+        },
+      },
+    },
+  });
+  assert.deepEqual(customProvidersOf(snapshot), [
+    { id: "mine", api: "openai-completions", baseUrl: "https://llm.test", keyEnv: "MINE_KEY" },
+  ]);
+  // 只认用户层
+  for (const layer of ["project", "local"] as const) {
+    assert.match(
+      problemsOf(layer, {
+        model: {
+          providers: { mine: { api: "openai-completions", baseUrl: "https://x", keyEnv: "A" } },
+        },
+      }).join("\n"),
+      /model is only allowed in user settings/
+    );
+  }
+  for (const bad of [
+    { providers: { mine: { api: "google", baseUrl: "https://x", keyEnv: "A" } } },
+    { providers: { mine: { api: "openai-completions", baseUrl: "ftp://x", keyEnv: "A" } } },
+    { providers: { mine: { api: "openai-completions", baseUrl: "https://x", keyEnv: "lower" } } },
+    { providers: { "Bad Id": { api: "openai-completions", baseUrl: "https://x", keyEnv: "A" } } },
+    { providers: { mine: { api: "openai-completions", baseUrl: "https://x" } } },
+  ]) {
+    assert.ok(problemsOf("user", { model: bad }).length > 0, JSON.stringify(bad));
+  }
+});
 
 test("MODEL-024 the last used model is kept in the user-level settings only", () => {
   const snapshot = snapshotOf({

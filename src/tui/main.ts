@@ -60,6 +60,7 @@ import {
 } from "../application/rewind.ts";
 import {
   disposeRuntime,
+  listModelProviders,
   loadStreamFn,
   type MemoryWriteConfig,
   type RuntimeBundle,
@@ -106,12 +107,18 @@ import { createApprovalQueue } from "../approvals/queue.ts";
 import { describeHead, treesHomeOf } from "../orchestration/worktree.ts";
 import { recordTrustedEntries } from "../persistence/config-trust-store.ts";
 import {
+  removeProviderKey,
+  storedProviders,
+  writeProviderKey,
+} from "../persistence/credentials.ts";
+import {
   addToSessionIndex,
   type ListedSession,
   removeFromSessionIndex,
   updateListedWorkspace,
 } from "../persistence/session-index.ts";
 import { holdWorktreeInUse } from "../persistence/worktree-in-use.ts";
+import { installProxyFetch } from "../pi-runtime/model-access.ts";
 import type { TrustEntry } from "../state/config-trust.ts";
 import { asSessionId, newSessionId, type SessionId } from "../state/ids.ts";
 import { FROM_BUNDLE } from "../state/package-paths.ts";
@@ -250,12 +257,20 @@ export async function main(argv: string[]): Promise<void> {
   // MODEL-030、MODEL-002…MODEL-019（决策 544）：给了 --stream-fn 时由插件提供模型、选择规则不介入；
   // 没给时按凭据、目录与上次选择定出型号。界面里没有选择器（MODEL-029），定不下来就把规格原文
   // （单家时另列该服务商的目录型号）打到终端并以非零退出
-  const streamFn = await (async () => {
+  // 决策 548：代理变量非空时先装上代理 fetch（加载失败响亮报错）
+  await installProxyFetch(process.env);
+  // 决策 546：零凭据时不是退出，而是进界面先提示 /login（占位运行面 + 禁止发消息），登录后重建
+  let needsLogin = false;
+  let streamFn = await (async () => {
     if (flags.streamFnSpec !== undefined && flags.streamFnSpec !== "") {
       return loadStreamFn(resolveStreamFnSpec(flags, USAGE));
     }
     const access = await resolvePackagedModelAccess({
       settings,
+      env: process.env,
+      homeDir: homedir(),
+      credentialsFile: true,
+      allowLogin: true,
       ...(flags.providerFlag !== undefined ? { provider: flags.providerFlag } : {}),
       ...(flags.modelFlag !== undefined ? { model: flags.modelFlag } : {}),
     });
@@ -264,6 +279,13 @@ export async function main(argv: string[]): Promise<void> {
     }
     flags.provider = access.provider;
     flags.modelId = access.modelId;
+    needsLogin = access.needsLogin === true;
+    if (needsLogin) {
+      early.push({
+        line: "no credentials: run /login to pick a provider and paste its API key",
+        alert: true,
+      });
+    }
     return access.streamFn;
   })();
   // 决策 445：建立或打开独立工作树（壳接管终端之前，提示打到 stderr）；起点档位取设置的 worktree 一节
@@ -1070,6 +1092,35 @@ export async function main(argv: string[]): Promise<void> {
     // 沙箱会话里不提供换绑（命令给出原因）
     ...(sandbox !== undefined ? {} : { resume: resumeOptions() }),
     status: statusReport,
+    // 决策 546：零凭据时拦下发消息，只是提示 /login
+    sendBlocked: () =>
+      needsLogin
+        ? "no credentials: run /login to pick a provider and paste its API key"
+        : undefined,
+    // 决策 546：/login、/logout——列服务商、写凭据文件、登录后重解析并重建本会话；沙箱里不可用
+    ...(sandbox === undefined
+      ? {
+          login: {
+            providers: () =>
+              listModelProviders({
+                settings: settingsOfCore(current),
+                env: process.env,
+                homeDir: homedir(),
+              }),
+            submit: async (provider: string, key: string) => {
+              writeProviderKey(provider, key, { homeDir: homedir() });
+              return afterCredentialsChange(provider);
+            },
+            logout: async (provider: string) => {
+              const removed = removeProviderKey(provider, { homeDir: homedir() });
+              if (!removed) return `no stored key for provider "${provider}"`;
+              const line = await afterCredentialsChange(undefined);
+              return `logged out ${provider}; ${line}`;
+            },
+            stored: () => storedProviders({ homeDir: homedir() }),
+          },
+        }
+      : {}),
     // 决策 496：/clear 原地换新对话（工作目录不变）；/new [path] 在 path 开新会话（不给即项目根），项目与工作目录的认法与
     // 在那里启动 pigeon 相同（别的项目的设置在界面里确认）。沿用当前的审批模式；当前会话还在干活就退到面板接着跑，闲着的关掉
     //（与 /resume 换走时同一套）。沙箱里不提供（旧会话无处可去）
@@ -1183,6 +1234,31 @@ export async function main(argv: string[]): Promise<void> {
     attachCoreRuntime(coreContext, core);
     shellHolder.current?.rebindSession(core.sessionId, bindingOf(core));
   }
+  // 决策 546：/login、/logout 之后按新凭据重新解析并重建当前会话（与 /reload 同一换手路径）
+  async function afterCredentialsChange(provider: string | undefined): Promise<string> {
+    const access = await resolvePackagedModelAccess({
+      settings: settingsOfCore(current),
+      env: process.env,
+      homeDir: homedir(),
+      credentialsFile: true,
+      allowLogin: true,
+      ...(flags.providerFlag !== undefined ? { provider: flags.providerFlag } : {}),
+      ...(flags.modelFlag !== undefined ? { model: flags.modelFlag } : {}),
+    });
+    if (access.kind === "failed") {
+      needsLogin = true;
+      return `saved, but the model still can't be chosen: ${access.text}`;
+    }
+    streamFn = access.streamFn;
+    flags.provider = access.provider;
+    flags.modelId = access.modelId;
+    needsLogin = access.needsLogin === true;
+    if (needsLogin) return "no credentials yet: run /login";
+    await rebuildMain(settingsOfCore(current));
+    const who = provider !== undefined ? provider : access.provider;
+    return `logged in ${who}; this session now uses ${access.provider}/${access.modelId}`;
+  }
+
   // 决策 484：/reload、/config 对面板里的会话同样生效——空闲的马上重建，在跑的这一轮跑完后重建；它的子 agent 在跑时等它们停下。
   // 重建在会话池里独占进行（期间不开跑、不叫醒、不能进入，发来的话排着）；同一个会话只排一次
   function rebuildPooled(root: string): void {

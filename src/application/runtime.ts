@@ -39,6 +39,7 @@ import {
   UPDATE_MEMORY_TOOL,
   updateMemoryRegistration,
 } from "../memory/update-memory-tool.ts";
+import { readCredentials } from "../persistence/credentials.ts";
 import { projectSharesUserPigeonDir } from "../persistence/pigeon-layers.ts";
 import { ensureProjectStateDir, writeLastUsedModel } from "../persistence/settings.ts";
 import {
@@ -63,9 +64,13 @@ import {
   type StreamFn,
 } from "../pi-runtime/index.ts";
 import {
+  type CredentialSource,
   chooseModel,
+  createCredentialSource,
   createPackagedStreamFn,
   loadProviderFacts,
+  type ProviderFacts,
+  providerFactsWith,
   ROUTE_APIS,
 } from "../pi-runtime/model-access.ts";
 import { limitOutputTokens } from "../pi-runtime/output-limit.ts";
@@ -120,6 +125,7 @@ import {
   commandsConfigOf,
   configGrantRulesOf,
   contextPruneSectionOf,
+  customProvidersOf,
   emptySettingsSnapshot,
   lastUsedModelOf,
   memoryLimitsOf,
@@ -208,6 +214,7 @@ import {
 } from "./enter-worktree-tool.ts";
 import { createToolGovernance } from "./governance.ts";
 import { SessionHooks } from "./hooks.ts";
+import { DEFAULT_MODEL_PLACEHOLDER } from "./launch-flags.ts";
 import type { McpSession } from "./mcp.ts";
 import { outputAncestors } from "./output-ancestors.ts";
 import { createHostProtectedPathResolver, createProtectedPathResolver } from "./protected-paths.ts";
@@ -1733,8 +1740,8 @@ function withOutputLimit(streamFn: StreamFn, maxOutputTokens: number | undefined
   return maxOutputTokens !== undefined ? limitOutputTokens(streamFn, maxOutputTokens) : streamFn;
 }
 
-// 没有 --stream-fn 时的型号解析（MODEL-002…MODEL-019；决策 540–544）：按凭据、目录与上次选择定出 provider 与型号，
-// 造一个随包线路的 StreamFn 并登记目录。失败时交出规格原文（终端界面另列目录型号后退出）
+// 没有 --stream-fn 时的型号解析（MODEL-002…MODEL-019、MODEL-032…；决策 540–549）：按凭据、目录与上次选择
+// 定出 provider 与型号，造一个随包线路的 StreamFn 并登记目录。失败时交出规格原文（终端界面另列目录型号后退出）
 export interface PackagedModelAccessRequest {
   settings: SettingsSnapshot;
   // 命令行显式给的（没给为 undefined）
@@ -1743,45 +1750,130 @@ export interface PackagedModelAccessRequest {
   env?: Record<string, string | undefined>;
   homeDir?: string;
   warn?: WarnSink;
+  // 决策 545、549：也读 ~/.pigeon/credentials.json（终端界面给；pigeon run 只认环境变量，不给）
+  credentialsFile?: boolean;
+  // 决策 546：零凭据时不算失败，交回占位运行面（终端界面先提示 /login；发消息由壳拦下）
+  allowLogin?: boolean;
 }
 
 export type ModelAccessOutcome =
-  | { kind: "ok"; streamFn: StreamFn; provider: string; modelId: string }
+  | { kind: "ok"; streamFn: StreamFn; provider: string; modelId: string; needsLogin?: true }
   | { kind: "failed"; text: string; models?: string[] };
 
-export async function resolvePackagedModelAccess(
-  request: PackagedModelAccessRequest
-): Promise<ModelAccessOutcome> {
+// /login 列表的一行（决策 546）：随包或自定义、环境变量名、当前 key 来自哪
+interface ModelProviderChoice {
+  id: string;
+  envName?: string;
+  source?: "env" | "file";
+  custom: boolean;
+}
+
+interface ModelAccessContext {
+  source: CredentialSource;
+  facts: ProviderFacts;
+  custom: ReturnType<typeof customProvidersOf>;
+  catalog?: Awaited<ReturnType<typeof loadCatalogLookup>>;
+}
+
+// 目录 + 用户层自定义服务商 + 凭据来源（env > 文件）；目录加载失败仍保留自定义服务商
+async function loadModelAccessContext(
+  request: Pick<
+    PackagedModelAccessRequest,
+    "settings" | "env" | "homeDir" | "warn" | "credentialsFile"
+  >
+): Promise<ModelAccessContext> {
   const warn = request.warn ?? stderrWarn;
   const env = request.env ?? process.env;
   const [catalog, providers] = await Promise.all([
     loadCatalogLookup(warn),
     loadProviderFacts(warn),
   ]);
-  if (providers === undefined) {
-    return { kind: "failed", text: "the packaged provider catalog is unavailable" };
-  }
-  const lastUsed = lastUsedModelOf(request.settings);
-  const choice = chooseModel({
+  const custom = customProvidersOf(request.settings);
+  const facts = providerFactsWith(providers, custom);
+  const envNames: Record<string, string> = {};
+  for (const provider of custom) envNames[provider.id] = provider.keyEnv;
+  const source = createCredentialSource({
     env,
-    facts: providers,
-    ...(request.provider !== undefined ? { provider: request.provider } : {}),
-    ...(request.model !== undefined ? { model: request.model } : {}),
-    ...(lastUsed !== undefined
-      ? { lastUsed: { provider: lastUsed.provider, model: lastUsed.model } }
+    envNames,
+    ...(request.credentialsFile === true
+      ? {
+          stored: () =>
+            readCredentials(request.homeDir !== undefined ? { homeDir: request.homeDir } : {}),
+        }
       : {}),
   });
+  return { source, facts, custom, ...(catalog !== undefined ? { catalog } : {}) };
+}
+
+// /login 的服务商候选（决策 546）：随包 + 自定义，按 id 排序；带环境变量名与当前 key 来源
+export async function listModelProviders(
+  request: Pick<PackagedModelAccessRequest, "settings" | "env" | "homeDir" | "warn">
+): Promise<ModelProviderChoice[]> {
+  const context = await loadModelAccessContext({ ...request, credentialsFile: true });
+  return context.facts.names().map((id) => ({
+    id,
+    ...(context.source.envNameOf(id) !== undefined
+      ? { envName: context.source.envNameOf(id) as string }
+      : {}),
+    ...(context.source.sourceOf(id) !== undefined
+      ? { source: context.source.sourceOf(id) as "env" | "file" }
+      : {}),
+    custom: context.custom.some((provider) => provider.id === id),
+  }));
+}
+
+export async function resolvePackagedModelAccess(
+  request: PackagedModelAccessRequest
+): Promise<ModelAccessOutcome> {
+  const warn = request.warn ?? stderrWarn;
+  let context: ModelAccessContext;
+  try {
+    context = await loadModelAccessContext(request);
+  } catch (error) {
+    return { kind: "failed", text: error instanceof Error ? error.message : String(error) };
+  }
+  const lastUsed = lastUsedModelOf(request.settings);
+  let choice: ReturnType<typeof chooseModel>;
+  try {
+    choice = chooseModel({
+      credentials: context.source,
+      facts: context.facts,
+      ...(request.provider !== undefined ? { provider: request.provider } : {}),
+      ...(request.model !== undefined ? { model: request.model } : {}),
+      ...(lastUsed !== undefined
+        ? { lastUsed: { provider: lastUsed.provider, model: lastUsed.model } }
+        : {}),
+    });
+  } catch (error) {
+    // 凭据文件读不了或字段不对：响亮报错，不静默当没有
+    return { kind: "failed", text: error instanceof Error ? error.message : String(error) };
+  }
   if ("reason" in choice) {
+    // 决策 546：零凭据时终端界面先起占位运行面、提示 /login（发消息由壳拦下）
+    if (request.allowLogin === true && choice.reason === "no-credentials") {
+      const streamFn = createPackagedStreamFn(context.source);
+      registerModelAccess(streamFn, {
+        ...(context.catalog !== undefined ? { catalog: context.catalog } : {}),
+        providers: context.facts,
+      });
+      return {
+        kind: "ok",
+        streamFn,
+        provider: DEFAULT_MODEL_PLACEHOLDER.provider,
+        modelId: DEFAULT_MODEL_PLACEHOLDER.modelId,
+        needsLogin: true,
+      };
+    }
     return {
       kind: "failed",
       text: choice.text,
       ...(choice.reason === "no-model" ? { models: choice.models } : {}),
     };
   }
-  const streamFn = createPackagedStreamFn(env);
+  const streamFn = createPackagedStreamFn(context.source);
   registerModelAccess(streamFn, {
-    ...(catalog !== undefined ? { catalog } : {}),
-    providers,
+    ...(context.catalog !== undefined ? { catalog: context.catalog } : {}),
+    providers: context.facts,
   });
   // MODEL-012、MODEL-024：把这次选定的服务商与型号记进用户层；记不下不挡开跑
   try {
