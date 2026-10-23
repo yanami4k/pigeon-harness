@@ -5,7 +5,9 @@ the code and its tests; a rule that changes is changed in the same commit as the
 page has a short purpose, the rules grouped by topic, the settings that affect the area, and
 known limitations.
 
-Rule numbers (such as `PANEL-011`) are stable references.
+Rule numbers (such as `PANEL-011`) are stable references. A test cites a rule by putting its number in
+the test title or `// spec: AREA-NNN` on the line above; `node scripts/spec-refs.mjs --require` fails when
+an area leaves more rules unreferenced than recorded in `scripts/spec-coverage-baseline.json`.
 
 | Area | Page | What it covers |
 | --- | --- | --- |

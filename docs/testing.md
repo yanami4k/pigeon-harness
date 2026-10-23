@@ -60,7 +60,12 @@
 | `npm run test` | 快档 |
 | `npm run test:slow` | 慢档 |
 | `npm run verify` | lint + check + 快档 + deps（开发中的快速检查） |
-| `npm run verify:full` | lint + check + 规格引用检查 + 第三方许可汇总校验 + 锁文件源检查 + 快档与慢档 + deps（交付与合并前必跑） |
+| `npm run verify:full` | lint + check + 规格引用覆盖率检查（`--require`） + 第三方许可汇总校验 + 锁文件源检查 + 快档与慢档 + deps（交付与合并前必跑） |
+
+- 规格引用覆盖率门禁：`scripts/spec-refs.mjs --require` 按区比对 `scripts/spec-coverage-baseline.json`，
+  未引用的规则比基线多一条即失败（新增规则要带一条测试引用：标题里写规则号，或测试上一行写 `// spec: AREA-NNN`；
+  确实无法用测试覆盖的写进 `scripts/spec-coverage-exempt.json` 并说明理由）；补完引用后运行
+  `node scripts/spec-refs.mjs --update-baseline` 重写基线。
 
 - 依赖变动后先运行 `node scripts/third-party-licenses.mjs --write` 重新生成汇总，再跑 `verify:full`。
 
