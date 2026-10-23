@@ -108,6 +108,26 @@ export const TuiSectionSchema = Type.Object(
 export const DEFAULT_WHEEL_SCROLL_LINES = 3;
 export type TuiSection = Static<typeof TuiSectionSchema>;
 
+// 型号一节（MODEL-024）：只认用户层；记上次用过的服务商与型号
+const ClosedModelSection = { additionalProperties: false } as const;
+const LastUsedModelSchema = Type.Object(
+  {
+    provider: Type.String({ minLength: 1 }),
+    model: Type.String({ minLength: 1 }),
+  },
+  ClosedModelSection
+);
+
+// settings.json 的 model 一节：lastUsed 的形如 {provider, model}
+export const ModelSectionSchema = Type.Object(
+  {
+    lastUsed: Type.Optional(LastUsedModelSchema),
+  },
+  ClosedModelSection
+);
+export type ModelSection = Static<typeof ModelSectionSchema>;
+export type LastUsedModelSetting = Static<typeof LastUsedModelSchema>;
+
 // 各节：节名 → schema（节名 camelCase）
 export const SETTINGS_SECTIONS = {
   mcp: McpSectionSchema,
@@ -119,6 +139,7 @@ export const SETTINGS_SECTIONS = {
   loopGuard: LoopGuardSectionSchema,
   memory: MemorySectionSchema,
   modelInfo: ModelInfoSectionSchema,
+  model: ModelSectionSchema,
   truncationContinuation: TruncationContinuationSectionSchema,
   repetitionGuard: RepetitionGuardSectionSchema,
   tools: ToolsSectionSchema,
@@ -152,6 +173,7 @@ export const SettingsFileSchema = Type.Object(
     hooks: Type.Optional(HooksSectionSchema),
     memory: Type.Optional(MemorySectionSchema),
     modelInfo: Type.Optional(ModelInfoSectionSchema),
+    model: Type.Optional(ModelSectionSchema),
     truncationContinuation: Type.Optional(TruncationContinuationSectionSchema),
     repetitionGuard: Type.Optional(RepetitionGuardSectionSchema),
     tools: Type.Optional(ToolsSectionSchema),
@@ -233,6 +255,10 @@ export function validateSettingsLayer(
           }
         }
       }
+      continue;
+    }
+    if (key === "model" && source.layer !== "user") {
+      problems.push(`settings file ${where}: model is only allowed in user settings`);
       continue;
     }
     if (REMOVED_SECTIONS.has(key)) {
@@ -345,6 +371,8 @@ export interface MergedSettings {
   loopGuard?: Static<typeof LoopGuardSectionSchema>;
   memory?: Static<typeof MemorySectionSchema>;
   modelInfo?: ModelInfoSection;
+  // 上次用过的型号（MODEL-024）：只来自用户层
+  model?: ModelSection;
   truncationContinuation?: TruncationContinuationSection;
   repetitionGuard?: RepetitionGuardSection;
   tools?: Static<typeof ToolsSectionSchema>;
@@ -397,8 +425,8 @@ export function mergeSettingsLayers(
       const section = file[name];
       if (section === undefined) continue;
       sectionSources[name] = [...(sectionSources[name] ?? []), layer];
-      // hooks 不按键合并：各层条目并列生效（324）
-      if (name === "permissions" || name === "hooks") continue;
+      // hooks 不按键合并：各层条目并列生效（324）；model 只认用户层（MODEL-024）
+      if (name === "permissions" || name === "hooks" || name === "model") continue;
       merged = mergeSettingsValue(merged, { [name]: section }) as Record<string, unknown>;
     }
     hookLayers.push(hooksOfLayer(file.hooks, layer));
@@ -438,8 +466,9 @@ export function mergeSettingsLayers(
     merged: {
       ...(merged as Omit<
         MergedSettings,
-        "trustedDirectories" | "disableAllHooks" | "stopHookBlockCap"
+        "trustedDirectories" | "disableAllHooks" | "stopHookBlockCap" | "model"
       >),
+      ...(user?.model !== undefined ? { model: user.model } : {}),
       trustedDirectories: [...(user?.trustedDirectories ?? [])],
       disableAllHooks,
       stopHookBlockCap,
@@ -541,6 +570,11 @@ export function memoryLimitsOf(snapshot: SettingsSnapshot): MemoryLimits {
 // 模型信息的覆盖值（决策 362）：合并后的 modelInfo 一节
 export function modelInfoSectionOf(snapshot: SettingsSnapshot): ModelInfoSection | undefined {
   return snapshot.merged.modelInfo;
+}
+
+// 上次用过的型号（MODEL-024）：只取用户层记下的 {provider, model}；没记过为 undefined
+export function lastUsedModelOf(snapshot: SettingsSnapshot): LastUsedModelSetting | undefined {
+  return snapshot.merged.model?.lastUsed;
 }
 
 // 决策 361：上下文裁剪一节（缺省值与按模型信息算的价格比由 prune-config.ts 补）

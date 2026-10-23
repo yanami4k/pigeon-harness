@@ -17,7 +17,7 @@ import {
 } from "../application/launch-flags.ts";
 import { LOOP_GUARD_TEXTS } from "../application/loop-guard.ts";
 import { MIGRATE_CONFIG_USAGE, runMigrateConfig } from "../application/migrate-config.ts";
-import { loadStreamFn } from "../application/runtime.ts";
+import { loadStreamFn, resolvePackagedModelAccess } from "../application/runtime.ts";
 import { runHeadlessInSandbox, runSandboxCommand } from "../application/sandbox-session.ts";
 import { runSessionListCommand } from "../application/session-list.ts";
 import { openSessionSettings, TRUST_CONFIG_FLAG } from "../application/session-settings.ts";
@@ -263,7 +263,6 @@ async function runMain(argv: string[]): Promise<void> {
   if (task === "") {
     throw new Error(`task is empty (${usage})`);
   }
-  const streamFn = await loadStreamFn(resolveStreamFnSpec(flags, usage));
   const workspaceRoot = prepareWorkspace(flags.root);
   // 治理根缺省与工作区根相同；沙箱在一次性容器里重建工作区，分开的治理根进不去，同给即拒绝
   if (governanceRootArg !== undefined && flags.sandbox !== undefined) {
@@ -278,6 +277,22 @@ async function runMain(argv: string[]): Promise<void> {
   });
   // 决策 324：--no-hooks 只对本次运行停用全部钩子
   if (flags.noHooks) settings = withHooksDisabled(settings);
+  // MODEL-030、MODEL-002…MODEL-019（决策 544）：给了 --stream-fn 时由插件提供模型、选择规则不介入；
+  // 没给时按凭据、目录与上次选择定出型号（失败即抛规格原文）
+  const streamFn = await (async () => {
+    if (flags.streamFnSpec !== undefined && flags.streamFnSpec !== "") {
+      return loadStreamFn(resolveStreamFnSpec(flags, usage));
+    }
+    const access = await resolvePackagedModelAccess({
+      settings,
+      ...(flags.providerFlag !== undefined ? { provider: flags.providerFlag } : {}),
+      ...(flags.modelFlag !== undefined ? { model: flags.modelFlag } : {}),
+    });
+    if (access.kind === "failed") throw new Error(access.text);
+    flags.provider = access.provider;
+    flags.modelId = access.modelId;
+    return access.streamFn;
+  })();
   // 决策 308：打转检测——设置的 loopGuard 一节（缺失取缺省即开着）
   const loopGuard = loopGuardSettingsOf(settings);
   const runOptions = {
@@ -290,6 +305,9 @@ async function runMain(argv: string[]): Promise<void> {
     ...(editMode !== undefined ? { editMode } : {}),
     provider: flags.provider,
     modelId: flags.modelId,
+    // MODEL-013：显式指定的型号在续接时优先于会话记录
+    ...(flags.providerFlag !== undefined ? { providerFlag: flags.providerFlag } : {}),
+    ...(flags.modelFlag !== undefined ? { modelFlag: flags.modelFlag } : {}),
     persistThinking: flags.persistThinking,
     ...(flags.thinkingLevel !== undefined ? { thinking: flags.thinkingLevel } : {}),
     ...(maxTurns !== undefined ? { maxTurns } : {}),

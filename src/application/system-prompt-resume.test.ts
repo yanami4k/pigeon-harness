@@ -30,7 +30,15 @@ test("续跑换了模型：系统提示按新模型重建；再用同一模型�
       governanceRoot: root,
       sessionId,
       streamFn,
-      flags: { yolo: true, provider: "deepseek", modelId, persistThinking: true },
+      flags: {
+        yolo: true,
+        provider: "deepseek",
+        modelId,
+        // 显式指定的型号：续接时按它换模型（MODEL-013）
+        providerFlag: "deepseek",
+        modelFlag: modelId,
+        persistThinking: true,
+      },
       startMcp: noMcp,
       homeDir: home,
       ...(resume ? { resume: true } : {}),

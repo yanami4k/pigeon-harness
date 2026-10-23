@@ -9,18 +9,50 @@ import { join } from "node:path";
 import { test } from "vitest";
 import type { SessionGrantStore } from "../approvals/grant-store.ts";
 import { loadStoreSession } from "../persistence/session-view.ts";
+import { loadSettings } from "../persistence/settings.ts";
 import { createFakeStreamFn } from "../pi-runtime/fixtures.ts";
 import { newSessionId } from "../state/ids.ts";
 import { toolResultMark } from "../state/session-judge.ts";
 import type { EditFileParams } from "../tools/edit-file.ts";
 import { lineTag, snapshotTag } from "../tools/hashline.ts";
-import { buildRuntime } from "./runtime.ts";
+import { buildRuntime, resolvePackagedModelAccess } from "./runtime.ts";
 
 // 取值并断言在场（替代非空断言）
 function required<T>(value: T | undefined): T {
   assert.ok(value !== undefined, "值应在场");
   return value;
 }
+
+test("MODEL-003, MODEL-012, MODEL-024 one credentialed provider is chosen and the choice is remembered in the user settings", async () => {
+  const home = mkdtempSync(join(tmpdir(), "pigeon-runtime-model-"));
+  try {
+    const first = await resolvePackagedModelAccess({
+      settings: loadSettings(home, { homeDir: home }),
+      model: "claude-sonnet-4-5-20250929",
+      env: { ANTHROPIC_API_KEY: "sk-x" },
+      homeDir: home,
+    });
+    assert.equal(first.kind, "ok");
+    if (first.kind !== "ok") return;
+    // MODEL-003：唯一有凭据的那家被选中；MODEL-009：型号唯一，所以能反推
+    assert.equal(first.provider, "anthropic");
+    assert.equal(first.modelId, "claude-sonnet-4-5-20250929");
+    // MODEL-024：写进用户层的 model.lastUsed
+    assert.match(readFileSync(join(home, ".pigeon", "settings.json"), "utf8"), /"lastUsed"/);
+    // MODEL-012：下次不给型号时用它；MODEL-016：那家仍有凭据
+    const second = await resolvePackagedModelAccess({
+      settings: loadSettings(home, { homeDir: home }),
+      env: { ANTHROPIC_API_KEY: "sk-x" },
+      homeDir: home,
+    });
+    assert.equal(second.kind, "ok");
+    if (second.kind !== "ok") return;
+    assert.equal(second.provider, "anthropic");
+    assert.equal(second.modelId, "claude-sonnet-4-5-20250929");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
 
 test("装配根：注入审批 handler 的 bundle 跑通 prompt 模式写调用，审批决定记在工具结果上", async () => {
   const original = "alpha\nbeta\ngamma\n";

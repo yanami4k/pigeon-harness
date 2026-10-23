@@ -3,6 +3,10 @@
 // 目录用 pi-ai 0.84.4 公开的 providers/all 查询函数，不碰其内部；只在声明没给全时才动态加载（日常的 DeepSeek 接入声明齐全，
 // 不加载）。加载失败退回没有目录（各项按未知处理）并告警，不挡接入模块启动。
 import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { streamSimple as anthropicMessages } from "@earendil-works/pi-ai/api/anthropic-messages";
+import { streamSimple as googleGenerativeAi } from "@earendil-works/pi-ai/api/google-generative-ai";
+import { streamSimple as openaiCompletions } from "@earendil-works/pi-ai/api/openai-completions";
+import { streamSimple as openaiResponses } from "@earendil-works/pi-ai/api/openai-responses";
 import { Value } from "typebox/value";
 import {
   type CatalogLookup,
@@ -16,6 +20,8 @@ import {
 export interface ModelAccessInfo {
   declared?: ModelInfoDeclaration;
   catalog?: CatalogLookup;
+  // 随包的 provider 目录（线路、地址、型号清单）：随包线路的 StreamFn 登记它
+  providers?: ProviderFacts;
 }
 
 const registry = new WeakMap<StreamFn, ModelAccessInfo>();
@@ -108,10 +114,317 @@ export async function loadCatalogLookup(
     if (positiveInteger(model.contextWindow)) values.contextWindow = model.contextWindow;
     if (positiveInteger(model.maxTokens)) values.maxTokens = model.maxTokens;
     if (typeof model.reasoning === "boolean") values.reasoning = model.reasoning;
+    if (typeof model.api === "string" && model.api !== "") values.api = model.api;
+    if (typeof model.baseUrl === "string" && model.baseUrl !== "") values.baseUrl = model.baseUrl;
     const input = model.input;
     if (Array.isArray(input) && input.every((kind) => kind === "text" || kind === "image")) {
       values.input = [...(input as Array<"text" | "image">)];
     }
     return values;
+  };
+}
+
+// ---- 型号选择（MODEL-001…MODEL-031；决策 540–544）----
+
+// 随包发出的四条线路：Pigeon 的名字与 pi-ai 的 api 标识（MODEL-007、MODEL-026）
+export const ROUTE_APIS = {
+  anthropic: "anthropic-messages",
+  openai: "openai-responses",
+  "openai-compatible": "openai-completions",
+  google: "google-generative-ai",
+} as const;
+export type RouteName = keyof typeof ROUTE_APIS;
+export type PackagedApi = (typeof ROUTE_APIS)[RouteName];
+export const ROUTE_NAMES = Object.keys(ROUTE_APIS) as RouteName[];
+// 文案里列举随包线路的写法（MODEL-002、MODEL-007）
+export const PACKAGED_ROUTES = ROUTE_NAMES.join(", ");
+
+export function routeOfApi(api: string): RouteName | undefined {
+  return ROUTE_NAMES.find((name) => ROUTE_APIS[name] === api);
+}
+
+// provider → 环境变量。来源：pi-ai 0.84.4 的 env-api-keys 表（这张表没有从包的 exports 放出，故在此照录）；
+// 只列线路属于随包四类的 provider（MODEL-001、MODEL-008）
+export const PROVIDER_KEY_ENV: Readonly<Record<string, string>> = {
+  "ant-ling": "ANT_LING_API_KEY",
+  anthropic: "ANTHROPIC_API_KEY",
+  baseten: "BASETEN_API_KEY",
+  cerebras: "CEREBRAS_API_KEY",
+  "cloudflare-ai-gateway": "CLOUDFLARE_API_KEY",
+  "cloudflare-workers-ai": "CLOUDFLARE_API_KEY",
+  deepseek: "DEEPSEEK_API_KEY",
+  fireworks: "FIREWORKS_API_KEY",
+  "github-copilot": "COPILOT_GITHUB_TOKEN",
+  google: "GEMINI_API_KEY",
+  groq: "GROQ_API_KEY",
+  huggingface: "HF_TOKEN",
+  "kimi-coding": "KIMI_API_KEY",
+  minimax: "MINIMAX_API_KEY",
+  "minimax-cn": "MINIMAX_CN_API_KEY",
+  moonshotai: "MOONSHOT_API_KEY",
+  "moonshotai-cn": "MOONSHOT_API_KEY",
+  nvidia: "NVIDIA_API_KEY",
+  openai: "OPENAI_API_KEY",
+  opencode: "OPENCODE_API_KEY",
+  "opencode-go": "OPENCODE_API_KEY",
+  openrouter: "OPENROUTER_API_KEY",
+  "qwen-token-plan": "QWEN_TOKEN_PLAN_API_KEY",
+  "qwen-token-plan-cn": "QWEN_TOKEN_PLAN_CN_API_KEY",
+  "qwen-token-plan-individual": "QWEN_TOKEN_PLAN_API_KEY",
+  together: "TOGETHER_API_KEY",
+  "vercel-ai-gateway": "AI_GATEWAY_API_KEY",
+  xai: "XAI_API_KEY",
+  xiaomi: "XIAOMI_API_KEY",
+  "xiaomi-token-plan-ams": "XIAOMI_TOKEN_PLAN_AMS_API_KEY",
+  "xiaomi-token-plan-cn": "XIAOMI_TOKEN_PLAN_CN_API_KEY",
+  "xiaomi-token-plan-sgp": "XIAOMI_TOKEN_PLAN_SGP_API_KEY",
+  zai: "ZAI_API_KEY",
+  "zai-coding-cn": "ZAI_CODING_CN_API_KEY",
+};
+
+export function keyEnvOf(provider: string): string | undefined {
+  return PROVIDER_KEY_ENV[provider];
+}
+
+// 一个 provider 有没有凭据（MODEL-001）：它的环境变量给了非空值
+export function hasCredential(provider: string, env: Record<string, string | undefined>): boolean {
+  const name = PROVIDER_KEY_ENV[provider];
+  if (name === undefined) return false;
+  const value = env[name];
+  return value !== undefined && value !== "";
+}
+
+// 随包 provider 目录的事实：线路、地址、目录里的型号（MODEL-007、MODEL-009、MODEL-019）
+export interface ProviderFacts {
+  names(): string[];
+  routeOf(provider: string): RouteName | undefined;
+  baseUrlOf(provider: string): string | undefined;
+  modelsOf(provider: string): string[];
+  providersOffering(modelId: string): string[];
+}
+
+interface ProviderCatalogModule {
+  getBuiltinProviders?: () => unknown;
+  getBuiltinModels?: (provider: string) => unknown;
+}
+
+export async function loadProviderFacts(
+  warn: (line: string) => void,
+  importModule: (specifier: string) => Promise<unknown> = (specifier) => import(specifier)
+): Promise<ProviderFacts | undefined> {
+  let catalog: ProviderCatalogModule;
+  try {
+    catalog = (await importModule(CATALOG_MODULE)) as ProviderCatalogModule;
+    if (
+      typeof catalog?.getBuiltinProviders !== "function" ||
+      typeof catalog?.getBuiltinModels !== "function"
+    ) {
+      throw new Error("no built-in provider query");
+    }
+  } catch (error) {
+    warn(
+      `loading the pi-ai provider catalog failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return undefined;
+  }
+  const routes = new Map<string, { route: RouteName; baseUrl?: string; models: string[] }>();
+  const offering = new Map<string, string[]>();
+  const providers = catalog.getBuiltinProviders() as unknown;
+  if (!Array.isArray(providers)) return undefined;
+  for (const id of providers) {
+    if (typeof id !== "string") continue;
+    let models: unknown;
+    try {
+      models = catalog.getBuiltinModels(id);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(models)) continue;
+    const shipped: string[] = [];
+    let route: RouteName | undefined;
+    let baseUrl: string | undefined;
+    for (const raw of models as Array<{ id?: unknown; api?: unknown; baseUrl?: unknown }>) {
+      if (typeof raw?.id !== "string" || typeof raw.api !== "string") continue;
+      const found = routeOfApi(raw.api);
+      if (found === undefined) continue;
+      route ??= found;
+      shipped.push(raw.id);
+      if (baseUrl === undefined && typeof raw.baseUrl === "string") baseUrl = raw.baseUrl;
+      offering.set(raw.id, [...(offering.get(raw.id) ?? []), id]);
+    }
+    if (route === undefined) continue;
+    routes.set(id, {
+      route,
+      models: shipped,
+      ...(baseUrl !== undefined ? { baseUrl } : {}),
+    });
+  }
+  return {
+    names: () => [...routes.keys()].sort(),
+    routeOf: (provider) => routes.get(provider)?.route,
+    baseUrlOf: (provider) => routes.get(provider)?.baseUrl,
+    modelsOf: (provider) => [...(routes.get(provider)?.models ?? [])].sort(),
+    providersOffering: (modelId) => [...(offering.get(modelId) ?? [])].sort(),
+  };
+}
+
+export interface LastUsedModel {
+  provider: string;
+  model: string;
+}
+
+export interface ModelChoice {
+  provider: string;
+  model: string;
+}
+
+// 选择失败：文案逐字对应规格（MODEL-002/004/007/008/010/015）；后两项另带界面要列出的候选
+export type ModelChoiceFailure =
+  | { reason: "no-credentials"; text: string }
+  | { reason: "many-providers"; text: string; candidates: string[] }
+  | { reason: "unknown-provider"; text: string }
+  | { reason: "no-credential"; text: string }
+  | { reason: "many-offerings"; text: string; candidates: string[] }
+  | { reason: "no-model"; text: string; provider: string; models: string[] };
+
+export interface ModelChoiceInputs {
+  env: Record<string, string | undefined>;
+  facts: ProviderFacts;
+  // 命令行给的（没给为 undefined）
+  provider?: string;
+  model?: string;
+  // 用户层记住的上次选择（MODEL-012、MODEL-016、MODEL-024）
+  lastUsed?: LastUsedModel;
+}
+
+function noModelText(provider: string): string {
+  return `no model selected for provider "${provider}"; pass --model.`;
+}
+
+export function chooseModel(inputs: ModelChoiceInputs): ModelChoice | ModelChoiceFailure {
+  const { env, facts, model, lastUsed } = inputs;
+  const credentialed = facts
+    .names()
+    .filter((name) => hasCredential(name, env))
+    .sort();
+  // MODEL-016：上次用的那家没凭据（或线路不再随包）时当作没有记过
+  const remembered =
+    lastUsed !== undefined &&
+    facts.routeOf(lastUsed.provider) !== undefined &&
+    hasCredential(lastUsed.provider, env)
+      ? lastUsed
+      : undefined;
+  const provider = inputs.provider;
+  // MODEL-006、MODEL-007、MODEL-008：命令行指定了 provider 就按它
+  if (provider !== undefined) {
+    if (facts.routeOf(provider) === undefined) {
+      return {
+        reason: "unknown-provider",
+        text: `unknown provider "${provider}"; packaged routes: ${PACKAGED_ROUTES}.`,
+      };
+    }
+    if (!hasCredential(provider, env)) {
+      return {
+        reason: "no-credential",
+        text: `no credential for provider "${provider}"; set ${keyEnvOf(provider) ?? "an API key environment variable"}.`,
+      };
+    }
+    const chosen = model ?? (remembered?.provider === provider ? remembered.model : undefined);
+    if (chosen === undefined) {
+      return {
+        reason: "no-model",
+        text: noModelText(provider),
+        provider,
+        models: facts.modelsOf(provider),
+      };
+    }
+    return { provider, model: chosen };
+  }
+  // MODEL-009、MODEL-010：只给型号时，仅当目录里只有一家提供且它有凭据才反推
+  if (model !== undefined) {
+    const offering = facts.providersOffering(model);
+    if (offering.length > 1) {
+      return {
+        reason: "many-offerings",
+        text: `model "${model}" is offered by more than one provider (${offering.join(", ")}); pass --provider.`,
+        candidates: offering,
+      };
+    }
+    if (offering.length === 1 && hasCredential(offering[0] as string, env)) {
+      return { provider: offering[0] as string, model };
+    }
+    // 目录认不出这个型号（MODEL-019）或那一家没凭据：provider 当作没给
+    const fallback =
+      remembered?.provider ?? (credentialed.length === 1 ? credentialed[0] : undefined);
+    if (fallback !== undefined) return { provider: fallback, model };
+    if (credentialed.length > 1) {
+      return {
+        reason: "many-providers",
+        text: manyProvidersText(credentialed),
+        candidates: credentialed,
+      };
+    }
+    return { reason: "no-credentials", text: NO_CREDENTIALS_TEXT };
+  }
+  // MODEL-012、MODEL-016：全新会话没给型号时先用上次的选择
+  if (remembered !== undefined) return { ...remembered };
+  // MODEL-002：一家都没有
+  if (credentialed.length === 0) {
+    return { reason: "no-credentials", text: NO_CREDENTIALS_TEXT };
+  }
+  // MODEL-003、MODEL-015：只有一家时用它，但没有型号可发
+  if (credentialed.length === 1) {
+    const only = credentialed[0] as string;
+    return {
+      reason: "no-model",
+      text: noModelText(only),
+      provider: only,
+      models: facts.modelsOf(only),
+    };
+  }
+  // MODEL-004、MODEL-005：多家都有凭据，不自选
+  return {
+    reason: "many-providers",
+    text: manyProvidersText(credentialed),
+    candidates: credentialed,
+  };
+}
+
+const NO_CREDENTIALS_TEXT = `no credentials: set an environment variable such as DEEPSEEK_API_KEY (routes: ${PACKAGED_ROUTES}).`;
+
+function manyProvidersText(candidates: readonly string[]): string {
+  return `no model selected: more than one provider has credentials (${candidates.join(", ")}); pass --provider and --model, or run the terminal UI to choose one.`;
+}
+
+// ---- 随包线路的 StreamFn（MODEL-026；决策 544）----
+
+// 四种 api 实现按 model.api 分发；模型对象（api、baseUrl、窗口等）由装配层按型号信息填好
+const PACKAGED_STREAMS: Readonly<Record<PackagedApi, StreamFn>> = {
+  "anthropic-messages": anthropicMessages as unknown as StreamFn,
+  "openai-responses": openaiResponses as unknown as StreamFn,
+  "openai-completions": openaiCompletions as unknown as StreamFn,
+  "google-generative-ai": googleGenerativeAi as unknown as StreamFn,
+};
+
+// 没有 --stream-fn 时的接入：按快照里的 provider/型号查环境变量取 key，按模型对象上的 api 发（MODEL-003、MODEL-017、MODEL-019）
+export function createPackagedStreamFn(
+  env: Record<string, string | undefined>,
+  streams: Readonly<Record<PackagedApi, StreamFn>> = PACKAGED_STREAMS
+): StreamFn {
+  return (model, context, options) => {
+    const stream = streams[model.api as PackagedApi];
+    if (stream === undefined) {
+      throw new Error(
+        `model route "${model.api}" is not packaged; pass --stream-fn for a custom route (routes: ${PACKAGED_ROUTES})`
+      );
+    }
+    const keyEnv = PROVIDER_KEY_ENV[model.provider];
+    const apiKey = keyEnv !== undefined ? env[keyEnv] : undefined;
+    if (keyEnv === undefined || apiKey === undefined || apiKey === "") {
+      throw new Error(
+        `no credential for provider "${model.provider}"; set ${keyEnv ?? "an API key environment variable"}.`
+      );
+    }
+    return stream(model, context, { ...options, apiKey });
   };
 }

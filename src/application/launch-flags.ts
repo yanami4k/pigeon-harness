@@ -54,6 +54,9 @@ export interface LaunchFlags {
   noWeb: boolean;
   provider: string;
   modelId: string;
+  // MODEL-006、MODEL-009：命令行显式给了哪个（没给为 undefined；provider/modelId 的占位缺省不算）
+  providerFlag?: string;
+  modelFlag?: string;
   // M5 S1（决策 045）：--no-persist-thinking 关闭 thinking 正文持久化（缺省开）
   persistThinking: boolean;
   // M5.5 S5（决策 050）：--thinking <档位> 推理档位全局值（不给即取设置，设置也没写按模型信息：支持推理的 high，决策 390）
@@ -195,8 +198,10 @@ export function parseLaunchFlags(argv: string[], options: ParseLaunchFlagsOption
       flags.streamFnSpec = value;
     } else if (flag === "--provider") {
       flags.provider = argv[++i] ?? flags.provider;
+      flags.providerFlag = flags.provider;
     } else if (flag === "--model") {
       flags.modelId = argv[++i] ?? flags.modelId;
+      flags.modelFlag = flags.modelId;
     } else {
       throw new Error(`unknown option: ${flag} (${usage})`);
     }

@@ -40,8 +40,12 @@ import {
   updateMemoryRegistration,
 } from "../memory/update-memory-tool.ts";
 import { projectSharesUserPigeonDir } from "../persistence/pigeon-layers.ts";
-import { ensureProjectStateDir } from "../persistence/settings.ts";
-import { PiRuntimeAdapter, type StatusChannel } from "../pi-runtime/adapter.ts";
+import { ensureProjectStateDir, writeLastUsedModel } from "../persistence/settings.ts";
+import {
+  PiRuntimeAdapter,
+  type PiRuntimeAdapterOptions,
+  type StatusChannel,
+} from "../pi-runtime/adapter.ts";
 import {
   type BeforeCompaction,
   type CompactionConfigInput,
@@ -58,6 +62,12 @@ import {
   registerModelAccess,
   type StreamFn,
 } from "../pi-runtime/index.ts";
+import {
+  chooseModel,
+  createPackagedStreamFn,
+  loadProviderFacts,
+  ROUTE_APIS,
+} from "../pi-runtime/model-access.ts";
 import { limitOutputTokens } from "../pi-runtime/output-limit.ts";
 import {
   requestRetryEntry,
@@ -111,6 +121,7 @@ import {
   configGrantRulesOf,
   contextPruneSectionOf,
   emptySettingsSnapshot,
+  lastUsedModelOf,
   memoryLimitsOf,
   modelInfoSectionOf,
   modelRequestMaxRetriesOf,
@@ -565,6 +576,34 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     ...(access?.catalog !== undefined ? { catalog: access.catalog } : {}),
     ...(modelSection !== undefined ? { section: modelSection } : {}),
   });
+  // MODEL-019、MODEL-021：随包线路的 StreamFn 按模型对象发——目录认得就取它的线路与地址，目录外的型号按所选
+  // provider 的随包线路与地址；窗口、输出上限等取已解析的模型信息。给了 --stream-fn 时（没有 providers）不改模型
+  const packagedStream = access?.providers !== undefined;
+  const providerRoute = access?.providers?.routeOf(deps.provider);
+  const adapterModel: Record<string, unknown> = packagedStream
+    ? {
+        ...(modelInfo.api.source !== "unknown"
+          ? { api: modelInfo.api.value }
+          : providerRoute !== undefined
+            ? { api: ROUTE_APIS[providerRoute] }
+            : {}),
+        ...(modelInfo.baseUrl.source !== "unknown"
+          ? { baseUrl: modelInfo.baseUrl.value }
+          : access?.providers?.baseUrlOf(deps.provider) !== undefined
+            ? { baseUrl: access.providers.baseUrlOf(deps.provider) }
+            : {}),
+        ...(modelInfo.contextWindow.source !== "unknown"
+          ? { contextWindow: modelInfo.contextWindow.value }
+          : {}),
+        ...(modelInfo.maxTokens.source !== "unknown"
+          ? { maxTokens: modelInfo.maxTokens.value }
+          : {}),
+        ...(modelInfo.reasoning.source !== "unknown"
+          ? { reasoning: modelInfo.reasoning.value }
+          : {}),
+        ...(modelInfo.input.source !== "unknown" ? { input: [...modelInfo.input.value] } : {}),
+      }
+    : {};
   // 决策 422：压缩所用的窗口取自模型信息（运行参数显式给的优先）；配置畸形在打开会话文件之前响亮失败
   const compactionConfig = resolveCompactionConfig(deps.compaction, modelInfo.contextWindow);
   // 决策 390：本运行面的推理档位——启动参数 > 设置 > 按模型信息的缺省（支持推理的 high，其余 off）。
@@ -1240,6 +1279,9 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
         ]
       : [];
   const adapter = new PiRuntimeAdapter({
+    ...(Object.keys(adapterModel).length > 0
+      ? { model: adapterModel as NonNullable<PiRuntimeAdapterOptions["model"]> }
+      : {}),
     ...(modeCell !== undefined ? { approvalMode: () => modeCell.current } : {}),
     snapshot: {
       version: INJECTION_SNAPSHOT_VERSION,
@@ -1689,4 +1731,65 @@ export async function loadStreamFn(
 // 配置了单轮输出上限才包装；未配置原样返回（跟模型）
 function withOutputLimit(streamFn: StreamFn, maxOutputTokens: number | undefined): StreamFn {
   return maxOutputTokens !== undefined ? limitOutputTokens(streamFn, maxOutputTokens) : streamFn;
+}
+
+// 没有 --stream-fn 时的型号解析（MODEL-002…MODEL-019；决策 540–544）：按凭据、目录与上次选择定出 provider 与型号，
+// 造一个随包线路的 StreamFn 并登记目录。失败时交出规格原文（终端界面另列目录型号后退出）
+export interface PackagedModelAccessRequest {
+  settings: SettingsSnapshot;
+  // 命令行显式给的（没给为 undefined）
+  provider?: string;
+  model?: string;
+  env?: Record<string, string | undefined>;
+  homeDir?: string;
+  warn?: WarnSink;
+}
+
+export type ModelAccessOutcome =
+  | { kind: "ok"; streamFn: StreamFn; provider: string; modelId: string }
+  | { kind: "failed"; text: string; models?: string[] };
+
+export async function resolvePackagedModelAccess(
+  request: PackagedModelAccessRequest
+): Promise<ModelAccessOutcome> {
+  const warn = request.warn ?? stderrWarn;
+  const env = request.env ?? process.env;
+  const [catalog, providers] = await Promise.all([
+    loadCatalogLookup(warn),
+    loadProviderFacts(warn),
+  ]);
+  if (providers === undefined) {
+    return { kind: "failed", text: "the packaged provider catalog is unavailable" };
+  }
+  const lastUsed = lastUsedModelOf(request.settings);
+  const choice = chooseModel({
+    env,
+    facts: providers,
+    ...(request.provider !== undefined ? { provider: request.provider } : {}),
+    ...(request.model !== undefined ? { model: request.model } : {}),
+    ...(lastUsed !== undefined
+      ? { lastUsed: { provider: lastUsed.provider, model: lastUsed.model } }
+      : {}),
+  });
+  if ("reason" in choice) {
+    return {
+      kind: "failed",
+      text: choice.text,
+      ...(choice.reason === "no-model" ? { models: choice.models } : {}),
+    };
+  }
+  const streamFn = createPackagedStreamFn(env);
+  registerModelAccess(streamFn, {
+    ...(catalog !== undefined ? { catalog } : {}),
+    providers,
+  });
+  // MODEL-012、MODEL-024：把这次选定的服务商与型号记进用户层；记不下不挡开跑
+  try {
+    writeLastUsedModel(choice, request.homeDir);
+  } catch (error) {
+    warn(
+      `recording the last used model failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  return { kind: "ok", streamFn, provider: choice.provider, modelId: choice.model };
 }

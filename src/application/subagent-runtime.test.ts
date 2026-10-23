@@ -7,6 +7,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -678,3 +679,44 @@ test("决策 486：派出方有未提交改动时按起点快照引用取回；�
 function samePath(a: string, b: string): boolean {
   return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
+
+test("MODEL-018 a model given to a subagent applies to that subagent's requests only", async () => {
+  const root = repo();
+  const delivered: string[] = [];
+  const { streamFn } = routed(
+    [
+      {
+        text: "",
+        toolCalls: [
+          {
+            name: "spawn_agent",
+            args: {
+              task: "look at a.txt",
+              type: "explore",
+              model: "agent-model",
+              background: false,
+            },
+          },
+        ],
+      },
+      { text: "parent done" },
+    ],
+    [{ text: "found it in a.txt" }]
+  );
+  const { opened } = await openTop(root, streamFn, delivered);
+  try {
+    await opened.bundle.adapter.run("go");
+    // 派出方的型号不变
+    assert.equal(opened.bundle.adapter.snapshot().model.id, "custom");
+    // 子 agent 自己的 Run 开始条目写的是它的型号（会话在所属会话名下的 subagents 里）
+    const sessionsRoot = sessionsDirOf(root.dir);
+    const files = (readdirSync(sessionsRoot, { recursive: true }) as string[])
+      .filter((entry) => entry.endsWith(".jsonl"))
+      .map((entry) => join(sessionsRoot, entry));
+    const hits = files.filter((file) => readFileSync(file, "utf8").includes('"id":"agent-model"'));
+    assert.equal(hits.length, 1, "只有子 agent 的会话记下这个型号");
+  } finally {
+    await disposeRuntime(opened.bundle).catch(() => {});
+    root.cleanup();
+  }
+});

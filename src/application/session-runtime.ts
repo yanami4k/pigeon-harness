@@ -48,6 +48,9 @@ export interface SessionRuntimeFlags {
   yolo: boolean;
   provider: string;
   modelId: string;
+  // MODEL-013：命令行显式指定的型号（没给为 undefined）——续接时它优先于会话记录，否则以记录为准
+  providerFlag?: string;
+  modelFlag?: string;
   persistThinking: boolean;
   thinkingLevel?: ThinkingLevel;
   maxOutputTokens?: number;
@@ -257,6 +260,14 @@ export async function openSessionRuntime(
   const recordedSystemPrompt = recordedStart?.systemPrompt;
   // 决策 430：生成这份系统提示时所用的模型（旧记录没有模型信息）
   const recordedPromptModel = recordedStart?.modelInfo;
+  // MODEL-013、MODEL-014：续接用会话记录里的型号；命令行显式给了就按显式值（决策 430 的换模型续接）。
+  // 记录里的模型信息可能缺（旧记录），退到 Run 开始条目里恒有的 model
+  const explicitModel =
+    request.flags.modelFlag !== undefined || request.flags.providerFlag !== undefined;
+  const recordedModel =
+    request.resume === true && !explicitModel
+      ? (recordedStart?.modelInfo ?? recordedStart?.model)
+      : undefined;
   // 决策 365：/reload 接着管旧运行面的后台作业；续跑时取会话记录里上一进程的作业（已丢失的与用过的作业号）
   const reloadJobs = request.reloadFrom?.jobs;
   // 决策 438：作业号按全部分支编号（会话回退后旧分支上用过的号不再用）；丢失的作业只看主分支
@@ -300,8 +311,8 @@ export async function openSessionRuntime(
       ...(request.approvalModeCell !== undefined
         ? { approvalModeCell: request.approvalModeCell }
         : {}),
-      provider: request.flags.provider,
-      modelId: request.flags.modelId,
+      provider: recordedModel?.provider ?? request.flags.provider,
+      modelId: recordedModel?.id ?? request.flags.modelId,
       persistThinking: request.flags.persistThinking,
       ...(request.flags.thinkingLevel !== undefined
         ? { thinkingLevel: request.flags.thinkingLevel }

@@ -32,6 +32,7 @@ import {
   type SettingsSource,
   validateSettingsLayer,
 } from "../state/settings.ts";
+import { type AtomicWriteIo, writeFileAtomic } from "./atomic-write.ts";
 import { ensureGlobalIgnoreRulesOnce, type GlobalIgnoreOptions } from "./global-ignore.ts";
 import { parseJsonText } from "./json-text.ts";
 import { readDotMcpJson } from "./mcp-config.ts";
@@ -183,4 +184,32 @@ export function ensureStateDirOf(
     }
     current = parent;
   }
+}
+
+// 上次用过的型号写进用户层设置（MODEL-024）：只动 model.lastUsed，其余内容原样；文件不存在时新建。
+// 写盘失败由调用方决定是否告警（记下上次选择不该挡住开跑）
+export function writeLastUsedModel(
+  value: { provider: string; model: string },
+  homeDir: string = homedir(),
+  io?: AtomicWriteIo
+): void {
+  const file = userSettingsPath(homeDir);
+  let current: Record<string, unknown> = {};
+  if (existsSync(file)) {
+    const raw = parseJsonText(readFileSync(file, "utf8"));
+    if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+      current = raw as Record<string, unknown>;
+    }
+  }
+  const previous = current.model;
+  const section =
+    typeof previous === "object" && previous !== null && !Array.isArray(previous)
+      ? (previous as Record<string, unknown>)
+      : {};
+  const next = {
+    ...current,
+    model: { ...section, lastUsed: { provider: value.provider, model: value.model } },
+  };
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileAtomic(file, `${JSON.stringify(next, null, 2)}\n`, io);
 }
