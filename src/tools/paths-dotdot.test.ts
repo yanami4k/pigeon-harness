@@ -28,11 +28,11 @@ test("resolveWorkspacePath 接受以 .. 开头的合法文件名与目录名", (
   try {
     assert.equal(
       resolveWorkspacePath(root, "..notes.txt"),
-      realpathSync(join(root, "..notes.txt"))
+      realpathSync.native(join(root, "..notes.txt"))
     );
     assert.equal(
       resolveWorkspacePath(root, "src/..cache/x.txt"),
-      realpathSync(join(root, "src", "..cache", "x.txt"))
+      realpathSync.native(join(root, "src", "..cache", "x.txt"))
     );
   } finally {
     cleanup();

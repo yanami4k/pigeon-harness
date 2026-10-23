@@ -4,7 +4,7 @@
 // 决策 416：超出单张上限的图片缩小后交出（保持原格式，只超字节的转 JPEG）；缩放库载入失败时退回只给元信息。
 // 决策 417：交出前完整解码一遍，截断的图只给元信息；其他工具（MCP）结果里的图片块走同一道关口。
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { crc32, deflateSync } from "node:zlib";
@@ -67,6 +67,11 @@ function withFiles(
 type Block = { type: string; text?: string; data?: string; mimeType?: string };
 const blocksOf = (result: { content: readonly Block[] }) => result.content;
 
+// The read record is keyed by the path the tool resolved, which the native resolver folds to one spelling
+// (8.3 short names and letter case included); a plain join of the root keeps whatever spelling the temp path
+// has, so the expectation has to be normalized the same way.
+const recordedKey = (root: string, name: string) => realpathSync.native(join(root, name));
+
 test("能看图：四种图片按文件头认出（扩展名不算数），交出图片内容并附一行尺寸与字节数；读取记进读取记录", async () => {
   const images: Array<[string, Buffer, string, string]> = [
     ["shot.dat", png(3, 2), "image/png", "3×2"],
@@ -85,7 +90,7 @@ test("能看图：四种图片按文件头认出（扩展名不算数），交�
         const [head, image] = blocksOf(result);
         assert.match(head?.text ?? "", new RegExp(`${name}.*${dims}.*${bytes.length} bytes`));
         assert.deepEqual(image, { type: "image", data: bytes.toString("base64"), mimeType });
-        assert.equal(reads.unchangedSinceRead(join(root, name), bytes), true, name);
+        assert.equal(reads.unchangedSinceRead(recordedKey(root, name), bytes), true, name);
       }
     }
   );
@@ -116,9 +121,9 @@ test("不能看图：图片只给元信息；其他二进制（开头有 NUL、�
       assert.equal(rest.length, 0);
       assert.match(only?.text ?? "", pattern);
       assert.doesNotMatch(only?.text ?? "", /�|stream text|\d+#/, name);
-      assert.equal(reads.hasRead(join(root, name)), true, name);
+      assert.equal(reads.hasRead(recordedKey(root, name)), true, name);
     }
-    assert.equal(reads.hasRead(join(root, "a.png")), true);
+    assert.equal(reads.hasRead(recordedKey(root, "a.png")), true);
   });
 });
 
