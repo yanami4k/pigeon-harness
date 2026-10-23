@@ -3,6 +3,7 @@
 // 判定本身（词法、真实路径、大小写）另有单元用例。
 import assert from "node:assert/strict";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -187,6 +188,9 @@ test.skipIf(NO_SYMLINKS)(
     assert.equal(lexical(".pigeon/a"), ".pigeon/a");
     assert.equal(lexical("link/a"), undefined);
     // 大小写：不敏感的文件系统上 .PIGEON 即 .pigeon；敏感的文件系统上是另一个目录
+    // Which one it is depends on the file system, not only on the option: with realPaths the resolver asks the
+    // file system for the real path first, and a case-insensitive one folds .PIGEON onto .pigeon.
+    const foldsCase = existsSync(join(root, ".PIGEON"));
     const insensitive = createProtectedPathResolver({
       workspaceRoot: root,
       governanceRoot: root,
@@ -200,7 +204,10 @@ test.skipIf(NO_SYMLINKS)(
       realPaths: true,
       caseInsensitive: false,
     });
-    assert.equal(sensitive(".PIGEON/Settings.json"), undefined);
+    assert.equal(
+      sensitive(".PIGEON/Settings.json"),
+      foldsCase ? ".pigeon/Settings.json" : undefined
+    );
   }
 );
 
