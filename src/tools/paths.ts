@@ -91,6 +91,9 @@ function assertNotGitMetadata(realRoot: string, resolved: string, inputPath: str
   }
 }
 
+// Native resolution: on Windows it folds 8.3 short names (`C:\Users\RUNNER~1`), letter case and the `\\?\`
+// prefix to one spelling, which is what the read side already returns (read-paths.ts). The read record and the
+// write check of the same file must agree on that spelling, or write_file refuses a file it just read.
 // 决策 352：工作区根的真实路径缓存起来（按根的写法；同一进程里换了根即另一条），每次解析不再重算
 const realRoots = new Map<string, string>();
 
@@ -99,7 +102,7 @@ export function realRootOf(workspaceRoot: string): string {
   if (cached !== undefined) {
     return cached;
   }
-  const real = realpathSync(workspaceRoot);
+  const real = realpathSync.native(workspaceRoot);
   realRoots.set(workspaceRoot, real);
   return real;
 }
@@ -136,7 +139,7 @@ function resolveRealPath(workspaceRoot: string, inputPath: string, outside: bool
   const resolved = path.resolve(realRoot, inputPath);
   let realTarget: string;
   try {
-    realTarget = realpathSync(resolved);
+    realTarget = realpathSync.native(resolved);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     throw code === "ENOENT" || code === "ENOTDIR"
@@ -160,8 +163,8 @@ export function isPathInsideDir(workspaceRoot: string, dir: string, inputPath: s
   let realTarget: string;
   try {
     realRoot = realRootOf(workspaceRoot);
-    realDir = realpathSync(path.resolve(realRoot, dir));
-    realTarget = realpathSync(path.resolve(realRoot, inputPath));
+    realDir = realpathSync.native(path.resolve(realRoot, dir));
+    realTarget = realpathSync.native(path.resolve(realRoot, inputPath));
   } catch {
     return false;
   }
@@ -273,7 +276,7 @@ export function resolveWorkspaceCreatePath(
   }
   let realExisting: string;
   try {
-    realExisting = realpathSync(existing);
+    realExisting = realpathSync.native(existing);
   } catch {
     throw new WorkspacePathError(
       `${existing} on the path cannot be resolved (a dangling symbolic link?): ${inputPath}`

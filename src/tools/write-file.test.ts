@@ -9,6 +9,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -77,6 +78,29 @@ test("覆盖已存在的文件：没读过拒写；读过（分段读也算）�
     await write.execute("w3", { path: "f.txt", content: "x\n" });
     assert.equal(readFileSync(file, "utf8"), "x\n");
   }));
+
+// The read record and the write check must agree on one spelling of the same file. On a Windows machine whose
+// temp path carries an 8.3 short name (the GitHub runner's TEMP is spelled C:\Users\RUNNER~1\...), the plain
+// realpath keeps the short spelling while the native one folds it to the long one, and write_file then refused
+// to overwrite a file it had just read. The case only exists where the temp path has a short spelling, so the
+// test asks the environment first instead of trusting a platform name.
+test("overwriting a file just read works when the workspace root is spelled with an 8.3 short name", async (t) => {
+  await withRoot(async (root) => {
+    if (realpathSync(root) === realpathSync.native(root)) {
+      t.skip(
+        "this machine's temp path has no 8.3 short spelling, so the two resolvers can't disagree here"
+      );
+      // ctx.skip only marks the test, so leave before the assertions run on a machine without the case.
+      return;
+    }
+    const file = join(root, "f.txt");
+    writeFileSync(file, "one\n");
+    const { read, write } = tools(root);
+    await read.execute("r1", { path: "f.txt" });
+    await write.execute("w1", { path: "f.txt", content: "two\n" });
+    assert.equal(readFileSync(file, "utf8"), "two\n");
+  });
+});
 
 test.skipIf(process.platform === "win32")("目标是符号链接即拒写，链接与它指向的文件都不变", () =>
   withRoot(async (root) => {
