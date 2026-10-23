@@ -21,6 +21,9 @@ import { asWorkspaceHost } from "./local-host.ts";
 import {
   assertWritePathText,
   OUTSIDE_WRITE_SENTENCE,
+  type OutsideWriteTool,
+  outsideWritesNow,
+  WorkspacePathError,
   type WritePathOptions,
   type WriteToolOptions,
 } from "./paths.ts";
@@ -72,34 +75,43 @@ export interface EditFileDetails {
 // 决策 098：workspace 给目录即本地工作区，给执行端实现即由它承接读写
 // 决策 358：reads 为本会话的读取记录，成功写入后按写成的内容更新
 // 决策 407：放权时（options.outsideWrites）接受工作区以外的路径，说明随之交代
+type EditFileTool = PigeonAgentTool<typeof EditFileParamsSchema, EditFileDetails> &
+  PreviewableTool &
+  OutsideWriteTool;
+
 export function createEditFileTool(
   workspace: string | WorkspaceHost,
   reads?: FileReadTracker,
   options: WriteToolOptions = {}
-): PigeonAgentTool<typeof EditFileParamsSchema, EditFileDetails> & PreviewableTool {
+): EditFileTool {
   const host = asWorkspaceHost(workspace);
-  const outside = options.outsideWrites === true;
-  const pathOptions: WritePathOptions = { outside };
-  return {
+  // 能力现取：审批模式在会话中途可切换（见 paths.ts 的 outsideWritesNow）
+  const pathOptions = (): WritePathOptions => ({ outside: outsideWritesNow(options) });
+  const tool: EditFileTool = {
     name: "edit_file",
     label: "edit_file",
-    description:
-      (outside
-        ? `Edits an existing text file. ${OUTSIDE_WRITE_SENTENCE}`
-        : "Edits an existing text file in the workspace.") +
-      " Read the file with read_file first: edits are addressed by N#TAG anchors (the line prefixes in the read_file output), " +
-      "and snapshot is the snapshot tag from the [PATH#TAG] header of the read_file output. " +
-      "Operations: replace (replaces the lines from anchor to endAnchor) / insertAfter (inserts after anchor) / " +
-      "delete (deletes lines). Put several changes to the same file into the edits of one call (all anchors from the same read, " +
-      "not overlapping); they are written together only if all pass the checks, and if any fails, none is written. " +
-      "If the file has changed since it was read (stale snapshot), the edit is refused and you need to read_file again.",
+    get description() {
+      return (
+        (outsideWritesNow(options)
+          ? `Edits an existing text file. ${OUTSIDE_WRITE_SENTENCE}`
+          : "Edits an existing text file in the workspace.") +
+        " Read the file with read_file first: edits are addressed by N#TAG anchors (the line prefixes in the read_file output), " +
+        "and snapshot is the snapshot tag from the [PATH#TAG] header of the read_file output. " +
+        "Operations: replace (replaces the lines from anchor to endAnchor) / insertAfter (inserts after anchor) / " +
+        "delete (deletes lines). Put several changes to the same file into the edits of one call (all anchors from the same read, " +
+        "not overlapping); they are written together only if all pass the checks, and if any fails, none is written. " +
+        "If the file has changed since it was read (stale snapshot), the edit is refused and you need to read_file again."
+      );
+    },
     parameters: EditFileParamsSchema,
     // 写工具强制串行执行器（对齐上游 executionMode 语义 + M3 决策 2）
     executionMode: "sequential",
+    // 这次调用的目标是否落在工作区之外：治理层据此在弹审批之前拒掉（见 governance.ts）
+    inspectOutsideWrite: (args: unknown) => outsideTarget(host, args),
     // 执行前预览（审批展示用）：与 execute 共享同一 planEdits 预检，但零副作用。
     // 注意 TOCTOU：预览与执行是两次独立读取，快照预检在执行时仍会兜底。
     async preview(params) {
-      const plan = await planEdits(host, Value.Parse(EditFileParamsSchema, params), pathOptions);
+      const plan = await planEdits(host, Value.Parse(EditFileParamsSchema, params), pathOptions());
       return buildEditDiff(plan.args.path, plan.split.lines, plan.applied);
     },
     async execute(_toolCallId, params, signal): Promise<PigeonToolResult<EditFileDetails>> {
@@ -109,7 +121,7 @@ export function createEditFileTool(
       const plan = await planAndWrite({
         host,
         inputPath: args.path,
-        plan: () => planEdits(host, args, pathOptions),
+        plan: () => planEdits(host, args, pathOptions()),
         contentOf: (planned) => joinContent(planned.newLines, planned.split),
         signal,
       });
@@ -141,6 +153,25 @@ export function createEditFileTool(
       };
     },
   };
+  return tool;
+}
+
+// 目标是否落在工作区以外：按执行端自己的解析口径试一次（只读、不写），越界即交出路径。
+// 其它问题（快照过时、符号链接等）不在这里判，留给执行时——治理层只关心"能不能越界写"。
+async function outsideTarget(host: WorkspaceHost, args: unknown): Promise<string | undefined> {
+  const target = (args as { path?: unknown } | null)?.path;
+  if (typeof target !== "string" || target === "" || host.resolveForWrite === undefined) {
+    return undefined;
+  }
+  try {
+    await host.resolveForWrite(target, {});
+    return undefined;
+  } catch (error) {
+    // 越界时两个执行端都抛同一个说法（见 paths.ts 与 container-host.ts）
+    return error instanceof WorkspacePathError && /outside the workspace root/.test(error.message)
+      ? target
+      : undefined;
+  }
 }
 
 // 读 + 围栏 + 快照预检 + 内存落地（零写副作用）；任一编辑失败整单抛错，文件零改动。

@@ -25,6 +25,9 @@ import { asWorkspaceHost } from "./local-host.ts";
 import {
   assertWritePathText,
   OUTSIDE_WRITE_SENTENCE,
+  type OutsideWriteTool,
+  outsideWritesNow,
+  WorkspacePathError,
   type WritePathOptions,
   type WriteToolOptions,
 } from "./paths.ts";
@@ -85,26 +88,34 @@ export function replaceEditDescription(outsideWrites: boolean): string {
     .join(" ");
 }
 
+type ReplaceEditTool = PigeonAgentTool<typeof ReplaceEditParamsSchema, ReplaceEditDetails> &
+  PreviewableTool &
+  OutsideWriteTool;
+
 // 决策 098：workspace 给目录即本地工作区，给执行端实现即由它承接读写；reads 为本会话的读取记录（决策 358）
 export function createReplaceEditTool(
   workspace: string | WorkspaceHost,
   reads?: FileReadTracker,
   options: WriteToolOptions = {}
-): PigeonAgentTool<typeof ReplaceEditParamsSchema, ReplaceEditDetails> & PreviewableTool {
+): ReplaceEditTool {
   const host = asWorkspaceHost(workspace);
-  const outside = options.outsideWrites === true;
-  const pathOptions: WritePathOptions = { outside };
-  return {
+  // 能力现取：审批模式在会话中途可切换（见 paths.ts 的 outsideWritesNow）
+  const pathOptions = (): WritePathOptions => ({ outside: outsideWritesNow(options) });
+  const tool: ReplaceEditTool = {
     name: "edit_file",
     label: "edit_file",
-    description: replaceEditDescription(outside),
+    get description() {
+      return replaceEditDescription(outsideWritesNow(options));
+    },
     parameters: ReplaceEditParamsSchema,
     executionMode: "sequential",
+    // 这次调用的目标是否落在工作区之外：治理层据此在弹审批之前拒掉（见 governance.ts）
+    inspectOutsideWrite: (args: unknown) => outsideTarget(host, args),
     async preview(params) {
       const plan = await planReplace(
         host,
         Value.Parse(ReplaceEditParamsSchema, params),
-        pathOptions
+        pathOptions()
       );
       return buildEditDiff(plan.args.path, plan.oldLines, plan.applied);
     },
@@ -114,7 +125,7 @@ export function createReplaceEditTool(
       const plan = await planAndWrite({
         host,
         inputPath: args.path,
-        plan: () => planReplace(host, args, pathOptions),
+        plan: () => planReplace(host, args, pathOptions()),
         contentOf: (planned) => planned.newRaw,
         signal,
       });
@@ -141,6 +152,25 @@ export function createReplaceEditTool(
       };
     },
   };
+  return tool;
+}
+
+// 目标是否落在工作区以外：按执行端自己的解析口径试一次（只读、不写），越界即交出路径。
+// 其它问题（原文对不上、符号链接等）不在这里判，留给执行时——治理层只关心"能不能越界写"。
+async function outsideTarget(host: WorkspaceHost, args: unknown): Promise<string | undefined> {
+  const target = (args as { path?: unknown } | null)?.path;
+  if (typeof target !== "string" || target === "" || host.resolveForWrite === undefined) {
+    return undefined;
+  }
+  try {
+    await host.resolveForWrite(target, {});
+    return undefined;
+  } catch (error) {
+    // 越界时两个执行端都抛同一个说法（见 paths.ts 与 container-host.ts）
+    return error instanceof WorkspacePathError && /outside the workspace root/.test(error.message)
+      ? target
+      : undefined;
+  }
 }
 
 // 读 + 围栏 + 唯一匹配预检 + 内存落地（零写副作用）；多处时全部定位、查过交叠才拼出新内容，任一处不通过即抛错

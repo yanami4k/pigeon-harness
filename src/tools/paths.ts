@@ -113,10 +113,22 @@ export interface WritePathOptions {
   outside?: boolean;
 }
 
-// 写工具（edit_file 两种模式、write_file）的选项（决策 407）：outsideWrites 为真（放权时）接受工作区以外的路径，
-// 由装配层按本会话的审批状态给出；缺省只写工作区
+// 写工具（edit_file 两种模式、write_file）的选项（决策 407）：outsideWrites 为真（放权时）接受工作区以外的路径。
+// 也可以给一个取当前值的函数：审批模式能在会话中途切换，能力必须跟着当下的模式走，不能在建工具时定死。
 export interface WriteToolOptions {
-  outsideWrites?: boolean;
+  outsideWrites?: boolean | (() => boolean);
+}
+
+// 当下是否放权写工作区以外：给了函数就现取一次（模式切换即时生效），否则按给定的布尔值
+export function outsideWritesNow(options: WriteToolOptions): boolean {
+  const value = options.outsideWrites;
+  return typeof value === "function" ? value() : value === true;
+}
+
+// 可选能力（治理层使用）：只读检查这次调用是否写工作区以外的文件
+export interface OutsideWriteTool {
+  // 目标落在工作区以外时返回模型给的路径；在工作区内或判断不了返回 undefined
+  inspectOutsideWrite(params: unknown): Promise<string | undefined>;
 }
 
 // 决策 407：放权时写工具的说明里交代可写工作区以外

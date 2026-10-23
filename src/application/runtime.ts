@@ -703,8 +703,9 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
   const approval: RunCommandApproval =
     approvalMode === "yolo" ? "yolo" : deps.createApprovalHandler !== undefined ? "prompt" : "none";
   const commandTexts = runCommandTexts({ platform: workspaceHost.platform, approval });
-  // 决策 407：放权时写工具接受工作区以外的路径（与放权下 shell 的能力一致）；未放权时照旧只写工作区
-  const writeOptions = { outsideWrites: approval === "yolo" };
+  // 决策 407：放权时写工具接受工作区以外的路径（与放权下 shell 的能力一致）。审批模式能在会话中途切换，
+  // 能力因此现取当下的模式，不在建会话时定死
+  const writeOptions = { outsideWrites: () => modeCell.current === "yolo" };
   // 决策 368：grep、glob 的上限；本机执行端先用随包附带的 ripgrep，容器里用容器自己的
   const searchLimits = searchLimitsOf(settings);
   const searchOptions = { bundledRipgrep: deps.workspaceHost === undefined };
