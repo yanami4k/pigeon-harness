@@ -1,6 +1,6 @@
-# Pigeon
-
 <p align="center"><img src="docs/assets/pigeon.png" width="120" alt="Pigeon"></p>
+
+# Pigeon
 
 **轻量、注重成本，面向个人长期使用的终端 coding-agent harness。**
 
@@ -250,7 +250,7 @@ Pigeon 的配置按三层合并，后一层覆盖前一层：
 
 ## Pigeon 与 pi 的关系
 
-Pigeon 复用 `@earendil-works/pi-agent-core`、`pi-ai` 和 `pi-tui` 提供的 agent 运行时、模型接入与终端基础部件，不声称自研 agent 运行时。
+Pigeon 复用 `@earendil-works/pi-agent-core`、`pi-ai` 和 `pi-tui` 提供的 agent 运行时、模型接入与终端基础部件，三者都钉在 **0.84.4**（精确版本，不带范围），不声称自研 agent 运行时。
 
 本项目的工作集中在终端 harness 与应用层：模型驱动的子代理分派、执行与审批边界、Docker 沙箱交付、上下文与运行控制，以及围绕这些过程形成的会话记录和终端工作流。
 
