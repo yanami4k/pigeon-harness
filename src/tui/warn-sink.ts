@@ -23,3 +23,36 @@ export function switchableWarn(fallback: WarnSink = stderrWarn): SwitchableWarn 
     },
   };
 }
+
+// 决策 562：给人看的次要提示（档位回落说明）的出口切换：壳接管终端之前先攒着（启动阶段的说明
+// 也要落进消息区，不能先写 stderr），壳接管后逐行交给 target；壳始终没起来或停下时，攒下的写回
+// fallback（缺省标准错误输出），此后的也直写 fallback。与 switchableWarn 的区别只在接管前的处理。
+export interface BufferedNotice {
+  notice: WarnSink;
+  // 壳接管终端后调用：先倒出攒着的，此后的直接交给 target
+  attach(target: (line: string) => void): void;
+  // 壳始终没起来或停下时调用：攒下的写回 fallback，此后的也直写
+  detach(): void;
+}
+
+export function bufferedNotice(fallback: WarnSink = stderrWarn): BufferedNotice {
+  let target: ((line: string) => void) | undefined;
+  let closed = false;
+  const pending: string[] = [];
+  return {
+    notice: (line) => {
+      if (target !== undefined) target(line);
+      else if (closed) fallback(line);
+      else pending.push(line);
+    },
+    attach: (next) => {
+      target = next;
+      for (const line of pending.splice(0)) next(line);
+    },
+    detach: () => {
+      target = undefined;
+      closed = true;
+      for (const line of pending.splice(0)) fallback(line);
+    },
+  };
+}

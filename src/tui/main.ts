@@ -181,7 +181,7 @@ import {
 } from "./shell.ts";
 import { type StatusReport, statusCwd } from "./status-report.ts";
 import { installTerminalReset } from "./terminal-reset.ts";
-import { switchableWarn } from "./warn-sink.ts";
+import { bufferedNotice, switchableWarn } from "./warn-sink.ts";
 import { modelLabelOf, tildePath } from "./welcome.ts";
 import { WorkList } from "./work-list.ts";
 import { takeWorktreeFlag } from "./worktree-flag.ts";
@@ -355,8 +355,11 @@ export async function main(argv: string[]): Promise<void> {
   // 决策 286：运行期告警的出口——壳接管终端期间落消息区，之前与之后写标准错误输出（去重与文案由告警方负责）
   const warnSink = switchableWarn();
   const warn = warnSink.warn;
-  // 决策 562：档位回落等给人看的次要提示——接管终端后落消息区的系统行（暗色），之前/之后仍写 stderr
-  const noticeSink = switchableWarn();
+  // 决策 562：档位回落等给人看的次要提示——壳接管终端之前先攒着（启动时也要落消息区），
+  // 接管后落消息区的系统行（暗色）；壳始终没起来或停下时攒下的写回 stderr，不能丢
+  const noticeSink = bufferedNotice();
+  // 壳始终没起来就退出（启动阶段出错）：攒下的说明在进程退出时写回标准错误输出
+  process.once("exit", () => noticeSink.detach());
   // S3 面板版审批 handler：face 晚绑定——buildRuntime 收 handler 工厂时壳尚未构造；
   // 壳未就位即收到审批请求属装配级故障，工厂内 fail-closed 按拒绝处理
   const faceHolder: { current: TuiApprovalFace | undefined } = { current: undefined };
@@ -576,7 +579,7 @@ export async function main(argv: string[]): Promise<void> {
         ...webToolsFor(snapshot),
         warn,
         // 决策 562：档位回落说明落消息区的次要系统行（暗色）
-        notice: noticeSink.warn,
+        notice: noticeSink.notice,
         memoryWrite,
         createApprovalHandler: coreApprovalHandler(coreContext, core),
         ...(agentsHost !== undefined ? { agents: agentsHost } : {}),
@@ -1469,7 +1472,7 @@ export async function main(argv: string[]): Promise<void> {
         : {}),
       warn,
       // 决策 562：重建后的档位回落说明照旧走暗色系统行
-      notice: noticeSink.warn,
+      notice: noticeSink.notice,
       createApprovalHandler: coreApprovalHandler(coreContext, core),
       memoryWrite,
       // 面板里的会话重建不动当前会话 /memory 的上限
@@ -1656,6 +1659,8 @@ export async function main(argv: string[]): Promise<void> {
   });
   faceHolder.current = shell;
   shellHolder.current = shell;
+  // 决策 562：壳已就位——启动阶段攒下的回落说明倒进消息区（开始渲染前，随首屏一起出现）
+  noticeSink.attach((line) => shell.addSystem(line));
   // 壳接管终端之前存下的提示与报错先落消息区（发生得更早，排在前面）
   for (const item of early.splice(0)) {
     if (item.alert) shell.addAlert(item.line);
@@ -1680,7 +1685,6 @@ export async function main(argv: string[]): Promise<void> {
   if (startBundle.instructionsNotice !== undefined) shell.addSystem(startBundle.instructionsNotice);
   if (startBundle.toolsNotice !== undefined) shell.addSystem(startBundle.toolsNotice);
   warnSink.attach((line) => shell.addWarning(line));
-  noticeSink.attach((line) => shell.addSystem(line));
   if (target.kind === "resume") {
     shell.announceResumed(governanceRoot, target.report);
   } else if (target.picker) {
