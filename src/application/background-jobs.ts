@@ -277,7 +277,7 @@ export function lostJobsText(lost: PreviousJobs["lost"]): string {
 }
 
 // 决策 365：沙箱交回时有作业在跑先提示（给人看的一行）。收尾交回之前作业随会话结束停掉，交回的是停下时的工作区；
-// 会话中途 /export 时作业照跑，交回的可能是做到一半的样子。决策 409：收尾时保留的作业不停，交回时仍在跑，容器删除时
+// 会话中途 /deliver 时作业照跑，交回的可能是做到一半的样子。决策 409：收尾时保留的作业不停，交回时仍在跑，容器删除时
 // 随之结束。没有在跑的为 undefined
 export function handbackJobsNotice(
   jobs: Pick<SessionJobs, "running"> | undefined,
@@ -288,13 +288,15 @@ export function handbackJobsNotice(
   const list = (items: readonly BackgroundJob[]) =>
     items.map((job) => `${job.id} (${job.command})`).join(", ");
   if (when === "export") {
-    return `background jobs still running during export: ${list(running)}`;
+    return `background jobs still running during delivery: ${list(running)}`;
   }
   const stopped = running.filter((job) => !job.keep);
   const kept = running.filter((job) => job.keep);
   return [
-    ...(stopped.length > 0 ? [`stopped background jobs before export: ${list(stopped)}`] : []),
-    ...(kept.length > 0 ? [`kept background jobs still running during export: ${list(kept)}`] : []),
+    ...(stopped.length > 0 ? [`stopped background jobs before delivery: ${list(stopped)}`] : []),
+    ...(kept.length > 0
+      ? [`kept background jobs still running during delivery: ${list(kept)}`]
+      : []),
   ].join("\n");
 }
 

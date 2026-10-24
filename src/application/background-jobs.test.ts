@@ -15,6 +15,7 @@ import { CommandOutputStore } from "../tools/command-output.ts";
 import type { HostJobExit, WorkspaceHost } from "../tools/workspace-host.ts";
 import {
   backgroundJobEntry,
+  handbackJobsNotice,
   JOB_NOTICE_PREFIX,
   JobNotices,
   previousJobsOf,
@@ -452,3 +453,21 @@ test("装配：标了会话结束后保留的作业不进收尾轮、会话结�
       }
     }
   }));
+
+test("决策 526：交回时的后台作业提示写作 delivery，不再出现 export", () => {
+  const running = [
+    { id: "j1", command: "sleep 1", keep: false },
+    { id: "j2", command: "sleep 2", keep: true },
+  ];
+  const jobs = { running: () => running } as never;
+  const during = handbackJobsNotice(jobs, "export") ?? "";
+  assert.match(
+    during,
+    /background jobs still running during delivery: j1 \(sleep 1\), j2 \(sleep 2\)/
+  );
+  assert.doesNotMatch(during, /export/);
+  const closed = handbackJobsNotice(jobs, "close") ?? "";
+  assert.match(closed, /stopped background jobs before delivery: j1 \(sleep 1\)/);
+  assert.match(closed, /kept background jobs still running during delivery: j2 \(sleep 2\)/);
+  assert.doesNotMatch(closed, /export/);
+});
