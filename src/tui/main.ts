@@ -109,6 +109,7 @@ import { createApprovalQueue } from "../approvals/queue.ts";
 import { describeHead, treesHomeOf } from "../orchestration/worktree.ts";
 import { recordTrustedEntries } from "../persistence/config-trust-store.ts";
 import {
+  readCredentials,
   removeProviderKey,
   storedProviders,
   writeProviderKey,
@@ -121,7 +122,7 @@ import {
 } from "../persistence/session-index.ts";
 import { holdWorktreeInUse } from "../persistence/worktree-in-use.ts";
 import type { StreamFn } from "../pi-runtime/index.ts";
-import { installProxyFetch } from "../pi-runtime/model-access.ts";
+import { createCredentialSource, installProxyFetch } from "../pi-runtime/model-access.ts";
 import type { TrustEntry } from "../state/config-trust.ts";
 import { asSessionId, newSessionId, type SessionId } from "../state/ids.ts";
 import { FROM_BUNDLE } from "../state/package-paths.ts";
@@ -134,6 +135,7 @@ import {
 } from "../state/paths.ts";
 import { SESSION_ENTRY_VERSION, SessionEntryType } from "../state/session-entries.ts";
 import {
+  customProvidersOf,
   keybindingsSectionOf,
   loopGuardSettingsOf,
   memoryLimitsOf,
@@ -246,7 +248,7 @@ export function switchedReloadContext(
   };
 }
 
-// 决策 564：凭据增删的决定与文案单独放这里（可测），副作用由入口注入
+// 决策 564、566：凭据变化的决定与文案单独放这里（可测），副作用由入口注入
 // 当前运行面的型号（取运行面快照，不是可能已过期的 flags）
 export interface CredentialModel {
   provider: string;
@@ -267,12 +269,14 @@ export type CredentialResolution = CredentialAccess | { kind: "failed"; text: st
 // 凭据变化要用的东西由入口供给；测试用假的记账实现
 export interface CredentialChangeHost {
   currentModel(): CredentialModel;
+  // 决策 566：该服务商还有没有凭据（文件或环境变量都算）
+  hasCredential(provider: string): boolean;
   resolve(): Promise<CredentialResolution>;
   // 解析成功：换上接入与目标
   apply(access: CredentialAccess): void;
-  // 解析失败：只转占位（禁止发消息），不换型号
-  markUnavailable(): void;
-  // 重建；给 target 即显式目标型号（决策 557、564）
+  // 凭据不够用：转占位（禁止发消息），不换型号
+  applyPlaceholder(): void;
+  // 重建；给 target 即显式目标型号（决策 557、564、566）
   rebuild(target?: { provider: string; model: string; streamFn: StreamFn }): Promise<void>;
 }
 
@@ -283,29 +287,72 @@ export function placeholderModel(model: CredentialModel): boolean {
   );
 }
 
-// 决策 564：登录成功——当前已是可用型号时只增凭据，不重建、不换型号；占位时才按新凭据解析，
-// 且重建带显式目标型号（决策 557）
-export async function afterCredentialStored(
-  host: CredentialChangeHost,
-  provider: string
-): Promise<string> {
-  const before = host.currentModel();
-  if (!placeholderModel(before)) {
-    return `logged in ${provider}; model unchanged (${before.provider}/${before.id})`;
+// 决策 564、566：凭据变化后先看当前型号的服务商还有没有凭据——有就只动凭据、不重建；
+// 没了才按剩余凭据解析一次，并为选中的目标型号显式重建（不为旧的、已无凭据的型号解析或重建）
+type CredentialSettled =
+  | { kind: "unchanged"; model: CredentialModel }
+  | { kind: "switched"; provider: string; model: string }
+  | { kind: "placeholder"; failure?: string };
+
+async function settleCredentials(host: CredentialChangeHost): Promise<CredentialSettled> {
+  const current = host.currentModel();
+  if (!placeholderModel(current) && host.hasCredential(current.provider)) {
+    return { kind: "unchanged", model: current };
   }
   const access = await host.resolve();
   if (access.kind === "failed") {
-    host.markUnavailable();
-    return `saved, but the model still can't be chosen: ${access.text}`;
+    host.applyPlaceholder();
+    await host.rebuild();
+    return { kind: "placeholder", failure: access.text };
   }
   host.apply(access);
-  if (access.needsLogin === true) return "no credentials yet: run /login";
+  if (access.needsLogin === true) {
+    await host.rebuild();
+    return { kind: "placeholder" };
+  }
   await host.rebuild({
     provider: access.provider,
     model: access.modelId,
     streamFn: access.streamFn,
   });
-  return `logged in ${provider}; this session now uses ${access.provider}/${access.modelId}`;
+  return { kind: "switched", provider: access.provider, model: access.modelId };
+}
+
+// 决策 564：登录成功——当前型号还有凭据时只增凭据，不重建、不换型号；否则按新凭据解析并显式重建
+export async function afterCredentialStored(
+  host: CredentialChangeHost,
+  provider: string
+): Promise<string> {
+  const settled = await settleCredentials(host);
+  if (settled.kind === "unchanged") {
+    return `logged in ${provider}; model unchanged (${settled.model.provider}/${settled.model.id})`;
+  }
+  if (settled.kind === "switched") {
+    return `logged in ${provider}; this session now uses ${settled.provider}/${settled.model}`;
+  }
+  return settled.failure !== undefined
+    ? `saved, but the model still can't be chosen: ${settled.failure}`
+    : "no credentials yet: run /login";
+}
+
+// 决策 566：登出后当前型号的服务商还有凭据就保持型号；没了就换到解析出的型号，解析不到就转占位。
+// 文案前缀与来源列表维持原样（决策 565 暂停）
+export async function afterCredentialRemoved(
+  host: CredentialChangeHost,
+  provider: string
+): Promise<string> {
+  const line = `logged out ${provider}`;
+  if (placeholderModel(host.currentModel())) {
+    return `${line}; no credentials yet: run /login`;
+  }
+  const settled = await settleCredentials(host);
+  if (settled.kind === "unchanged") {
+    return `${line}; model unchanged (${settled.model.provider}/${settled.model.id})`;
+  }
+  if (settled.kind === "switched") {
+    return `${line}; this session now uses ${settled.provider}/${settled.model}`;
+  }
+  return `${line}; no credentials left: run /login`;
 }
 
 export async function main(argv: string[]): Promise<void> {
@@ -1214,13 +1261,12 @@ export async function main(argv: string[]): Promise<void> {
               }),
             submit: async (provider: string, key: string) => {
               writeProviderKey(provider, key, { homeDir: homedir() });
-              return afterCredentialsChange(provider);
+              return afterCredentialStored(credentialHost(), provider);
             },
             logout: async (provider: string) => {
               const removed = removeProviderKey(provider, { homeDir: homedir() });
               if (!removed) return `no stored key for provider "${provider}"`;
-              const line = await afterCredentialsChange(undefined);
-              return `logged out ${provider}; ${line}`;
+              return afterCredentialRemoved(credentialHost(), provider);
             },
             stored: () => storedProviders({ homeDir: homedir() }),
           },
@@ -1356,13 +1402,25 @@ export async function main(argv: string[]): Promise<void> {
     attachCoreRuntime(coreContext, core);
     shellHolder.current?.rebindSession(core.sessionId, bindingOf(core));
   }
-  // 决策 564：凭据增删的接线（决策与文案在 afterCredentialStored）
+  // 决策 564、566：凭据增删的接线（决定与文案在 afterCredentialStored / afterCredentialRemoved）
+  function credentialSource() {
+    const envNames: Record<string, string> = {};
+    for (const provider of customProvidersOf(settingsOfCore(current))) {
+      envNames[provider.id] = provider.keyEnv;
+    }
+    return createCredentialSource({
+      env: process.env,
+      envNames,
+      stored: () => readCredentials({ homeDir: homedir() }),
+    });
+  }
   function credentialHost(): CredentialChangeHost {
     return {
       currentModel: () => {
         const model = coreBundle(current).adapter.snapshot().model;
         return { provider: model.provider, id: model.id };
       },
+      hasCredential: (provider) => credentialSource().has(provider),
       resolve: () =>
         resolvePackagedModelAccess({
           settings: settingsOfCore(current),
@@ -1379,29 +1437,16 @@ export async function main(argv: string[]): Promise<void> {
         flags.modelId = access.modelId;
         needsLogin = access.needsLogin === true;
       },
-      markUnavailable: () => {
+      applyPlaceholder: () => {
         needsLogin = true;
+        flags.provider = DEFAULT_MODEL_PLACEHOLDER.provider;
+        flags.modelId = DEFAULT_MODEL_PLACEHOLDER.modelId;
       },
       rebuild: async (target) => {
         if (target !== undefined) pendingModelSwitch.set(current.sessionId, target);
         await rebuildMain(settingsOfCore(current));
       },
     };
-  }
-  // 决策 546、564：/login 之后——可用型号只增凭据；占位时才解析并重建
-  async function afterCredentialsChange(provider: string | undefined): Promise<string> {
-    const host = credentialHost();
-    if (provider !== undefined) return afterCredentialStored(host, provider);
-    // /logout 本轮维持原行为（决策 565 等新指令）
-    const access = await host.resolve();
-    if (access.kind === "failed") {
-      needsLogin = true;
-      return `saved, but the model still can't be chosen: ${access.text}`;
-    }
-    host.apply(access);
-    if (needsLogin) return "no credentials yet: run /login";
-    await host.rebuild();
-    return `logged in ${access.provider}; this session now uses ${access.provider}/${access.modelId}`;
   }
 
   // 决策 550：/model 切换——解析新型号、写一条会话记录；空闲立即重建，运行中本轮结束后重建（与 /reload 同一机制）
