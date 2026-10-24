@@ -217,6 +217,33 @@ async function askTrustOnStderr(entries: readonly TrustEntry[]): Promise<TrustCh
   }
 }
 
+// 决策 557：/model 的“已经是这个型号”要看当前运行面的模型（snapshot），不能看可能已过期的 flags
+export function isSameModel(
+  a: { provider: string; id: string },
+  b: { provider: string; id: string }
+): boolean {
+  return a.provider === b.provider && a.id === b.id;
+}
+
+// 决策 557：/model 切换后的重建上下文——把目标型号作为显式参数带上（providerFlag/modelFlag），
+// 否则续接重逢时没给显式型号会回落到会话记录或用户级 last-used，运行面又变回旧型号
+export function switchedReloadContext(
+  context: MainReloadContext,
+  target: { provider: string; model: string; streamFn: MainReloadContext["streamFn"] }
+): MainReloadContext {
+  return {
+    ...context,
+    streamFn: target.streamFn,
+    flags: {
+      ...context.flags,
+      provider: target.provider,
+      modelId: target.model,
+      providerFlag: target.provider,
+      modelFlag: target.model,
+    },
+  };
+}
+
 export async function main(argv: string[]): Promise<void> {
   // 壳接管终端之前的提示与报错先存着，壳起来后落消息区（全屏之前写到标准错误输出的会被备用屏盖住，看不见）
   const early: Array<{ line: string; alert: boolean }> = [];
@@ -290,6 +317,12 @@ export async function main(argv: string[]): Promise<void> {
     }
     return access.streamFn;
   })();
+  // 决策 557：/model 切换后的重建必须带着刚选的目标型号；运行中切换要等本轮结束后才重建，
+  // 所以按会话记下目标，由 rebuildMain 消费（不能靠用户级 last-used 兜底）
+  const pendingModelSwitch = new Map<
+    SessionId,
+    { provider: string; model: string; streamFn: typeof streamFn }
+  >();
   // 决策 445：建立或打开独立工作树（壳接管终端之前，提示打到 stderr）；起点档位取设置的 worktree 一节
   const namedWorktree =
     worktreeFlag.name !== undefined
@@ -1220,10 +1253,17 @@ export async function main(argv: string[]): Promise<void> {
     // /reload 会照当前快照重新列出待确认条目、可重试
     const core = current;
     const previous = coreBundle(core);
-    const reloaded = await reopenMainSessionForReload(reloadContextOf(core), snapshot, {
-      sessionId: core.sessionId,
-      bundle: previous,
-    });
+    const target = pendingModelSwitch.get(core.sessionId);
+    pendingModelSwitch.delete(core.sessionId);
+    const context = reloadContextOf(core);
+    const reloaded = await reopenMainSessionForReload(
+      target === undefined ? context : switchedReloadContext(context, target),
+      snapshot,
+      {
+        sessionId: core.sessionId,
+        bundle: previous,
+      }
+    );
     core.settingsStale = false;
     setProjectSettings(core.governanceRoot, snapshot);
     // 决策 480：子 agent 的类型随 /reload 重读
@@ -1281,9 +1321,10 @@ export async function main(argv: string[]): Promise<void> {
       model: id,
     });
     if (access.kind === "failed") throw new Error(access.text);
-    const from = { provider: flags.provider, id: flags.modelId };
+    const snapshotModel = coreBundle(current).adapter.snapshot().model;
+    const from = { provider: snapshotModel.provider, id: snapshotModel.id };
     const to = { provider: access.provider, id: access.modelId };
-    if (from.provider === to.provider && from.id === to.id) {
+    if (isSameModel(snapshotModel, to)) {
       return `model is already ${to.provider}/${to.id}`;
     }
     streamFn = access.streamFn;
@@ -1293,6 +1334,11 @@ export async function main(argv: string[]): Promise<void> {
     coreBundle(current).sessionStore.append({
       customType: SessionEntryType.ModelSwitch,
       data: { version: SESSION_ENTRY_VERSION, from, to, changedAt: Date.now() },
+    });
+    pendingModelSwitch.set(current.sessionId, {
+      provider: to.provider,
+      model: to.id,
+      streamFn: access.streamFn,
     });
     const line = `model set to ${to.provider}/${to.id} (from the next request)`;
     if (shellHolder.current?.isRunning() === true) {
