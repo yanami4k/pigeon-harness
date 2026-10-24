@@ -13,6 +13,7 @@ import { createFakeStreamFn, type FakeReply, type FakeStreamFn } from "../pi-run
 import type { StreamFn } from "../pi-runtime/index.ts";
 import { registerModelAccess } from "../pi-runtime/model-access.ts";
 import { newSessionId, type SessionId } from "../state/ids.ts";
+import type { ThinkingLevel } from "../state/runtime-events.ts";
 import { SessionEntryType } from "../state/session-entries.ts";
 import { emptySettingsSnapshot, type SettingsSnapshot } from "../state/settings.ts";
 import { noMcpSession } from "./mcp.ts";
@@ -42,7 +43,7 @@ function model(
 
 const levels = (fake: FakeStreamFn): unknown[] => fake.calls.map((call) => call.options?.reasoning);
 
-function settingsWith(root: string, level?: "low" | "medium"): SettingsSnapshot {
+function settingsWith(root: string, level?: ThinkingLevel): SettingsSnapshot {
   const settings = emptySettingsSnapshot(root);
   return level === undefined
     ? settings
@@ -57,7 +58,8 @@ function open(
     resume?: boolean;
     reloadFrom?: RuntimeBundle;
     settings?: SettingsSnapshot;
-    flags?: Partial<typeof FLAGS> & { thinkingLevel?: "high" };
+    flags?: Partial<typeof FLAGS> & { thinkingLevel?: ThinkingLevel };
+    warn?: (line: string) => void;
   } = {}
 ) {
   return openSessionRuntime({
@@ -68,6 +70,7 @@ function open(
     homeDir: root,
     startMcp: async () => noMcpSession(),
     settings: options.settings ?? emptySettingsSnapshot(root),
+    ...(options.warn !== undefined ? { warn: options.warn } : {}),
     ...(options.resume === true ? { resume: true } : {}),
     ...(options.reloadFrom !== undefined ? { resume: true, reloadFrom: options.reloadFrom } : {}),
   });
@@ -352,5 +355,75 @@ test("MODEL-041 决策 553：显式档位不受支持时启动报错并列出可
     }
   } finally {
     root.cleanup();
+  }
+});
+
+test("决策 558：用户级档位不支持时回落到不超过它的最高可用档并说明；显式 --thinking 仍报错", async () => {
+  const { root: dir, cleanup } = workspace();
+  try {
+    const stream = registerModelAccess(createFakeStreamFn({ replies: [{ text: "好" }] }), {
+      declared: { reasoning: true },
+      catalog: () => ({ reasoning: true, thinkingLevels: ["off", "low", "high", "max"] }),
+    });
+    const warnings: string[] = [];
+    const sessionId = newSessionId();
+    const opened = await open(dir, sessionId, stream, {
+      settings: settingsWith(dir, "xhigh"),
+      warn: (line) => warnings.push(line),
+    });
+    try {
+      assert.equal(opened.bundle.thinking.get(), "high", "xhigh 回落到 high");
+      assert.match(
+        warnings.join("\n"),
+        /effort "xhigh" is not supported by fake\/fake \(available: off, low, high, max\); using "high"/
+      );
+      await opened.bundle.adapter.run("hi");
+      await opened.bundle.sessionStore.flush();
+      assert.equal(
+        sessionOf(dir, sessionId)?.view.runs.at(-1)?.start.model.thinkingLevel,
+        "high",
+        "Run 开始条目记实际档位"
+      );
+    } finally {
+      await disposeRuntime(opened.bundle);
+    }
+
+    // 显式 --thinking xhigh：553 不变，仍然报错并列可用档
+    await assert.rejects(
+      () =>
+        open(dir, newSessionId(), stream, {
+          settings: settingsWith(dir),
+          flags: { thinkingLevel: "xhigh" },
+        }),
+      /effort "xhigh" is not supported by this model \(use off, low, high, max\)/
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("决策 558：没有更低的可用档时回落取最低可用档（low + off/high → off）", async () => {
+  const { root: dir, cleanup } = workspace();
+  try {
+    const stream = registerModelAccess(createFakeStreamFn({ replies: [{ text: "好" }] }), {
+      declared: { reasoning: true },
+      catalog: () => ({ reasoning: true, thinkingLevels: ["off", "high"] }),
+    });
+    const warnings: string[] = [];
+    const opened = await open(dir, newSessionId(), stream, {
+      settings: settingsWith(dir, "low"),
+      warn: (line) => warnings.push(line),
+    });
+    try {
+      assert.equal(opened.bundle.thinking.get(), "off");
+      assert.match(
+        warnings.join("\n"),
+        /effort "low" is not supported by fake\/fake \(available: off, high\); using "off"/
+      );
+    } finally {
+      await disposeRuntime(opened.bundle);
+    }
+  } finally {
+    cleanup();
   }
 });

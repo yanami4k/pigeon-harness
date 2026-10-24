@@ -474,6 +474,85 @@ test("决策 557：/model 切换后重建带显式目标型号，RUN-START 与�
   }
 });
 
+test("决策 558：/model 切到不支持原档位的型号时不阻断，运行面与下一次 RUN-START 用回落值", async () => {
+  const root = temp("pigeon-think-fallback-");
+  const home = temp("pigeon-think-fallback-home-");
+  const flags = parseLaunchFlags(["--root", root], { usage: "u", pushedMemory: true });
+  const baseStream = registerModelAccess(createFakeStreamFn({ replies: [{ text: "旧" }] }), {
+    declared: { reasoning: true },
+    catalog: () => ({ reasoning: true, thinkingLevels: ["off", "low", "high", "xhigh", "max"] }),
+  });
+  const settings = await openSessionSettings(root, {
+    homeDir: home,
+    confirmation: { kind: "interactive", ask: async () => "trust" },
+  });
+  const warnings: string[] = [];
+  const context: MainReloadContext = {
+    governanceRoot: root,
+    streamFn: baseStream,
+    flags,
+    warn: (line) => warnings.push(line),
+    createApprovalHandler: () => async () => ({ approved: true }),
+    memoryWrite: { source: "tui" },
+    memoryContext: { limits: memoryLimitsOf(settings) },
+    webToolsFor: () => ({}),
+    hooksNotice: () => {},
+    onMcpNote: () => {},
+    homeDir: home,
+    startMcp: noMcp,
+  };
+  const sessionId = newSessionId();
+  let bundle = (
+    await openSessionRuntime({
+      governanceRoot: root,
+      settings,
+      sessionId,
+      streamFn: baseStream,
+      flags,
+      memoryWrite: context.memoryWrite,
+      createApprovalHandler: context.createApprovalHandler,
+      homeDir: home,
+      startMcp: noMcp,
+    })
+  ).bundle;
+  try {
+    // 本会话选过 xhigh（旧型号支持）
+    bundle.thinking.set("xhigh");
+    assert.equal(bundle.thinking.get(), "xhigh");
+
+    const switchedStream = registerModelAccess(createFakeStreamFn({ replies: [{ text: "新" }] }), {
+      declared: { reasoning: true },
+      catalog: () => ({ reasoning: true, thinkingLevels: ["off", "low", "high", "max"] }),
+    });
+    const reloaded = await reopenMainSessionForReload(
+      switchedReloadContext(context, {
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+        streamFn: switchedStream,
+      }),
+      settings,
+      { sessionId, bundle }
+    );
+    await disposeRuntime(bundle);
+    bundle = reloaded.opened.bundle;
+    assert.deepEqual(bundle.thinking.levels, ["off", "low", "high", "max"]);
+    assert.equal(bundle.thinking.get(), "high", "xhigh 回落到 high，状态栏/ /status 取的就是它");
+    assert.match(
+      warnings.join("\n"),
+      /effort "xhigh" is not supported by deepseek\/deepseek-v4-flash \(available: off, low, high, max\); using "high"/
+    );
+    await bundle.adapter.run("新的一轮");
+    await bundle.sessionStore.flush();
+    assert.equal(
+      loadStoreSession(sessionsDirOf(root), sessionId)?.view.runs.at(-1)?.start.model.thinkingLevel,
+      "high",
+      "下一次 RUN-START 记回落值"
+    );
+  } finally {
+    await disposeRuntime(bundle);
+  }
+});
+
 test("决策 444：第一条消息建会话文件时才建 .pigeon/state/，忽略规则进全局排除文件，不写 .pigeon/.gitignore", async () => {
   const root = gitRepo("pigeon-main-first-");
   const home = temp("pigeon-main-first-home-");

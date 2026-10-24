@@ -29,6 +29,25 @@ export const ALL_THINKING_LEVELS: readonly ThinkingLevel[] = [
   "max",
 ];
 
+// 决策 558：用户级/上记录的档位在当前型号不支持时的回落——取不超过请求档位的最高可用档；
+// 没有更低的就取最低可用档（xhigh + off/low/high/max → high；low + off/high → off）。回落要配一行说明，不静默夹取
+export function fallbackThinkingLevel(
+  level: ThinkingLevel,
+  levels: readonly ThinkingLevel[]
+): ThinkingLevel {
+  const rank = (value: ThinkingLevel): number => ALL_THINKING_LEVELS.indexOf(value);
+  const requested = rank(level);
+  let best: ThinkingLevel | undefined;
+  let lowest: ThinkingLevel | undefined;
+  for (const candidate of levels) {
+    if (lowest === undefined || rank(candidate) < rank(lowest)) lowest = candidate;
+    if (requested >= 0 && rank(candidate) <= requested) {
+      if (best === undefined || rank(candidate) > rank(best)) best = candidate;
+    }
+  }
+  return best ?? lowest ?? "off";
+}
+
 // 一个模型可用的档位（决策 553）：目录给出了就用它；否则已知不支持推理只有 off，未知或支持时不限制。
 // 不做静默夹取：调用方拿到列表后自己拒绝不支持的档位。
 export function thinkingLevelsFor(input: {

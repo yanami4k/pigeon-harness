@@ -142,7 +142,11 @@ import {
   thinkingSectionOf,
   truncationContinuationOf,
 } from "../state/settings.ts";
-import { resolveThinkingLevel, thinkingLevelsFor } from "../state/thinking-config.ts";
+import {
+  fallbackThinkingLevel,
+  resolveThinkingLevel,
+  thinkingLevelsFor,
+} from "../state/thinking-config.ts";
 import {
   JOB_KILL_TOOL,
   JOB_OUTPUT_TOOL,
@@ -614,9 +618,10 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     : {};
   // 决策 422：压缩所用的窗口取自模型信息（运行参数显式给的优先）；配置畸形在打开会话文件之前响亮失败
   const compactionConfig = resolveCompactionConfig(deps.compaction, modelInfo.contextWindow);
-  // 决策 390、553：本运行面的推理档位——启动参数 > 设置 > 按模型信息的缺省（可用档里最高）。
+  // 决策 390、553、558：本运行面的推理档位——会话选过的 > 启动参数 > 设置 > 按模型信息的缺省（可用档里最高）。
   // 可用档位取自目录（pi-ai 的 getSupportedThinkingLevels）；已知不支持推理只有 off。
-  // 显式给的档位不支持即报错并列出可用档（不静默夹取）；会话记下的档位（续接、/reload）不支持时回到缺省并告警
+  // 显式 --thinking 不支持即报错并列出可用档（553 不变）；用户级设置与会话记下的档位不支持时回落到
+  // “不超过请求档位的最高可用档（没有更低就取最低）”，并打一行说明——不静默夹取（558）
   const modelReasoning =
     modelInfo.reasoning.source === "unknown" ? undefined : modelInfo.reasoning.value;
   const thinkingLevels = thinkingLevelsFor({
@@ -624,26 +629,26 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
       modelInfo.thinkingLevels.source === "unknown" ? undefined : modelInfo.thinkingLevels.value,
     reasoning: modelReasoning,
   });
-  const explicitThinking = deps.thinkingLevel ?? thinkingSectionOf(settings)?.level;
+  const explicitThinking = deps.thinkingLevel;
   if (explicitThinking !== undefined && !thinkingLevels.includes(explicitThinking)) {
     throw new Error(
       `effort "${explicitThinking}" is not supported by this model (use ${thinkingLevels.join(", ")})`
     );
   }
-  let thinkingLevel = resolveThinkingLevel({
-    ...(explicitThinking !== undefined ? { requested: explicitThinking } : {}),
-    reasoning: modelReasoning,
-    levels: thinkingLevels,
-  });
-  if (deps.sessionThinkingLevel !== undefined) {
-    if (thinkingLevels.includes(deps.sessionThinkingLevel)) {
-      thinkingLevel = deps.sessionThinkingLevel;
+  const requestedThinking =
+    deps.sessionThinkingLevel ?? explicitThinking ?? thinkingSectionOf(settings)?.level;
+  let thinkingLevel: ThinkingLevel | undefined;
+  if (requestedThinking !== undefined) {
+    if (thinkingLevels.includes(requestedThinking)) {
+      thinkingLevel = requestedThinking;
     } else {
+      thinkingLevel = fallbackThinkingLevel(requestedThinking, thinkingLevels);
       deps.storeWarn?.(
-        `effort "${deps.sessionThinkingLevel}" is not supported by ${modelInfo.provider}/${modelInfo.id}; using "${thinkingLevel}"`
+        `effort "${requestedThinking}" is not supported by ${modelInfo.provider}/${modelInfo.id} (available: ${thinkingLevels.join(", ")}); using "${thinkingLevel}"`
       );
     }
   }
+  thinkingLevel ??= resolveThinkingLevel({ reasoning: modelReasoning, levels: thinkingLevels });
   // 决策 513：这个会话选过的思考强度（续接、/reload 时沿用）；没选过为 undefined
   let thinkingChosen = deps.sessionThinkingLevel;
   // 推理开启时温度不生效：pi-ai 的 anthropic-messages 线路开思考时不发 temperature，DeepSeek 文档也写明思考模式下

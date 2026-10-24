@@ -1345,7 +1345,15 @@ export async function main(argv: string[]): Promise<void> {
       current.settingsStale = true;
       return line;
     }
+    const previousThinking = coreBundle(current).thinking.get();
     await rebuildMain(settingsOfCore(current));
+    // 决策 558：新型号不支持原来的档位时不阻断；说明实际生效的档位（不静默夹取）
+    const thinking = coreBundle(current).thinking;
+    const actualThinking = thinking.get();
+    if (!thinking.levels.includes(previousThinking) && actualThinking !== previousThinking) {
+      const model = coreBundle(current).adapter.snapshot().model;
+      return `${line}; effort "${previousThinking}" is not supported by ${model.provider}/${model.id} (available: ${thinking.levels.join(", ")}); using "${actualThinking}"`;
+    }
     return line;
   }
 
