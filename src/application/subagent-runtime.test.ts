@@ -72,15 +72,32 @@ function repo(): { dir: string; home: string; cleanup: () => void } {
   };
 }
 
-// 派出方与子 agent 各一串回复：按系统提示里有没有子 agent 那一段分流
-function routed(parent: FakeReply[], child: FakeReply[]) {
+// 派出方与子 agent 各一串回复：按系统提示里有没有子 agent 那一段分流。
+// 有多个后台子 agent 时它们谁先开跑不确定，所以再按任务分流（byTask 的键出现在 context 的第一条用户消息里即取那一串）；
+// 这样每个子 agent 拿到的回复与启动顺序无关。
+function routed(parent: FakeReply[], child: FakeReply[], byTask?: Record<string, FakeReply[]>) {
   const top = createFakeStreamFn({ replies: parent });
   const sub = createFakeStreamFn({ replies: child });
-  const streamFn: StreamFn = (model, context, options) =>
-    (context.systemPrompt ?? "").includes("You are a sub-agent named")
-      ? sub(model, context, options)
-      : top(model, context, options);
-  return { streamFn, top, sub };
+  const tasks = new Map(
+    Object.entries(byTask ?? {}).map(([task, replies]) => [task, createFakeStreamFn({ replies })])
+  );
+  const taskOf = (context: { messages?: readonly unknown[] }): string | undefined => {
+    // 第一条用户消息是开工状态块，任务在后面：按全部消息文本认
+    const text = JSON.stringify(context.messages ?? []);
+    for (const task of tasks.keys()) {
+      if (text.includes(task)) return task;
+    }
+    return undefined;
+  };
+  const streamFn: StreamFn = (model, context, options) => {
+    if (!(context.systemPrompt ?? "").includes("You are a sub-agent named")) {
+      return top(model, context, options);
+    }
+    const task = taskOf(context as { messages?: readonly unknown[] });
+    const stream = task !== undefined ? tasks.get(task) : undefined;
+    return (stream ?? sub)(model, context, options);
+  };
+  return { streamFn, top, sub, tasks };
 }
 
 async function openTop(
@@ -252,10 +269,14 @@ test("临时工作树：从派出方工作目录的快照起步（含未提交�
       },
       { text: "waiting" },
     ],
-    [
-      { text: "", toolCalls: [{ name: "write_file", args: { path: "b.txt", content: "hi\n" } }] },
-      { text: "wrote b.txt" },
-    ]
+    [{ text: "fallback" }],
+    {
+      "write b.txt": [
+        { text: "", toolCalls: [{ name: "write_file", args: { path: "b.txt", content: "hi\n" } }] },
+        { text: "wrote b.txt" },
+      ],
+      "just read": [{ text: "waiting" }],
+    }
   );
   const { hub, sessionId, opened } = await openTop(root, streamFn, delivered);
   try {
