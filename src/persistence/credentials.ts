@@ -113,12 +113,16 @@ function writeFile(file: string, value: CredentialsFile): void {
   writeSecure(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-// 写入一个服务商的 key（保留其余条目）。目录首次创建时先收紧；凭据文件在改名之前收紧
+// 写入一个服务商的 key（保留其余条目）。目录首次创建时先收紧；凭据文件在改名之前收紧。
+// 登录 key 加固：保存前 trim（去首尾空白与换行）；trim 后为空不写文件、返回 false（调用方提示重新粘贴）。
+// 已存文件里的旧 key 读取时不做改动。
 export function writeProviderKey(
   provider: string,
   apiKey: string,
   options: CredentialsOptions = {}
-): void {
+): boolean {
+  const key = apiKey.trim();
+  if (key === "") return false;
   const dir = userPigeonDir(options.homeDir);
   const created = !existsSync(dir);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -127,8 +131,9 @@ export function writeProviderKey(
   const current = readFileOrEmpty(file);
   writeFile(file, {
     ...current,
-    providers: { ...(current.providers ?? {}), [provider]: { apiKey } },
+    providers: { ...(current.providers ?? {}), [provider]: { apiKey: key } },
   });
+  return true;
 }
 
 // 删掉一个服务商的条目；文件里本来没有它即 false（不写文件）

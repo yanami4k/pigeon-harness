@@ -1,10 +1,20 @@
 // 凭据文件（决策 545）：~/.pigeon/credentials.json 的读、写、删；POSIX 0600；Windows 去继承、只给当前用户。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { test } from "vitest";
+import { createCredentialSource, createPackagedStreamFn } from "../pi-runtime/model-access.ts";
 import { userCredentialsPath } from "../state/paths.ts";
 import {
   CredentialsError,
@@ -78,6 +88,67 @@ test("MODEL-032 a failed ACL hardening writes nothing", () => {
     writeFileSync(join(dir, ".pigeon"), "x");
     assert.throws(() => writeProviderKey("deepseek", "sk-x", { homeDir: dir }));
     assert.deepEqual(readCredentials({ homeDir: dir }), {});
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// 登录 key 加固：新存进去的 key 去掉首尾空白与换行；读取不动旧内容
+test("MODEL-032 a pasted key is trimmed before it is stored, old keys stay as they are", () => {
+  const dir = home();
+  try {
+    assert.equal(writeProviderKey("deepseek", "  sk-abc\n", { homeDir: dir }), true);
+    assert.deepEqual(readCredentials({ homeDir: dir }), { deepseek: "sk-abc" });
+    // 文件里已有的旧 key（带空白）读取时原样交出，不顺手改写
+    writeFileSync(
+      userCredentialsPath(dir),
+      JSON.stringify({ providers: { deepseek: { apiKey: "  old-key\n" } } })
+    );
+    assert.deepEqual(readCredentials({ homeDir: dir }), { deepseek: "  old-key\n" });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("MODEL-032 a key of only whitespace is not written at all", () => {
+  const dir = home();
+  try {
+    assert.equal(writeProviderKey("deepseek", " \n\t ", { homeDir: dir }), false);
+    assert.deepEqual(readCredentials({ homeDir: dir }), {});
+    assert.deepEqual(storedProviders({ homeDir: dir }), []);
+    assert.equal(existsSync(userCredentialsPath(dir)), false, "不建凭据文件");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("MODEL-017 the request carries the trimmed key stored by /login", () => {
+  const dir = home();
+  try {
+    writeProviderKey("deepseek", "  sk-abc\n", { homeDir: dir });
+    const source = createCredentialSource({
+      env: {},
+      stored: () => readCredentials({ homeDir: dir }),
+    });
+    const seen: Array<string | undefined> = [];
+    const stream: StreamFn = (_model, _context, options) => {
+      seen.push(options?.apiKey);
+      throw new Error("stop");
+    };
+    const packaged = createPackagedStreamFn(source, {
+      "anthropic-messages": stream,
+      "openai-responses": stream,
+      "openai-completions": stream,
+      "google-generative-ai": stream,
+    });
+    assert.throws(() =>
+      packaged(
+        { api: "openai-completions", provider: "deepseek", id: "deepseek-chat" } as never,
+        {} as never,
+        {}
+      )
+    );
+    assert.deepEqual(seen, ["sk-abc"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

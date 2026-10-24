@@ -1260,7 +1260,9 @@ export async function main(argv: string[]): Promise<void> {
                 homeDir: homedir(),
               }),
             submit: async (provider: string, key: string) => {
-              writeProviderKey(provider, key, { homeDir: homedir() });
+              if (!writeProviderKey(provider, key, { homeDir: homedir() })) {
+                return "paste a key first";
+              }
               return afterCredentialStored(credentialHost(), provider);
             },
             logout: async (provider: string) => {

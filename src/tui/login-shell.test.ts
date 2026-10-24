@@ -1,10 +1,12 @@
 // 决策 546：/login、/logout 的整屏交互与零凭据时的发送拦截。
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
+import { writeProviderKey } from "../persistence/credentials.ts";
 import { newSessionId } from "../state/ids.ts";
+import { userCredentialsPath } from "../state/paths.ts";
 import { ScriptedRuntime } from "./runtime-fixtures.ts";
 import type { TuiShellOptions } from "./shell.ts";
 import { PigeonTuiShell } from "./shell.ts";
@@ -153,5 +155,35 @@ test("MODEL-033 Esc leaves the login view without saving", async () => {
     assert.deepEqual(submitted, []);
   } finally {
     cleanup();
+  }
+});
+
+// 登录 key 加固：只有空白的 key 不写文件；提示重新粘贴
+test("MODEL-033 全空白的 key 不写文件，回 paste a key first", async () => {
+  const home = mkdtempSync(join(tmpdir(), "pigeon-login-trim-"));
+  const { shell, term, cleanup } = makeShell({
+    login: {
+      providers: async () => [{ id: "deepseek", source: "file", custom: false }],
+      submit: async (provider, key) => {
+        if (!writeProviderKey(provider, key, { homeDir: home })) return "paste a key first";
+        return `logged in ${provider}`;
+      },
+      logout: async (provider) => `logged out ${provider}`,
+      stored: () => [],
+    },
+  });
+  try {
+    shell.start();
+    await settle();
+    command(term, "/login deepseek");
+    await settle();
+    term.input("   ");
+    term.input("\r");
+    await settle();
+    assert.match(screenText(term), /paste a key first/);
+    assert.equal(existsSync(userCredentialsPath(home)), false, "不建凭据文件");
+  } finally {
+    cleanup();
+    rmSync(home, { recursive: true, force: true });
   }
 });
