@@ -100,7 +100,8 @@ test("调低触发点：一次 Run 内轮间压缩；接续式摘要请求经同
     };
     assert.equal(options.temperature, 0);
     assert.equal(options.reasoning, undefined);
-    assert.equal(options.maxTokens, Math.floor(0.8 * 16_384));
+    // 决策 556：占位模型的输出上限为正（目录未给时用安全缺省 8192），摘要上限取它与预留量的较小者
+    assert.equal(options.maxTokens, 8192);
     assert.equal(options.toolChoice, undefined);
     const [start] = runStarts(join(root, ".pigeon", "state", "sessions"), result.sessionId);
     assert.deepEqual(start?.compaction, {

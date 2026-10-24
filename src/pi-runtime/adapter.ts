@@ -105,7 +105,6 @@ import {
   STATUS_MARKER,
   withoutStatusMarker,
 } from "../state/status-text.ts";
-
 import type { ToolErrorKind, ToolExecution } from "../state/tool-execution.ts";
 import { classifyToolError } from "../tools/error-kind.ts";
 import type { ApprovalMode } from "../tools/policy.ts";
@@ -120,6 +119,7 @@ import {
 import type { ContextPruner, PruneRecord } from "./context-prune.ts";
 import { isSyntheticFailureMessage, normalizePiEvent } from "./events.ts";
 import type { ToolGovernance, ToolGovernanceFactory, ToolHookPort } from "./governance.ts";
+import { DEFAULT_MODEL_MAX_TOKENS } from "./model-access.ts";
 import { isContextOverflowReply } from "./overflow.ts";
 import { guardRepetition, type RepetitionHit } from "./repetition-guard.ts";
 import type { SessionStoreSink } from "./session-store.ts";
@@ -492,7 +492,8 @@ export class PiRuntimeAdapter {
           input: ["text"],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow: 0,
-          maxTokens: 0,
+          // 决策 556：占位模型也给正数上限，客户端口径不能是 0（真实上限由装配层与接入层盖）
+          maxTokens: DEFAULT_MODEL_MAX_TOKENS,
           ...options.model,
         },
         // 广告给模型的工具集：执行体 ∩ 快照 allow ∩ 已注册（deny 不过滤，闸口逐调用拒绝并留账）

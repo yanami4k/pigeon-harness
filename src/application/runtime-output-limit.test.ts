@@ -55,3 +55,48 @@ for (const [label, maxOutputTokens, expected] of [
     }
   });
 }
+
+test("决策 556：未配置输出上限时交给模型的 maxTokens 为正；显式值仍优先", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pigeon-output-limit-default-"));
+  const home = mkdtempSync(join(tmpdir(), "pigeon-output-limit-default-home-"));
+  try {
+    const seen: Array<{ modelMaxTokens: number; requested: number | undefined }> = [];
+    const fake = createFakeStreamFn({ replies: [{ text: "好" }] });
+    const streamFn: StreamFn = (model, context, options) => {
+      seen.push({ modelMaxTokens: model.maxTokens, requested: options?.maxTokens });
+      return fake(model, context, options);
+    };
+    await runHeadless({
+      task: "你好",
+      governanceRoot: root,
+      workspaceRoot: root,
+      streamFn,
+      yolo: true,
+      homeDir: home,
+      skillRoots: [],
+      agentsMd: false,
+    });
+    assert.equal(seen[0]?.modelMaxTokens, 8192, "未给目录上限时用安全缺省，不能是 0");
+    assert.equal(seen[0]?.requested, undefined, "未配置时不另外传每轮上限");
+
+    const seenExplicit: number[] = [];
+    await runHeadless({
+      task: "你好",
+      governanceRoot: root,
+      workspaceRoot: root,
+      streamFn: (model, context, options) => {
+        seenExplicit.push(options?.maxTokens ?? -1);
+        return fake(model, context, options);
+      },
+      maxOutputTokens: 64,
+      yolo: true,
+      homeDir: home,
+      skillRoots: [],
+      agentsMd: false,
+    });
+    assert.equal(seenExplicit[0], 64, "显式 --max-output-tokens 仍优先");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
