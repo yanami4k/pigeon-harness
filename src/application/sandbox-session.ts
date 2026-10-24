@@ -129,7 +129,7 @@ export async function closeSandbox(
   }
 }
 
-// /export：会话中手动交回；决策 365：有后台作业在跑时先提示一句
+// /deliver：会话中手动交回；决策 365：有后台作业在跑时先提示一句
 export async function exportSandbox(
   sandbox: Sandbox,
   jobs?: Pick<SessionJobs, "running">
