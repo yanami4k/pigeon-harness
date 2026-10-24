@@ -13,7 +13,14 @@ import { createFakeStreamFn } from "../pi-runtime/fixtures.ts";
 import { newSessionId } from "../state/ids.ts";
 import { ScriptedRuntime } from "./runtime-fixtures.ts";
 import { PigeonTuiShell } from "./shell.ts";
-import { assertWidthsWithin, MockTerminal, screenFlat, screenText, settle } from "./testing.ts";
+import {
+  assertWidthsWithin,
+  isDimmed,
+  MockTerminal,
+  screenFlat,
+  screenText,
+  settle,
+} from "./testing.ts";
 import { switchableWarn } from "./warn-sink.ts";
 
 // 截获标准错误输出（用例结束还原）
@@ -131,6 +138,32 @@ test("窗口缩放：变窄后全量重绘，内容仍在、行宽不越界，�
     await settle();
     assertWidthsWithin(term, 120);
     assert.ok(screenText(term).includes("ctx 30% (60k/200k) · 0 tokens"), "变宽后状态栏恢复全写");
+  } finally {
+    shell.stop();
+    rmSync(logDir, { recursive: true, force: true });
+  }
+});
+
+// 决策 562：档位回落说明是给人看的次要提示——落消息区的系统行（addSystem → secondary 暗色），
+// 不走运行期告警那条醒目通道（addWarning → addAlert）
+test("VIEWS-062 档位回落说明落消息区的暗色系统行，与醒目告警分开", async () => {
+  const logDir = mkdtempSync(join(tmpdir(), "pigeon-tui-notice-"));
+  const sessionId = newSessionId();
+  const term = new MockTerminal(120, 30);
+  const runtime = new ScriptedRuntime(sessionId);
+  const shell = new PigeonTuiShell({ terminal: term, runtime, sessionId, logDir });
+  try {
+    shell.start();
+    await settle();
+    shell.addSystem('effort "xhigh" is not supported by fake/fake; using "high"');
+    term.input("draft");
+    await settle();
+    assert.ok(screenText(term).includes('effort "xhigh" is not supported'), screenText(term));
+    // secondary 的 SGR 序列紧贴在这一行文字前面（暗色），alert 行不带
+    assert.ok(
+      isDimmed(term.writes.join(""), 'effort "xhigh" is not supported by fake/fake; using "high"'),
+      "系统行是暗色"
+    );
   } finally {
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });

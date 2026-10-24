@@ -355,6 +355,8 @@ export async function main(argv: string[]): Promise<void> {
   // 决策 286：运行期告警的出口——壳接管终端期间落消息区，之前与之后写标准错误输出（去重与文案由告警方负责）
   const warnSink = switchableWarn();
   const warn = warnSink.warn;
+  // 决策 562：档位回落等给人看的次要提示——接管终端后落消息区的系统行（暗色），之前/之后仍写 stderr
+  const noticeSink = switchableWarn();
   // S3 面板版审批 handler：face 晚绑定——buildRuntime 收 handler 工厂时壳尚未构造；
   // 壳未就位即收到审批请求属装配级故障，工厂内 fail-closed 按拒绝处理
   const faceHolder: { current: TuiApprovalFace | undefined } = { current: undefined };
@@ -573,6 +575,8 @@ export async function main(argv: string[]): Promise<void> {
         taskList: taskListEnabledOf(snapshot),
         ...webToolsFor(snapshot),
         warn,
+        // 决策 562：档位回落说明落消息区的次要系统行（暗色）
+        notice: noticeSink.warn,
         memoryWrite,
         createApprovalHandler: coreApprovalHandler(coreContext, core),
         ...(agentsHost !== undefined ? { agents: agentsHost } : {}),
@@ -1464,6 +1468,8 @@ export async function main(argv: string[]): Promise<void> {
         ? { workspaceHost: sandbox.host, statusFacts: sandboxStatusFacts(sandbox) }
         : {}),
       warn,
+      // 决策 562：重建后的档位回落说明照旧走暗色系统行
+      notice: noticeSink.warn,
       createApprovalHandler: coreApprovalHandler(coreContext, core),
       memoryWrite,
       // 面板里的会话重建不动当前会话 /memory 的上限
@@ -1674,6 +1680,7 @@ export async function main(argv: string[]): Promise<void> {
   if (startBundle.instructionsNotice !== undefined) shell.addSystem(startBundle.instructionsNotice);
   if (startBundle.toolsNotice !== undefined) shell.addSystem(startBundle.toolsNotice);
   warnSink.attach((line) => shell.addWarning(line));
+  noticeSink.attach((line) => shell.addSystem(line));
   if (target.kind === "resume") {
     shell.announceResumed(governanceRoot, target.report);
   } else if (target.picker) {
@@ -1686,6 +1693,7 @@ export async function main(argv: string[]): Promise<void> {
     const core = current;
     // 壳已停：此后的告警写回标准错误输出
     warnSink.detach();
+    noticeSink.detach();
     void (async () => {
       // 决策 323、324：退出前跑一次 SessionEnd（reason "exit"）——必须在释放运行面之前，记录才落盘
       // （331：补做复盘记录已随复盘删除，退出不再等补做）

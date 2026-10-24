@@ -41,6 +41,8 @@ export interface MainReloadContext {
   // 决策 354：沙箱会话的确知事实（开工状态块环境一节）
   statusFacts?: StatusFacts;
   warn: (line: string) => void;
+  // 决策 562：给人看的次要提示（档位回落说明）的出口；不注入时同 warn
+  notice?: (line: string) => void;
   createApprovalHandler: NonNullable<OpenSessionRuntimeRequest["createApprovalHandler"]>;
   // 决策 331：有人对话的入口带记忆写入
   memoryWrite: MemoryWriteConfig;
@@ -88,6 +90,7 @@ export async function reopenMainSessionForReload(
     taskList: taskListEnabledOf(snapshot),
     ...webTools,
     warn: context.warn,
+    ...(context.notice !== undefined ? { notice: context.notice } : {}),
     loopGuard,
     createApprovalHandler: context.createApprovalHandler,
     // 决策 331：/reload 重建的运行面照常注册 update_memory

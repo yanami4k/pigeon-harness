@@ -60,6 +60,7 @@ function open(
     settings?: SettingsSnapshot;
     flags?: Partial<typeof FLAGS> & { thinkingLevel?: ThinkingLevel };
     warn?: (line: string) => void;
+    notice?: (line: string) => void;
   } = {}
 ) {
   return openSessionRuntime({
@@ -71,6 +72,7 @@ function open(
     startMcp: async () => noMcpSession(),
     settings: options.settings ?? emptySettingsSnapshot(root),
     ...(options.warn !== undefined ? { warn: options.warn } : {}),
+    ...(options.notice !== undefined ? { notice: options.notice } : {}),
     ...(options.resume === true ? { resume: true } : {}),
     ...(options.reloadFrom !== undefined ? { resume: true, reloadFrom: options.reloadFrom } : {}),
   });
@@ -366,17 +368,20 @@ test("MODEL-043 决策 558：用户级档位不支持时回落到不超过它的
       catalog: () => ({ reasoning: true, thinkingLevels: ["off", "low", "high", "max"] }),
     });
     const warnings: string[] = [];
+    const notices: string[] = [];
     const sessionId = newSessionId();
     const opened = await open(dir, sessionId, stream, {
       settings: settingsWith(dir, "xhigh"),
       warn: (line) => warnings.push(line),
+      notice: (line) => notices.push(line),
     });
     try {
       assert.equal(opened.bundle.thinking.get(), "high", "xhigh 回落到 high");
       assert.match(
-        warnings.join("\n"),
+        notices.join("\n"),
         /effort "xhigh" is not supported by fake\/fake \(available: off, low, high, max\); using "high"/
       );
+      assert.deepEqual(warnings, [], "回落说明不走告警出口（决策 562）");
       await opened.bundle.adapter.run("hi");
       await opened.bundle.sessionStore.flush();
       assert.equal(
@@ -402,6 +407,38 @@ test("MODEL-043 决策 558：用户级档位不支持时回落到不超过它的
   }
 });
 
+// 决策 562：输出口缺省不变——两个可注入出口都没给时，回落说明照旧写标准错误输出（命令行路径）
+test("MODEL-043 决策 562：未注入 notice 时回落说明仍写标准错误输出", async () => {
+  const { root: dir, cleanup } = workspace();
+  const lines: string[] = [];
+  const original = process.stderr.write.bind(process.stderr);
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    lines.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    const stream = registerModelAccess(createFakeStreamFn({ replies: [{ text: "好" }] }), {
+      declared: { reasoning: true },
+      catalog: () => ({ reasoning: true, thinkingLevels: ["off", "low", "high", "max"] }),
+    });
+    const opened = await open(dir, newSessionId(), stream, {
+      settings: settingsWith(dir, "xhigh"),
+    });
+    try {
+      assert.equal(opened.bundle.thinking.get(), "high");
+    } finally {
+      await disposeRuntime(opened.bundle);
+    }
+  } finally {
+    process.stderr.write = original;
+    cleanup();
+  }
+  assert.match(
+    lines.join(""),
+    /effort "xhigh" is not supported by fake\/fake \(available: off, low, high, max\); using "high"/
+  );
+});
+
 test("MODEL-043 决策 558：没有更低的可用档时回落取最低可用档（low + off/high → off）", async () => {
   const { root: dir, cleanup } = workspace();
   try {
@@ -409,15 +446,15 @@ test("MODEL-043 决策 558：没有更低的可用档时回落取最低可用档
       declared: { reasoning: true },
       catalog: () => ({ reasoning: true, thinkingLevels: ["off", "high"] }),
     });
-    const warnings: string[] = [];
+    const notices: string[] = [];
     const opened = await open(dir, newSessionId(), stream, {
       settings: settingsWith(dir, "low"),
-      warn: (line) => warnings.push(line),
+      notice: (line) => notices.push(line),
     });
     try {
       assert.equal(opened.bundle.thinking.get(), "off");
       assert.match(
-        warnings.join("\n"),
+        notices.join("\n"),
         /effort "low" is not supported by fake\/fake \(available: off, high\); using "off"/
       );
     } finally {

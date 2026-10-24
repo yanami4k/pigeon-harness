@@ -348,6 +348,9 @@ export interface RuntimeDeps {
   deferSessionFile?: boolean;
   // 会话存储故障告警的出口（缺省标准错误输出；测试注入）
   storeWarn?: WarnSink;
+  // 决策 562：给人看的次要提示（目前只有档位回落说明）的出口；缺省同 storeWarn，命令行即 stderr，
+  // 终端界面接到消息区的次要系统行（暗色），区别于其他运行期告警
+  notice?: WarnSink;
   // 决策 324：钩子拦下或出错时的一行提示（终端界面落消息区；缺省静默）
   hooksNotice?: WarnSink;
   // 决策 193：能否检索历史会话。关掉时不注册 search_sessions、read_session_entry 与 list_sessions（339），系统提示去掉提到它们的那一句；
@@ -646,7 +649,8 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
       thinkingLevel = requestedThinking;
     } else {
       thinkingLevel = fallbackThinkingLevel(requestedThinking, thinkingLevels);
-      storeWarn(
+      // 决策 562：回落说明是给人看的次要提示——终端界面走 notice（暗色系统行），没注入时仍写 stderr
+      (deps.notice ?? storeWarn)(
         `effort "${requestedThinking}" is not supported by ${modelInfo.provider}/${modelInfo.id} (available: ${thinkingLevels.join(", ")}); using "${thinkingLevel}"`
       );
     }
