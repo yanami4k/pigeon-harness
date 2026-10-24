@@ -59,6 +59,7 @@ import {
   type BeforeToolCallResult,
   buildSessionContext,
   convertToLlm,
+  type Entry,
   type PrepareNextTurnContext,
   type StreamFn,
 } from "@earendil-works/pi-agent-core";
@@ -1184,6 +1185,13 @@ export class PiRuntimeAdapter {
     return {
       branch: () => sink.branch?.() ?? Promise.resolve(undefined),
       appendCompaction: (result) => sink.appendCompaction?.(result) ?? Promise.resolve(undefined),
+      // 决策 554：存储写者提供归档能力时转给压缩器；不提供就没有链接行
+      ...(sink.archiveCompaction !== undefined
+        ? {
+            archiveCompaction: (input: { index: number; entries: readonly Entry[] }) =>
+              sink.archiveCompaction?.(input) ?? Promise.resolve({ error: "unavailable" }),
+          }
+        : {}),
     };
   }
 

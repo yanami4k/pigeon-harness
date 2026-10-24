@@ -77,6 +77,7 @@ test("决策 339 ⑦、384：三件工具的说明逐字冻结——能找到的
       SCOPE +
       " Earlier tool output (command output, contents of files that were read, and so on) is also searched: it may be out of date, so verify the current state before relying on it; " +
       "earlier tool calls were attempts at the time and do not represent the final result. To search only the conversation text (the user's words and the model's replies), pass conversationOnly: true. " +
+      'By default the search covers earlier sessions; pass scope: "current" to search only this session up to its latest compaction point (hits there may already have appeared in the current context). ' +
       "For keywords, give a few exact words likely to appear in the earlier conversation (names, terms, words from error messages); " +
       'do not write whole sentences, meta words such as "discussion" or "yesterday", or new names that appear only in this task; ' +
       "at most 8 keywords; a session is listed if any keyword matches, and each hit shows which keywords it matched. " +
@@ -152,7 +153,7 @@ test("search_sessions 典型输出逐字：按会话归并——会话行带命�
     assert.equal(
       textOf(found),
       [
-        "Matches in 1 session (keywords: 网关, 部署; scope: conversation text and tool output):",
+        "Matches in 1 session (keywords: 网关, 部署; scope: conversation text and tool output; in earlier sessions):",
         `- Session ${SESSION} | started ${new Date(createdAt).toISOString().slice(0, 16).replace("T", " ")} | 2 matching entries`,
         `  ${user.entryId} | ${runId} #1 | user | ${new Date(user.timestamp).toISOString()} | matched: 网关, 部署`,
         "  部署网关",
@@ -170,11 +171,11 @@ test("search_sessions 典型输出逐字：按会话归并——会话行带命�
     assert.ok(!conversationOnly.includes("toolResult"), conversationOnly);
     assert.equal(
       textOf(await tool.execute("t3", { keywords: ["gw.yaml"], conversationOnly: true })),
-      "No matches (keywords: gw.yaml; scope: conversation text only). Try synonyms or other wording, or drop conversationOnly to search tool output as well."
+      "No matches (keywords: gw.yaml; scope: conversation text only; in earlier sessions). Try synonyms or other wording, or drop conversationOnly to search tool output as well."
     );
     assert.equal(
       textOf(await tool.execute("t4", { keywords: ["无此词"] })),
-      "No matches (keywords: 无此词; scope: conversation text and tool output). Try synonyms or other wording."
+      "No matches (keywords: 无此词; scope: conversation text and tool output; in earlier sessions). Try synonyms or other wording."
     );
   }));
 
@@ -241,7 +242,7 @@ test("决策 384：三件工具对不认识的参数报错说明（如 sessionId
     const search = createSearchSessionsTool({ sessionsDir: dir });
     await assert.rejects(
       search.execute("t1", { keywords: ["needle"], sessionId: "sess_x" } as never),
-      /Unknown parameters for search_sessions: sessionId \(available: keywords, conversationOnly, limit\)/
+      /Unknown parameters for search_sessions: sessionId \(available: keywords, conversationOnly, limit, scope\)/
     );
     const read = createReadSessionEntryTool({ sessionsDir: dir });
     await assert.rejects(

@@ -12,6 +12,8 @@
 // - 推迟建文件（432）：新建时可推迟到第一条真要落盘的写入才建文件、取锁；在此之前只有钩子运行记录时先留在内存里，
 //   建文件时按原顺序补写，到最后一个写者关闭都没建就丢弃、不留文件。再开的写者共用同一核心，随它的状态。
 // 读非本进程所写的会话一律用 persistence/session-reader.ts 的只读读取器，不用这里。
+
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
   type AgentMessage,
@@ -113,6 +115,11 @@ export interface SessionStoreSink extends SessionEntrySink {
   branch?(): Promise<Entry[] | undefined>;
   // 写一条压缩条目（排在此前的写入之后），返回写入后的主分支；失败时为 undefined
   appendCompaction?(result: CompactResult): Promise<Entry[] | undefined>;
+  // 决策 554：把本次被替换的增量写到 outputs/<会话号>/compact-<n>，返回虚拟路径；写失败返回 error（不抛）
+  archiveCompaction?(input: {
+    index: number;
+    entries: readonly Entry[];
+  }): Promise<{ uri: string } | { error: unknown }>;
   // 把主分支上最后一条消息（须是撞输出上限的助手回复）移出主分支（排在此前的写入之后）：叶子退回它之前，
   // 它之后挂的自定义条目重写到退回后的叶子上。主分支末条消息不是撞上限的回复时不动，按写入失败报告
   dropTruncatedReply?(): void;
@@ -416,6 +423,21 @@ export function openSessionStoreWriter(options: SessionStoreWriterOptions): Sess
         await session.appendEntry({ ...entry, id: session.idGenerator.next() }, "main");
         return readBranch(session);
       });
+    },
+    archiveCompaction: ({ index, entries }) => {
+      try {
+        const dir = path.join(path.dirname(options.sessionsRoot), "outputs", options.sessionId);
+        mkdirSync(dir, { recursive: true });
+        const file = path.join(dir, `compact-${index}`);
+        writeFileSync(
+          file,
+          `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+          "utf8"
+        );
+        return Promise.resolve({ uri: `pigeon://outputs/${options.sessionId}/compact-${index}` });
+      } catch (error) {
+        return Promise.resolve({ error });
+      }
     },
     flush: () => shared.tail,
     filePath: async () => {

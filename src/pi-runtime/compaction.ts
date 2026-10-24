@@ -428,6 +428,12 @@ export function fitsWindow(
 export interface CompactionStore {
   branch(): Promise<readonly Entry[] | undefined>;
   appendCompaction(result: CompactResult): Promise<readonly Entry[] | undefined>;
+  // 决策 554：把本次被替换的增量写进会话落盘目录（outputs/<会话号>/compact-<n>），返回可读的虚拟路径；
+  // 写失败返回 error，由调用方在摘要里记一行，不中止压缩
+  archiveCompaction?(input: {
+    index: number;
+    entries: readonly Entry[];
+  }): Promise<{ uri: string } | { error: unknown }>;
 }
 
 // 触发位置：一次 Run 内轮与轮之间、一次 Run 开始之前、模型请求因上下文超长出错之后（决策 422）、手动 /compact
@@ -579,7 +585,9 @@ export class ContextCompactor {
           details: { ...(standalone.value.details ?? {}), summaryRequest: record },
         };
       }
-      const after = await store.appendCompaction(result);
+      const after = await store.appendCompaction(
+        await this.#archiveBeforeAppend(store, entries, result)
+      );
       if (after === undefined) {
         return {
           kind: "failed",
@@ -598,6 +606,32 @@ export class ContextCompactor {
     } catch (error) {
       return { kind: "failed", stage: "summary", error };
     }
+  }
+
+  // 决策 554：压缩时把“上一条 compaction 条目之后、本次之前”的条目另存一份（对话正文 + 工具输出原样），
+  // 摘要末尾给 pigeon://outputs/<会话号>/compact-<n>；归档失败只在摘要里记一行，压缩照常完成
+  async #archiveBeforeAppend(
+    store: CompactionStore,
+    entries: readonly Entry[],
+    result: CompactResult
+  ): Promise<CompactResult> {
+    if (store.archiveCompaction === undefined) {
+      return result;
+    }
+    const previous = entries.map((entry) => entry.type).lastIndexOf("compaction");
+    const delta = entries.slice(previous + 1);
+    const index = entries.filter((entry) => entry.type === "compaction").length + 1;
+    let outcome: { uri: string } | { error: unknown };
+    try {
+      outcome = await store.archiveCompaction({ index, entries: delta });
+    } catch (error) {
+      outcome = { error };
+    }
+    if ("uri" in outcome) {
+      return { ...result, summary: `${result.summary}\n${outcome.uri}` };
+    }
+    const message = outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
+    return { ...result, summary: `${result.summary}\nCompaction archive failed: ${message}` };
   }
 
   // 接续式摘要请求（决策 424）：没有会话、整段放不下、请求出错（含被拒、超长）、回复里有工具调用或没有文字时交回"走独立式"

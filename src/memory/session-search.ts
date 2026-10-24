@@ -16,7 +16,11 @@
 // 分支会话文件开头从来源复制来的历史不重复产出命中（它属于来源会话）。跑批器作废重做时把作废尝试的会话文件移出会话根，
 // 检索自然看不到它们。
 import { listSessionRefs, sessionRefTime } from "../persistence/session-catalog.ts";
-import { listSessionFiles, readSessionHeader } from "../persistence/session-reader.ts";
+import {
+  listSessionFiles,
+  readSessionFile,
+  readSessionHeader,
+} from "../persistence/session-reader.ts";
 import {
   createSessionSearchSource,
   pruneSessionSearchCache,
@@ -63,8 +67,10 @@ export interface SessionSearchQuery {
   toolOutputMode?: ToolOutputMode;
   // 角色过滤（在搜索范围之内再筛）；给了 toolResult 即连同工具输出一起搜
   roles?: readonly SessionMessageRole[];
-  // 当前会话：它所在的整棵会话树都不搜
+  // 当前会话：它所在的整棵会话树都不搜（scope 为 project 时）
   current?: CurrentSession;
+  // 决策 555：project（缺省，以前的会话）或 current（只当前会话、只到最近一次压缩点为止）
+  scope?: "project" | "current";
   // 会话创建时间范围（毫秒，含两端）
   since?: number;
   until?: number;
@@ -392,6 +398,39 @@ export function loadPastSessions(
   return loaded.filter((entry) => !family.has(entry.info.sessionId));
 }
 
+// 决策 555：scope=current 只取当前会话自己的可搜内容，且只到最近一次压缩点（含）为止：压缩点之后的条目已在上下文里，
+// 不必再搜。没有压缩点时取全部（同样带“可能已看过”的提醒）。会话文件还没写出时返回空
+function loadCurrentSession(
+  sessionsDir: string,
+  source: SessionSearchSource,
+  current: CurrentSession | undefined,
+  parts: { toolOutput: boolean }
+): SessionSearchEntry[] {
+  if (current === undefined) {
+    return [];
+  }
+  const ref = listSessionRefs(sessionsDir).find((item) => item.sessionId === current.sessionId);
+  if (ref === undefined) {
+    return [];
+  }
+  const entry = source.load(ref, parts);
+  if (entry === undefined) {
+    return [];
+  }
+  let cutoff: number | undefined;
+  for (const item of readSessionFile(ref.path)?.entries ?? []) {
+    if (item.type === "compaction") cutoff = item.timestamp;
+  }
+  const keep = (doc: SearchDoc): boolean => cutoff === undefined || doc.timestamp <= cutoff;
+  return [
+    {
+      ...entry,
+      conversation: entry.conversation.filter(keep),
+      ...(entry.toolOutput !== undefined ? { toolOutput: entry.toolOutput.filter(keep) } : {}),
+    },
+  ];
+}
+
 interface ScoredDoc {
   doc: SearchDoc;
   sessionId: string;
@@ -610,13 +649,10 @@ function runSearch(
       docs: pick(entry).filter(roleFilter),
     }));
 
-  const loaded = loadPastSessions(
-    sessionsDir,
-    source,
-    query,
-    { toolOutput: wantToolOutput },
-    cacheDir
-  );
+  const loaded =
+    query.scope === "current"
+      ? loadCurrentSession(sessionsDir, source, query.current, { toolOutput: wantToolOutput })
+      : loadPastSessions(sessionsDir, source, query, { toolOutput: wantToolOutput }, cacheDir);
   let scored: ScoredDoc[];
   if (wantToolOutput) {
     // 同等计分或打折：正文与工具输出同一范围一起打分（df 与平均文档长按合并范围算）
@@ -640,13 +676,10 @@ function runSearch(
     );
     if (!conversationOnly && scored.length === 0) {
       // 回退做法：正文零命中时才去搜工具输出（统计口径只按工具输出算）
-      const withTools = loadPastSessions(
-        sessionsDir,
-        source,
-        query,
-        { toolOutput: true },
-        cacheDir
-      );
+      const withTools =
+        query.scope === "current"
+          ? loadCurrentSession(sessionsDir, source, query.current, { toolOutput: true })
+          : loadPastSessions(sessionsDir, source, query, { toolOutput: true }, cacheDir);
       scored = scoreDocs(
         toEntries(withTools, (entry) => entry.toolOutput ?? []),
         keywords,

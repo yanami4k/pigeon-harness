@@ -120,6 +120,8 @@ from earlier sessions of the same project.
 
 Flags: `--no-pushed-memory`, `--no-session-search` (current run only). Environment: `VISUAL`, then `EDITOR`, for "/memory edit".
 
+- **MEMORY-082** `search_sessions` shall accept `scope` with `project` (the default; behaviour unchanged, earlier sessions only) and `current` (only the current session, only up to its latest compaction point); hits from `current` shall carry a note that they may already have appeared in the current context.
+
 ## Known limitations
 
 - The over-limit line for instruction files is shown to the user only when a session opens; growth past the limit mid-session is reported only to the model.
