@@ -137,10 +137,10 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
       host.requestExit();
       return;
     }
-    // 决策 237、245：沙箱会话——/export 手动交回；分叉、取回与 /resume 换绑不支持，说明原因（决策 496：/clear、/new 同 /resume）
+    // 决策 237、245、526：沙箱会话——/deliver 手动交回；分叉、取回与 /resume 换绑不支持，说明原因（决策 496：/clear、/new 同 /resume）
     const sandbox = host.sandbox?.();
     if (sandbox !== undefined) {
-      if (tokens[0] === "export") {
+      if (tokens[0] === "deliver") {
         void sandbox.exportChanges().then(
           (text) => {
             host.addSystem(text);
@@ -148,7 +148,7 @@ export function handleSlashCommand(host: CommandsHost, value: string): void {
           },
           (error: unknown) => {
             host.addAlert(
-              `export failed: ${error instanceof Error ? error.message : String(error)}`
+              `delivery failed: ${error instanceof Error ? error.message : String(error)}`
             );
             host.render();
           }
