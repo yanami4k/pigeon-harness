@@ -1,8 +1,8 @@
 // 命令输出的头尾保留与全文落盘（决策 356）：run_command 的输出超过开头加末尾两段时，结果里留开头一小段与末尾一大段，中间
 // 注明省略的行数；完整输出存进会话自己的落盘目录（.pigeon/state/outputs/<会话号>/<编号>.log），结果给出虚拟路径
 // pigeon://outputs/<会话号>/<编号> 与总行数，模型用 read_file 读需要的那段。
-// 虚拟路径由 Pigeon 自己解析：只认 pigeon://outputs/ 加会话号加正整数编号，会话须是本会话或其分叉来源（分支会话复制来的
-// 历史里的路径仍指向来源会话的输出）；别的写法（..、绝对路径、子目录、别的会话）一律拒绝。
+// 虚拟路径由 Pigeon 自己解析：只认 pigeon://outputs/ 加会话号加正整数编号（命令输出）或 compact-<正整数>（压缩归档，决策 554），
+// 会话须是本会话或其分叉来源（分支会话复制来的历史里的路径仍指向来源会话的输出）；别的写法（..、绝对路径、子目录、别的会话）一律拒绝。
 // 落盘目录在工作区的 .pigeon/state 里，命令改得动（换成符号链接、硬链接、改内容），lstat 与打开之间也有竞态，Windows 又没有
 // O_NOFOLLOW，所以读取只认 Pigeon 自己写下的内容：每写成一份，在会话自己的索引（落盘目录里的 index.json）记下它的身份
 // （设备号、inode、大小、写入字节的 sha256）；读时打开后 fstat 核对设备号、inode 与大小，读完核对哈希，任何一项不符即拒绝。
@@ -22,6 +22,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -43,6 +44,8 @@ export function isOutputsUri(inputPath: string): boolean {
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 const FILE_PATTERN = /^([1-9][0-9]*)\.log$/;
 const URI_PATTERN = /^pigeon:\/\/outputs\/([A-Za-z0-9_-]+)\/([1-9][0-9]*)$/;
+// 决策 554：压缩归档 pigeon://outputs/<会话号>/compact-<n>（n 为正整数），只读、不在命令输出索引里
+const COMPACT_URI_PATTERN = /^pigeon:\/\/outputs\/([A-Za-z0-9_-]+)\/compact-([1-9][0-9]*)$/;
 const INDEX_FILE = "index.json";
 const CHANGED =
   "the saved output file has been changed (it is not the one Pigeon wrote); refusing to read it";
@@ -329,10 +332,11 @@ export class CommandOutputStore {
 
   // 虚拟路径 → 落盘文件与索引里的记录（各级不得是链接；索引里没有即不存在）
   resolve(uri: string): { file: string; record: OutputRecord } {
-    const match = URI_PATTERN.exec(uri);
+    const compact = COMPACT_URI_PATTERN.exec(uri);
+    const match = compact ?? URI_PATTERN.exec(uri);
     if (match === null) {
       throw new OutputPathError(
-        `A virtual path must have the form ${OUTPUTS_URI_PREFIX}<session-id>/<number> (as given in a run_command result): ${uri}`
+        `A virtual path must have the form ${OUTPUTS_URI_PREFIX}<session-id>/<number> (as given in a run_command result) or ${OUTPUTS_URI_PREFIX}<session-id>/compact-<number> (a compaction archive): ${uri}`
       );
     }
     const [, session, idText] = match as unknown as [string, string, string];
@@ -343,6 +347,23 @@ export class CommandOutputStore {
       throw new OutputPathError(
         `${uri} is another session's output: only output saved by this session or the sessions it was branched from can be read`
       );
+    }
+    if (compact !== null) {
+      // 压缩归档不在索引里：当场取身份与哈希，读窗口时按同一份核对，被改过即拒
+      const file = path.join(this.#outputsRoot, session, `compact-${idText}`);
+      this.#assertNoLinks(file);
+      const stat = statSync(file, { bigint: true });
+      const bytes = readFileSync(file);
+      return {
+        file,
+        record: {
+          id: 0,
+          dev: String(stat.dev),
+          ino: String(stat.ino),
+          size: bytes.length,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+        },
+      };
     }
     const file = path.join(this.#outputsRoot, session, `${idText}.log`);
     this.#assertNoLinks(file);

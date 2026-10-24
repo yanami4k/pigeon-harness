@@ -78,7 +78,7 @@ function rejectUnknownParams(tool: string, params: unknown, known: readonly stri
   }
 }
 
-const SEARCH_SESSIONS_PARAM_NAMES = ["keywords", "conversationOnly", "limit"] as const;
+const SEARCH_SESSIONS_PARAM_NAMES = ["keywords", "conversationOnly", "limit", "scope"] as const;
 export const SearchSessionsParamsSchema = Type.Object({
   keywords: Type.Array(Type.String({ minLength: 1 }), {
     minItems: 1,
@@ -87,6 +87,8 @@ export const SearchSessionsParamsSchema = Type.Object({
   // 决策 384：工具输出缺省在检索范围内；打开后只搜对话正文
   conversationOnly: Type.Optional(Type.Boolean()),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SESSION_LIMIT })),
+  // 决策 555：project（缺省，以前的会话）或 current（只当前会话、只到最近一次压缩点）
+  scope: Type.Optional(Type.Union([Type.Literal("project"), Type.Literal("current")])),
 });
 export type SearchSessionsParams = Static<typeof SearchSessionsParamsSchema>;
 
@@ -183,7 +185,7 @@ function minuteTime(timestamp: number): string {
 
 // 一个会话的归并结果：第一行给会话号、开始时间与命中条目数，其后至多两段命中，各带条目编号与片段；
 // 命中在工具输出上的片段前加一行来历并标"以前的工具输出，可能已过时"（决策 384）
-function formatGroup(group: SessionSearchGroup): string {
+function formatGroup(group: SessionSearchGroup, currentScope = false): string {
   const lines = [
     `- Session ${group.sessionId} | started ${minuteTime(group.createdAt)} | ${group.hitCount} matching ${group.hitCount === 1 ? "entry" : "entries"}`,
   ];
@@ -200,6 +202,11 @@ function formatGroup(group: SessionSearchGroup): string {
         isoTime(hit.timestamp),
       ].join(" | ");
       lines.push(`  Earlier tool output, may be out of date (${origin}):`);
+    }
+    if (currentScope) {
+      lines.push(
+        `  Before the latest compaction of this session, so it may already have appeared in the current context.`
+      );
     }
     lines.push(`  ${hit.snippet}`);
   }
@@ -224,6 +231,7 @@ export function createSearchSessionsTool(
       SCOPE_GUIDANCE +
       " Earlier tool output (command output, contents of files that were read, and so on) is also searched: it may be out of date, so verify the current state before relying on it; " +
       "earlier tool calls were attempts at the time and do not represent the final result. To search only the conversation text (the user's words and the model's replies), pass conversationOnly: true. " +
+      'By default the search covers earlier sessions; pass scope: "current" to search only this session up to its latest compaction point (hits there may already have appeared in the current context). ' +
       "For keywords, give a few exact words likely to appear in the earlier conversation (names, terms, words from error messages); " +
       'do not write whole sentences, meta words such as "discussion" or "yesterday", or new names that appear only in this task; ' +
       `at most ${MAX_SEARCH_KEYWORDS} keywords; a session is listed if any keyword matches, and each hit shows which keywords it matched. ` +
@@ -242,10 +250,12 @@ export function createSearchSessionsTool(
       // 模型给的 limit 只受硬上限夹；maxSessions 是模型没给时的缺省
       const sessionLimit = Math.min(args.limit ?? maxSessions, MAX_SESSION_LIMIT);
       const conversationOnly = args.conversationOnly === true;
+      const scope = args.scope ?? "project";
       const result = await createSessionSearch(options.sessionsDir, cacheOf(options)).search(
         {
           keywords: args.keywords,
           conversationOnly,
+          scope,
           ...(options.current !== undefined ? { current: options.current } : {}),
         },
         { sessionLimit }
@@ -255,7 +265,7 @@ export function createSearchSessionsTool(
       let bytes = 0;
       let byteCapped = false;
       for (const group of result.groups) {
-        const block = formatGroup(group);
+        const block = formatGroup(group, scope === "current");
         const size = Buffer.byteLength(block, "utf8") + 1;
         if (bytes + size > maxBytes) {
           byteCapped = true;
@@ -267,18 +277,23 @@ export function createSearchSessionsTool(
       }
       const limited = result.totalSessions > result.groups.length;
       const keywordList = args.keywords.join(", ");
-      const scope = conversationOnly
+      const textScope = conversationOnly
         ? "conversation text only"
         : "conversation text and tool output";
+      const where =
+        scope === "current"
+          ? "in this session before its latest compaction"
+          : "in earlier sessions";
+      const scopeText = `${textScope}; ${where}`;
       const lines: string[] = [];
       if (groups.length === 0 && !byteCapped) {
         lines.push(
-          `No matches (keywords: ${keywordList}; scope: ${scope}). Try synonyms or other wording` +
+          `No matches (keywords: ${keywordList}; scope: ${scopeText}). Try synonyms or other wording` +
             (conversationOnly ? ", or drop conversationOnly to search tool output as well." : ".")
         );
       } else {
         lines.push(
-          `Matches in ${counted(groups.length, "session")} (keywords: ${keywordList}; scope: ${scope}):`,
+          `Matches in ${counted(groups.length, "session")} (keywords: ${keywordList}; scope: ${scopeText}):`,
           ...blocks
         );
         if (limited) {

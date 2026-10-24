@@ -186,6 +186,47 @@ test("虚拟路径只认 pigeon://outputs/<会话号>/<编号>：越界写法一
   }
 });
 
+test("CONTEXT-094 compaction archives are readable as pigeon://outputs/<session>/compact-<n>; bad forms stay rejected", async () => {
+  const { root, store, cleanup } = workspace(10_000_000, () => ["parent"]);
+  try {
+    for (const [session, text] of [
+      ["s1", "current archive"],
+      ["parent", "parent archive"],
+    ] as const) {
+      const dir = join(root, ".pigeon", "state", "outputs", session);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "compact-1"), `${text} line 1\n${text} line 2\n`);
+    }
+    const read = createReadFileTool(root, { editMode: "replace", outputs: store });
+    assert.match(
+      textOf(await read.execute("r", { path: "pigeon://outputs/s1/compact-1" })),
+      /current archive line 2/
+    );
+    assert.match(
+      textOf(await read.execute("r", { path: "pigeon://outputs/parent/compact-1" })),
+      /parent archive line 1/
+    );
+    mkdirSync(join(root, ".pigeon", "state", "outputs", "worker"), { recursive: true });
+    writeFileSync(join(root, ".pigeon", "state", "outputs", "worker", "compact-1"), "secret\n");
+    await assert.rejects(
+      () => read.execute("r", { path: "pigeon://outputs/worker/compact-1" }),
+      /is another session's output/
+    );
+    for (const path of [
+      "pigeon://outputs/s1/compact-0",
+      "pigeon://outputs/s1/compact-01",
+      "pigeon://outputs/s1/compact-1.log",
+      "pigeon://outputs/s1/../compact-1",
+      "pigeon://outputs/s1/compact-",
+      "pigeon://outputs/s1/compact-1/../1",
+    ]) {
+      await assert.rejects(() => read.execute("r", { path }), OutputPathError, path);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
 test("读取只认 Pigeon 写下的那份：原地改了内容、换成同内容的别的文件或硬链接都拒绝，改回原样可读", async () => {
   const { root, store, cleanup } = workspace();
   try {

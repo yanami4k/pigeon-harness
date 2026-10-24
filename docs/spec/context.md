@@ -154,6 +154,11 @@ budget, the startup status and the system prompt's general rules.
 
 Flags: `--context-window`, `--compact-threshold`, `--compact-keep`, `--max-output-tokens`, `--wall-clock` (`pigeon run`).
 
+## Compaction archives
+
+- **CONTEXT-094** A compaction shall write the entries it replaces (the session entries after the previous compaction entry up to this one) to `.pigeon/state/outputs/<session ID>/compact-<n>`, one stored entry per line, with n increasing on every compaction; the summary entry shall end with the line `pigeon://outputs/<session ID>/compact-<n>`, and `read_file` shall read that virtual path.
+- **CONTEXT-095** When an archive cannot be written, the compaction shall still complete and the summary shall end with one failure line instead of the link.
+
 ## Known limitations
 
 - Context overflow is recognised only from the provider's error text.
