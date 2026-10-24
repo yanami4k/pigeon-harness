@@ -1,8 +1,12 @@
 // MODEL-001…MODEL-019、MODEL-026、MODEL-028：型号选择的规则（决策 540–544）。纯选择逻辑用假目录喂，
 // 目录与线路的真实事实另按随包的 pi-ai 目录核对。
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { test } from "vitest";
+import { readCredentials, writeProviderKey } from "../persistence/credentials.ts";
 import {
   chooseModel,
   createCredentialSource,
@@ -404,5 +408,39 @@ test("MODEL-037 proxy support is loaded only when a proxy variable is set, and f
     );
   } finally {
     globalThis.fetch = original;
+  }
+});
+
+// 登录 key 加固：/login 写入时 trim，请求带的是 trim 后的 key（此用例属于模型接入层，
+// 不把 pi-agent-core 引进 persistence 的测试）
+test("MODEL-017 the request carries the trimmed key stored by /login", () => {
+  const home = mkdtempSync(join(tmpdir(), "pigeon-model-access-trim-"));
+  try {
+    writeProviderKey("deepseek", "  sk-abc\n", { homeDir: home });
+    const source = createCredentialSource({
+      env: {},
+      stored: () => readCredentials({ homeDir: home }),
+    });
+    const seen: Array<string | undefined> = [];
+    const stream: StreamFn = (_model, _context, options) => {
+      seen.push(options?.apiKey);
+      throw new Error("stop");
+    };
+    const packaged = createPackagedStreamFn(source, {
+      "anthropic-messages": stream,
+      "openai-responses": stream,
+      "openai-completions": stream,
+      "google-generative-ai": stream,
+    });
+    assert.throws(() =>
+      packaged(
+        { api: "openai-completions", provider: "deepseek", id: "deepseek-chat" } as never,
+        {} as never,
+        {}
+      )
+    );
+    assert.deepEqual(seen, ["sk-abc"]);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
   }
 });

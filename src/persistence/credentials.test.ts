@@ -12,9 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
-import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { test } from "vitest";
-import { createCredentialSource, createPackagedStreamFn } from "../pi-runtime/model-access.ts";
 import { userCredentialsPath } from "../state/paths.ts";
 import {
   CredentialsError,
@@ -117,38 +115,6 @@ test("MODEL-032 a key of only whitespace is not written at all", () => {
     assert.deepEqual(readCredentials({ homeDir: dir }), {});
     assert.deepEqual(storedProviders({ homeDir: dir }), []);
     assert.equal(existsSync(userCredentialsPath(dir)), false, "不建凭据文件");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("MODEL-017 the request carries the trimmed key stored by /login", () => {
-  const dir = home();
-  try {
-    writeProviderKey("deepseek", "  sk-abc\n", { homeDir: dir });
-    const source = createCredentialSource({
-      env: {},
-      stored: () => readCredentials({ homeDir: dir }),
-    });
-    const seen: Array<string | undefined> = [];
-    const stream: StreamFn = (_model, _context, options) => {
-      seen.push(options?.apiKey);
-      throw new Error("stop");
-    };
-    const packaged = createPackagedStreamFn(source, {
-      "anthropic-messages": stream,
-      "openai-responses": stream,
-      "openai-completions": stream,
-      "google-generative-ai": stream,
-    });
-    assert.throws(() =>
-      packaged(
-        { api: "openai-completions", provider: "deepseek", id: "deepseek-chat" } as never,
-        {} as never,
-        {}
-      )
-    );
-    assert.deepEqual(seen, ["sk-abc"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
