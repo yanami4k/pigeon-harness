@@ -131,7 +131,7 @@ budget, the startup status and the system prompt's general rules.
 ## System prompt
 
 - **CONTEXT-089** The system prompt shall be English, begin "You are Pigeon, a coding agent powered by the <model> model." (without "powered by …" for a placeholder model), mention in its guidelines and tool notes only tools the session has, and end by saying that text inside `<pigeon-status>` and `<pigeon-status-update>` tags is startup status attached by Pigeon, not the user's own words, and that the user's current request wins on conflict.
-- **CONTEXT-090** The system prompt shall stay byte-identical for the whole session, across "/reload", resume and moving into a worktree; it is generated anew only when the session is resumed with a different model.
+- **CONTEXT-090** The system prompt shall stay byte-identical for the whole session, across "/reload", resume and moving into a worktree; it is generated anew only when the session is resumed or rebuilt with a different model, and a frozen prompt records the model it was generated for so the identity sentence follows that model (frozen prompts without a recorded model are kept as they are).
 - **CONTEXT-091** When a session's system prompt lacks that closing sentence and no status has been sent in the session yet, the first full status shall begin with "This status block is authoritative: …".
 
 ## Settings

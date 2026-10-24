@@ -467,6 +467,8 @@ export const WEB_TOOLS_SENTENCE =
 export interface FrozenSessionPrompt {
   // 决策 363：本运行面的系统提示（续跑与 /reload 后逐字节不变）
   systemPrompt: string;
+  // 决策 570：这份提示是按哪个型号拼的；/reload 换型号时身份句要跟着重建。旧数据没有此项，照旧沿用
+  model?: { provider: string; id: string };
   instructions: AgentsMdInstructions;
   pushedMemory?: PushedMemory;
   localSkills: LocalSkillScan;
@@ -1064,9 +1066,16 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     (deps.systemPromptModel === undefined || sameModelIdentity(deps.systemPromptModel, modelInfo))
       ? deps.systemPrompt
       : undefined;
+  // 决策 570：/reload 沿用的冻结提示带着拼它时的型号；换型号后不再用这份原文（身份句会是旧型号），
+  // 回到底座重建。没有 model 的旧数据照旧沿用（363 的续跑逐字节不变不受影响）
+  const frozenPrompt =
+    frozen?.systemPrompt !== undefined &&
+    (frozen.model === undefined || sameModelIdentity(frozen.model, modelInfo))
+      ? frozen.systemPrompt
+      : undefined;
   const systemPrompt =
     recordedPrompt ??
-    frozen?.systemPrompt ??
+    frozenPrompt ??
     [
       basePrompt,
       deps.taskDirective ?? "",
@@ -1671,6 +1680,8 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     prune,
     frozenPrompt: {
       systemPrompt,
+      // 决策 570：记下拼这份提示所用的型号，/reload 换型号时据此重建身份句
+      model: { provider: modelInfo.provider, id: modelInfo.id },
       instructions,
       ...(pushedMemory !== undefined ? { pushedMemory } : {}),
       localSkills,

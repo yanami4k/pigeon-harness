@@ -420,6 +420,15 @@ test("决策 557：/model 切换后重建带显式目标型号，RUN-START 与�
       },
       { provider: "deepseek", id: "deepseek-v4-flash" }
     );
+    // 决策 570：重建后的系统提示身份句跟着新运行面型号，不再是旧型号
+    assert.match(
+      bundle.adapter.snapshot().context.systemPrompt,
+      /^You are Pigeon, a coding agent powered by the deepseek-v4-flash model\./
+    );
+    assert.doesNotMatch(
+      bundle.adapter.snapshot().context.systemPrompt,
+      /powered by the gpt-x model/
+    );
     await bundle.adapter.run("新的一轮");
     await bundle.sessionStore.flush();
     const afterSwitch = loadStoreSession(sessionsDirOf(root), sessionId)?.view.runs.at(-1)?.start
