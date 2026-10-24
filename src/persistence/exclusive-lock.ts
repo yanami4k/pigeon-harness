@@ -27,6 +27,24 @@ import { dirname } from "node:path";
 
 export class ExclusiveLockError extends Error {}
 
+// 读锁文件的注入点：Windows 上另一进程正在替换/删除锁文件时，readFileSync 会得到 EPERM（不是 ENOENT），
+// 这里做有界重试；测试注入假的读与等待，不用真 sleep
+export interface LockReadIo {
+  read(path: string): string;
+  wait(ms: number): void;
+}
+
+// 有界重试：三次，20/35/50 毫秒（不随机，避免测试不确定）；仍失败才抛原错误
+const LOCK_READ_RETRY_MS = [20, 35, 50] as const;
+
+const defaultLockReadIo: LockReadIo = {
+  read: (path) => readFileSync(path, "utf8"),
+  wait: (ms) => {
+    // 同步接口里的有界等待；只用在上面这三次重试之间，不改变锁语义
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  },
+};
+
 interface LockHolder {
   pid: number;
   acquiredAt: number;
@@ -66,15 +84,31 @@ function holderAlive(holder: LockHolder): boolean {
   return true;
 }
 
-function readHolder(path: string): LockHolder | "missing" | "malformed" {
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return "missing";
+function readHolder(
+  path: string,
+  io: LockReadIo = defaultLockReadIo
+): LockHolder | "missing" | "malformed" {
+  let raw: string | undefined;
+  for (let attempt = 0; attempt <= LOCK_READ_RETRY_MS.length; attempt += 1) {
+    try {
+      raw = io.read(path);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return "missing";
+      }
+      // EPERM 不当作“没锁”：重试几次再抛；其余错误照旧直接上抛
+      if (
+        (error as NodeJS.ErrnoException).code !== "EPERM" ||
+        attempt === LOCK_READ_RETRY_MS.length
+      ) {
+        throw error;
+      }
+      io.wait(LOCK_READ_RETRY_MS[attempt] as number);
     }
-    throw error;
+  }
+  if (raw === undefined) {
+    throw new Error(`could not read lock file ${path}`);
   }
   try {
     const parsed: unknown = JSON.parse(raw);
@@ -101,8 +135,11 @@ function isProcessAlive(pid: number): boolean {
 }
 
 // 锁文件是否正被一个仍存活的进程持有（迁移命令据此拒绝挪动正在使用的状态；会话锁与本锁的持有者记录同形）
-export function lockHeldByLiveProcess(path: string): { pid: number } | undefined {
-  const holder = readHolder(path);
+export function lockHeldByLiveProcess(
+  path: string,
+  io: LockReadIo = defaultLockReadIo
+): { pid: number } | undefined {
+  const holder = readHolder(path, io);
   if (holder === "missing" || holder === "malformed") return undefined;
   return holderAlive(holder) ? { pid: holder.pid } : undefined;
 }
@@ -132,7 +169,11 @@ function tryCreate(path: string, holder: LockHolder): boolean {
 }
 
 // 取锁；返回幂等的释放函数。detail 是给人看的一句话，拒绝时连同锁文件路径一起报出
-export function acquireExclusiveLock(path: string, detail: string): () => void {
+export function acquireExclusiveLock(
+  path: string,
+  detail: string,
+  io: LockReadIo = defaultLockReadIo
+): () => void {
   mkdirSync(dirname(path), { recursive: true });
   const bootId = currentBootId();
   const startTime = processStartTime(process.pid);
@@ -144,9 +185,9 @@ export function acquireExclusiveLock(path: string, detail: string): () => void {
   };
   for (let attempt = 0; attempt < 5; attempt += 1) {
     if (tryCreate(path, holder)) {
-      return releaser(path, holder.acquiredAt);
+      return releaser(path, holder.acquiredAt, io);
     }
-    const current = readHolder(path);
+    const current = readHolder(path, io);
     if (current === "missing") {
       continue;
     }
@@ -160,14 +201,14 @@ export function acquireExclusiveLock(path: string, detail: string): () => void {
 }
 
 // 只删自己那一把：被别人接管之后重复释放不误删
-function releaser(path: string, acquiredAt: number): () => void {
+function releaser(path: string, acquiredAt: number, io: LockReadIo): () => void {
   let released = false;
   return () => {
     if (released) {
       return;
     }
     released = true;
-    const current = readHolder(path);
+    const current = readHolder(path, io);
     if (
       current !== "missing" &&
       current !== "malformed" &&
