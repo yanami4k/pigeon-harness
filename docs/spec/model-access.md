@@ -51,7 +51,7 @@ unit and is not covered here.
 - **MODEL-022** The status bar shall show the model the session is talking to, in dim text, after the mode segment and before the effort segment (see VIEWS-010).
 - **MODEL-023** `/status` shall list the model the session is talking to.
 - **MODEL-040** Costs shall be shown in US dollars as computed by pi-ai when a response carries a price: in the status bar after the token count and in the `/status` usage line, and omitted when the price is zero. No price shall be converted to yuan, no peak-hour multiplier applied, and no cost-zero heuristic used to infer a provider.
-- **MODEL-041** `/effort` and Alt+T shall offer only the thinking levels the current model supports (taken from the catalog), in the order `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` (including `max`); an explicitly given unsupported level shall be refused with the supported ones listed rather than silently clamped, and the same refusal shall apply at startup to `--thinking` or `thinking.level`.
+- **MODEL-041** `/effort` and Alt+T shall offer only the thinking levels the current model supports (taken from the catalog), in the order `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` (including `max`); an explicitly given unsupported `--thinking` level shall be refused with the supported ones listed rather than silently clamped, while a level taken from the user settings or the session record falls back as MODEL-043 describes.
 
 ## Routes
 
