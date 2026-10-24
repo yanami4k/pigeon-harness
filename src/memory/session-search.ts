@@ -417,11 +417,21 @@ function loadCurrentSession(
   if (entry === undefined) {
     return [];
   }
-  let cutoff: number | undefined;
-  for (const item of readSessionFile(ref.path)?.entries ?? []) {
-    if (item.type === "compaction") cutoff = item.timestamp;
+  // 压缩点按文件里的条目顺序认，不看时间戳：同一毫秒内写入的压缩条目与之后的条目时间可能相同，
+  // 用“最后一条 compaction 之前的条目号”判定才是确定的
+  const file = readSessionFile(ref.path);
+  let before: Set<string> | undefined;
+  if (file !== undefined) {
+    const entries = file.entries;
+    let lastCompaction = -1;
+    for (let index = 0; index < entries.length; index++) {
+      if (entries[index]?.type === "compaction") lastCompaction = index;
+    }
+    if (lastCompaction >= 0) {
+      before = new Set(entries.slice(0, lastCompaction).map((item) => item.id));
+    }
   }
-  const keep = (doc: SearchDoc): boolean => cutoff === undefined || doc.timestamp <= cutoff;
+  const keep = (doc: SearchDoc): boolean => before === undefined || before.has(doc.entryId);
   return [
     {
       ...entry,

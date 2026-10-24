@@ -1,6 +1,6 @@
 // 决策 555：search_sessions 的 scope——project（缺省，与今天一致）与 current（只当前会话、只到最近一次压缩点为止）。
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
@@ -69,6 +69,45 @@ test("MEMORY-082 scope defaults to project: no behaviour change, the current ses
     assert.equal(implicit.totalHits, 0, "缺省仍排除当前会话");
   } finally {
     await session.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MEMORY-082 the compaction point follows entry order, not timestamps", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pigeon-search-scope-order-"));
+  try {
+    const sessionsDir = join(root, ".pigeon", "state", "sessions");
+    const session = createFixtureSession({ sessionsDir });
+    session.startRun({ task: "任务" });
+    session.user("压缩前的 alpaca");
+    await session.writer.appendCompaction(compaction("摘要"));
+    session.user("压缩后的 alpaca");
+    const { path, sessionId } = await session.close();
+
+    // 把所有条目的时间戳改成同一个值：只能按条目顺序认压缩点
+    const sameAt = 1_700_000_000_000;
+    const lines = readFileSync(path, "utf8")
+      .split(/\r?\n/)
+      .filter((line) => line.trim() !== "")
+      .map((line) => {
+        const entry = JSON.parse(line) as Record<string, unknown> & { kind?: string };
+        if (entry.kind === "entry") entry.timestamp = sameAt;
+        return JSON.stringify(entry);
+      });
+    writeFileSync(path, `${lines.join("\n")}\n`);
+
+    const result = await createSessionSearch(sessionsDir).search({
+      keywords: ["alpaca"],
+      scope: "current",
+      current: { sessionId },
+    });
+    assert.equal(result.totalHits, 1, "只算压缩点之前的那一条");
+    assert.deepEqual(
+      result.ranked.map((hit) => hit.runSeq),
+      [2],
+      "压缩前的用户消息（runSeq 2）"
+    );
+  } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
