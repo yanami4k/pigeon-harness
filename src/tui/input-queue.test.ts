@@ -183,7 +183,8 @@ test("命令放行表：只读类与 /quit 运行中可用，其余逐条说明�
     // 决策 546：登录与登出会换运行面的凭据，与 /reload 同档
     "login",
     "logout",
-    "export",
+    // 决策 526：/deliver 只在沙箱里可用（运行中拒绝）
+    "deliver",
   ]);
   for (const name of rejected) {
     const line = rejectWhileRunning(`/${name} x`);

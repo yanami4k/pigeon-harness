@@ -271,7 +271,7 @@ export interface TuiShellOptions {
   historyLimit?: number;
   // M7（决策 079）：/fork 手动分叉（交回给人看的一行）；缺省 = 命令不可用
   fork?: (args: string) => Promise<string>;
-  // 决策 237、245：沙箱会话——/export 手动交回；分叉与 /resume 换绑在沙箱里不支持，命令给出原因
+  // 决策 237、245、526：沙箱会话——/deliver 手动交回；分叉与 /resume 换绑在沙箱里不支持，命令给出原因
   sandbox?: TuiSandboxFace;
   // 决策 294 B1：/tasks 查看当前会话的任务清单（排好的文字）；返回 undefined = 清单没开；缺省 = 命令不可用
   tasks?: () => string | undefined;

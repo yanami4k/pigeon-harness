@@ -1082,7 +1082,7 @@ export async function main(argv: string[]): Promise<void> {
           },
         }
       : {}),
-    // 决策 245：沙箱会话的 /export 手动交回
+    // 决策 245、526：沙箱会话的 /deliver 手动交回
     ...(sandbox !== undefined
       ? { sandbox: { exportChanges: () => exportSandbox(sandbox, bundleOf().jobs) } }
       : {}),

@@ -1,4 +1,4 @@
-// 终端界面在沙箱会话里的斜杠命令（决策 237、245）：/export 手动交回；/fork、/take 与 /resume 换绑给出不支持的原因。
+// 终端界面在沙箱会话里的斜杠命令（决策 237、245、526）：/deliver 手动交回；/fork、/take 与 /resume 换绑给出不支持的原因。
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import {
@@ -42,15 +42,18 @@ test("沙箱会话：/fork、/take、/resume 给出不支持的原因", () => {
   ]);
 });
 
-test("沙箱会话：/export 手动交回，结果落消息区；不在沙箱里 /export 是未知命令", async () => {
+test("VIEWS-034 沙箱会话：/deliver 手动交回，结果落消息区；不在沙箱里 /deliver 与 /export 都是未知命令", async () => {
   const { host, lines, rendered } = stubHost({
     exportChanges: async () => "沙箱改动已交回到分支 pigeon/sandbox-x",
   });
-  handleSlashCommand(host, "/export");
+  handleSlashCommand(host, "/deliver");
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(lines.at(-1), "沙箱改动已交回到分支 pigeon/sandbox-x");
   assert.ok(rendered() > 0);
   const plain = stubHost(undefined);
-  handleSlashCommand(plain.host, "/export");
-  assert.match(plain.lines[0] ?? "", /^unknown command: \/export/);
+  handleSlashCommand(plain.host, "/deliver");
+  assert.match(plain.lines[0] ?? "", /^unknown command: \/deliver/);
+  // 旧命令名不再被识别（决策 526）
+  handleSlashCommand(host, "/export");
+  assert.match(lines.at(-1) ?? "", /^unknown command: \/export/);
 });

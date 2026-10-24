@@ -180,10 +180,10 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     whileRunning: { allow: true },
     scope: "main",
   },
-  // 只在沙箱会话里有（手动交回改动，决策 245）；沙箱不开子 agent，子 agent 视图里照常报未知命令
+  // 只在沙箱会话里有（手动交回改动，决策 245、526：命令名 /deliver）；沙箱不开子 agent，子 agent 视图里照常报未知命令
   {
-    name: "export",
-    usage: "/export",
+    name: "deliver",
+    usage: "/deliver",
     whileRunning: { allow: false },
     scope: "agent",
   },
