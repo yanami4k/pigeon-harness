@@ -17,7 +17,7 @@ import { secondary } from "./style.ts";
 import { MockTerminal, screenText, settle } from "./testing.ts";
 import { modelLabelOf, PIGEON_LOGO, tildePath, WelcomeHeader, welcomeLines } from "./welcome.ts";
 
-const INFO = { version: "0.9.1", model: "deepseek-flash · deepseek", cwd: "~/code/demo" };
+const INFO = { version: "0.9.1", model: "deepseek-flash", cwd: "~/code/demo" };
 const ESC = "\u001b";
 const SGR = new RegExp(`${ESC}\\[[0-9;]*m`, "g");
 const plain = (line: string): string => line.replace(SGR, "");
@@ -37,10 +37,10 @@ test("欢迎头：鸽子 11 列 × 4 行在左，三行字在右与鸽子纵向�
   // 4 行里放 3 行字：第 2 至第 4 行（头顶那一行只有鸽子），文字从同一列起
   assert.equal(plain(rows[0] ?? ""), ` ${PIGEON_LOGO[0]?.trimEnd()}`);
   assert.equal(plain(rows[1] ?? "").slice(14), "Pigeon v0.9.1");
-  assert.equal(plain(rows[2] ?? "").slice(14), "deepseek-flash · deepseek");
+  assert.equal(plain(rows[2] ?? "").slice(14), "deepseek-flash");
   assert.equal(plain(rows[3] ?? "").slice(14), "~/code/demo");
   assert.ok(rows[1]?.includes("\x1b[1mPigeon v0.9.1\x1b[22m"));
-  assert.ok(rows[2]?.includes(secondary("deepseek-flash · deepseek")));
+  assert.ok(rows[2]?.includes(secondary("deepseek-flash")));
   assert.ok(rows[3]?.includes(secondary("~/code/demo")));
   // 鸽子本身不带任何颜色或样式
   for (const row of rows) {
@@ -55,22 +55,16 @@ test("欢迎头：没有模型名时两行字仍居中；窄终端只留文字�
   assert.equal(noModel[2]?.slice(14), "~");
 
   // 并排时模型名放不下：只留文字，模型名写全
-  assert.deepEqual(welcomeLines(INFO, 30).map(plain), [
+  assert.deepEqual(welcomeLines(INFO, 27).map(plain), [
     "",
     " Pigeon v0.9.1",
-    " deepseek-flash · deepseek",
+    " deepseek-flash",
     " ~/code/demo",
     "",
   ]);
   // 只留文字也放不下：按宽度截断
-  const narrow = welcomeLines(INFO, 24);
-  assert.deepEqual(narrow.map(plain), [
-    "",
-    " Pigeon v0.9.1",
-    " deepseek-flash · dee...",
-    " ~/code/demo",
-    "",
-  ]);
+  const narrow = welcomeLines(INFO, 12);
+  assert.deepEqual(narrow.map(plain), ["", " Pigeon v...", " deepseek...", " ~/code/demo", ""]);
   for (const width of [8, 12, 20, 30, 40]) {
     for (const line of welcomeLines(INFO, width)) {
       assert.ok(visibleWidth(line) <= width, `宽 ${width}：${JSON.stringify(line)}`);
@@ -83,16 +77,13 @@ test("欢迎头：没有模型名时两行字仍居中；窄终端只留文字�
   assert.ok(longCwd.every((line) => visibleWidth(line) <= 50));
 });
 
-test('模型名取模型信息：接入模块声明的照写 "id · 服务商"；只有启动参数的占位标签时不写；启动参数给了真名字照写', () => {
+test("RENDERING-058、VIEWS-032 模型名取模型信息：只写型号 id；只有启动参数的占位标签时不写；启动参数给了真名字照写", () => {
   assert.equal(
     modelLabelOf({ provider: "deepseek", id: "deepseek-flash", identity: "declared" }),
-    "deepseek-flash · deepseek"
+    "deepseek-flash"
   );
   assert.equal(modelLabelOf({ provider: "custom", id: "custom", identity: "launch" }), undefined);
-  assert.equal(
-    modelLabelOf({ provider: "openai", id: "gpt-5", identity: "launch" }),
-    "gpt-5 · openai"
-  );
+  assert.equal(modelLabelOf({ provider: "openai", id: "gpt-5", identity: "launch" }), "gpt-5");
 });
 
 test("目录缩写：主目录本身为 ~，主目录之下为 ~ 开头，主目录之外原样", () => {
@@ -119,7 +110,7 @@ test("欢迎头在对话流最上方、随消息滚动（不常驻）；清空�
     await settle();
     const first = screenText(term);
     assert.ok(first.includes("Pigeon v0.9.1"), first);
-    assert.ok(first.includes("deepseek-flash · deepseek"), first);
+    assert.ok(first.includes("deepseek-flash"), first);
     // 跑几轮把它顶出屏幕：欢迎头不常驻
     for (let index = 0; index < 4; index += 1) {
       term.input(`第 ${index} 条`);

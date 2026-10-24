@@ -180,6 +180,8 @@ export interface OpenSessionRuntimeRequest {
   memoryWrite?: MemoryWriteConfig;
   // 决策 286：运行期告警的出口（会话存储、压缩前回调、工作区快照）；缺省写标准错误输出
   warn?: WarnSink;
+  // 决策 562：给人看的次要提示（档位回落说明）的出口；不注入时同 warn
+  notice?: WarnSink;
   // 决策 324：钩子拦下或出错时的一行提示的出口（终端界面落消息区）；缺省静默
   hooksNotice?: WarnSink;
   // 决策 308：打转检测设定——此处挂到压缩与运行面内的用点；主 agent 由入口自己挂（叫停后的交代各入口不同）
@@ -374,6 +376,7 @@ export async function openSessionRuntime(
       ...(request.taskList === true ? { taskList: true } : {}),
       ...(request.webTools !== undefined ? { webTools: request.webTools } : {}),
       ...(request.warn !== undefined ? { storeWarn: request.warn } : {}),
+      ...(request.notice !== undefined ? { notice: request.notice } : {}),
       ...(request.hooksNotice !== undefined ? { hooksNotice: request.hooksNotice } : {}),
       ...(frozenPrompt !== undefined ? { frozenPrompt } : {}),
       ...(recordedSystemPrompt !== undefined ? { systemPrompt: recordedSystemPrompt } : {}),

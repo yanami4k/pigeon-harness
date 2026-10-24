@@ -28,13 +28,13 @@ export interface WelcomeInfo {
   cwd: string;
 }
 
-// 决策 453：显示用的模型名——"模型 id · 服务商"；身份只有启动参数的占位标签（custom）时没有真名字，为 undefined
+// 决策 429、453、563：显示用的模型名——只有模型 id；身份只有启动参数的占位标签（custom）时没有真名字，为 undefined
 export function modelLabelOf(info: {
   provider: string;
   id: string;
   identity: "declared" | "launch";
 }): string | undefined {
-  return promptModelName(info) === undefined ? undefined : `${info.id} · ${info.provider}`;
+  return promptModelName(info) === undefined ? undefined : info.id;
 }
 
 // 主目录下的路径缩写成 ~ 开头（与命令行侧同一份，见 application/format.ts）

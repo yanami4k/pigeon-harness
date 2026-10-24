@@ -487,11 +487,13 @@ test("MODEL-043 决策 558：/model 切到不支持原档位的型号时不阻�
     confirmation: { kind: "interactive", ask: async () => "trust" },
   });
   const warnings: string[] = [];
+  const notices: string[] = [];
   const context: MainReloadContext = {
     governanceRoot: root,
     streamFn: baseStream,
     flags,
     warn: (line) => warnings.push(line),
+    notice: (line) => notices.push(line),
     createApprovalHandler: () => async () => ({ approved: true }),
     memoryWrite: { source: "tui" },
     memoryContext: { limits: memoryLimitsOf(settings) },
@@ -538,9 +540,10 @@ test("MODEL-043 决策 558：/model 切到不支持原档位的型号时不阻�
     assert.deepEqual(bundle.thinking.levels, ["off", "low", "high", "max"]);
     assert.equal(bundle.thinking.get(), "high", "xhigh 回落到 high，状态栏/ /status 取的就是它");
     assert.match(
-      warnings.join("\n"),
+      notices.join("\n"),
       /effort "xhigh" is not supported by deepseek\/deepseek-v4-flash \(available: off, low, high, max\); using "high"/
     );
+    assert.deepEqual(warnings, [], "重建的回落说明不进告警出口（决策 562）");
     await bundle.adapter.run("新的一轮");
     await bundle.sessionStore.flush();
     assert.equal(
