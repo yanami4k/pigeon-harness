@@ -68,6 +68,7 @@ import {
   chooseModel,
   createCredentialSource,
   createPackagedStreamFn,
+  DEFAULT_MODEL_MAX_TOKENS,
   loadProviderFacts,
   type ProviderFacts,
   providerFactsWith,
@@ -1273,8 +1274,12 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     input: ["text" as const],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: compactionConfig.contextWindow,
-    // 未配置输出上限时为 0（占位不知道真实模型的上限；压缩摘要的输出上限此时只按预留量取）
-    maxTokens: maxOutputTokens ?? 0,
+    // 决策 556：占位模型的输出上限也必须为正——显式值优先，其次目录/声明给的真实上限，都没有时用安全缺省
+    maxTokens:
+      maxOutputTokens ??
+      (modelInfo.maxTokens.source !== "unknown"
+        ? modelInfo.maxTokens.value
+        : DEFAULT_MODEL_MAX_TOKENS),
   };
   const compactor = new ContextCompactor({
     config: compactionConfig,

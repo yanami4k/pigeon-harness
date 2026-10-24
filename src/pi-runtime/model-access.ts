@@ -20,6 +20,7 @@ import {
 } from "../state/model-info.ts";
 import type { ThinkingLevel } from "../state/runtime-events.ts";
 import type { CustomProvider } from "../state/settings.ts";
+import { withMaxTokens } from "./output-limit.ts";
 
 export interface ModelAccessInfo {
   declared?: ModelInfoDeclaration;
@@ -512,6 +513,10 @@ const PACKAGED_STREAMS: Readonly<Record<PackagedApi, StreamFn>> = {
   "google-generative-ai": googleGenerativeAi as unknown as StreamFn,
 };
 
+// 模型对象没给正数输出上限时的安全缺省（决策 556）：不能把 0 当上限发给服务商
+// （openai-completions 的线路会把 0 当成只出 1 个 token）。8192 低于各家常见的输出上限。
+export const DEFAULT_MODEL_MAX_TOKENS = 8192;
+
 // 没有 --stream-fn 时的接入：按凭据来源取 key（env > /login 文件），按模型对象上的 api 发（MODEL-003、MODEL-017、MODEL-019）
 export function createPackagedStreamFn(
   credentials: CredentialSource | Record<string, string | undefined>,
@@ -531,7 +536,15 @@ export function createPackagedStreamFn(
     if (apiKey === undefined) {
       throw new Error(noCredentialText(model.provider, source.envNameOf(model.provider)));
     }
-    return stream(model, context, { ...options, apiKey });
+    // 决策 556：输出上限必须为正——目录/声明给了真实上限就用它，没有就用安全缺省；
+    // 显式上限（--max-output-tokens）仍优先，但不超出模型上限
+    const capped = model.maxTokens > 0 ? model : { ...model, maxTokens: DEFAULT_MODEL_MAX_TOKENS };
+    const requested =
+      options?.maxTokens !== undefined && options.maxTokens > 0 ? options.maxTokens : undefined;
+    // 没有显式（或显式值不为正）时也把模型上限明确发出去：不能留给客户端对 0/缺省的解释（决策 556）
+    const maxTokens =
+      requested !== undefined ? Math.min(requested, capped.maxTokens) : capped.maxTokens;
+    return stream(capped, context, withMaxTokens({ ...options, apiKey }, maxTokens));
   };
 }
 

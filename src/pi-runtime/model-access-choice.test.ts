@@ -199,6 +199,45 @@ test("MODEL-017 the given model is sent as the model id, with the provider key",
   assert.deepEqual(seen, [{ id: "deepseek-chat", apiKey: "sk-x" }]);
 });
 
+test("决策 556 an unknown model gets a positive output limit; an explicit one wins but stays capped", () => {
+  const seen: Array<{ modelMaxTokens: number; requested: number | undefined }> = [];
+  const stream: StreamFn = (model, _context, options) => {
+    seen.push({ modelMaxTokens: model.maxTokens, requested: options?.maxTokens });
+    throw new Error("stop");
+  };
+  const packaged = createPackagedStreamFn(
+    { DEEPSEEK_API_KEY: "sk-x" },
+    {
+      "anthropic-messages": stream,
+      "openai-responses": stream,
+      "openai-completions": stream,
+      "google-generative-ai": stream,
+    }
+  );
+  const unknown = {
+    api: "openai-completions",
+    provider: "deepseek",
+    id: "x",
+    maxTokens: 0,
+  } as never;
+  assert.throws(() => packaged(unknown, {} as never, {}));
+  assert.throws(() => packaged(unknown, {} as never, { maxTokens: 64 }));
+  assert.throws(() => packaged(unknown, {} as never, { maxTokens: 50_000 }));
+  assert.throws(() =>
+    packaged(
+      { api: "openai-completions", provider: "deepseek", id: "y", maxTokens: 384_000 } as never,
+      {} as never,
+      {}
+    )
+  );
+  assert.deepEqual(seen, [
+    { modelMaxTokens: 8192, requested: 8192 },
+    { modelMaxTokens: 8192, requested: 64 },
+    { modelMaxTokens: 8192, requested: 8192 },
+    { modelMaxTokens: 384_000, requested: 384_000 },
+  ]);
+});
+
 test("MODEL-019 a model the catalog does not know goes on the chosen provider's packaged route", () => {
   const seen: string[] = [];
   const stream: StreamFn = (model) => {
