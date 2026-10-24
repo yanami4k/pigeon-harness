@@ -70,6 +70,10 @@ unit and is not covered here.
 
 - **MODEL-042** A model request that produces no content for 60 seconds shall be aborted and retried once; an error or idle timeout after content has streamed shall be reported without retrying while the received content is kept; a request aborted by the user shall not be retried; each such retry shall be recorded in the session.
 
+## Thinking effort
+
+- **MODEL-043** When the thinking level comes from the user settings or the session record and the model does not support it, the runtime shall fall back to the highest supported level not above the requested one, or to the lowest supported level when none is lower, and shall report the requested and the effective level in one line. A level requested explicitly shall still fail when the model does not support it, listing the supported levels.
+
 ## Settings
 
 - **MODEL-024** The last used model shall be kept in the user-level settings only, as the pair `{provider, model}` under the key `model.lastUsed`.

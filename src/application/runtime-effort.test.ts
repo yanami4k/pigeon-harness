@@ -358,7 +358,7 @@ test("MODEL-041 决策 553：显式档位不受支持时启动报错并列出可
   }
 });
 
-test("决策 558：用户级档位不支持时回落到不超过它的最高可用档并说明；显式 --thinking 仍报错", async () => {
+test("MODEL-043 决策 558：用户级档位不支持时回落到不超过它的最高可用档并说明；显式 --thinking 仍报错", async () => {
   const { root: dir, cleanup } = workspace();
   try {
     const stream = registerModelAccess(createFakeStreamFn({ replies: [{ text: "好" }] }), {
@@ -402,7 +402,7 @@ test("决策 558：用户级档位不支持时回落到不超过它的最高可�
   }
 });
 
-test("决策 558：没有更低的可用档时回落取最低可用档（low + off/high → off）", async () => {
+test("MODEL-043 决策 558：没有更低的可用档时回落取最低可用档（low + off/high → off）", async () => {
   const { root: dir, cleanup } = workspace();
   try {
     const stream = registerModelAccess(createFakeStreamFn({ replies: [{ text: "好" }] }), {
