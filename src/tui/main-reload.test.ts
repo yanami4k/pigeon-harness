@@ -474,7 +474,7 @@ test("决策 557：/model 切换后重建带显式目标型号，RUN-START 与�
   }
 });
 
-test("决策 558：/model 切到不支持原档位的型号时不阻断，运行面与下一次 RUN-START 用回落值", async () => {
+test("MODEL-043 决策 558：/model 切到不支持原档位的型号时不阻断，运行面与下一次 RUN-START 用回落值", async () => {
   const root = temp("pigeon-think-fallback-");
   const home = temp("pigeon-think-fallback-home-");
   const flags = parseLaunchFlags(["--root", root], { usage: "u", pushedMemory: true });
