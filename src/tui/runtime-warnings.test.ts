@@ -10,7 +10,9 @@ import { disposeRuntime } from "../application/runtime.ts";
 import { openSessionRuntime } from "../application/session-runtime.ts";
 import { sessionDirectoryName } from "../persistence/session-reader.ts";
 import { createFakeStreamFn } from "../pi-runtime/fixtures.ts";
+import { registerModelAccess } from "../pi-runtime/model-access.ts";
 import { newSessionId } from "../state/ids.ts";
+import { emptySettingsSnapshot } from "../state/settings.ts";
 import { ScriptedRuntime } from "./runtime-fixtures.ts";
 import { PigeonTuiShell } from "./shell.ts";
 import {
@@ -21,7 +23,7 @@ import {
   screenText,
   settle,
 } from "./testing.ts";
-import { switchableWarn } from "./warn-sink.ts";
+import { bufferedNotice, switchableWarn } from "./warn-sink.ts";
 
 // 截获标准错误输出（用例结束还原）
 function captureStderr(): { lines: string[]; restore: () => void } {
@@ -168,4 +170,72 @@ test("VIEWS-062 档位回落说明落消息区的暗色系统行，与醒目告�
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });
   }
+});
+
+// 决策 562：启动阶段运行面先于壳装配——回落说明先攒着，壳接管后随首屏落进消息区，不先写 stderr
+test("VIEWS-062 启动即回落：壳起来之前的说明先缓冲，接管后落暗色系统行", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pigeon-tui-notice-startup-"));
+  const sessionId = newSessionId();
+  const buffer = bufferedNotice();
+  const stderr = captureStderr();
+  let opened: Awaited<ReturnType<typeof openSessionRuntime>> | undefined;
+  try {
+    const settings = emptySettingsSnapshot(root);
+    opened = await openSessionRuntime({
+      governanceRoot: root,
+      sessionId,
+      streamFn: registerModelAccess(createFakeStreamFn({ replies: [{ text: "一" }] }), {
+        declared: { reasoning: true },
+        catalog: () => ({ reasoning: true, thinkingLevels: ["off", "low", "high", "max"] }),
+      }),
+      flags: { yolo: true, provider: "fake", modelId: "fake", persistThinking: true },
+      settings: { ...settings, merged: { ...settings.merged, thinking: { level: "xhigh" } } },
+      homeDir: root,
+      startMcp: noMcpSession,
+      notice: buffer.notice,
+    });
+    assert.deepEqual(stderr.lines, [], "壳接管前不写标准错误输出");
+
+    const term = new MockTerminal(120, 30);
+    const shell = new PigeonTuiShell({
+      terminal: term,
+      runtime: opened.bundle.adapter,
+      sessionId,
+      logDir: join(root, "log"),
+    });
+    try {
+      buffer.attach((line) => shell.addSystem(line));
+      shell.start();
+      await settle();
+      term.input("draft");
+      await settle();
+      assert.ok(screenText(term).includes('effort "xhigh" is not supported'), screenText(term));
+      assert.ok(
+        isDimmed(term.writes.join(""), 'effort "xhigh" is not supported by fake/fake'),
+        "启动时的回落说明是暗色系统行"
+      );
+      assert.deepEqual(stderr.lines, [], "接管后也不写标准错误输出");
+    } finally {
+      shell.stop();
+    }
+  } finally {
+    if (opened !== undefined) await disposeRuntime(opened.bundle);
+    stderr.restore();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// 决策 562：壳始终没起来（启动阶段出错退出）——攒下的说明写回标准错误输出，不能丢
+test("VIEWS-062 壳始终没起来：攒下的回落说明退出时写回标准错误输出", () => {
+  const stderr = captureStderr();
+  try {
+    const buffer = bufferedNotice();
+    buffer.notice('effort "xhigh" is not supported by fake/fake; using "high"');
+    assert.deepEqual(stderr.lines, [], "接管前先攒着");
+    // main.ts 在进程退出时对同一个出口调 detach
+    buffer.detach();
+  } finally {
+    stderr.restore();
+  }
+  assert.deepEqual(stderr.lines, ['effort "xhigh" is not supported by fake/fake; using "high"\n']);
 });
