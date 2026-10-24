@@ -1,5 +1,5 @@
-// 决策 513：会话中途切换思考强度——/effort [档位]（不带参数时在输入框下方列出档位、标出当前档位；非法档位报错；运行中可用）、
-// Alt+T 在 off → low → medium → high → xhigh 之间轮换（minimal 的下一档为 low；模型不支持推理时不切换），状态栏紧跟审批模式
+// 决策 513、560：会话中途切换思考强度——/effort [档位]（不带参数时在输入框下方列出档位、标出当前档位；非法档位报错；运行中可用）、
+// Alt+T 在 off → low → medium → high → xhigh → max 之间轮换（minimal 的下一档为 low；模型不支持推理时不切换），状态栏紧跟审批模式
 // 只写档位（如 high）、/status 的 mode 行写 effort <档位>；子 agent 视图里改的是那个子 agent 的档位。
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -11,7 +11,7 @@ import { SessionGrantStore } from "../approvals/grant-store.ts";
 import { newSessionId } from "../state/ids.ts";
 import type { ThinkingLevel } from "../state/runtime-events.ts";
 import { ALL_THINKING_LEVELS } from "../state/thinking-config.ts";
-import { nextEffort, type ThinkingControl } from "./effort.ts";
+import { effortChoices, nextEffort, type ThinkingControl } from "./effort.ts";
 import { ScriptedRuntime } from "./runtime-fixtures.ts";
 import { PigeonTuiShell, type TuiAgentsFace } from "./shell.ts";
 import { agentStatusText, type StatusReport, statusReportText } from "./status-report.ts";
@@ -105,12 +105,62 @@ async function command(term: MockTerminal, text: string): Promise<void> {
   await settle();
 }
 
-test("轮换顺序：off → low → medium → high → xhigh → off；minimal 的下一档为 low，max 的下一档为 off", () => {
+test("MODEL-041 三档型号（low/high/max）：候选直接取可用档（含 max），max 可切，轮换跳过不可用的 off", async () => {
+  assert.deepEqual(
+    effortChoices(["low", "high", "max"], "").map((choice) => choice.value),
+    ["low", "high", "max"],
+    "不再被写死的表二次裁剪"
+  );
+  assert.deepEqual(
+    effortChoices(["off"], "").map((choice) => choice.value),
+    ["off"]
+  );
+  const main = control("high", ["low", "high", "max"]);
+  const { term, cleanup } = makeShell(main);
+  try {
+    await settle();
+    await command(term, "/effort max");
+    assert.match(screenText(term), /effort set to max \(from the next request\)/);
+    assert.match(statusLine(term), /^ask · max · /);
+    term.input(ALT_T);
+    await settle();
+    assert.match(statusLine(term), /^ask · low · /, "max 之后跳过不可用的 off");
+    assert.deepEqual(main.sets, ["max", "low"]);
+  } finally {
+    cleanup();
+  }
+  // 可用的 off 在场时：high → max → off
+  assert.equal(nextEffort("high", ["off", "low", "high", "max"]), "max");
+  assert.equal(nextEffort("max", ["off", "low", "high", "max"]), "off");
+});
+
+test("MODEL-041 三档型号上显式请求 xhigh 仍拒绝并列可用档；未知档位文案不变", async () => {
+  const main = control("low", ["low", "high", "max"]);
+  const { term, cleanup } = makeShell(main);
+  try {
+    await settle();
+    await command(term, "/effort xhigh");
+    assert.match(
+      screenText(term),
+      /effort "xhigh" is not supported by this model \(use low, high, max\)/
+    );
+    assert.deepEqual(main.sets, []);
+    await command(term, "/effort turbo");
+    assert.match(
+      screenText(term),
+      /unknown effort level: turbo \(use off, minimal, low, medium, high, xhigh, max\)/
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("MODEL-041 轮换顺序：off → low → medium → high → xhigh → max → off；minimal 的下一档为 low", () => {
   assert.deepEqual(
     ["off", "low", "medium", "high", "xhigh", "minimal", "max"].map((level) =>
       nextEffort(level as ThinkingLevel, ALL_THINKING_LEVELS)
     ),
-    ["low", "medium", "high", "xhigh", "off", "low", "off"]
+    ["low", "medium", "high", "xhigh", "max", "low", "off"]
   );
 });
 
@@ -120,12 +170,12 @@ test("Alt+T 轮换主代理的档位，状态栏紧跟审批模式当场更新�
   try {
     await settle();
     assert.match(statusLine(term), /^ask · minimal · /);
-    for (const expected of ["low", "medium", "high", "xhigh", "off", "low"]) {
+    for (const expected of ["low", "medium", "high", "xhigh", "max", "off"]) {
       term.input(ALT_T);
       await settle();
       assert.match(statusLine(term), new RegExp(`^ask · ${expected} · `));
     }
-    assert.deepEqual(main.sets, ["low", "medium", "high", "xhigh", "off", "low"]);
+    assert.deepEqual(main.sets, ["low", "medium", "high", "xhigh", "max", "off"]);
   } finally {
     cleanup();
   }
@@ -156,11 +206,11 @@ test("/effort <档位> 切换并写一行；同档、非法档位与不支持推
     await command(term, "/effort turbo");
     assert.match(
       screenText(term),
-      /unknown effort level: turbo \(use off, minimal, low, medium, high, xhigh\)/
+      /unknown effort level: turbo \(use off, minimal, low, medium, high, xhigh, max\)/
     );
     await command(term, "/effort max");
-    assert.match(screenText(term), /unknown effort level: max/);
-    assert.deepEqual(main.sets, ["low"]);
+    assert.match(screenText(term), /effort set to max \(from the next request\)/);
+    assert.deepEqual(main.sets, ["low", "max"]);
     // 运行中可用
     runtime.autoResolve = false;
     term.input("go");
@@ -169,7 +219,7 @@ test("/effort <档位> 切换并写一行；同档、非法档位与不支持推
     assert.equal(shell.isRunning(), true);
     await command(term, "/effort medium");
     assert.match(screenText(term), /effort set to medium/);
-    assert.deepEqual(main.sets, ["low", "medium"]);
+    assert.deepEqual(main.sets, ["low", "max", "medium"]);
     runtime.finishAll();
     await settle();
   } finally {
