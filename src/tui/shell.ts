@@ -561,18 +561,22 @@ export class LoginPanel implements Component {
   private readonly done: (line: string) => void;
   private readonly cancelled: () => void;
   private readonly maxRows: number;
+  // 决策 561：异步数据或结果落地时请求重绘（构造时由壳传入），否则面板停在“加载中”那一帧
+  private readonly redraw: () => void;
 
   constructor(
     face: NonNullable<TuiShellOptions["login"]>,
     done: (line: string) => void,
     cancelled: () => void,
     preset: string | undefined,
-    maxRows: number
+    maxRows: number,
+    redraw: () => void
   ) {
     this.face = face;
     this.done = done;
     this.cancelled = cancelled;
     this.maxRows = maxRows;
+    this.redraw = redraw;
     if (preset !== undefined) {
       this.mode = "key";
       this.provider = preset;
@@ -582,9 +586,11 @@ export class LoginPanel implements Component {
       (rows) => {
         this.rows = rows;
         this.mode = "pick";
+        this.redraw();
       },
       (error: unknown) => {
         this.note = `reading providers failed: ${error instanceof Error ? error.message : String(error)}`;
+        this.redraw();
       }
     );
   }
@@ -632,6 +638,7 @@ export class LoginPanel implements Component {
         return;
       }
       this.busy = true;
+      this.redraw();
       void this.face.submit(provider, key).then(
         (line) => {
           this.busy = false;
@@ -640,6 +647,7 @@ export class LoginPanel implements Component {
         (error: unknown) => {
           this.busy = false;
           this.note = `login failed: ${error instanceof Error ? error.message : String(error)}`;
+          this.redraw();
         }
       );
       return;
@@ -706,23 +714,29 @@ export class ModelPanel implements Component {
   private readonly done: (line: string) => void;
   private readonly cancelled: () => void;
   private readonly maxRows: number;
+  // 决策 561：异步数据或结果落地时请求重绘（构造时由壳传入）
+  private readonly redraw: () => void;
 
   constructor(
     face: NonNullable<TuiShellOptions["models"]>,
     done: (line: string) => void,
     cancelled: () => void,
-    maxRows: number
+    maxRows: number,
+    redraw: () => void
   ) {
     this.face = face;
     this.done = done;
     this.cancelled = cancelled;
     this.maxRows = maxRows;
+    this.redraw = redraw;
     void this.face.list().then(
       (rows) => {
         this.rows = rows;
+        this.redraw();
       },
       (error: unknown) => {
         this.note = `reading models failed: ${error instanceof Error ? error.message : String(error)}`;
+        this.redraw();
       }
     );
   }
@@ -748,6 +762,7 @@ export class ModelPanel implements Component {
     const row = rows[this.index];
     if (row === undefined) return;
     this.busy = true;
+    this.redraw();
     void this.face.apply(row.provider, row.id).then(
       (line) => {
         this.busy = false;
@@ -756,6 +771,7 @@ export class ModelPanel implements Component {
       (error: unknown) => {
         this.busy = false;
         this.note = `switching the model failed: ${error instanceof Error ? error.message : String(error)}`;
+        this.redraw();
       }
     );
   }
@@ -2033,7 +2049,8 @@ export class PigeonTuiShell
         this.tui.requestRender();
       },
       provider,
-      Math.max(3, this.options.terminal.rows - 5)
+      Math.max(3, this.options.terminal.rows - 5),
+      () => this.requestPanelRedraw()
     );
     this.showView("login");
   }
@@ -2083,9 +2100,19 @@ export class PigeonTuiShell
         this.viewFlow().addSystem("model switch cancelled");
         this.tui.requestRender();
       },
-      Math.max(3, this.options.terminal.rows - 5)
+      Math.max(3, this.options.terminal.rows - 5),
+      () => this.requestPanelRedraw()
     );
     this.showView("model");
+  }
+
+  // 决策 561：登录/型号面板异步数据落地或结果回来时请求重绘；面板已关、壳已停止时忽略
+  private requestPanelRedraw(): void {
+    try {
+      this.tui.requestRender();
+    } catch {
+      // 壳已停止：没有可画的终端
+    }
   }
 
   // 决策 546：/logout [provider]——不带参数时列出文件里存着的服务商；沙箱里不可用
