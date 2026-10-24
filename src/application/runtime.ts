@@ -549,6 +549,9 @@ const OUTSIDE_READ_MODES: Readonly<Record<RunCommandApproval, OutsideReadMode>> 
 
 // start/resume 共用的运行时装配：注册内置工具 + 构造适配器与会话存储写者
 export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
+  // 决策 286、559：存储故障与回落说明的告警出口——调用方没注入时照旧写标准错误（一行加换行），不静默丢弃；
+  // 命令行 --json 的 stdout 只留 JSON，这些说明只走 stderr
+  const storeWarn: WarnSink = deps.storeWarn ?? ((line) => void process.stderr.write(`${line}\n`));
   // 决策 061：编辑工具按模式装配，工具名都叫 edit_file；hashline 分支与 061 之前逐字一致
   const replaceMode = (deps.editMode ?? DEFAULT_EDIT_MODE) === "replace";
   const maxOutputTokens = deps.maxOutputTokens;
@@ -643,7 +646,7 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
       thinkingLevel = requestedThinking;
     } else {
       thinkingLevel = fallbackThinkingLevel(requestedThinking, thinkingLevels);
-      deps.storeWarn?.(
+      storeWarn(
         `effort "${requestedThinking}" is not supported by ${modelInfo.provider}/${modelInfo.id} (available: ${thinkingLevels.join(", ")}); using "${thinkingLevel}"`
       );
     }
@@ -685,7 +688,7 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
       ...(deps.previousJobs !== undefined ? { firstId: deps.previousJobs.lastId } : {}),
     });
   // 崩溃后下次启动：按记录清理上一进程留下的作业（后台进行，每个进程一次）
-  void cleanupOrphanedJobsOnce(governanceRoot, deps.storeWarn, workspaceHost.dockerPrefix);
+  void cleanupOrphanedJobsOnce(governanceRoot, storeWarn, workspaceHost.dockerPrefix);
   const reads = new FileReadTracker();
   // 决策 414：模型能看图（模型信息的输入类型含 image）时 read_file 交出图片
   const readOptions = {
@@ -723,9 +726,9 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
     ...(deps.deferSessionFile === true ? { deferCreate: true } : {}),
     // 决策 444：第一次真建会话文件时才建程序状态目录，并确保全局忽略规则（一行提示走存储告警口）
     beforeCreate: () => {
-      ensureProjectStateDir(governanceRoot, deps.storeWarn);
+      ensureProjectStateDir(governanceRoot, storeWarn);
     },
-    onFault: storeFaultWarner(deps.storeWarn),
+    onFault: storeFaultWarner(storeWarn),
     persistThinking: deps.persistThinking ?? true,
   });
   // 170 ④：本会话的审批状态——取审批模式单元（缺省按 yolo 旗标）；非 yolo 时看有没有注入审批通道。
@@ -1548,7 +1551,7 @@ export function buildRuntime(deps: RuntimeDeps): RuntimeBundle {
   const lostJobs = deps.previousJobs?.lost ?? [];
   if (lostJobs.length > 0) {
     adapter.notify(`${JOB_NOTICE_PREFIX}${escapeStatusText(lostJobsText(lostJobs))}`);
-    deps.storeWarn?.(lostJobsText(lostJobs));
+    storeWarn(lostJobsText(lostJobs));
   }
   // 写工具改过的文件记作前台改动（作业结束时从期间变化里扣除）；job_output 以外的工具调用清零不带等待的连续查询。
   // 决策 407：放权时写到工作区以外的文件不进工作区的改动统计

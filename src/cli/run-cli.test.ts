@@ -2,7 +2,15 @@
 // --json 退出时打印一行结构化结果，退出码按终态映射；任务描述可从 stdin 读。
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -450,6 +458,93 @@ test("MODEL-030 --stream-fn supplies the model: the choice rules do not run even
     assert.equal(child.status, 0, child.stderr);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("决策 559：用户级档位回落时 stderr 有一行说明，--json 的 stdout 仍是单一 JSON；显式 --thinking 仍报错", () => {
+  const root = mkdtempSync(join(tmpdir(), "pigeon-effort-warn-"));
+  const home = mkdtempSync(join(tmpdir(), "pigeon-effort-warn-home-"));
+  try {
+    mkdirSync(join(home, ".pigeon"), { recursive: true });
+    writeFileSync(
+      join(home, ".pigeon", "settings.json"),
+      JSON.stringify({ thinking: { level: "xhigh" } })
+    );
+    const module = join(root, "fallback-stream.mjs");
+    writeFileSync(
+      module,
+      `import { createFakeStreamFn } from ${JSON.stringify(FIXTURES)};\n` +
+        `export const modelInfo = { reasoning: true };\n` +
+        `export default createFakeStreamFn({ replies: [{ text: "好" }] });\n`
+    );
+    const env = { ...process.env, HOME: home, USERPROFILE: home };
+    const child = spawnSync(
+      process.execPath,
+      [CLI, "run", "hi", "--root", root, "--stream-fn", module, "--yolo", "--json"],
+      { encoding: "utf8", timeout: 60_000, windowsHide: true, env }
+    );
+    assert.equal(child.status, 0, child.stderr);
+    assert.match(
+      child.stderr,
+      /^effort "xhigh" is not supported by custom\/custom \(available: off, minimal, low, medium, high\); using "high"$/m
+    );
+    const lines = child.stdout.trim().split(/\r?\n/);
+    assert.equal(lines.length, 1, "stdout 只有一行 JSON，说明不污染 stdout");
+    const result = JSON.parse(lines[0] ?? "") as { failure: unknown };
+    assert.equal(result.failure, null);
+    // 会话记录里 Run 开始条目记的是回落后的实际档位
+    const starts: unknown[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name.endsWith(".jsonl")) {
+          for (const line of readFileSync(full, "utf8").split(/\r?\n/)) {
+            if (line.trim() === "") continue;
+            const value = JSON.parse(line) as { customType?: string };
+            if (value.customType === "pigeon.run-start") starts.push(value);
+          }
+        }
+      }
+    };
+    const sessions = join(root, ".pigeon", "state", "sessions");
+    if (existsSync(sessions)) walk(sessions);
+    const thinkingLevels = starts.map(
+      (start) =>
+        (start as { data?: { model?: { thinkingLevel?: string } } }).data?.model?.thinkingLevel
+    );
+    assert.ok(
+      thinkingLevels.includes("high"),
+      `Run 开始条目应记 high: ${thinkingLevels.join(",")}`
+    );
+
+    // 显式 --thinking xhigh 同型号：仍报错并列可用档，不产出 JSON
+    const explicit = spawnSync(
+      process.execPath,
+      [
+        CLI,
+        "run",
+        "hi",
+        "--root",
+        root,
+        "--stream-fn",
+        module,
+        "--thinking",
+        "xhigh",
+        "--yolo",
+        "--json",
+      ],
+      { encoding: "utf8", timeout: 60_000, windowsHide: true, env }
+    );
+    assert.notEqual(explicit.status, 0);
+    assert.match(
+      explicit.stderr,
+      /effort "xhigh" is not supported by this model \(use off, minimal, low, medium, high\)/
+    );
+    assert.equal(explicit.stdout.trim(), "");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
   }
 });
 
