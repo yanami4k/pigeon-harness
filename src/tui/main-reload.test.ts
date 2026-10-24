@@ -26,9 +26,12 @@ import { globalExcludesFile } from "../persistence/global-ignore.ts";
 import { listSessionFiles } from "../persistence/session-reader.ts";
 import { loadStoreSession } from "../persistence/session-view.ts";
 import { createFakeStreamFn } from "../pi-runtime/fixtures.ts";
+import { registerModelAccess, type StreamFn } from "../pi-runtime/index.ts";
+import type { ProviderFacts } from "../pi-runtime/model-access.ts";
 import { newSessionId } from "../state/ids.ts";
 import { projectSettingsPath, sessionsDirOf } from "../state/paths.ts";
 import { memoryLimitsOf, type SettingsSnapshot } from "../state/settings.ts";
+import { isSameModel, switchedReloadContext } from "./main.ts";
 import { type MainReloadContext, reopenMainSessionForReload } from "./main-reload.ts";
 
 const made: string[] = [];
@@ -324,6 +327,151 @@ test("决策 444：git 仓库里打开终端界面的会话、不发消息就释
   await disposeRuntime(bundle);
   assert.equal(existsSync(join(root, ".pigeon")), false, "释放之后仍没有 .pigeon");
   assert.equal(globalIgnore().text, before);
+});
+
+function providerFacts(
+  provider: string,
+  route: "openai-compatible" | "openai",
+  baseUrl: string
+): ProviderFacts {
+  return {
+    names: () => [provider],
+    routeOf: (id) => (id === provider ? route : undefined),
+    baseUrlOf: (id) => (id === provider ? baseUrl : undefined),
+    modelsOf: () => [],
+    providersOffering: () => [],
+  };
+}
+
+test("决策 557：/model 切换后重建带显式目标型号，RUN-START 与请求线路都变；再切回同样生效", async () => {
+  const root = temp("pigeon-model-switch-");
+  const home = temp("pigeon-model-switch-home-");
+  // 用户级 last-used 指向 openai：证明重建不会被它兜底
+  write(join(home, ".pigeon", "settings.json"), {
+    model: { lastUsed: { provider: "openai", model: "gpt-x" } },
+  });
+  const flags = parseLaunchFlags(["--root", root, "--provider", "openai", "--model", "gpt-x"], {
+    usage: "u",
+    pushedMemory: true,
+  });
+  const baseStream = createFakeStreamFn({ replies: [{ text: "旧" }] });
+  const settings = await openSessionSettings(root, {
+    homeDir: home,
+    confirmation: { kind: "interactive", ask: async () => "trust" },
+  });
+  const context: MainReloadContext = {
+    governanceRoot: root,
+    streamFn: baseStream,
+    flags,
+    warn: () => {},
+    createApprovalHandler: () => async () => ({ approved: true }),
+    memoryWrite: { source: "tui" },
+    memoryContext: { limits: memoryLimitsOf(settings) },
+    webToolsFor: () => ({}),
+    hooksNotice: () => {},
+    onMcpNote: () => {},
+    homeDir: home,
+    startMcp: noMcp,
+  };
+  const sessionId = newSessionId();
+  let bundle = (
+    await openSessionRuntime({
+      governanceRoot: root,
+      settings,
+      sessionId,
+      streamFn: baseStream,
+      flags,
+      memoryWrite: context.memoryWrite,
+      createApprovalHandler: context.createApprovalHandler,
+      homeDir: home,
+      startMcp: noMcp,
+    })
+  ).bundle;
+  try {
+    await bundle.adapter.run("旧的一轮");
+    await bundle.sessionStore.flush();
+    assert.equal(
+      loadStoreSession(sessionsDirOf(root), sessionId)?.view.runs.at(-1)?.start.model.provider,
+      "openai"
+    );
+
+    // 切到 deepseek：重建上下文必须带显式目标；新 streamFn 记录请求收到的模型
+    const calls: Array<{ provider: string; api: string }> = [];
+    const deepInner = createFakeStreamFn({ replies: [{ text: "新" }] });
+    const deepStream: StreamFn = (model, context, options) => {
+      calls.push({ provider: model.provider, api: model.api });
+      return deepInner(model, context, options);
+    };
+    registerModelAccess(deepStream, {
+      providers: providerFacts("deepseek", "openai-compatible", "https://api.deepseek.test"),
+    });
+    const switched = switchedReloadContext(context, {
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      streamFn: deepStream,
+    });
+    const reloaded = await reopenMainSessionForReload(switched, settings, { sessionId, bundle });
+    await disposeRuntime(bundle);
+    bundle = reloaded.opened.bundle;
+    assert.deepEqual(
+      {
+        provider: bundle.adapter.snapshot().model.provider,
+        id: bundle.adapter.snapshot().model.id,
+      },
+      { provider: "deepseek", id: "deepseek-v4-flash" }
+    );
+    await bundle.adapter.run("新的一轮");
+    await bundle.sessionStore.flush();
+    const afterSwitch = loadStoreSession(sessionsDirOf(root), sessionId)?.view.runs.at(-1)?.start
+      .model;
+    assert.equal(afterSwitch?.provider, "deepseek");
+    assert.equal(afterSwitch?.id, "deepseek-v4-flash");
+    assert.deepEqual(calls.at(-1), { provider: "deepseek", api: "openai-completions" });
+    // “已经是这个型号”比的是运行面（snapshot），不是可能过期的 flags
+    assert.equal(
+      isSameModel(bundle.adapter.snapshot().model, {
+        provider: "deepseek",
+        id: "deepseek-v4-flash",
+      }),
+      true
+    );
+    assert.equal(
+      isSameModel(bundle.adapter.snapshot().model, { provider: "openai", id: "gpt-x" }),
+      false
+    );
+
+    // 再切回 openai：同样生效，请求走 openai-responses
+    const backCalls: Array<{ provider: string; api: string }> = [];
+    const openaiInner = createFakeStreamFn({ replies: [{ text: "回" }] });
+    const openaiStream: StreamFn = (model, context, options) => {
+      backCalls.push({ provider: model.provider, api: model.api });
+      return openaiInner(model, context, options);
+    };
+    registerModelAccess(openaiStream, {
+      providers: providerFacts("openai", "openai", "https://api.openai.test"),
+    });
+    const back = await reopenMainSessionForReload(
+      switchedReloadContext(context, {
+        provider: "openai",
+        model: "gpt-x",
+        streamFn: openaiStream,
+      }),
+      settings,
+      { sessionId, bundle }
+    );
+    await disposeRuntime(bundle);
+    bundle = back.opened.bundle;
+    assert.equal(bundle.adapter.snapshot().model.provider, "openai");
+    await bundle.adapter.run("再一轮");
+    await bundle.sessionStore.flush();
+    assert.equal(
+      loadStoreSession(sessionsDirOf(root), sessionId)?.view.runs.at(-1)?.start.model.provider,
+      "openai"
+    );
+    assert.equal(backCalls.at(-1)?.api, "openai-responses");
+  } finally {
+    await disposeRuntime(bundle);
+  }
 });
 
 test("决策 444：第一条消息建会话文件时才建 .pigeon/state/，忽略规则进全局排除文件，不写 .pigeon/.gitignore", async () => {
