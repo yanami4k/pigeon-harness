@@ -10,6 +10,7 @@ import {
   acquireExclusiveLock,
   currentBootId,
   ExclusiveLockError,
+  lockHeldByLiveProcess,
   processStartTime,
 } from "./exclusive-lock.ts";
 
@@ -190,3 +191,73 @@ test.skipIf(NO_PROC)(
     }
   }
 );
+
+test("读锁遇 EPERM：重试几次后读到持有者，不当作没锁", () => {
+  const root = dir();
+  try {
+    const path = join(root, "a.lock");
+    const holder = { pid: process.pid, acquiredAt: 1 };
+    const waits: number[] = [];
+    let reads = 0;
+    const io = {
+      read: () => {
+        reads += 1;
+        if (reads <= 2) {
+          throw Object.assign(new Error("busy"), { code: "EPERM" });
+        }
+        return `${JSON.stringify(holder)}\n`;
+      },
+      wait: (ms: number) => waits.push(ms),
+    };
+    assert.deepEqual(lockHeldByLiveProcess(path, io), { pid: process.pid });
+    assert.equal(reads, 3, "两次 EPERM 后第三次读到");
+    assert.deepEqual(waits, [20, 35]);
+
+    // 取锁时同样重试，读到存活持有者即拒绝（不会把 EPERM 当成没锁抢走）
+    writeFileSync(path, `${JSON.stringify(holder)}\n`);
+    let acquireReads = 0;
+    const acquireIo = {
+      read: () => {
+        acquireReads += 1;
+        if (acquireReads <= 2) {
+          throw Object.assign(new Error("busy"), { code: "EPERM" });
+        }
+        return `${JSON.stringify(holder)}\n`;
+      },
+      wait: () => {},
+    };
+    assert.throws(() => acquireExclusiveLock(path, "配置 a 正在写入", acquireIo), /held by pid/);
+    assert.equal(acquireReads, 3);
+    assert.equal(existsSync(path), true, "锁文件未被抢走或删掉");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("读锁一直 EPERM：有界重试后抛原错误，不无限重试", () => {
+  const root = dir();
+  try {
+    const path = join(root, "a.lock");
+    const waits: number[] = [];
+    let reads = 0;
+    const io = {
+      read: () => {
+        reads += 1;
+        throw Object.assign(new Error("busy"), { code: "EPERM" });
+      },
+      wait: (ms: number) => waits.push(ms),
+    };
+    let caught: NodeJS.ErrnoException | undefined;
+    try {
+      lockHeldByLiveProcess(path, io);
+    } catch (error) {
+      caught = error as NodeJS.ErrnoException;
+    }
+    assert.ok(caught !== undefined, "应当抛错");
+    assert.equal(caught.code, "EPERM", "抛的是原错误");
+    assert.equal(reads, 4, "首次 + 三次重试");
+    assert.deepEqual(waits, [20, 35, 50]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
