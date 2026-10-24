@@ -21,7 +21,7 @@ unit and is not covered here.
 - **MODEL-006** A provider given on the command line shall be used whatever the other providers hold.
 - **MODEL-007** A provider whose route is not one the package ships shall be refused with "unknown provider \"<name>\"; packaged routes: anthropic, openai, openai-compatible, google.".
 - **MODEL-008** A provider given on the command line that holds no credential shall be refused with "no credential for provider \"<name>\"; set <ENV>, or start the terminal UI and run /login there." naming that provider's environment variable.
-- **MODEL-034** When no provider holds a credential, the terminal UI shall start with a placeholder model, refuse to send messages and tell the user to run `/login`, and after a successful login it shall rebuild the session with the newly chosen provider and model; it shall not pick a provider on its own.
+- **MODEL-034** When no provider holds a credential, the terminal UI shall start with a placeholder model, refuse to send messages and tell the user to run `/login`, and after a successful login it shall rebuild the session with the newly chosen provider and model; it shall not pick a provider on its own. Adding credentials to a session that already has a usable model shall leave that model in place, without rebuilding and without switching models; only a placeholder session is rebuilt, and that rebuild passes the chosen provider and model explicitly.
 
 ## Choosing the model
 
