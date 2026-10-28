@@ -7,7 +7,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
-import { LocalSessionPool, type PooledRuntime } from "../application/session-pool.ts";
+import {
+  LocalSessionPool,
+  type PooledRuntime,
+  type PooledSessionCard,
+} from "../application/session-pool.ts";
 import type { StreamTextDelta } from "../pi-runtime/adapter.ts";
 import type { EventEnvelope } from "../state/events.ts";
 import { newSessionId, type SessionId } from "../state/ids.ts";
@@ -1275,4 +1279,38 @@ test("决策 507：去掉当前会话、换上来的会话带着退回来的排�
     shell.stop();
     rmSync(logDir, { recursive: true, force: true });
   }
+});
+
+// 决策 573：本进程没开的历史卡片叫 dormant；池内 idle/stopped 不变；elsewhere 照旧单独标
+test("PANEL-077 决策 573：dormant 卡片自成一组，池内 idle/stopped 与 elsewhere 不受影响", () => {
+  const card = (
+    id: string,
+    state: PooledSessionCard["state"],
+    extra: Partial<PooledSessionCard> = {}
+  ): PooledSessionCard => ({
+    id,
+    name: id,
+    state,
+    task: "做点事",
+    summary: "做好了",
+    startedAt: 0,
+    updatedAt: 0,
+    ...extra,
+  });
+  const panel = new SessionPanel({
+    height: () => 30,
+    cards: () => [
+      card("d", "dormant", { dormant: true }),
+      card("e", "dormant", { dormant: true, elsewhere: true }),
+      card("i", "idle"),
+      card("s", "stopped"),
+    ],
+    peek: () => [],
+  });
+  const screen = panel.render(80).join("\n");
+  assert.match(screen, /dormant \(2\)/);
+  assert.match(screen, /idle \(1\)/);
+  assert.match(screen, /stopped \(1\)/);
+  assert.match(screen, /e .*open elsewhere/);
+  assert.ok(screen.indexOf("idle (1)") < screen.indexOf("dormant (2)"), "dormant 排在 idle 之后");
 });

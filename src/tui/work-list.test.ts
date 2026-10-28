@@ -69,7 +69,7 @@ function harness(home: string) {
   return { list, pool, runs, opened, tasks };
 }
 
-test("本进程没开的会话列成 idle 卡片：摘要取最后一条回复，别的项目的标目录；当前会话不列；发话先开起来再发；偷看取最近几句；去掉删出清单", async () => {
+test("本进程没开的会话列成 dormant 卡片：摘要取最后一条回复，别的项目的标目录；当前会话不列；发话先开起来再发；偷看取最近几句；去掉删出清单", async () => {
   const home = temp("pigeon-worklist-home-");
   const here = temp("pigeon-worklist-here-");
   const there = temp("pigeon-worklist-there-");
@@ -84,8 +84,8 @@ test("本进程没开的会话列成 idle 卡片：摘要取最后一条回复�
   assert.deepEqual(
     cards.map((card) => [card.id, card.state, card.task, card.summary]),
     [
-      [local, "idle", "修登录", "登录修好了"],
-      [remote, "idle", "查日志", "日志看过了"],
+      [local, "dormant", "修登录", "登录修好了"],
+      [remote, "dormant", "查日志", "日志看过了"],
     ]
   );
   // 决策 489：每张卡都写它干活的目录（与当前会话的工作区相同时由面板省掉）

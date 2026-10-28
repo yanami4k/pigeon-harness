@@ -16,7 +16,7 @@ work list — and the read-only view of a session open in another Pigeon process
 ## Cards
 
 - **PANEL-007** The panel shall list the current session, every other independent session open in this process, and work-list sessions not open in this process; subagents are not listed.
-- **PANEL-008** Cards shall be grouped under "waiting", "running", "preparing", "idle", "failed" and "stopped", in that order, each heading "  <state> (<count>)"; empty groups are omitted and cards carry no state word.
+- **PANEL-008** Cards shall be grouped under "waiting", "running", "preparing", "idle", "dormant", "failed" and "stopped", in that order, each heading "  <state> (<count>)"; empty groups are omitted and cards carry no state word.
 - **PANEL-009** The current session's card shall be first within its group and tagged "current".
 - **PANEL-010** Within a group, other open sessions shall be ordered most recently updated first, followed by work-list sessions in the order they were added.
 - **PANEL-011** Each card shall be one line with four aligned columns — name, working directory, task, summary — "> " marking the selected card; the working directory is shown as the full path, also when it is the current session's, without `~` for the home directory, and when it does not fit it is shortened from the front so that it starts with "…" and keeps its end; other text that does not fit is cut with "…"; an empty task or summary shows the dim placeholder "-".
@@ -88,7 +88,7 @@ work list — and the read-only view of a session open in another Pigeon process
 - **PANEL-059** A session shall join the work list when started from the panel or created by "/fork", when it is current and the user opens the panel from the main or a subagent view, when it is current and the user enters another session, or when "/resume", "/new" or "/clear" replaces it as current while it is still working (SESSIONS-030); only sessions with a session file join.
 - **PANEL-060** The work list shall be re-read each time the panel opens.
 - **PANEL-061** Entries whose session file is gone or cannot be read shall be left out of the panel; a malformed list shows as empty in the panel and is rewritten when the next session joins.
-- **PANEL-062** A work-list session not open here shall be an "idle" card named from its record, with its first typed input as task and the start of its last reply as summary.
+- **PANEL-062** A work-list session not open here shall be a "dormant" card named from its record, with its first typed input as task and the start of its last reply as summary.
 - **PANEL-063** When a listed session moves into a worktree or another directory, its entry shall follow.
 - **PANEL-064** "/worktrees clean" keeps worktrees used by work-list sessions: see WORKTREES-047.
 - **PANEL-065** Writes from several windows shall not overwrite each other; a held lock is retried for about a second.
@@ -109,6 +109,7 @@ work list — and the read-only view of a session open in another Pigeon process
 
 - **PANEL-074** When Pigeon exits, it shall stop all panel sessions within 15 seconds in total and, after leaving the full screen, print "session <name> didn't stop within 15s" for each that was still opening or running when the time ran out ("session panel didn't stop within 15s" when none can be named); work-list entries remain (see WORKTREES-079).
 - **PANEL-075** When Pigeon exits, a panel session still opening, or a work-list session being opened, shall be released once open without running its task.
+- **PANEL-077** A dormant card shall count as history, not as an open session: it can be opened to resume, keeps the "open elsewhere" tag when another process holds it, and sessions in the pool keep reporting "idle" or "stopped".
 
 ## Settings
 

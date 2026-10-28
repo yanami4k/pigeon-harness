@@ -22,6 +22,7 @@ export type PooledSessionState =
   | "running"
   | "preparing"
   | "idle"
+  | "dormant"
   | "failed"
   | "stopped";
 
@@ -140,8 +141,10 @@ const STATE_ORDER: Record<PooledSessionState, number> = {
   running: 1,
   preparing: 2,
   idle: 3,
-  failed: 4,
-  stopped: 5,
+  // 决策 573：历史卡片（本进程没开、可打开续接）不参与池内排序，占位放在 idle 之后
+  dormant: 4,
+  failed: 5,
+  stopped: 6,
 };
 
 const SUMMARY_CHARS = 120;
