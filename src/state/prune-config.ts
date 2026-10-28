@@ -31,6 +31,8 @@ export const ContextPruneSectionSchema = Type.Object(
     onIdle: Type.Optional(Type.Boolean()),
     // 过时读取（被后来的读取覆盖或被整体覆写）的清理
     staleReads: Type.Optional(Type.Boolean()),
+    // 决策 572：带图结果的普通裁剪开关（缺省关：图片不参与保护轮/过时读取/空闲/压缩裁剪，只受图片预算约束）
+    pruneImages: Type.Optional(Type.Boolean()),
     // 决策 414：上下文里没裁的图片（base64）合计至多这么多字节，超过即从最旧的起清掉带图的工具结果
     maxImageBytes: Type.Optional(Type.Integer({ minimum: 1 })),
   },
@@ -51,6 +53,8 @@ export interface ContextPruneSettings {
   onCompaction: boolean;
   onIdle: boolean;
   staleReads: boolean;
+  // 决策 572：图片是否参与保护轮/过时读取/空闲/压缩裁剪（缺省 false）
+  pruneImages: boolean;
   maxImageBytes: number;
 }
 
@@ -63,6 +67,7 @@ export const DEFAULT_CONTEXT_PRUNE = {
   onCompaction: true,
   onIdle: true,
   staleReads: true,
+  pruneImages: false,
   // 每次请求都重发历史里的图片：取常见服务方请求体上限（较小的几家在 20–48 MB）的一小部分，留足文字的余量，也不让每次上传过大
   maxImageBytes: 16 * 1024 * 1024,
 } as const;
@@ -82,6 +87,7 @@ export function contextPruneSettings(
     onCompaction: section?.onCompaction ?? DEFAULT_CONTEXT_PRUNE.onCompaction,
     onIdle: section?.onIdle ?? DEFAULT_CONTEXT_PRUNE.onIdle,
     staleReads: section?.staleReads ?? DEFAULT_CONTEXT_PRUNE.staleReads,
+    pruneImages: section?.pruneImages ?? DEFAULT_CONTEXT_PRUNE.pruneImages,
     maxImageBytes: section?.maxImageBytes ?? DEFAULT_CONTEXT_PRUNE.maxImageBytes,
   };
 }

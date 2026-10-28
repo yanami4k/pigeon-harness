@@ -53,7 +53,7 @@ budget, the startup status and the system prompt's general rules.
 ## Pruning
 
 - **CONTEXT-032** Context pruning shall be on by default and replace only the body of older tool results with a placeholder; calls, user messages, model text, arguments, thinking and status messages are untouched, and the session file keeps the originals.
-- **CONTEXT-033** Results in the last `protectTurns` turns (default 5), results of interrupted calls, and truncated command output that was not saved shall never be prune candidates; image replacement (by the image budget, or of new images after a request rejects them) does not observe these protections.
+- **CONTEXT-033** Results in the last `protectTurns` turns (default 10), results of interrupted calls, and truncated command output that was not saved shall never be prune candidates; image replacement (by the image budget, or of new images after a request rejects them) does not observe these protections.
 - **CONTEXT-034** Pigeon shall take as candidates stale reads (with `staleReads` on: a successful read followed by a successful read of the same file covering all its lines, or by a successful `write_file` of it), empty results (a successful `grep`, `glob` or `search_sessions` with no hits, a `web_search` with no results and no answer, a command that exited 0 with no output and no file changes) and large old results of at least `minResultTokens` (default 500); a result whose placeholder would not be smaller than it is never a candidate.
 - **CONTEXT-035** At free moments — before any automatic compaction (see CONTEXT-008; unless `onCompaction` is off), at the first request after the model, tool set or system prompt changed from the previous run, and after idling longer than the cache retention (unless `onIdle` is off) — Pigeon shall prune all candidates at once.
 - **CONTEXT-036** At other requests Pigeon shall prune, apart from images over the budget (CONTEXT-041), only stale reads from a chosen start onwards, together with the empty results from there on, choosing the start with the largest net saving; it prunes only when the amount saved by those stale reads is at least `minBatchTokens` (default 10,000) and `horizonTurns` (default 20) × that amount is at least (price ratio − 1) × the tokens after the start.
@@ -61,7 +61,7 @@ budget, the startup status and the system prompt's general rules.
 - **CONTEXT-038** A pruned result shall read "[Pruned] <tool> result (<what>; ~<tokens> tokens; <why>), removed to save context. To get it back: <how>"; a pruned command keeps its file-change list.
 - **CONTEXT-039** Before pruning a command result whose output was not saved, Pigeon shall save it (empty output needs no saving); if saving fails the result is kept.
 - **CONTEXT-040** When a read is pruned and no unpruned read, write or edit result of that file remains, the file shall no longer count as read in the session.
-- **CONTEXT-041** With pruning on, when the images in unpruned tool results exceed `maxImageBytes` (default 8 MiB), Pigeon shall replace image results from the oldest until the remaining images total at most half the budget, never the newest image result or a result of the latest turn.
+- **CONTEXT-041** With pruning on, when the images in unpruned tool results exceed `maxImageBytes` (default 16 MiB), Pigeon shall replace image results from the oldest until the remaining images total at most half the budget, never the newest image result or a result of the latest turn.
 - **CONTEXT-042** Each prune shall be recorded in the session before the request that first applies it.
 - **CONTEXT-043** On resume, fork, "/rewind", "/reload", a settings change in "/config" and moving the session into a worktree, Pigeon shall replay the recorded prunes, also when pruning is disabled.
 - **CONTEXT-044** The context usage shown in the status bar and the compaction check shall be estimated on the context actually sent, after pruning (see CONTEXT-007).
@@ -145,11 +145,12 @@ budget, the startup status and the system prompt's general rules.
 | `truncationContinuation.maxConsecutive` / `maxPerRun` | `2` / `5` | Continuation limits. |
 | `repetitionGuard.enabled` / `mode` / `preset` | `true` / `"abort"` / `"omp"` | Repetition detection; individual thresholds may be set too. |
 | `contextPrune.enabled` | `true` | Pruning. |
-| `contextPrune.protectTurns` / `horizonTurns` | `5` / `20` | Protected recent turns; expected horizon. |
+| `contextPrune.protectTurns` / `horizonTurns` | `10` / `20` | Protected recent turns; expected horizon. |
 | `contextPrune.minBatchTokens` / `minResultTokens` | `10000` / `500` | Smallest paid prune; smallest large result. |
 | `contextPrune.priceRatio` / `writeMultiplier` / `retentionSeconds` | from model information | Pricing and cache overrides. |
 | `contextPrune.onCompaction` / `onIdle` / `staleReads` | `true` | Free moments and stale reads. |
-| `contextPrune.maxImageBytes` | `8388608` | Image budget in the context. |
+| `contextPrune.pruneImages` | `false` | Also let turn pruning remove image results. |
+| `contextPrune.maxImageBytes` | `16777216` | Image budget in the context. |
 | `modelRequest.maxRetries` | `4` | Retries per model request. |
 
 Flags: `--context-window`, `--compact-threshold`, `--compact-keep`, `--max-output-tokens`, `--wall-clock` (`pigeon run`).
@@ -158,6 +159,7 @@ Flags: `--context-window`, `--compact-threshold`, `--compact-keep`, `--max-outpu
 
 - **CONTEXT-094** A compaction shall write the entries it replaces (the session entries after the previous compaction entry up to this one) to `.pigeon/state/outputs/<session ID>/compact-<n>`, one stored entry per line, with n increasing on every compaction; the summary entry shall end with the line `pigeon://outputs/<session ID>/compact-<n>`, and `read_file` shall read that virtual path.
 - **CONTEXT-095** When an archive cannot be written, the compaction shall still complete and the summary shall end with one failure line instead of the link.
+- **CONTEXT-096** Image-bearing tool results shall not be prune candidates by default — only the image budget (CONTEXT-041) removes them; with `contextPrune.pruneImages` on they take part in turn pruning like other results.
 
 ## Known limitations
 

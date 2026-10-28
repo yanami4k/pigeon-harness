@@ -438,6 +438,8 @@ function findCandidates(
   const candidates: Candidate[] = [];
   messages.forEach((message, index) => {
     if (message.role !== "toolResult" || pruned.has(message.toolCallId)) return;
+    // 决策 572：缺省不让带图结果参与普通裁剪（保护轮/过时读取/空闲/压缩），图片只由预算清
+    if (!settings.pruneImages && imageBytesOf(message) > 0) return;
     const call = calls.get(message.toolCallId);
     // 找不到所属调用的、保护轮之内的、被中断补上的、命令输出找不回的不裁
     if (call === undefined || call.turn >= firstProtected) return;
