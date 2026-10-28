@@ -35,15 +35,15 @@ import {
 
 export { LIST_SESSIONS_TOOL, READ_SESSION_ENTRY_TOOL, SEARCH_SESSIONS_TOOL };
 // 总字节上限：命中列表进模型上下文前的硬边界（决策 384：照旧设一个）
-export const DEFAULT_SEARCH_TOOL_MAX_BYTES = 16 * 1024;
+export const DEFAULT_SEARCH_TOOL_MAX_BYTES = 32 * 1024;
 export const MAX_SEARCH_KEYWORDS = 8;
 // 会话目录的条数上限与第一句话的截断长度（字符）
 export const DEFAULT_LIST_SESSIONS_LIMIT = 20;
 export const FIRST_USER_TEXT_CHARS = 60;
 // 会话目录里每个会话最多列出的改动文件数
 const LISTED_FILES = 10;
-// read_session_entry：单次读取上限（字符，决策 384：约 4,000）、可调到的上限与前后消息的条数与各自截断
-export const READ_ENTRY_CHARS = 4_000;
+// read_session_entry：单次读取上限（字符）、可调到的上限与前后消息的条数与各自截断
+export const READ_ENTRY_CHARS = 8_000;
 export const MAX_READ_ENTRY_CHARS = 8_000;
 export const READ_CONTEXT_MAX = 5;
 export const READ_CONTEXT_CHARS = 1_000;

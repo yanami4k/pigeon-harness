@@ -92,7 +92,7 @@ test("决策 339 ⑦、384：三件工具的说明逐字冻结——能找到的
   assert.equal(
     read.description,
     "Read the original text of one message from an earlier session by entryId (including thinking and tool output). " +
-      "At most 4000 characters per read (adjustable with maxChars, up to 8000); " +
+      "At most 8000 characters per read (adjustable with maxChars, up to 8000); " +
       "the result gives the total length, and you can continue reading what was not shown with offset; pass before and after to also read some messages before and after it. " +
       "entryId comes from search_sessions hits; you can add sessionId to locate it faster. " +
       "The original text is a record from that time, and the code and file contents in it may be out of date: for the current state of the code, read the code directly; for its history, use git log and git blame."
@@ -323,7 +323,7 @@ test("read_session_entry：单次上限给出总长度、可按偏移续读（�
     const entryId = loadSessionView(dir, SESSION)?.messages[2]?.entryId ?? "";
     const tool = createReadSessionEntryTool({ sessionsDir: dir });
     const first = await tool.execute("t1", { entryId });
-    assert.equal(READ_ENTRY_CHARS, 4_000);
+    assert.equal(READ_ENTRY_CHARS, 8_000);
     assert.equal(MAX_READ_ENTRY_CHARS, 8_000);
     assert.equal(first.details.totalChars, long.length);
     assert.equal(first.details.truncated, true);

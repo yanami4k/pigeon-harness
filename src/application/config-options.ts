@@ -183,7 +183,7 @@ export const CONFIG_OPTIONS: readonly ConfigOption[] = [
     "context",
     "prune: protected turns",
     "recent turns never pruned",
-    "5",
+    "10",
     0
   ),
   int(
@@ -259,7 +259,7 @@ export const CONFIG_OPTIONS: readonly ConfigOption[] = [
     "context",
     "max image bytes",
     "max image bytes kept un-pruned in context",
-    "8388608",
+    "16777216",
     1
   ),
   bool(
@@ -382,7 +382,7 @@ export const CONFIG_OPTIONS: readonly ConfigOption[] = [
     "tools",
     "read_file max bytes",
     "max bytes per read_file",
-    "51200",
+    "262144",
     1
   ),
   int(
@@ -398,7 +398,7 @@ export const CONFIG_OPTIONS: readonly ConfigOption[] = [
     "tools",
     "command output head",
     "bytes kept from the start of long output",
-    "8192",
+    "16384",
     1
   ),
   int(
@@ -406,7 +406,7 @@ export const CONFIG_OPTIONS: readonly ConfigOption[] = [
     "tools",
     "command output tail",
     "bytes kept from the end of long output",
-    "24576",
+    "49152",
     0
   ),
   int(
