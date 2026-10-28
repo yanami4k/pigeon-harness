@@ -123,7 +123,13 @@ const readAll = (path: string, tokens: number): Call => ({
 const stale = (path: string, tokens: number): Call[] => [readAll(path, tokens), readAll(path, 10)];
 
 function settings(overrides: Partial<ContextPruneSettings> = {}): ContextPruneSettings {
-  return { ...contextPruneSettings(undefined, undefined), ...overrides };
+  // 这里的用例按"保护最近 5 轮、图片预算 8 MiB"布置数据；缺省值本身由 prune-config 的用例断言
+  return {
+    ...contextPruneSettings(undefined, undefined),
+    protectTurns: 5,
+    maxImageBytes: 8 * 1024 * 1024,
+    ...overrides,
+  };
 }
 
 const contentOf = (messages: readonly AgentMessage[], id: string) =>

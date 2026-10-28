@@ -41,3 +41,10 @@ test("价格比的取值顺序与保留时长", () => {
   const overridden = contextPruneSettings({ priceRatio: 3, retentionSeconds: 60 }, known);
   assert.deepEqual([overridden.priceRatio, overridden.retentionSeconds], [3, 60]);
 });
+
+// 决策 571：输入上限的缺省值上调——保护最近 10 轮、图片预算 16 MiB
+test("缺省输入上限：保护 10 轮、图片预算 16 MiB", () => {
+  const defaults = contextPruneSettings(undefined, undefined);
+  assert.equal(defaults.protectTurns, 10);
+  assert.equal(defaults.maxImageBytes, 16 * 1024 * 1024);
+});
