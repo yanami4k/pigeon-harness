@@ -205,43 +205,6 @@ Pigeon 的配置按三层合并，后一层覆盖前一层：
 
 这些键都可以在 `/config` 中修改；表中没有列出的嵌套配置或自由文本字段，直接编辑对应层的 `settings.json`。
 
-### `contextPrune`：上下文裁剪
-
-裁剪默认开启，通常不需要配置。价格比与缓存保留时长优先按当前模型的价格信息和缓存规则推断；确定不了价格比时按 `50` 从严处理。所有参数都放在 `contextPrune` 一节，例如把最近 8 轮设为保护区：
-
-```json
-{
-  "contextPrune": {
-    "protectTurns": 8
-  }
-}
-```
-
-| 参数 | 默认值 | 作用 |
-|---|---:|---|
-| `enabled` | `true` | 总开关；关闭后不再新裁，已有记录仍重放 |
-| `protectTurns` | `10` | 最近多少轮的工具结果不裁 |
-| `horizonTurns` | `20` | 公式中的 N，即预期后续轮数的保守下限；越大越容易通过净收益判断 |
-| `minBatchTokens` | `10000` | 其他请求中一次至少裁掉的 token 数；调大更保守 |
-| `minResultTokens` | `500` | 免费时机里“较大旧结果”的候选下限 |
-| `priceRatio` | 按模型信息 | 直接覆盖“缓存重写价 / 命中价”，一般不用手填 |
-| `writeMultiplier` | 按模型信息 | 用未命中价推算重写价时使用的写缓存倍率；`priceRatio` 的直接覆盖优先 |
-| `retentionSeconds` | 按缓存规则 | 空闲多少秒后按免费时机裁剪 |
-| `onCompaction` / `onIdle` / `staleReads` | 均为 `true` | 分别控制压缩前裁剪、空闲裁剪和过时读取候选 |
-| `pruneImages` | `false` | 是否让普通裁剪也清带图的结果；缺省只有图片预算会清 |
-| `maxImageBytes` | `16777216` | 上下文中未裁图片的 base64 总量上限，即 16 MiB |
-
-只有在已经确认当前模型真实价格时，才需要显式覆盖价格比和缓存保留时长：
-
-```json
-{
-  "contextPrune": {
-    "priceRatio": 10,
-    "retentionSeconds": 300
-  }
-}
-```
-
 ## 审批与配置边界
 
 - `ask` 对需要批准的动作逐条询问，`bypass` 不再询问；`Shift+Tab` 只改变当前会话。
