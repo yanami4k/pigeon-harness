@@ -541,9 +541,82 @@ test("同一张图片再读一次，前一次读取即成过时读取（图片�
     ...imageTurn("a.png", 100, "old1"),
     ...conversation([], 5).slice(1),
   ];
-  const pruner = new ContextPruner(settings({ priceRatio: 1, minBatchTokens: 0 }));
+  const pruner = new ContextPruner(settings({ priceRatio: 1, minBatchTokens: 0, pruneImages: true }));
   assert.deepEqual(
     pruner.beforeRequest(messages).record?.items.map((item) => [item.toolCallId, item.reason]),
     [["old0", "stale"]]
   );
+});
+
+// 决策 572：缺省图片不参与保护轮/过时读取/空闲/压缩裁剪，只由图片预算清
+test("CONTEXT-096 决策 572：图片不参与轮次裁剪（缺省），旧文本被裁而图片留着", () => {
+  const [imageCall, imageResult] = imageTurn("a.png", 100, "img0") as [
+    AgentMessage,
+    AgentMessage & { content: object[] },
+  ];
+  const largeImage = {
+    ...imageResult,
+    content: [{ type: "text", text: sized(1_000) }, ...imageResult.content],
+  } as AgentMessage;
+  const messages = [
+    user("任务"),
+    imageCall,
+    largeImage,
+    ...conversation([readAll("b.txt", 12_000)], 6),
+  ];
+  const pruner = new ContextPruner(settings({ priceRatio: 1, minBatchTokens: 0 }));
+  const record = pruner.beforeCompaction(messages);
+  const view = pruner.view(messages);
+  assert.ok(record !== undefined);
+  assert.ok(record.items.some((item) => item.toolCallId === "old0"), "旧的文本结果照裁");
+  assert.ok(!record.items.some((item) => item.toolCallId === "img0"), "图片不进普通裁剪");
+  assert.deepEqual(imagesOf(view), ["img0"]);
+});
+
+test("CONTEXT-096 决策 572：过时读取、空闲与压缩前裁剪都不动图片", () => {
+  const messages = [
+    user("任务"),
+    ...imageTurn("a.png", 100, "old0"),
+    ...imageTurn("a.png", 100, "old1"),
+    ...conversation([], 5).slice(1),
+  ];
+  const stale = new ContextPruner(settings({ priceRatio: 1, minBatchTokens: 0 })).beforeRequest(
+    messages
+  );
+  assert.equal(stale.record, undefined, "只有过时读取候选时也不裁图片");
+  assert.deepEqual(imagesOf(stale.messages), ["old0", "old1"]);
+  let now = 1_000;
+  const idle = new ContextPruner(
+    settings({ priceRatio: 50, retentionSeconds: 60 }),
+    {},
+    undefined,
+    () => now
+  );
+  now += 61_000;
+  const idleView = idle.beforeRequest(messages);
+  assert.equal(idleView.record, undefined);
+  assert.deepEqual(imagesOf(idleView.messages), ["old0", "old1"]);
+  const compact = new ContextPruner(settings({ priceRatio: 1, minBatchTokens: 0 })).beforeCompaction(
+    messages
+  );
+  assert.equal(compact, undefined);
+});
+
+test("CONTEXT-096 决策 572：pruneImages: true 恢复旧行为，图片参与保护轮之外的裁剪", () => {
+  const [imageCall, imageResult] = imageTurn("a.png", 100, "img0") as [
+    AgentMessage,
+    AgentMessage & { content: object[] },
+  ];
+  const largeImage = {
+    ...imageResult,
+    content: [{ type: "text", text: sized(1_000) }, ...imageResult.content],
+  } as AgentMessage;
+  const messages = [user("任务"), imageCall, largeImage, ...conversation([], 6)];
+  const pruner = new ContextPruner(
+    settings({ priceRatio: 1, minBatchTokens: 0, pruneImages: true })
+  );
+  const record = pruner.beforeCompaction(messages);
+  const view = pruner.view(messages);
+  assert.ok(record?.items.some((item) => item.toolCallId === "img0"));
+  assert.deepEqual(imagesOf(view), []);
 });

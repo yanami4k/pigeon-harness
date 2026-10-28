@@ -254,6 +254,12 @@ export const CONFIG_OPTIONS: readonly ConfigOption[] = [
     "prune stale reads",
     "prune file reads superseded later"
   ),
+  bool(
+    "contextPrune.pruneImages",
+    "context",
+    "prune images",
+    "let turn pruning drop image results too (off: only the image budget removes them)"
+  ),
   int(
     "contextPrune.maxImageBytes",
     "context",

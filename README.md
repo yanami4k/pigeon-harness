@@ -220,7 +220,7 @@ Pigeon 的配置按三层合并，后一层覆盖前一层：
 | 参数 | 默认值 | 作用 |
 |---|---:|---|
 | `enabled` | `true` | 总开关；关闭后不再新裁，已有记录仍重放 |
-| `protectTurns` | `5` | 最近多少轮的工具结果不裁 |
+| `protectTurns` | `10` | 最近多少轮的工具结果不裁 |
 | `horizonTurns` | `20` | 公式中的 N，即预期后续轮数的保守下限；越大越容易通过净收益判断 |
 | `minBatchTokens` | `10000` | 其他请求中一次至少裁掉的 token 数；调大更保守 |
 | `minResultTokens` | `500` | 免费时机里“较大旧结果”的候选下限 |
@@ -228,7 +228,8 @@ Pigeon 的配置按三层合并，后一层覆盖前一层：
 | `writeMultiplier` | 按模型信息 | 用未命中价推算重写价时使用的写缓存倍率；`priceRatio` 的直接覆盖优先 |
 | `retentionSeconds` | 按缓存规则 | 空闲多少秒后按免费时机裁剪 |
 | `onCompaction` / `onIdle` / `staleReads` | 均为 `true` | 分别控制压缩前裁剪、空闲裁剪和过时读取候选 |
-| `maxImageBytes` | `8388608` | 上下文中未裁图片的 base64 总量上限，即 8 MiB |
+| `pruneImages` | `false` | 是否让普通裁剪也清带图的结果；缺省只有图片预算会清 |
+| `maxImageBytes` | `16777216` | 上下文中未裁图片的 base64 总量上限，即 16 MiB |
 
 只有在已经确认当前模型真实价格时，才需要显式覆盖价格比和缓存保留时长：
 
