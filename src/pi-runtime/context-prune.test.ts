@@ -541,7 +541,9 @@ test("同一张图片再读一次，前一次读取即成过时读取（图片�
     ...imageTurn("a.png", 100, "old1"),
     ...conversation([], 5).slice(1),
   ];
-  const pruner = new ContextPruner(settings({ priceRatio: 1, minBatchTokens: 0, pruneImages: true }));
+  const pruner = new ContextPruner(
+    settings({ priceRatio: 1, minBatchTokens: 0, pruneImages: true })
+  );
   assert.deepEqual(
     pruner.beforeRequest(messages).record?.items.map((item) => [item.toolCallId, item.reason]),
     [["old0", "stale"]]
@@ -568,7 +570,10 @@ test("CONTEXT-096 决策 572：图片不参与轮次裁剪（缺省），旧文�
   const record = pruner.beforeCompaction(messages);
   const view = pruner.view(messages);
   assert.ok(record !== undefined);
-  assert.ok(record.items.some((item) => item.toolCallId === "old0"), "旧的文本结果照裁");
+  assert.ok(
+    record.items.some((item) => item.toolCallId === "old0"),
+    "旧的文本结果照裁"
+  );
   assert.ok(!record.items.some((item) => item.toolCallId === "img0"), "图片不进普通裁剪");
   assert.deepEqual(imagesOf(view), ["img0"]);
 });
@@ -596,9 +601,9 @@ test("CONTEXT-096 决策 572：过时读取、空闲与压缩前裁剪都不动�
   const idleView = idle.beforeRequest(messages);
   assert.equal(idleView.record, undefined);
   assert.deepEqual(imagesOf(idleView.messages), ["old0", "old1"]);
-  const compact = new ContextPruner(settings({ priceRatio: 1, minBatchTokens: 0 })).beforeCompaction(
-    messages
-  );
+  const compact = new ContextPruner(
+    settings({ priceRatio: 1, minBatchTokens: 0 })
+  ).beforeCompaction(messages);
   assert.equal(compact, undefined);
 });
 
