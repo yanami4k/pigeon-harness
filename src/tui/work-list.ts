@@ -1,6 +1,6 @@
 // 决策 485：会话面板的工作清单——本进程会话池里开着的会话，加上用户级清单（~/.pigeon/state/session-index.json）里本进程
 // 没开的会话（重启前留下的、别的工作区的、别的 Pigeon 进程开着的），不分工作区。当前会话不在这里（面板另画它那张卡）。
-// 本进程没开的卡片写 idle、摘要取会话记录里最后一条回复；别的进程开着的标 open elsewhere（只能看历史、发不了话、停不了）；
+// 本进程没开的卡片写 dormant（历史卡片，能打开续接）、摘要取会话记录里最后一条回复；别的进程开着的标 open elsewhere（只能看历史、发不了话、停不了）；
 // 不在当前会话所在项目里的标它的目录。偷看取会话记录最近几句；发话先在本进程开起来再发（开不成写明原因）；
 // Ctrl+X 第一下不做事，第二下删出清单。从面板去掉即删出清单（会话记录保留）；开着的再释放。清单在打开面板时重读。
 import { homedir } from "node:os";
@@ -115,7 +115,7 @@ export class WorkList<Live> implements SessionPanelSource {
         card: {
           id: entry.sessionId,
           name: facts.name,
-          state: "idle",
+          state: "dormant",
           task: facts.task,
           summary: facts.summary,
           dormant: true,

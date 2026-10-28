@@ -18,6 +18,7 @@ const GROUP_LABEL: Record<PooledSessionState, string> = {
   running: "running",
   preparing: "preparing",
   idle: "idle",
+  dormant: "dormant",
   failed: "failed",
   stopped: "stopped",
 };
@@ -27,6 +28,7 @@ const GROUPS: PooledSessionState[] = [
   "running",
   "preparing",
   "idle",
+  "dormant",
   "failed",
   "stopped",
 ];
