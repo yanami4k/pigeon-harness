@@ -10,6 +10,8 @@ coverage/
 # Pigeon 的程序状态与个人设置不入库（决策 325）；可提交的 .pigeon/settings.json 与 .pigeon/skills 是项目内容
 .pigeon/state/
 .pigeon/settings.local.json
+# 工作树目录由全局排除覆盖；biome 只读项目 .gitignore，补上使两者口径一致
+.pigeon/worktrees/
 
 npm-debug.log*
 
