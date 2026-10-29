@@ -276,10 +276,10 @@ export const modelInfo = {
 | --- | --- | --- |
 | `tools.grep.maxResults` | grep 至多列出的匹配条数（files_only 时为文件数），超出给出总数；另有列出部分的字数预算（常量，见下文"读档工具"一节末尾） | 200 |
 | `tools.glob.maxResults` | glob 至多列出的文件个数，超出给出总数 | 100 |
-| `tools.readFile.maxBytes` | read_file 单次返回的正文至多这么多字节，到了即停并给出续读的 offset | 51200（50 KiB） |
+| `tools.readFile.maxBytes` | read_file 单次返回的正文至多这么多字节，到了即停并给出续读的 offset | 262144（256 KiB） |
 | `tools.readFile.maxLineChars` | 单行超过这么多字符即截断显示并注明原长 | 2000 |
-| `tools.runCommand.outputHeadBytes` | run_command 输出超长时保留的开头 | 8192（8 KiB） |
-| `tools.runCommand.outputTailBytes` | 输出超长时保留的末尾 | 24576（24 KiB） |
+| `tools.runCommand.outputHeadBytes` | run_command 输出超长时保留的开头 | 16384（16 KiB） |
+| `tools.runCommand.outputTailBytes` | 输出超长时保留的末尾 | 49152（48 KiB） |
 | `tools.runCommand.savedOutputsMaxBytes` | 每个会话落盘的完整输出总量上限，满了删最旧的 | 209715200（200 MiB） |
 | `tools.runCommand.timeoutSeconds` | 不给 `timeout_seconds` 时的单次超时（秒）；大于上限时按上限 | 120 |
 | `tools.runCommand.maxTimeoutSeconds` | `timeout_seconds` 的上限（秒），给得更大按上限执行并在结果里注明 | 600 |
@@ -670,7 +670,7 @@ agent 之间的一切传话——派出时交代的任务、`send_message` 的�
 agent 可以查本项目以前的会话，共三件工具，都是只读、免审批：
 
 - `search_sessions`：按关键词检索以前会话。关键词大小写不敏感、按字面匹配，最多 8 个，任一命中即列出；多词的关键词拆成词分别计分，整段出现另加分；代码名整体与拆开的各段都能命中，中文按重叠二元组匹配。BM25 打分、同分从新到旧；结果按会话归并：每个会话一条，带命中条目数与一两段片段及其条目编号，缺省 5 个会话、最多 10 个。
-- `read_session_entry`：按条目号读一条消息的原文（含思考内容与工具输出）。单次最多 4,000 字（`maxChars` 可调、上限 8,000），返回里给出总长度，没显示完的用 `offset` 续读；可给 `before`、`after` 连同前后各至多 5 条消息一起读（各自截断到 1,000 字）。
+- `read_session_entry`：按条目号读一条消息的原文（含思考内容与工具输出）。单次最多 8,000 字（`maxChars` 可调、上限同为 8,000），返回里给出总长度，没显示完的用 `offset` 续读；可给 `before`、`after` 连同前后各至多 5 条消息一起读（各自截断到 1,000 字）。
 - `list_sessions`：列出以前的会话，每个给出会话编号、开始时间、第一句使用者的话与改动过的文件（`edit_file` 的写入与 `run_command` 报告的文件变化），可按开始时间与文件路径筛选，最多 20 个。
 
 三件工具对不认识的参数报错说明，不静默丢弃。终端界面没有给人用的检索命令（决策 466）：想找以前的事直接问 agent；`/resume` 的会话列表打字即可按内容筛选，用的是同一套检索与缓存。

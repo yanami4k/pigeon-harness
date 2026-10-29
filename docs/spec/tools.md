@@ -179,8 +179,8 @@ Approval of tool calls is specified under Approvals; session search under Memory
 | --- | --- | --- |
 | `tools.taskList` | `true` | Offer the task-list tools. |
 | `tools.grep.maxResults` / `tools.glob.maxResults` | `200` / `100` | Result limits. |
-| `tools.readFile.maxBytes` / `maxLineChars` | `51200` / `2000` | Read limits. |
-| `tools.runCommand.outputHeadBytes` / `outputTailBytes` | `8192` / `24576` | Output kept around a cut. |
+| `tools.readFile.maxBytes` / `maxLineChars` | `262144` / `2000` | Read limits. |
+| `tools.runCommand.outputHeadBytes` / `outputTailBytes` | `16384` / `49152` | Output kept around a cut. |
 | `tools.runCommand.savedOutputsMaxBytes` | `209715200` | Saved output per session. |
 | `tools.runCommand.timeoutSeconds` / `maxTimeoutSeconds` | `120` / `600` | Command timeouts. |
 | `tools.runCommand.maxBackgroundJobs` / `maxBackgroundJobsTotal` | `2` / `8` | Concurrent jobs. |
