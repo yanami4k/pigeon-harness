@@ -63,10 +63,7 @@ export function recordTrustedEntries(
 ): void {
   const file = configTrustPathOf(homeDir);
   mkdirSync(userStateDir(homeDir), { recursive: true });
-  const release = acquireExclusiveLock(
-    `${file}.lock`,
-    "trust record is being written by another window"
-  );
+  const release = acquireExclusiveLock(`${file}.lock`, "trust record is being written");
   try {
     const projects = readTrustFile(file);
     const key = normalizeProjectPath(root);

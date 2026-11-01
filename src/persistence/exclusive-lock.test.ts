@@ -23,7 +23,10 @@ test("独占锁：同一把锁不可重入——同进程再取也拒绝", () =>
   try {
     const path = join(root, "a.lock");
     const release = acquireExclusiveLock(path, "配置 a 正在写入");
-    assert.throws(() => acquireExclusiveLock(path, "配置 a 正在写入"), ExclusiveLockError);
+    assert.throws(
+      () => acquireExclusiveLock(path, "配置 a 正在写入"),
+      /already held by this process/
+    );
     release();
     assert.doesNotThrow(() => acquireExclusiveLock(path, "配置 a 正在写入")());
   } finally {
@@ -164,7 +167,7 @@ test("建锁原子性：锁文件一出现就是完整内容，另一个进程�
 const NO_PROC = currentBootId() === undefined ? "取不到开机编号（非 Linux）" : false;
 
 test.skipIf(NO_PROC)(
-  "独占锁：记下的开机编号或进程启动时刻与现在不符（整机重启、pid 被复用）即按残留接管；真在跑的持有者照常拒绝",
+  "独占锁：开机编号或启动时刻与现在不符即按残留接管；真在跑的其他进程照常拒绝",
   () => {
     const dir = mkdtempSync(join(tmpdir(), "pigeon-lock-"));
     try {
@@ -184,8 +187,24 @@ test.skipIf(NO_PROC)(
         assert.equal(JSON.parse(readFileSync(path, "utf8")).startTime, alive.startTime, what);
         release();
       }
+      // 身份一致但本进程并没有持有这把锁：只能是自己留下的残留，按残留接管
       writeFileSync(path, `${JSON.stringify(alive)}\n`);
-      assert.throws(() => acquireExclusiveLock(path, "测试"), ExclusiveLockError, "真在跑的持有者");
+      acquireExclusiveLock(path, "测试")();
+
+      // 真在跑的其他进程：起一个子进程，把它的 pid 写进锁
+      const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], {
+        stdio: "ignore",
+      });
+      try {
+        writeFileSync(path, `${JSON.stringify({ pid: child.pid, acquiredAt: 1 })}\n`);
+        assert.throws(
+          () => acquireExclusiveLock(path, "测试"),
+          /held by another window, pid/,
+          "真在跑的持有者"
+        );
+      } finally {
+        child.kill();
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -196,7 +215,7 @@ test("读锁遇 EPERM：重试几次后读到持有者，不当作没锁", () =>
   const root = dir();
   try {
     const path = join(root, "a.lock");
-    const holder = { pid: process.pid, acquiredAt: 1 };
+    const holder = { pid: process.ppid, acquiredAt: 1 };
     const waits: number[] = [];
     let reads = 0;
     const io = {
@@ -209,12 +228,14 @@ test("读锁遇 EPERM：重试几次后读到持有者，不当作没锁", () =>
       },
       wait: (ms: number) => waits.push(ms),
     };
-    assert.deepEqual(lockHeldByLiveProcess(path, io), { pid: process.pid });
+    assert.deepEqual(lockHeldByLiveProcess(path, io), { pid: process.ppid });
     assert.equal(reads, 3, "两次 EPERM 后第三次读到");
     assert.deepEqual(waits, [20, 35]);
 
-    // 取锁时同样重试，读到存活持有者即拒绝（不会把 EPERM 当成没锁抢走）
-    writeFileSync(path, `${JSON.stringify(holder)}\n`);
+    // 取锁时同样重试，读到存活持有者即拒绝（不会把 EPERM 当成没锁抢走）；持有者用另一个活着的进程（父进程），
+    // 不能用自己：自己的 pid 出现在锁里而没有登记时按残留接管
+    const other = { pid: process.ppid, acquiredAt: 1 };
+    writeFileSync(path, `${JSON.stringify(other)}\n`);
     let acquireReads = 0;
     const acquireIo = {
       read: () => {
@@ -222,11 +243,14 @@ test("读锁遇 EPERM：重试几次后读到持有者，不当作没锁", () =>
         if (acquireReads <= 2) {
           throw Object.assign(new Error("busy"), { code: "EPERM" });
         }
-        return `${JSON.stringify(holder)}\n`;
+        return `${JSON.stringify(other)}\n`;
       },
       wait: () => {},
     };
-    assert.throws(() => acquireExclusiveLock(path, "配置 a 正在写入", acquireIo), /held by pid/);
+    assert.throws(
+      () => acquireExclusiveLock(path, "配置 a 正在写入", acquireIo),
+      /held by another window, pid/
+    );
     assert.equal(acquireReads, 3);
     assert.equal(existsSync(path), true, "锁文件未被抢走或删掉");
   } finally {
@@ -257,6 +281,61 @@ test("读锁一直 EPERM：有界重试后抛原错误，不无限重试", () =>
     assert.equal(caught.code, "EPERM", "抛的是原错误");
     assert.equal(reads, 4, "首次 + 三次重试");
     assert.deepEqual(waits, [20, 35, 50]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Windows 上没有 /proc，锁里只有 pid：释放失败留下的锁若永远判活，之后每次取锁都会误报"另一个窗口"（issue #32）。
+test("独占锁：本进程留下的残留锁直接接管（释放失败或 pid 被复用）", () => {
+  const root = dir();
+  try {
+    const path = join(root, "a.lock");
+    writeFileSync(path, `${JSON.stringify({ pid: process.pid, acquiredAt: 1 })}\n`, "utf8");
+    const release = acquireExclusiveLock(path, "a");
+    assert.match(readFileSync(path, "utf8"), new RegExp(`"pid":${process.pid}`));
+    release();
+    assert.equal(existsSync(path), false, "释放后锁文件应当没了");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("独占锁：删锁遇 EPERM/EBUSY 退避重试；仍失败则报警，下一次取锁自愈", () => {
+  const root = dir();
+  try {
+    const path = join(root, "a.lock");
+    const waits: number[] = [];
+    let removes = 0;
+    const flaky = {
+      read: (target: string) => readFileSync(target, "utf8"),
+      wait: (ms: number) => waits.push(ms),
+      remove: (target: string) => {
+        removes += 1;
+        if (removes <= 2) {
+          throw Object.assign(new Error("busy"), { code: "EPERM" });
+        }
+        rmSync(target, { force: true });
+      },
+    };
+    acquireExclusiveLock(path, "a", flaky)();
+    assert.equal(existsSync(path), false, "第三次删除成功");
+    assert.equal(removes, 3);
+    assert.deepEqual(waits, [20, 40]);
+
+    // 一直删不掉：抛原错误（登记表已清），锁文件留下，下一次取锁按残留接管
+    const stuck = {
+      read: (target: string) => readFileSync(target, "utf8"),
+      wait: () => {},
+      remove: () => {
+        throw Object.assign(new Error("busy"), { code: "EBUSY" });
+      },
+    };
+    const held = acquireExclusiveLock(path, "a", stuck);
+    assert.throws(() => held(), /busy/);
+    assert.equal(existsSync(path), true, "锁文件留在原地");
+    acquireExclusiveLock(path, "a")();
+    assert.equal(existsSync(path), false, "下一次取锁把它清掉");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

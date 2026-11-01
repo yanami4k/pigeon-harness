@@ -11,7 +11,10 @@
 // 残留处理与会话锁同口径：锁文件记持有进程 pid，持有者仍存活则拒绝；已死或内容畸形即接管。
 // Linux 上另记开机编号（/proc/sys/kernel/random/boot_id）与持有进程的启动时刻（/proc/<pid>/stat 第 22 列）：
 // 整机重启或进程被强杀后 pid 可能被无关进程占用，两者任一与现在不符即按残留接管，不会永远报"持有进程仍在"。
-// 取不到这两项的系统（或旧锁文件里没有它们）退回只看 pid，局限同前：pid 被复用时误判为存活，报错给出锁文件路径。
+// 取不到这两项的系统（或旧锁文件里没有它们）退回只看 pid。
+// 同一个进程留下的锁另按进程内登记判断：锁里的 pid 是自己、但本进程并没有持有这把锁时（释放时删除失败，
+// 或上一个进程的 pid 被复用），一律按残留接管；只有自己正持有时的再取才拒绝并说明是"本进程"。
+// 删锁遇 Windows 上短暂的 EPERM/EBUSY/EACCES 会退避重试；仍失败即抛原错误，下一次取锁再自愈。
 import { randomBytes } from "node:crypto";
 import {
   closeSync,
@@ -32,17 +35,22 @@ export class ExclusiveLockError extends Error {}
 export interface LockReadIo {
   read(path: string): string;
   wait(ms: number): void;
+  // 删锁文件的注入点（测试用）；不给时用默认实现，默认实现本身不带重试，重试由 removeLock 负责
+  remove?(path: string): void;
 }
 
 // 有界重试：三次，20/35/50 毫秒（不随机，避免测试不确定）；仍失败才抛原错误
 const LOCK_READ_RETRY_MS = [20, 35, 50] as const;
+// 删锁失败的重试间隔：Windows 上刚写完的锁可能被扫描程序短暂占用
+const LOCK_REMOVE_RETRY_MS = [20, 40, 60, 80] as const;
 
 const defaultLockReadIo: LockReadIo = {
   read: (path) => readFileSync(path, "utf8"),
   wait: (ms) => {
-    // 同步接口里的有界等待；只用在上面这三次重试之间，不改变锁语义
+    // 同步接口里的有界等待；只用在重试之间，不改变锁语义
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
   },
+  remove: (path) => rmSync(path, { force: true }),
 };
 
 interface LockHolder {
@@ -51,6 +59,9 @@ interface LockHolder {
   bootId?: string;
   startTime?: string;
 }
+
+// 本进程当前持有的锁：锁文件路径 → 取锁时记下的时刻。锁里的 pid 是自己却不在表里，只可能是自己留下的残留。
+const heldHere = new Map<string, number>();
 
 // 本次开机的编号；取不到（非 Linux）为 undefined
 export function currentBootId(): string | undefined {
@@ -135,12 +146,14 @@ function isProcessAlive(pid: number): boolean {
 }
 
 // 锁文件是否正被一个仍存活的进程持有（迁移命令据此拒绝挪动正在使用的状态；会话锁与本锁的持有者记录同形）
+// 锁里的 pid 是自己、但本进程并没有持有这把锁时，同样当作残留（不算被占用），与取锁时的判断一致
 export function lockHeldByLiveProcess(
   path: string,
   io: LockReadIo = defaultLockReadIo
 ): { pid: number } | undefined {
   const holder = readHolder(path, io);
   if (holder === "missing" || holder === "malformed") return undefined;
+  if (holder.pid === process.pid && !heldHere.has(path)) return undefined;
   return holderAlive(holder) ? { pid: holder.pid } : undefined;
 }
 
@@ -185,6 +198,7 @@ export function acquireExclusiveLock(
   };
   for (let attempt = 0; attempt < 5; attempt += 1) {
     if (tryCreate(path, holder)) {
+      heldHere.set(path, holder.acquiredAt);
       return releaser(path, holder.acquiredAt, io);
     }
     const current = readHolder(path, io);
@@ -192,12 +206,38 @@ export function acquireExclusiveLock(
       continue;
     }
     if (current !== "malformed" && holderAlive(current)) {
-      throw new ExclusiveLockError(`${detail} (held by pid ${current.pid}, lock file ${path})`);
+      if (current.pid !== process.pid) {
+        throw new ExclusiveLockError(
+          `${detail} (held by another window, pid ${current.pid}; lock file ${path})`
+        );
+      }
+      // 同一个进程：只有自己正拿着这把锁才是真占用；不在登记表里即残留，落到下面接管
+      if (heldHere.get(path) === current.acquiredAt) {
+        throw new ExclusiveLockError(`${detail} (already held by this process; lock file ${path})`);
+      }
     }
-    // 残留锁：持有进程已死、已不是记下的那个进程（重启或 pid 被复用），或内容畸形
-    rmSync(path, { force: true });
+    // 残留锁：持有进程已死、已不是记下的那个进程（重启或 pid 被复用）、是本进程的遗留，或内容畸形
+    removeLock(path, io);
   }
   throw new ExclusiveLockError(`couldn't acquire lock ${path} after several retries`);
+}
+
+// 删锁：Windows 上短暂的 EPERM/EBUSY/EACCES 退避重试，仍失败抛原错误（调用方补锁路径）
+function removeLock(path: string, io: LockReadIo): void {
+  const remove = io.remove ?? ((target: string) => rmSync(target, { force: true }));
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      remove(path);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const retriable = code === "EPERM" || code === "EBUSY" || code === "EACCES";
+      if (!retriable || attempt >= LOCK_REMOVE_RETRY_MS.length) {
+        throw error;
+      }
+      io.wait(LOCK_REMOVE_RETRY_MS[attempt] as number);
+    }
+  }
 }
 
 // 只删自己那一把：被别人接管之后重复释放不误删
@@ -208,6 +248,9 @@ function releaser(path: string, acquiredAt: number, io: LockReadIo): () => void 
       return;
     }
     released = true;
+    if (heldHere.get(path) === acquiredAt) {
+      heldHere.delete(path);
+    }
     const current = readHolder(path, io);
     if (
       current !== "missing" &&
@@ -215,7 +258,7 @@ function releaser(path: string, acquiredAt: number, io: LockReadIo): () => void 
       current.pid === process.pid &&
       current.acquiredAt === acquiredAt
     ) {
-      rmSync(path, { force: true });
+      removeLock(path, io);
     }
   };
 }

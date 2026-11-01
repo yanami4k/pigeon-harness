@@ -68,10 +68,7 @@ function modify(
   let release: (() => void) | undefined;
   for (let attempt = 0; release === undefined; attempt += 1) {
     try {
-      release = acquireExclusiveLock(
-        `${file}.lock`,
-        "session index is being written by another window"
-      );
+      release = acquireExclusiveLock(`${file}.lock`, "session index is being written");
     } catch (error) {
       if (!(error instanceof ExclusiveLockError) || attempt >= LOCK_RETRIES) throw error;
       sleepSync(LOCK_RETRY_MS);

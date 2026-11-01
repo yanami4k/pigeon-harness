@@ -32,7 +32,7 @@ export interface MemoryLocation {
 }
 
 // 记忆锁被占时报错里的说法
-const MEMORY_LOCK_DETAIL = "memory is being written by another process";
+const MEMORY_LOCK_DETAIL = "memory is being written";
 
 // 主目录下启动时项目的 .pigeon 就是用户级的 ~/.pigeon，项目级记忆与用户级是同一个文件：只有用户级这一层可用——不重复推送、
 // 不把两层的编号混进一个文件（混了两层都判格式不对、拒绝写入），也不让"只对本项目"的条目随用户级推给所有项目

@@ -90,7 +90,7 @@ fence, protected paths and MCP tiers.
 - **APPROVALS-062** An id that neither starts with "grant_" nor has the form config#N shall fail with "can't revoke <id>: not a grant_ id or config#N"; project and user rules cannot be revoked by command.
 - **APPROVALS-063** "/grants save <grantId>" shall append the grant with its origin (including the first call's full arguments) to `permissions.grants` in `.pigeon/settings.local.json` and print "saved <grantId> → .pigeon/settings.local.json"; it applies from the next start or "/reload", and an unknown id fails with "command failed: grant not found or revoked: <id>".
 - **APPROVALS-064** Saving a grant twice shall fail with "command failed: grant <id> already saved as config#N" and change nothing.
-- **APPROVALS-065** "/grants save" and "/revoke config#N" shall replace the file in one step, keeping its other sections; while another window writes it, they fail with "command failed: saved rules are being written by another window".
+- **APPROVALS-065** "/grants save" and "/revoke config#N" shall replace the file in one step, keeping its other sections; while another window writes it, they fail with "command failed: saved rules are being written (held by another window, pid <pid>; lock file <path>)".
 - **APPROVALS-066** Creating the local settings file inside a git repository shall add it to the user's global git excludes when not already ignored.
 - **APPROVALS-067** While a turn runs, "/grants" shall work and "/revoke" and "/grants save" are refused with "can't use /<command> while running" (see SUBAGENTS-070).
 

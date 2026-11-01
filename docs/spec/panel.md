@@ -91,7 +91,7 @@ work list — and the read-only view of a session open in another Pigeon process
 - **PANEL-062** A work-list session not open here shall be a "dormant" card named from its record, with its first typed input as task and the start of its last reply as summary.
 - **PANEL-063** When a listed session moves into a worktree or another directory, its entry shall follow.
 - **PANEL-064** "/worktrees clean" keeps worktrees used by work-list sessions: see WORKTREES-047.
-- **PANEL-065** Writes from several windows shall not overwrite each other; a held lock is retried for about a second.
+- **PANEL-065** Writes from several windows shall not overwrite each other; a held lock is retried for about a second. A lock is stale and shall be taken over when its process is gone, its content cannot be read, its boot or start time differs, or it names this process while no write is under way here; removing a lock file that resists deletion is retried briefly and then reported with its path.
 - **PANEL-066** Sandbox sessions shall never join the work list.
 
 ## Sessions open elsewhere

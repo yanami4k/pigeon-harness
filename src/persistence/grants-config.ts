@@ -51,7 +51,7 @@ export function grantsConfigLockPath(governanceRoot: string): string {
   return localSettingsLockPathOf(governanceRoot);
 }
 
-const CONTENDED = "saved rules are being written by another window";
+const CONTENDED = "saved rules are being written";
 
 // 读出个人设置文件的原样内容（校验通过才返回；缺失为空对象）
 function readLocalSettingsRaw(governanceRoot: string): Record<string, unknown> {

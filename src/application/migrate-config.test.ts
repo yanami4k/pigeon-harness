@@ -255,7 +255,7 @@ test("锁被存活进程占用（有会话在运行）：拒绝并说明，什�
   const root = repo();
   write(
     join(root, ".pigeon", "sessions", "enc", "s.jsonl.lock"),
-    JSON.stringify({ pid: process.pid })
+    JSON.stringify({ pid: process.ppid })
   );
   assert.throws(() => migrate(root), /lock held by a running/);
   assert.ok(existsSync(join(root, ".pigeon", "sessions")));
