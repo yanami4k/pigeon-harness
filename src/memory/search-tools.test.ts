@@ -92,7 +92,7 @@ test("决策 339 ⑦、384：三件工具的说明逐字冻结——能找到的
   assert.equal(
     read.description,
     "Read the original text of one message from an earlier session by entryId (including thinking and tool output). " +
-      "At most 8000 characters per read (adjustable with maxChars, up to 8000); " +
+      "At most 8000 characters per read (adjustable with maxChars, up to 16000); " +
       "the result gives the total length, and you can continue reading what was not shown with offset; pass before and after to also read some messages before and after it. " +
       "entryId comes from search_sessions hits; you can add sessionId to locate it faster. " +
       "The original text is a record from that time, and the code and file contents in it may be out of date: for the current state of the code, read the code directly; for its history, use git log and git blame."
@@ -310,6 +310,7 @@ test("read_session_entry 典型输出逐字：头行、正文分隔、thinking �
     );
   }));
 
+// spec: MEMORY-074
 test("read_session_entry：单次上限给出总长度、可按偏移续读（去上限或吃掉续读提示变红）；找不到条目响亮报错", () =>
   withDir(async (dir) => {
     const long = "很长的工具输出".repeat(20_000);
@@ -324,7 +325,7 @@ test("read_session_entry：单次上限给出总长度、可按偏移续读（�
     const tool = createReadSessionEntryTool({ sessionsDir: dir });
     const first = await tool.execute("t1", { entryId });
     assert.equal(READ_ENTRY_CHARS, 8_000);
-    assert.equal(MAX_READ_ENTRY_CHARS, 8_000);
+    assert.equal(MAX_READ_ENTRY_CHARS, 16_000);
     assert.equal(first.details.totalChars, long.length);
     assert.equal(first.details.truncated, true);
     const text = textOf(first);
@@ -336,13 +337,19 @@ test("read_session_entry：单次上限给出总长度、可按偏移续读（�
     );
     assert.ok(text.includes(`(Not fully shown: continue with offset: ${READ_ENTRY_CHARS})`), text);
     assert.ok(!text.endsWith(long), "单次读出不得超过上限");
-    // 续读：offset 接上，两段拼回原文；maxChars 可调
-    const second = await tool.execute("t2", { entryId, offset: READ_ENTRY_CHARS, maxChars: 8_000 });
+    // 续读：offset 接上，两段拼回原文；maxChars 可调到上限
+    const second = await tool.execute("t2", {
+      entryId,
+      offset: READ_ENTRY_CHARS,
+      maxChars: MAX_READ_ENTRY_CHARS,
+    });
     assert.equal(second.details.offset, READ_ENTRY_CHARS);
     assert.equal(second.details.truncated, true);
     const secondSlice = textOf(second);
     assert.ok(
-      secondSlice.includes(`showing ${READ_ENTRY_CHARS}–${READ_ENTRY_CHARS + 8_000})`),
+      secondSlice.includes(
+        `showing ${READ_ENTRY_CHARS}–${READ_ENTRY_CHARS + MAX_READ_ENTRY_CHARS})`
+      ),
       secondSlice
     );
     const tail = await tool.execute("t3", { entryId, offset: long.length - 10 });

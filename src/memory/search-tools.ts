@@ -44,7 +44,7 @@ export const FIRST_USER_TEXT_CHARS = 60;
 const LISTED_FILES = 10;
 // read_session_entry：单次读取上限（字符）、可调到的上限与前后消息的条数与各自截断
 export const READ_ENTRY_CHARS = 8_000;
-export const MAX_READ_ENTRY_CHARS = 8_000;
+export const MAX_READ_ENTRY_CHARS = 16_000;
 export const READ_CONTEXT_MAX = 5;
 export const READ_CONTEXT_CHARS = 1_000;
 

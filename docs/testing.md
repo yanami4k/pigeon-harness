@@ -66,6 +66,8 @@
   未引用的规则比基线多一条即失败（新增规则要带一条测试引用：标题里写规则号，或测试上一行写 `// spec: AREA-NNN`；
   确实无法用测试覆盖的写进 `scripts/spec-coverage-exempt.json` 并说明理由）；补完引用后运行
   `node scripts/spec-refs.mjs --update-baseline` 重写基线。
+- 老规则的补法采用**触碰即补**：改动落到哪个区，就把这次涉及的规则补上测试引用（没有对应测试的补一条），
+  并同步调低该区基线；不单独立项整批补齐（决策 576）。
 
 - 依赖变动后先运行 `node scripts/third-party-licenses.mjs --write` 重新生成汇总，再跑 `verify:full`。
 
