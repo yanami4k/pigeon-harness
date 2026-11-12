@@ -230,7 +230,6 @@ Pigeon 复用 `@earendil-works/pi-agent-core`、`pi-ai` 和 `pi-tui`（0.84.4）
 - [配置文档](docs/configuration.md)：设置、自定义服务商、代理、沙箱、钩子、记忆与安全细节
 - [行为规格](docs/spec/README.md)：带测试引用的编号行为规则
 - [CLI 规格](docs/spec/cli.md)：命令行参数、JSON 输出与退出码
-- [测试说明](docs/testing.md)：测试分档与验证命令
 
 ## 许可
 
